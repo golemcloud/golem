@@ -23,9 +23,9 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation, HttpApiDeploymentUpdate,
 };
-use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 
@@ -86,7 +86,10 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    assert_eq!(http_api_deployment.domain, http_api_deployment_creation.domain);
+    assert_eq!(
+        http_api_deployment.domain,
+        http_api_deployment_creation.domain
+    );
 
     {
         let fetched_http_api_deployment = client
@@ -154,12 +157,18 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .await?;
 
     assert_eq!(updated_http_api_deployment.id, http_api_deployment.id);
-    assert_eq!(updated_http_api_deployment.revision, http_api_deployment.revision.next()?);
+    assert_eq!(
+        updated_http_api_deployment.revision,
+        http_api_deployment.revision.next()?
+    );
     assert_eq!(
         updated_http_api_deployment.webhooks_url,
         http_api_deployment_update.webhook_url.unwrap()
     );
-    assert_eq!(updated_http_api_deployment.agents, http_api_deployment_update.agents.unwrap());
+    assert_eq!(
+        updated_http_api_deployment.agents,
+        http_api_deployment_update.agents.unwrap()
+    );
 
     {
         let fetched_http_api_deployment = client
@@ -393,7 +402,10 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
         .await?;
 
     assert_eq!(http_api_deployment_2.id, http_api_deployment_1.id);
-    assert_eq!(http_api_deployment_2.revision, http_api_deployment_1.revision.next()?.next()?);
+    assert_eq!(
+        http_api_deployment_2.revision,
+        http_api_deployment_1.revision.next()?.next()?
+    );
 
     client
         .delete_http_api_deployment(
@@ -445,7 +457,10 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         let fetched_http_api_deployments = client
             .list_http_api_deployments_in_deployment(&env.id.0, deployment.revision.into())
             .await?;
-        assert_eq!(fetched_http_api_deployments.values, vec![http_api_deployment]);
+        assert_eq!(
+            fetched_http_api_deployments.values,
+            vec![http_api_deployment]
+        );
     }
 
     Ok(())

@@ -18,7 +18,6 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentPluginGrantError, RegistryServiceGetPluginByIdError,
     RegistryServiceListEnvironmentPluginGrantsError,
 };
-use pretty_assertions::assert_eq;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
@@ -27,6 +26,7 @@ use golem_common::model::plugin_registration::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);

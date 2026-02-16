@@ -33,10 +33,10 @@ use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_common::model::Empty;
-use pretty_assertions::{assert_eq, assert_ne};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
+use pretty_assertions::{assert_eq, assert_ne};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
@@ -149,7 +149,9 @@ async fn component_update_with_wrong_revision_is_rejected(
 
     assert!(matches!(
         result,
-        Err(golem_client::Error::Item(RegistryServiceUpdateComponentError::Error409(_)))
+        Err(golem_client::Error::Item(
+            RegistryServiceUpdateComponentError::Error409(_)
+        ))
     ));
 
     Ok(())
@@ -443,7 +445,10 @@ async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result
 
     let recreated_component = user.component(&env.id, "update-test-v1").store().await?;
     assert_eq!(recreated_component.id, component.id);
-    assert_eq!(recreated_component.revision, component.revision.next()?.next()?);
+    assert_eq!(
+        recreated_component.revision,
+        component.revision.next()?.next()?
+    );
 
     client
         .delete_component(&component.id.0, recreated_component.revision.into())
@@ -515,7 +520,10 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         )
         .await?;
 
-    assert_eq!(component.metadata.agent_types(), std::slice::from_ref(&agent_type));
+    assert_eq!(
+        component.metadata.agent_types(),
+        std::slice::from_ref(&agent_type)
+    );
 
     let deployment = user.deploy_environment(&env.id).await?;
 

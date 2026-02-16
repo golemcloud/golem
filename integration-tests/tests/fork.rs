@@ -158,12 +158,7 @@ async fn fork_running_worker_1(
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, entry)| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::ExportedFunctionInvoked(_)
-            )
-        })
+        .find(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))
         .expect("Expected ExportedFunctionInvoked in oplog");
 
     let oplog_index_of_function_invoked = OplogIndex::from_u64((idx + 1) as u64);
@@ -359,21 +354,11 @@ async fn fork_idle_worker(
     .await?;
 
     let original_contents = user
-        .invoke_and_await_agent(
-            &component.id,
-            &source_agent_id,
-            "list",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &source_agent_id, "list", data_value!())
         .await?;
 
     let forked_contents = user
-        .invoke_and_await_agent(
-            &component.id,
-            &target_agent_id,
-            "list",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &target_agent_id, "list", data_value!())
         .await?;
 
     let original_value = original_contents
@@ -460,9 +445,7 @@ async fn fork_worker_when_target_already_exists(
     )
     .await?;
 
-    let oplog_entries = user
-        .search_oplog(&source_worker_id, "invoke")
-        .await?;
+    let oplog_entries = user.search_oplog(&source_worker_id, "invoke").await?;
 
     let index = oplog_entries
         .last()
@@ -764,8 +747,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     let forked_phantom_id = fork_phantom_id_rx.await.unwrap();
     let forked_phantom_uuid: Uuid = forked_phantom_id.parse().expect("Expected valid UUID");
 
-    let target_agent_id =
-        phantom_agent_id!("golem-host-api", forked_phantom_uuid, "source-worker");
+    let target_agent_id = phantom_agent_id!("golem-host-api", forked_phantom_uuid, "source-worker");
     let target_worker_id = WorkerId {
         component_id: component.id,
         worker_name: target_agent_id.to_string(),

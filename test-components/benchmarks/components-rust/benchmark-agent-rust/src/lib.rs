@@ -7,6 +7,7 @@ trait RustBenchmarkAgent {
     fn large_input(&mut self, input: Vec<u8>) -> u32;
     fn cpu_intensive(&mut self, length: f64) -> u32; // length is f64 to have the same interface as the TS agent
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32;
+    fn sleep(&mut self, millis: u64) -> bool;
 }
 
 struct RustBenchmarkAgentImpl {
@@ -33,6 +34,12 @@ impl RustBenchmarkAgent for RustBenchmarkAgentImpl {
 
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32 {
         common_lib::oplog_heavy(length, persistence_on, commit)
+    }
+
+    fn sleep(&mut self, millis: u64) -> bool {
+        let duration = std::time::Duration::from_millis(millis);
+        std::thread::sleep(duration);
+        true
     }
 }
 

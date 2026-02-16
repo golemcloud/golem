@@ -15,15 +15,15 @@
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
 };
-use pretty_assertions::assert_eq;
-use golem_common::model::Empty;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
+use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -144,7 +144,10 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             .into_iter()
             .map(|p| p.id)
             .collect::<HashSet<_>>();
-        assert_eq!(plugin_ids, HashSet::from_iter(vec![app_plugin.id, library_plugin.id]));
+        assert_eq!(
+            plugin_ids,
+            HashSet::from_iter(vec![app_plugin.id, library_plugin.id])
+        );
     }
 
     Ok(())

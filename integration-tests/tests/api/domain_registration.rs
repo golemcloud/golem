@@ -17,10 +17,10 @@ use golem_client::api::{
     RegistryServiceGetDomainRegistrationError,
     RegistryServiceListEnvironmentDomainRegistrationsError,
 };
-use pretty_assertions::assert_eq;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);

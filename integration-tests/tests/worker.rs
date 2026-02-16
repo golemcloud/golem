@@ -14,7 +14,6 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use pretty_assertions::assert_eq;
 use axum::extract::Query;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
@@ -44,6 +43,7 @@ use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
+use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -136,9 +136,7 @@ async fn counter_resource_test_1(
         .await?;
 
     let agent_id = agent_id!("rpc-counter", "counter1");
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
     user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
@@ -148,9 +146,7 @@ async fn counter_resource_test_1(
         .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     assert_eq!(result_value, Value::U64(5));
 
@@ -175,9 +171,7 @@ async fn counter_resource_test_1_json(
         .await?;
 
     let agent_id = agent_id!("rpc-counter", "counter1j");
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
     user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
@@ -187,9 +181,7 @@ async fn counter_resource_test_1_json(
         .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
         .await?;
 
-    let result_value = result
-        .into_return_value()
-        .expect("Expected a return value");
+    let result_value = result.into_return_value().expect("Expected a return value");
 
     assert_eq!(result_value, Value::U64(5));
 
@@ -512,13 +504,8 @@ async fn get_running_workers(
     let worker_ids: HashSet<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
 
     for (worker_id, aid) in &workers {
-        user.invoke_agent(
-            &component.id,
-            aid,
-            "start_polling",
-            data_value!("stop"),
-        )
-        .await?;
+        user.invoke_agent(&component.id, aid, "start_polling", data_value!("stop"))
+            .await?;
 
         user.wait_for_status(worker_id, WorkerStatus::Running, Duration::from_secs(10))
             .await?;
@@ -869,9 +856,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
 
     let result2 = user.search_oplog(&worker_id, "imported-function").await?;
 
-    let result3 = user
-        .search_oplog(&worker_id, "G1001 OR G1000")
-        .await?;
+    let result3 = user.search_oplog(&worker_id, "G1001 OR G1000").await?;
 
     assert_eq!(result1.len(), 2, "G1002"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
     assert_eq!(result2.len(), 2, "imported-function");
@@ -896,9 +881,7 @@ async fn worker_recreation(
         .await?;
 
     let agent_id = agent_id!("rpc-counter", "recreation");
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     // Doing many requests, so parts of the oplog gets archived
     for _ in 1..=1200 {
@@ -925,17 +908,21 @@ async fn worker_recreation(
     user.delete_worker(&worker_id).await?;
 
     // Also if we explicitly create a new one
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result3 = user
         .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
         .await?;
 
-    let result1_value = result1.into_return_value().expect("Expected a return value");
-    let result2_value = result2.into_return_value().expect("Expected a return value");
-    let result3_value = result3.into_return_value().expect("Expected a return value");
+    let result1_value = result1
+        .into_return_value()
+        .expect("Expected a return value");
+    let result2_value = result2
+        .into_return_value()
+        .expect("Expected a return value");
+    let result3_value = result3
+        .into_return_value()
+        .expect("Expected a return value");
 
     assert_eq!(result1_value, Value::U64(1200));
     assert_eq!(result2_value, Value::U64(1));
@@ -1039,9 +1026,7 @@ async fn worker_list_files(
         .await?;
 
     let agent_id = agent_id!("file-read-write", "worker-list-files-1");
-    let worker_id = user
-        .start_agent(&component.id, agent_id)
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id).await?;
 
     let result = user.get_file_system_node(&worker_id, "/").await?;
 
@@ -1217,9 +1202,7 @@ async fn worker_initial_files_after_automatic_worker_update(
         .await?;
 
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     // run the worker so it can update the files.
     let _ = user
@@ -1422,12 +1405,8 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
         }
     };
 
-    let result_future = user.invoke_and_await_agent(
-        &component.id,
-        &agent_id,
-        "run_high_volume",
-        data_value!(),
-    );
+    let result_future =
+        user.invoke_and_await_agent(&component.id, &agent_id, "run_high_volume", data_value!());
 
     let (found_log_entry, result) = (output_consumer, result_future).join().await;
     result?;

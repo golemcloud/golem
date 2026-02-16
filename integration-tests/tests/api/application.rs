@@ -18,9 +18,9 @@ use golem_client::api::{
     RegistryServiceUpdateApplicationError,
 };
 use golem_common::model::application::{ApplicationCreation, ApplicationUpdate};
-use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -100,12 +100,22 @@ async fn other_users_cannot_get_applications(
         let result = client
             .get_account_application(&user_1.account_id.0, &app.name.0)
             .await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceGetAccountApplicationError::Error404(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetAccountApplicationError::Error404(_)
+            ))
+        ));
     }
 
     {
         let result = client.list_account_applications(&user_1.account_id.0).await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceListAccountApplicationsError::Error403(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceListAccountApplicationsError::Error403(_)
+            ))
+        ));
     }
 
     Ok(())
@@ -133,7 +143,12 @@ async fn deleting_account_hides_applications(
         let result = admin_client
             .list_account_applications(&user.account_id.0)
             .await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceListAccountApplicationsError::Error403(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceListAccountApplicationsError::Error403(_)
+            ))
+        ));
     }
 
     {

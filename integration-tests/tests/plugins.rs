@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use pretty_assertions::assert_eq;
-use axum::Router;
 use axum::body::Bytes;
 use axum::extract::Multipart;
 use axum::routing::post;
+use axum::Router;
 use base64::Engine;
-use golem_api_grpc::proto::golem::worker::{Log, log_event};
+use golem_api_grpc::proto::golem::worker::{log_event, Log};
 use golem_client::api::{RegistryServiceClient, RegistryServiceCreateComponentError};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
@@ -35,6 +34,7 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResult
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm::{IntoValueAndType, Value};
+use pretty_assertions::assert_eq;
 use reqwest::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use test_r::{inherit_test_dep, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
-use wac_graph::{CompositionGraph, EncodeOptions, Processor, plug};
+use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -184,7 +184,6 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     Ok(())
 }
-
 
 #[test]
 #[tracing::instrument]

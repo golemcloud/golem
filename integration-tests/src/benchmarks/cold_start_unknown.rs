@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await};
+use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
+use golem_common::base_model::agent::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::WorkerId;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use std::time::Duration;
 use tracing::{info, Level};
@@ -49,7 +51,7 @@ impl Benchmark for ColdStartUnknownSmall {
         indoc! {
             "
             Benchmarks the first-time invocation of a component that have never been instantiated before.
-            This variant uses a relatively small Rust component. The `size` parameter is the number of
+            This variant uses a relatively small Rust agent component. The `size` parameter is the number of
             unique components, and `length` is the time in seconds _per component_ to wait for pre-compilation.
             "
         }
@@ -63,9 +65,8 @@ impl Benchmark for ColdStartUnknownSmall {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
-            "benchmark_direct_rust",
-            "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
-            vec!["benchmark".into_value_and_type()],
+            "benchmark_agent_rust_release",
+            "rust-benchmark-agent",
             mode,
             verbosity,
             cluster_size,
@@ -129,7 +130,7 @@ impl Benchmark for ColdStartUnknownMedium {
         indoc! {
             "
                 Benchmarks the first-time invocation of a component that have never been instantiated before.
-                This variant uses a basic TypeScript component. The `size` parameter is the number of unique
+                This variant uses a basic TypeScript agent component. The `size` parameter is the number of unique
                 components, and `length` is the time in seconds _per component_ to wait for pre-compilation.
                 "
         }
@@ -144,8 +145,7 @@ impl Benchmark for ColdStartUnknownMedium {
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts",
-            "benchmark:agent-ts/benchmark-agent.{echo}",
-            vec!["benchmark".into_value_and_type()],
+            "benchmark-agent",
             mode,
             verbosity,
             cluster_size,
@@ -208,7 +208,7 @@ impl Benchmark for ColdStartUnknownLarge {
     fn description() -> &'static str {
         indoc! {
             "Benchmarks the first-time invocation of a component that have never been instantiated before.
-             This variant uses a TypeScript component with a lot of linked AI libraries. The `size` parameter
+             This variant uses a TypeScript agent component with a lot of linked AI libraries. The `size` parameter
              is the number of unique components, and `length` is the time in seconds _per component_
              to wait for pre-compilation.
              "
@@ -224,8 +224,7 @@ impl Benchmark for ColdStartUnknownLarge {
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts_large",
-            "benchmark:agent-ts-large/benchmark-agent.{echo}",
-            vec!["benchmark".into_value_and_type()],
+            "benchmark-agent",
             mode,
             verbosity,
             cluster_size,
@@ -278,21 +277,19 @@ impl Benchmark for ColdStartUnknownLarge {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    worker_ids: Vec<WorkerId>,
+    agents: Vec<(ComponentId, AgentId)>,
 }
 
 pub struct ColdStartUnknownBenchmark {
     component_name: String,
-    function_name: String,
-    function_params: Vec<ValueAndType>,
+    agent_type_name: String,
     deps: BenchmarkTestDependencies,
 }
 
 impl ColdStartUnknownBenchmark {
     pub async fn new(
         component_name: &str,
-        function_name: &str,
-        function_params: Vec<ValueAndType>,
+        agent_type_name: &str,
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
@@ -301,8 +298,7 @@ impl ColdStartUnknownBenchmark {
     ) -> Self {
         Self {
             component_name: component_name.to_string(),
-            function_name: function_name.to_string(),
-            function_params,
+            agent_type_name: agent_type_name.to_string(),
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -320,7 +316,7 @@ impl ColdStartUnknownBenchmark {
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
         let user = self.deps.user().await.unwrap();
-        let mut worker_ids = vec![];
+        let mut agents = vec![];
 
         for _ in 0..config.size {
             // Agent types names are unique within one environment,
@@ -334,14 +330,11 @@ impl ColdStartUnknownBenchmark {
                 .await
                 .unwrap();
 
-            let worker_id = WorkerId {
-                component_id: component.id,
-                worker_name: "benchmark-agent(\"test\")".to_string(),
-            };
-            worker_ids.push(worker_id);
+            let agent_id = agent_id!(&self.agent_type_name, "test");
+            agents.push((component.id, agent_id));
         }
 
-        IterationContext { user, worker_ids }
+        IterationContext { user, agents }
     }
 
     pub async fn warmup(&self, config: &RunConfig) {
@@ -356,15 +349,16 @@ impl ColdStartUnknownBenchmark {
 
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
         let result_futures = iteration
-            .worker_ids
+            .agents
             .iter()
-            .map(move |worker_id| async move {
+            .map(move |(component_id, agent_id)| async move {
                 let user_clone = iteration.user.clone();
-                invoke_and_await(
+                invoke_and_await_agent(
                     &user_clone,
-                    worker_id,
-                    &self.function_name,
-                    self.function_params.clone(),
+                    component_id,
+                    agent_id,
+                    "echo",
+                    data_value!("benchmark"),
                 )
                 .await
             })
@@ -377,6 +371,13 @@ impl ColdStartUnknownBenchmark {
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        delete_workers(&iteration.user, &iteration.worker_ids).await
+        let worker_ids: Vec<WorkerId> = iteration
+            .agents
+            .iter()
+            .filter_map(|(component_id, agent_id)| {
+                WorkerId::from_agent_id(*component_id, agent_id).ok()
+            })
+            .collect();
+        delete_workers(&iteration.user, &worker_ids).await
     }
 }

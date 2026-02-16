@@ -15,7 +15,6 @@
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
 };
-use pretty_assertions::{assert_eq, assert_ne};
 use golem_client::model::AccountUpdate;
 use golem_common::model::account::{
     AccountCreation, AccountEmail, AccountRevision, AccountSetRoles,
@@ -23,6 +22,7 @@ use golem_common::model::account::{
 use golem_common::model::auth::AccountRole;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::{assert_eq, assert_ne};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -108,7 +108,10 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             .await?;
 
         // We always reorder the roles so they are consistent
-        assert_eq!(account.roles, vec![AccountRole::Admin, AccountRole::MarketingAdmin]);
+        assert_eq!(
+            account.roles,
+            vec![AccountRole::Admin, AccountRole::MarketingAdmin]
+        );
         assert_eq!(account.revision, AccountRevision::new(1)?);
     }
 

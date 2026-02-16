@@ -16,7 +16,6 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceDeployEnvironmentError,
     RegistryServiceRollbackEnvironmentError,
 };
-use pretty_assertions::{assert_eq, assert_ne};
 use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
@@ -32,6 +31,7 @@ use golem_common::model::http_api_deployment::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, test};
@@ -74,7 +74,10 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             panic!("expected current_deployment to be Some");
         };
         assert_eq!(current_deployment.deployment_revision, deployment.revision);
-        assert_eq!(current_deployment.deployment_hash, deployment.deployment_hash);
+        assert_eq!(
+            current_deployment.deployment_hash,
+            deployment.deployment_hash
+        );
     }
 
     // Summary of the deployed deployment is the same as the original plan
@@ -294,7 +297,10 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
         assert_eq!(deployment.deployment_hash, expected_hash);
         assert_eq!(deployment.components, expected_plan.components);
-        assert_eq!(deployment.http_api_deployments, expected_plan.http_api_deployments);
+        assert_eq!(
+            deployment.http_api_deployments,
+            expected_plan.http_api_deployments
+        );
     }
 
     Ok(())
@@ -372,7 +378,10 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
     assert_eq!(rollback_result.current_revision, expected_revision);
     assert_eq!(rollback_result.revision, deployment_1.revision);
-    assert_eq!(rollback_result.deployment_hash, deployment_1.deployment_hash);
+    assert_eq!(
+        rollback_result.deployment_hash,
+        deployment_1.deployment_hash
+    );
     assert_eq!(rollback_result.version, deployment_1.version);
 
     {

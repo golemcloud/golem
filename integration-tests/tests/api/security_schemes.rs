@@ -16,12 +16,12 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateSecuritySchemeError,
     RegistryServiceGetEnvironmentSecuritySchemesError, RegistryServiceGetSecuritySchemeError,
 };
-use pretty_assertions::{assert_eq, assert_ne};
 use golem_common::model::security_scheme::{
     Provider, SecuritySchemeCreation, SecuritySchemeName, SecuritySchemeUpdate,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::{assert_eq, assert_ne};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -301,10 +301,22 @@ async fn security_scheme_update(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     assert_eq!(fetched_updated_security_scheme, updated_security_scheme);
     assert_eq!(updated_security_scheme.id, security_scheme.id);
-    assert_eq!(updated_security_scheme.provider_type, security_scheme_update.provider_type.unwrap());
-    assert_eq!(updated_security_scheme.client_id, security_scheme_update.client_id.unwrap());
-    assert_eq!(updated_security_scheme.redirect_url, security_scheme_update.redirect_url.unwrap());
-    assert_eq!(updated_security_scheme.scopes, security_scheme_update.scopes.unwrap());
+    assert_eq!(
+        updated_security_scheme.provider_type,
+        security_scheme_update.provider_type.unwrap()
+    );
+    assert_eq!(
+        updated_security_scheme.client_id,
+        security_scheme_update.client_id.unwrap()
+    );
+    assert_eq!(
+        updated_security_scheme.redirect_url,
+        security_scheme_update.redirect_url.unwrap()
+    );
+    assert_eq!(
+        updated_security_scheme.scopes,
+        security_scheme_update.scopes.unwrap()
+    );
 
     Ok(())
 }

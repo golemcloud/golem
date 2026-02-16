@@ -15,8 +15,8 @@
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCurrentLoginTokenError, RegistryServiceGetAccountError,
 };
-use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -50,12 +50,22 @@ async fn deleting_account_revokes_tokens(deps: &EnvBasedTestDependencies) -> any
 
     {
         let result = client.current_login_token().await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceCurrentLoginTokenError::Error401(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceCurrentLoginTokenError::Error401(_)
+            ))
+        ));
     }
 
     {
         let result = client.get_account(&user.account_id.0).await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceGetAccountError::Error401(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetAccountError::Error401(_)
+            ))
+        ));
     }
 
     Ok(())

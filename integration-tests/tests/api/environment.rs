@@ -19,9 +19,9 @@ use golem_client::api::{
 };
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
-use pretty_assertions::assert_eq;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -101,12 +101,22 @@ async fn other_users_cannot_get_applications(
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceGetApplicationEnvironmentError::Error404(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetApplicationEnvironmentError::Error404(_)
+            ))
+        ));
     }
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(matches!(result, Err(golem_client::Error::Item(RegistryServiceListApplicationEnvironmentsError::Error404(_)))));
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceListApplicationEnvironmentsError::Error404(_)
+            ))
+        ));
     }
 
     Ok(())
