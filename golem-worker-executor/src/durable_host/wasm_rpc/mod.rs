@@ -17,7 +17,7 @@ use crate::get_oplog_entry;
 use crate::model::WorkerConfig;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::rpc::{RpcDemand, RpcError};
+use crate::services::rpc::{enrich_function_name, RpcDemand, RpcError};
 use crate::services::HasWorker;
 use crate::workerctx::{
     HasWasiConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
@@ -459,6 +459,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let remote_worker_id = payload.remote_worker_id().clone();
 
             Self::add_self_parameter_if_needed(&mut function_params, payload);
+
+            // Enrich the function name with the target component's root package,
+            // the same way invoke/invoke_and_await do via DirectWorkerInvocationRpc.
+            let function_name = enrich_function_name(
+                &self.state.component_service,
+                &remote_worker_id,
+                function_name,
+            )
+            .await;
 
             let current_idempotency_key = self
                 .state
@@ -1264,3 +1273,4 @@ pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
         )
         .await?)
 }
+
