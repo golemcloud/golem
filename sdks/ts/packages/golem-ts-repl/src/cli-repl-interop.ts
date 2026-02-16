@@ -21,6 +21,8 @@ import { writeFullLineSeparator } from './format';
 import * as base from './base';
 import * as uuid from 'uuid';
 
+const AGENT_STREAM_CLOSE_DELAY_MS = 100;
+
 export class CliReplInterop {
   private readonly config: CliCommandsConfig;
   private readonly commands: ReplCliCommand[];
@@ -193,7 +195,7 @@ export class CliReplInterop {
   private async stopAgentStreamByKey(key: string) {
     const state = this.agentStreams.get(key);
     if (!state) return;
-    await delay(100);
+    await new Promise((resolve) => setTimeout(resolve, AGENT_STREAM_CLOSE_DELAY_MS));
     if (this.agentStreams.get(key) !== state) return;
     this.agentStreams.delete(key);
     state.stop();
@@ -312,10 +314,6 @@ function safeJsonStringify(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const COMMAND_HOOKS: Partial<Record<CommandHookId, CommandHook>> = {
