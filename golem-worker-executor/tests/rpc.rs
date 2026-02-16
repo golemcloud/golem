@@ -174,9 +174,18 @@ async fn counter_resource_test_1(
     assert_eq!(
         result_value,
         Value::List(vec![
-            Value::Tuple(vec![Value::String("counter_resource_test_1_test1_counter3".to_string()), Value::U64(3)]),
-            Value::Tuple(vec![Value::String("counter_resource_test_1_test1_counter2".to_string()), Value::U64(3)]),
-            Value::Tuple(vec![Value::String("counter_resource_test_1_test1_counter1".to_string()), Value::U64(3)])
+            Value::Tuple(vec![
+                Value::String("counter_resource_test_1_test1_counter3".to_string()),
+                Value::U64(3)
+            ]),
+            Value::Tuple(vec![
+                Value::String("counter_resource_test_1_test1_counter2".to_string()),
+                Value::U64(3)
+            ]),
+            Value::Tuple(vec![
+                Value::String("counter_resource_test_1_test1_counter1".to_string()),
+                Value::U64(3)
+            ])
         ])
     );
 

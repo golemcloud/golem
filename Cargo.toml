@@ -28,11 +28,7 @@ exclude = [
     "cli/desktop-app/src-tauri",
     "test-components/host-api-tests",
     "test-components/http-tests",
-    "test-components/ifs-update",
-    "test-components/ifs-update-inside-exported-function",
-    "test-components/initial-file-read-write",
     "test-components/oplog-processor",
-    "test-components/scheduled-invocation",
     "sdks/golem-rust"
 ]
 

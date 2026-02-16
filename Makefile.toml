@@ -148,11 +148,8 @@ array_push ${components} agent-invocation-context/.wit
 array_push ${components} agent-updates-v1/.wit
 array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks
-array_push ${components} component-transformer-example1/adapter
 array_push ${components} initial-file-system/.wit
 array_push ${components} oplog-processor
-array_push ${components} rpc
-array_push ${components} scheduled-invocation
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"
