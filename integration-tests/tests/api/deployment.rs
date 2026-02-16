@@ -234,17 +234,19 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let expected_hash =
-        Hash::from_str("1507945cb1afd9b890cf09560d348a6f2ccd1bac9ee477106efe28b822817cfb")?;
+        Hash::from_str("8b0c317038b686cb4bd222dc561ba9166a3c9637e5e2f5f495574b3b066df82b")?;
 
     let expected_plan = DeploymentPlan {
         current_revision: None,
-        deployment_hash: expected_hash,
+        deployment_hash: Hash::from_str(
+            "8b0c317038b686cb4bd222dc561ba9166a3c9637e5e2f5f495574b3b066df82b",
+        )?,
         components: vec![DeploymentPlanComponentEntry {
             id: component.id,
             revision: component.revision,
             name: ComponentName("golem-it:agent-http-routes-ts".to_string()),
             hash: Hash::from_str(
-                "23d4dda294f6394b762d20542797d68f890243315b149cdff1cd34beffca0b71",
+                "86b91a5069d8e6b910cb4fe83c48c89d514a21f77fedbb67e9137e4a4babffa4",
             )?,
         }],
         http_api_deployments: vec![DeploymentPlanHttpApiDeploymentEntry {
