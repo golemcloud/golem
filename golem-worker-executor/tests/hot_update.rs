@@ -18,9 +18,9 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{update_counts, TestDsl};
-use golem_wasm::Value;
+
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -1003,26 +1003,31 @@ async fn update_component_revision_environment_variable(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "update-test-env-var")
+        .component(&context.default_environment_id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .unique()
         .store()
         .await?;
-
-    let worker_id = executor.start_worker(&component.id, "worker-1").await?;
+    let agent_id = agent_id!("revision-env-agent");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     {
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:component/api.{get-revision-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await??;
+            .await?;
 
-        assert_eq!(result, vec![Value::String("0".to_string())]);
+        assert_eq!(result, data_value!("0"));
     }
 
     let updated_component_1 = executor
-        .update_component(&component.id, "update-test-env-var")
+        .update_component(&component.id, "it_agent_update_v1_release")
         .await?;
 
     executor
@@ -1031,36 +1036,41 @@ async fn update_component_revision_environment_variable(
 
     {
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:component/api.{get-revision-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await??;
+            .await?;
 
-        assert_eq!(result, vec![Value::String("0".to_string())]);
+        assert_eq!(result, data_value!("0"));
 
         // FIXME: broken as get-environment during the replay is getting cached
-        // assert_eq!(result, vec![Value::String("1".to_string())]);
+        // assert_eq!(result, data_value!("1"));
     }
 
-    // worker created on the new version sees correct component version
+    // agent created on the new version sees correct component version
     {
-        let worker2 = executor.start_worker(&component.id, "worker-2").await?;
+        let agent_id_2 = phantom_agent_id!("revision-env-agent", uuid::Uuid::new_v4());
+        let _worker2 = executor
+            .start_agent(&component.id, agent_id_2.clone())
+            .await?;
 
         let result = executor
-            .invoke_and_await(
-                &worker2,
-                "golem:component/api.{get-revision-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id_2,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await??;
+            .await?;
 
-        assert_eq!(result, vec![Value::String("1".to_string())]);
+        assert_eq!(result, data_value!("1"));
     }
 
     let updated_component_2 = executor
-        .update_component(&component.id, "update-test-env-var")
+        .update_component(&component.id, "it_agent_update_v1_release")
         .await?;
 
     executor
@@ -1069,14 +1079,15 @@ async fn update_component_revision_environment_variable(
 
     {
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:component/api.{get-revision-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await??;
+            .await?;
 
-        assert_eq!(result, vec![Value::String("2".to_string())]);
+        assert_eq!(result, data_value!("2"));
     }
 
     executor.check_oplog_is_queryable(&worker_id).await?;

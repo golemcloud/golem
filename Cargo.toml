@@ -33,7 +33,6 @@ exclude = [
     "test-components/initial-file-read-write",
     "test-components/oplog-processor",
     "test-components/scheduled-invocation",
-    "test-components/update-test-env-var",
     "sdks/golem-rust"
 ]
 

@@ -96,6 +96,33 @@ impl UpdateTest for UpdateTestImpl {
     }
 }
 
+#[agent_definition]
+pub trait RevisionEnvAgent {
+    fn new() -> Self;
+    fn get_revision_from_env_var(&self) -> String;
+}
+
+struct RevisionEnvAgentImpl;
+
+#[agent_implementation]
+impl RevisionEnvAgent for RevisionEnvAgentImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn get_revision_from_env_var(&self) -> String {
+        std::env::var("GOLEM_COMPONENT_REVISION").unwrap_or_default()
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 async fn report_f1(current: u64) {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
     let url = format!("http://localhost:{port}/f1");
