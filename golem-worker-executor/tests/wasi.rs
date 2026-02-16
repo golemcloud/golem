@@ -80,7 +80,7 @@ async fn write_stdout(
 
     let mut events = vec![];
     let start_time = Instant::now();
-    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+    while events.len() < 4 && start_time.elapsed() < Duration::from_secs(5) {
         if let Some(event) = rx.recv().await {
             events.push(event);
         } else {
@@ -130,7 +130,7 @@ async fn write_stderr(
 
     let mut events = vec![];
     let start_time = Instant::now();
-    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+    while events.len() < 4 && start_time.elapsed() < Duration::from_secs(5) {
         if let Some(event) = rx.recv().await {
             events.push(event);
         } else {
