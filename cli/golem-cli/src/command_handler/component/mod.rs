@@ -740,6 +740,8 @@ impl ComponentCommandHandler {
         component_name: &ComponentName,
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
         post_deploy_args: Option<&PostDeployArgs>,
+        repl_bridge_sdk_target: Option<GuestLanguage>,
+        skip_build: bool,
     ) -> anyhow::Result<ComponentDto> {
         if post_deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
             self.ctx
@@ -752,7 +754,8 @@ impl ComponentCommandHandler {
                     post_deploy_args: post_deploy_args
                         .cloned()
                         .unwrap_or_else(PostDeployArgs::none),
-                    repl_bridge_sdk_target: None,
+                    repl_bridge_sdk_target,
+                    skip_build,
                 })
                 .await?;
         }
@@ -806,7 +809,8 @@ impl ComponentCommandHandler {
                             approve_staging_steps: false,
                             force_build: None,
                             post_deploy_args: PostDeployArgs::none(),
-                            repl_bridge_sdk_target: None,
+                            repl_bridge_sdk_target,
+                            skip_build,
                         })
                         .await?;
 

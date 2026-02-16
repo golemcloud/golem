@@ -120,7 +120,7 @@ impl CallAgentHandler {
 
                     values.push(ElementValue::ComponentModel(ValueAndType::new(
                         value,
-                        parameter_type.clone().into(),
+                        parameter_type.into(),
                     )));
                 }
             }

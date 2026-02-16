@@ -7,7 +7,7 @@
     "components-ts/*/*"
   ],
   "dependencies": {
-    "@golemcloud/golem-ts-sdk": "/Users/afsalthaj/projects/ribbb/golem/sdks/ts/packages/golem-ts-sdk"
+    "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk"
   },
   "devDependencies": {
     "@rollup/plugin-alias": "^5.1.1",
@@ -19,6 +19,6 @@
     "rollup": "^4.50.1",
     "tslib": "^2.8.1",
     "typescript": "^5.9.2",
-    "@golemcloud/golem-ts-typegen": "/Users/afsalthaj/projects/ribbb/golem/sdks/ts/packages/golem-ts-typegen"
+    "@golemcloud/golem-ts-typegen": "file:../../sdks/ts/packages/golem-ts-typegen"
   }
 }

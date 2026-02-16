@@ -20,17 +20,21 @@ import "wasm/rpc/type.proto";
 message PathSegment {
   oneof kind {
     Literal literal = 1;
-    golem.common.Empty variable = 2;
-    golem.common.Empty catch_all = 3;
+    Variable variable = 2;
+    CatchAll catch_all = 3;
   }
 
   message Literal {
     string value = 1;
   }
 
-  message Variable {}
+  message Variable {
+    string display_name = 1;
+  }
 
-  message CatchAll {}
+  message CatchAll {
+    string display_name = 1;
+  }
 }
 
 message PathSegmentType {
@@ -153,7 +157,7 @@ message CompiledRoutes {
   golem.common.EnvironmentId environment_id = 2;
   uint64 deployment_revision = 3;
   repeated SecuritySchemeDetails security_schemes = 4;
-  repeated CompiledRoute routes = 5;
+  repeated CompiledRoute routes = 6;
 }
 
 message CompiledRoute {
@@ -171,6 +175,7 @@ message RouteBehaviour {
     CallAgent call_agent = 1;
     CorsPreflight cors_preflight = 2;
     WebhookCallback webhook_callback = 3;
+    OpenApiSpec open_api_spec = 4;
   }
 
   message CallAgent {
@@ -192,6 +197,8 @@ message RouteBehaviour {
   message WebhookCallback {
     golem.component.ComponentId component_id = 1;
   }
+
+  message OpenApiSpec { }
 }
 
 message RouteSecurity {

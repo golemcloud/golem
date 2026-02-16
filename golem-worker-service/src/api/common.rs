@@ -297,6 +297,7 @@ impl From<RequestHandlerError> for ApiEndpointError {
             | RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
                 Self::internal(value)
             }
+            RequestHandlerError::OpenApiSpecGenerationFailed => Self::internal(value),
         }
     }
 }
