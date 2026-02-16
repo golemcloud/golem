@@ -74,6 +74,8 @@ impl TypeScriptRepl {
             }
         }
 
+        logln("");
+
         loop {
             let result = Command::new("npx")
                 .args(&repl_args)
