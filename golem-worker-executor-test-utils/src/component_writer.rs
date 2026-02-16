@@ -31,13 +31,24 @@ use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 use uuid::Uuid;
 
 const WASMS_DIRNAME: &str = "wasms";
 
+#[derive(Clone)]
+struct CachedAnalysis {
+    memories: Vec<LinearMemory>,
+    exports: Vec<AnalysedExport>,
+    agent_types: Vec<AgentType>,
+    root_package_name: Option<String>,
+    root_package_version: Option<String>,
+}
+
 pub struct FileSystemComponentWriter {
     root: PathBuf,
+    analysis_cache: Mutex<HashMap<blake3::Hash, CachedAnalysis>>,
 }
 
 impl FileSystemComponentWriter {
@@ -51,6 +62,7 @@ impl FileSystemComponentWriter {
 
         Self {
             root: root.to_path_buf(),
+            analysis_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -88,30 +100,58 @@ impl FileSystemComponentWriter {
         let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_revision}.wasm");
         let target_path = target_dir.join(&wasm_filename);
 
-        let wasm_hash = {
-            let content = tokio::fs::read(source_path).await?;
-            let hash = blake3::hash(&content);
-            golem_common::model::diff::Hash::from(hash)
-        };
+        let content = tokio::fs::read(source_path).await?;
+        let blake3_hash = blake3::hash(&content);
+        let wasm_hash = golem_common::model::diff::Hash::from(blake3_hash);
 
         tokio::fs::copy(source_path, &target_path)
             .await
             .map_err(|err| anyhow!("Failed to copy WASM to the local component store: {err:#}"))?;
 
-        let (raw_component_metadata, memories, exports) = if skip_analysis {
-            (RawComponentMetadata::default(), vec![], vec![])
+        let CachedAnalysis {
+            memories,
+            exports,
+            agent_types,
+            root_package_name,
+            root_package_version,
+        } = if skip_analysis {
+            CachedAnalysis {
+                memories: vec![],
+                exports: vec![],
+                agent_types: vec![],
+                root_package_name: None,
+                root_package_version: None,
+            }
         } else {
-            Self::analyze_memories_and_exports(&target_path)
-                .await
-                .map_err(|err| anyhow!("Failed to analyze component: {err:#}"))?
-        };
+            let cache = self.analysis_cache.lock().await;
+            if let Some(cached) = cache.get(&blake3_hash) {
+                debug!("Using cached analysis for component {component_id}");
+                cached.clone()
+            } else {
+                drop(cache);
 
-        let agent_types = if skip_analysis {
-            vec![]
-        } else {
-            extract_agent_types(&target_path, false, true)
-                .await
-                .map_err(|err| anyhow!("Failed analyzing component: {err}"))?
+                let (raw_component_metadata, memories, exports) =
+                    Self::analyze_memories_and_exports(&target_path)
+                        .await
+                        .map_err(|err| anyhow!("Failed to analyze component: {err:#}"))?;
+
+                let agent_types = extract_agent_types(&target_path, false, true)
+                    .await
+                    .map_err(|err| anyhow!("Failed analyzing component: {err}"))?;
+
+                let analysis = CachedAnalysis {
+                    memories,
+                    exports,
+                    agent_types,
+                    root_package_name: raw_component_metadata.root_package_name,
+                    root_package_version: raw_component_metadata.root_package_version,
+                };
+                self.analysis_cache
+                    .lock()
+                    .await
+                    .insert(blake3_hash, analysis.clone());
+                analysis
+            }
         };
 
         let size = tokio::fs::metadata(&target_path)
@@ -128,15 +168,15 @@ impl FileSystemComponentWriter {
             revision: component_revision,
             files,
             size,
-            memories: memories.clone(),
-            exports: exports.clone(),
+            memories,
+            exports,
             dynamic_linking,
             wasm_filename,
             env,
             agent_types,
             target_path,
-            root_package_name: raw_component_metadata.root_package_name.clone(),
-            root_package_version: raw_component_metadata.root_package_version.clone(),
+            root_package_name,
+            root_package_version,
             wasm_hash,
             environment_roles_from_shares,
             final_hash: Hash::empty(),
