@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
+use crate::custom_api::http_test_context::{make_test_context, HttpTestContext};
+use golem_common::base_model::agent::AgentTypeName;
+use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use reqwest::Url;
@@ -24,8 +26,22 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    test_context_internal(
+    make_test_context(
         deps,
+        vec![
+            (
+                AgentTypeName("http-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("cors-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("webhook-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ],
         "golem_it_agent_http_routes_ts",
         "golem-it:agent-http-routes-ts",
     )

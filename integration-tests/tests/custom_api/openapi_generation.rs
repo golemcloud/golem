@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
+use crate::custom_api::http_test_context::{make_test_context, HttpTestContext};
 use goldenfile::Mint;
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use std::io::Write;
@@ -24,9 +26,27 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    test_context_internal(deps, "http_rust", "http:rust")
-        .await
-        .unwrap()
+    make_test_context(
+        deps,
+        vec![
+            (
+                AgentTypeName("http-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("cors-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("webhook-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ],
+        "http_rust",
+        "http:rust",
+    )
+    .await
+    .unwrap()
 }
 
 #[test]
