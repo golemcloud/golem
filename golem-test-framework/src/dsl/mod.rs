@@ -697,6 +697,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     }
 
     /// Always create as a new component - otherwise, if the same component was already uploaded, it will be reused
+    // TODO: CHECK IF WE CAN GET RID OF THIS FEATURE COMPLETELY IN THE FIRST CLASS AGENTS EPIC
     pub fn unique(mut self) -> Self {
         self.unique = true;
         self

@@ -126,7 +126,7 @@ async fn agent_env_inheritance(
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "env-var-test", data_value!())
+        .invoke_and_await_agent(&component.id, &agent_id, "envVarTest", data_value!())
         .await;
 
     let child_worker_id = WorkerId {
