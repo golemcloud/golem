@@ -41,7 +41,8 @@ async fn agent_self_rpc_is_not_allowed(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_agent_self_rpc")
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
+        .name("golem-it:agent-rpc")
         .store()
         .await?;
     let worker_id = executor
@@ -51,7 +52,7 @@ async fn agent_self_rpc_is_not_allowed(
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "golem-it:agent-self-rpc/self-rpc-agent.{self-rpc}",
+            "golem-it:agent-rpc/self-rpc-agent.{self-rpc}",
             vec![],
         )
         .await?;

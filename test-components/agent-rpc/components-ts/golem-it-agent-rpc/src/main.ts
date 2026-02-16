@@ -87,6 +87,25 @@ class SimpleChildAgent extends BaseAgent {
     }
 }
 
+@agent()
+class SelfRpcAgent extends BaseAgent {
+    private readonly name: string;
+    private value: number = 0;
+
+    constructor(name: string) {
+        super()
+        this.name = name;
+    }
+
+    async doWork(): Promise<void> {
+        return
+    }
+
+    async selfRpc(): Promise<void> {
+      return SelfRpcAgent.get(this.name).doWork()
+    }
+}
+
 function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
