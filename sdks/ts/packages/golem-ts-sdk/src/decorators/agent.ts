@@ -42,6 +42,7 @@ export type AgentDecoratorOptions = {
   cors?: string[];
   auth?: boolean;
   webhookSuffix?: string;
+  phantom?: boolean;
 };
 
 /**
