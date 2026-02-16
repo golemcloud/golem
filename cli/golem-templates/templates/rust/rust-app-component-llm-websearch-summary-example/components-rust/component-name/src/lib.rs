@@ -13,7 +13,7 @@ pub struct SearchResult {
 
 #[agent_definition(
     mount = "/research",
-    phantom-agent = true
+    phantom_agent = true
 )]
 pub trait ResearchAgent {
     fn new() -> Self;
