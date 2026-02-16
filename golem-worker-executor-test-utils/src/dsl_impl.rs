@@ -402,7 +402,7 @@ impl TestDsl for TestWorkerExecutor {
             )),
             Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)) => Ok(()),
             Some(workerexecutor::v1::invoke_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed converting error: {error}"))
+                Err(anyhow!("Failed converting error: {error:?}"))
             }
         }
     }

@@ -16,9 +16,6 @@ use crate::Tracing;
 use pretty_assertions::assert_eq;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::IdempotencyKey;
@@ -352,31 +349,25 @@ async fn invocation_context_test(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "golem_ictest")
-        .with_dynamic_linking(&[(
-            "golem:ictest-client/golem-ictest-client",
-            DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                targets: HashMap::from_iter(vec![(
-                    "golem-ictest-api".to_string(),
-                    WasmRpcTarget {
-                        interface_name: "golem:ictest-exports/golem-ictest-api".to_string(),
-                        component_name: "golem_ictest".to_string(),
-                    },
-                )]),
-            }),
-        )])
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let agent_id = agent_id!("invocation-context", "w1");
     let worker_id = executor
-        .try_start_worker_with(&component.id, "w1", env.clone(), vec![])
-        .await??;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
 
-    let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:ictest-exports/golem-ictest-api.{test1}",
-            vec![],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "test1",
+            data_value!(),
         )
         .await?;
 
@@ -404,7 +395,6 @@ async fn invocation_context_test(
 
     let traceparents = traceparents.lock().unwrap();
 
-    assert!(result.is_ok());
     assert_eq!(traceparents.len(), 3);
     assert!(traceparents.iter().all(|tp| tp.is_some()));
 

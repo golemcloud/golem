@@ -799,39 +799,40 @@ async fn fork_and_sync_with_promise(
         .await?;
 
     let uuid = Uuid::new_v4();
-    let worker = user
+    let promise_agent_id = agent_id!("promise-agent", uuid.to_string());
+    let _worker = user
         .start_agent(
             &component.id,
-            agent_id!("promise-agent", uuid.to_string()),
+            promise_agent_id.clone(),
         )
         .await?;
 
     let result1 = user
-        .invoke_and_await(
-            &worker,
-            "golem-it:agent-promise/promise-agent.{fork-and-sync-with-promise}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &promise_agent_id,
+            "forkAndSyncWithPromise",
+            data_value!(),
         )
-        .await
-        .collapse()?;
+        .await?;
 
     assert_eq!(
-        result1,
-        vec![Value::String("Hello from forked agent!".to_string())]
+        result1.into_return_value(),
+        Some(Value::String("Hello from forked agent!".to_string()))
     );
 
     let result2 = user
-        .invoke_and_await(
-            &worker,
-            "golem-it:agent-promise/promise-agent.{fork-and-sync-with-promise}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &promise_agent_id,
+            "forkAndSyncWithPromise",
+            data_value!(),
         )
-        .await
-        .collapse()?;
+        .await?;
 
     assert_eq!(
-        result2,
-        vec![Value::String("Hello from forked agent!".to_string())]
+        result2.into_return_value(),
+        Some(Value::String("Hello from forked agent!".to_string()))
     );
 
     Ok(())

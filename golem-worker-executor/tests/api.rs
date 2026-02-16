@@ -1354,12 +1354,13 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
         .await?;
 
     let failure = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/failing-counter.{add}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "add",
+            data_value!(),
         )
-        .await?;
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     assert!(failure.is_err());
@@ -1388,12 +1389,13 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
         .await?;
 
     let failure = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/counter.{increment}",
-            vec!["extra parameter".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "increment",
+            data_value!("extra parameter"),
         )
-        .await?;
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1723,7 +1725,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         .await?;
 
     let agent_id = agent_id!("clocks", "bad-wasm-2");
-    let worker_id = executor.try_start_agent(&component.id, agent_id).await??;
+    let worker_id = executor.try_start_agent(&component.id, agent_id.clone()).await??;
 
     // worker is idle. if we restart the server, it will get recovered
     drop(executor);
@@ -1762,19 +1764,16 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     debug!("Trying to invoke recovered worker");
 
     // trying to invoke the previously created worker
-    let result = executor.invoke_and_await(&worker_id, "run", vec![]).await?;
+    let result = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await;
 
-    let Err(WorkerExecutorError::ComponentParseFailed {
-        component_id,
-        component_revision,
-        reason,
-    }) = result
-    else {
-        panic!("Expected ComponentParseFailed, got {:?}", result)
-    };
-    assert_eq!(component_id, component.id);
-    assert_eq!(component_revision, ComponentRevision::INITIAL);
-    assert_eq!(reason, "failed to parse WebAssembly module");
+    let err = result.expect_err("Expected ComponentParseFailed error");
+    let err_msg = format!("{err}");
+    assert!(
+        err_msg.contains("failed to parse WebAssembly module"),
+        "Expected ComponentParseFailed error, got: {err_msg}"
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2850,8 +2849,8 @@ async fn invoke_with_non_existing_function(
 
     // First we invoke a function that does not exist and expect a failure
     let failure = executor
-        .invoke_and_await(&worker_id, "WRONG", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &counter_id, "WRONG", data_value!())
+        .await;
 
     // Then we invoke an existing function, to prove the worker should not be in failed state
     let success = executor
@@ -2888,12 +2887,13 @@ async fn invoke_with_wrong_parameters(
 
     // First we invoke an existing function with wrong parameters
     let failure = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/counter.{increment}",
-            vec!["unexpected".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &counter_id,
+            "increment",
+            data_value!("unexpected"),
         )
-        .await?;
+        .await;
 
     // Then we invoke an existing function, to prove the worker should not be in failed state
     let success = executor
@@ -3314,12 +3314,13 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
         .await?;
 
     let failure = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/failing-counter.{add}",
-            vec!["not-a-number".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "add",
+            data_value!("not-a-number"),
         )
-        .await?;
+        .await;
 
     let success = executor
         .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))

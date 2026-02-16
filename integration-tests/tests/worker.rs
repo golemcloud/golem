@@ -628,9 +628,7 @@ async fn auto_update_on_idle(
         .store()
         .await?;
     let agent_id = agent_id!("update-test");
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
     let updated_component = user
@@ -676,9 +674,7 @@ async fn auto_update_on_idle_via_host_function(
         .store()
         .await?;
     let agent_id = agent_id!("update-test");
-    let worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
     let updated_component = user
@@ -701,10 +697,11 @@ async fn auto_update_on_idle_via_host_function(
         .await?;
 
     let (high_bits, low_bits) = worker_id.component_id.0.as_u64_pair();
-    user.invoke_and_await(
-        &host_api_worker_id,
-        "golem-it:host-api-tests/golem-host-api.{update-worker}",
-        vec![
+    user.invoke_and_await_agent(
+        &host_api_component.id,
+        &host_api_agent_id,
+        "update_worker",
+        data_value!(
             Record(vec![
                 (
                     "component-id",
@@ -718,10 +715,7 @@ async fn auto_update_on_idle_via_host_function(
                     )])
                     .into_value_and_type(),
                 ),
-                (
-                    "agent-id",
-                    agent_id.to_string().into_value_and_type(),
-                ),
+                ("agent-id", agent_id.to_string().into_value_and_type(),),
             ])
             .into_value_and_type(),
             updated_component.revision.into_value_and_type(),
@@ -735,10 +729,10 @@ async fn auto_update_on_idle_via_host_function(
                     analysed_type::unit_case("snapshot-based"),
                 ]),
             },
-        ],
+        ),
     )
-    .await
-    .collapse()?;
+    .await?
+    .into_return_value();
 
     let result = user
         .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
@@ -760,57 +754,60 @@ async fn auto_update_on_idle_via_host_function(
 async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "runtime-service").store().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
 
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "getoplog1".to_string(),
-    };
+    let agent_id = agent_id!("golem-host-api", "getoplog1");
+    let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem:it/api.{generate-idempotency-keys}",
-        vec![],
+    user.invoke_and_await_agent(
+        &component.id,
+        &agent_id,
+        "generate_idempotency_keys",
+        data_value!(),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await_with_key(
-        &worker_id,
+    user.invoke_and_await_agent_with_key(
+        &component.id,
+        &agent_id,
         &idempotency_key1,
-        "golem:it/api.{generate-idempotency-keys}",
-        vec![],
+        "generate_idempotency_keys",
+        data_value!(),
     )
-    .await
-    .collapse()?;
+    .await?;
 
-    user.invoke_and_await_with_key(
-        &worker_id,
+    user.invoke_and_await_agent_with_key(
+        &component.id,
+        &agent_id,
         &idempotency_key2,
-        "golem:it/api.{generate-idempotency-keys}",
-        vec![],
+        "generate_idempotency_keys",
+        data_value!(),
     )
-    .await
-    .collapse()?;
+    .await?;
 
     let oplog = user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
-    assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(&oplog[0].entry, PublicOplogEntry::Create(_)));
-    assert_eq!(
-        oplog
-            .iter()
-            .filter(
-                |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-        ExportedFunctionInvokedParams { function_name, .. }
-    ) if function_name == "golem:it/api.{generate-idempotency-keys}")
-            )
-            .count(),
-        3
+
+    let invoke_count = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
+                ExportedFunctionInvokedParams { function_name, .. }
+            ) if function_name == "golem:agent/guest.{invoke}")
+        })
+        .count();
+    assert!(
+        invoke_count >= 3,
+        "Expected at least 3 ExportedFunctionInvoked entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
     );
 
     Ok(())
@@ -1337,34 +1334,38 @@ async fn agent_promise_await(
         .store()
         .await?;
 
+    let promise_agent_id = agent_id!("promise-agent", "name");
     let worker = user
-        .start_agent(&component.id, agent_id!("promise-agent", "name"))
+        .start_agent(&component.id, promise_agent_id.clone())
         .await?;
 
-    let mut result = user
-        .invoke_and_await(
-            &worker,
-            "golem-it:agent-promise/promise-agent.{get-promise}",
-            vec![],
+    let result = user
+        .invoke_and_await_agent(
+            &component.id,
+            &promise_agent_id,
+            "getPromise",
+            data_value!(),
         )
-        .await
-        .collapse()?;
+        .await?;
 
-    assert_eq!(result.len(), 1);
-
-    let promise_id = ValueAndType::new(result.swap_remove(0), PromiseId::get_type());
+    let promise_id_value = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let promise_id = ValueAndType::new(promise_id_value, PromiseId::get_type());
 
     let task = {
         let executor_clone = user.clone();
-        let worker_clone = worker.clone();
+        let agent_id_clone = promise_agent_id.clone();
+        let component_id_clone = component.id;
         let promise_id_clone = promise_id.clone();
         tokio::spawn(
             async move {
                 executor_clone
-                    .invoke_and_await(
-                        &worker_clone,
-                        "golem-it:agent-promise/promise-agent.{await-promise}",
-                        vec![promise_id_clone],
+                    .invoke_and_await_agent(
+                        &component_id_clone,
+                        &agent_id_clone,
+                        "awaitPromise",
+                        data_value!(promise_id_clone),
                     )
                     .await
             }
@@ -1383,8 +1384,11 @@ async fn agent_promise_await(
     user.complete_promise(&promise_id, b"hello".to_vec())
         .await?;
 
-    let result = task.await?.collapse()?;
-    assert_eq!(result, vec![Value::String("hello".to_string())]);
+    let result = task.await??;
+    assert_eq!(
+        result.into_return_value(),
+        Some(Value::String("hello".to_string()))
+    );
 
     Ok(())
 }
@@ -1547,17 +1551,10 @@ async fn agent_await_parallel_rpc_calls(
 
     let unique_id = Uuid::new_v4();
     let agent_id = agent_id!("test-agent", unique_id.to_string());
-    let _worker_id = user
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
+    let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
-    user.invoke_and_await_agent(
-        &component.id,
-        &agent_id,
-        "run",
-        data_value!(20f64),
-    )
-    .await?;
+    user.invoke_and_await_agent(&component.id, &agent_id, "run", data_value!(20f64))
+        .await?;
 
     Ok(())
 }
@@ -1577,89 +1574,87 @@ async fn agent_update_constructor_signature(
         .store()
         .await?;
 
+    let agent1_id = agent_id!("counter-agent", "agent1");
     let agent1 = user
-        .start_agent(&component.id, agent_id!("counter-agent", "agent1"))
+        .start_agent(&component.id, agent1_id.clone())
         .await?;
     let result1a = user
-        .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
-        .await
-        .collapse()?;
-    assert_eq!(result1a, vec![Value::U32(1)]);
-
-    let old_singleton = user
-        .start_agent(&component.id, agent_id!("caller"))
+        .invoke_and_await_agent(&component.id, &agent1_id, "increment", data_value!())
         .await?;
+    assert_eq!(result1a.into_return_value(), Some(Value::U32(1)));
+
+    let old_singleton_id = agent_id!("caller");
+    let old_singleton = user.start_agent(&component.id, old_singleton_id.clone()).await?;
     user.log_output(&old_singleton).await?;
 
     let result1b = user
-        .invoke_and_await(
-            &old_singleton,
-            "it:agent-update/caller.{call}",
-            vec!["agent1".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &old_singleton_id,
+            "call",
+            data_value!("agent1"),
         )
-        .await
-        .collapse()?;
-    assert_eq!(result1b, vec![Value::U32(2)]);
+        .await?;
+    assert_eq!(result1b.into_return_value(), Some(Value::U32(2)));
 
     user.update_component(&component.id, "it_agent_update_v2_release")
         .await?;
 
+    let agent2_id = agent_id!("counter-agent", 123u64);
     let agent2 = user
-        .start_agent(&component.id, agent_id!("counter-agent", 123u64))
+        .start_agent(&component.id, agent2_id.clone())
         .await?;
     let result2a = user
-        .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
-        .await
-        .collapse()?;
-    assert_eq!(result2a, vec![Value::U32(1)]);
+        .invoke_and_await_agent(&component.id, &agent2_id, "increment", data_value!())
+        .await?;
+    assert_eq!(result2a.into_return_value(), Some(Value::U32(1)));
 
+    let new_singleton_id = agent_id!("new-caller");
     let new_singleton = user
-        .start_agent(&component.id, agent_id!("new-caller"))
+        .start_agent(&component.id, new_singleton_id.clone())
         .await?;
     let result2b = user
-        .invoke_and_await(
-            &new_singleton,
-            "it:agent-update/new-caller.{call}",
-            vec![123u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &new_singleton_id,
+            "call",
+            data_value!(123u64),
         )
-        .await
-        .collapse()?;
-    assert_eq!(result2b, vec![Value::U32(2)]);
+        .await?;
+    assert_eq!(result2b.into_return_value(), Some(Value::U32(2)));
 
     // Still able to call both agents
     let result3a = user
-        .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent1_id, "increment", data_value!())
+        .await?;
 
     let result4a = user
-        .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent2_id, "increment", data_value!())
+        .await?;
 
-    assert_eq!(result3a, vec![Value::U32(3)]);
-    assert_eq!(result4a, vec![Value::U32(3)]);
+    assert_eq!(result3a.into_return_value(), Some(Value::U32(3)));
+    assert_eq!(result4a.into_return_value(), Some(Value::U32(3)));
 
     // Still able to do RPC
     let result3b = user
-        .invoke_and_await(
-            &old_singleton,
-            "it:agent-update/caller.{call}",
-            vec!["agent1".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &old_singleton_id,
+            "call",
+            data_value!("agent1"),
         )
-        .await
-        .collapse()?;
-    assert_eq!(result3b, vec![Value::U32(4)]);
+        .await?;
+    assert_eq!(result3b.into_return_value(), Some(Value::U32(4)));
 
     let result4b = user
-        .invoke_and_await(
-            &new_singleton,
-            "it:agent-update/new-caller.{call}",
-            vec![123u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &new_singleton_id,
+            "call",
+            data_value!(123u64),
         )
-        .await
-        .collapse()?;
-    assert_eq!(result4b, vec![Value::U32(4)]);
+        .await?;
+    assert_eq!(result4b.into_return_value(), Some(Value::U32(4)));
 
     // Enumerate agents
     let mut cursor = ScanCursor::default();

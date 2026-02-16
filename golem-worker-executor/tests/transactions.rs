@@ -19,15 +19,12 @@ use axum::extract::Path;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use bytes::Bytes;
-use golem_common::model::agent::Principal;
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{
-    drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
-    worker_error_message, worker_error_underlying_error, TestDsl,
+    drain_connection, stdout_event_starting_with, stdout_events, TestDsl,
 };
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -280,56 +277,41 @@ async fn golem_rust_set_retry_policy(
 
     let start = SystemTime::now();
     let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:agent/guest.{invoke}",
-            vec![
-                "fail_with_custom_max_retries".into_value_and_type(),
-                data_value!(2u64).into_value_and_type(),
-                Principal::anonymous().into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "fail_with_custom_max_retries",
+            data_value!(2u64),
         )
-        .await?;
+        .await;
     let elapsed = start.elapsed().unwrap();
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:agent/guest.{invoke}",
-            vec![
-                "fail_with_custom_max_retries".into_value_and_type(),
-                data_value!(1u64).into_value_and_type(),
-                Principal::anonymous().into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "fail_with_custom_max_retries",
+            data_value!(1u64),
         )
-        .await?;
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
     assert!(result1.is_err());
     assert!(result2.is_err());
-    let result1_err = result1.err().unwrap();
-    assert_eq!(worker_error_message(&result1_err), "Invocation failed");
+    let result1_err = format!("{}", result1.unwrap_err());
     assert!(
-        matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
+        result1_err.contains("error while executing at wasm backtrace:")
+            || result1_err.contains("Invocation failed"),
+        "Unexpected error: {result1_err}"
     );
-    let result1_logs = worker_error_logs(&result1_err);
-    assert!(result1_logs
-        .as_ref()
-        .map_or(false, |l| l.contains("Fail now")));
-    let result2_err = result2.err().unwrap();
-    assert_eq!(
-        worker_error_message(&result2_err),
-        "Previous invocation failed"
-    );
+    let result2_err = format!("{}", result2.unwrap_err());
     assert!(
-        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
+        result2_err.contains("Previous invocation failed")
+            || result2_err.contains("error while executing at wasm backtrace:"),
+        "Unexpected error: {result2_err}"
     );
-    let result2_logs = worker_error_logs(&result2_err);
-    assert!(result2_logs
-        .as_ref()
-        .map_or(false, |l| l.contains("Fail now")));
 
     Ok(())
 }

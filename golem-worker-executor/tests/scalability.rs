@@ -107,7 +107,7 @@ async fn spawning_many_workers_that_sleep(
                     let (result, duration) = timed(async move {
                         executor_clone
                             .invoke_and_await_agent(
-                                &component.id,
+                                &component_id,
                                 &agent_id,
                                 "use_std_time_apis",
                                 data_value!(),
