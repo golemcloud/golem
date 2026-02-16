@@ -193,7 +193,7 @@ fn agent_metas() -> Vec<AgentMeta> {
             "TsCounterAgent",
             vec![
                 (
-                    "components-ts/app-ts/src/main.js",
+                    "components-ts/app-ts/src/main.ts",
                     "/counters",
                     "/ts-counters",
                 ),
@@ -210,7 +210,7 @@ fn agent_metas() -> Vec<AgentMeta> {
             "TsWorkflowAgent",
             vec![
                 (
-                    "components-ts/app-ts-human-in-the-loop/src/main.js",
+                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
                     "/workflows",
                     "/ts-workflows",
                 ),
@@ -227,7 +227,7 @@ fn agent_metas() -> Vec<AgentMeta> {
             "TsHumanAgent",
             vec![
                 (
-                    "components-ts/app-ts-human-in-the-loop/src/main.js",
+                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
                     "/humans",
                     "/ts-humans",
                 ),
@@ -244,7 +244,7 @@ fn agent_metas() -> Vec<AgentMeta> {
             "TsTaskAgent",
             vec![
                 (
-                    "components-ts/app-ts-json/src/main.js",
+                    "components-ts/app-ts-json/src/main.ts",
                     "/task-agents",
                     "/ts-task-agents",
                 ),
@@ -261,7 +261,7 @@ fn agent_metas() -> Vec<AgentMeta> {
             "TsChatAgent",
             vec![
                 (
-                    "components-ts/app-ts-llm-session/src/main.js",
+                    "components-ts/app-ts-llm-session/src/main.ts",
                     "/chats",
                     "/ts-chats",
                 ),
