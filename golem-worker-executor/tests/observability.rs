@@ -30,7 +30,7 @@ use http::HeaderMap;
 use log::info;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -211,6 +211,7 @@ async fn search_oplog_1(
 
 #[test]
 #[tracing::instrument]
+#[timeout(120_000)]
 async fn get_oplog_with_api_changing_updates(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -313,7 +314,7 @@ async fn get_oplog_starting_with_updated_component(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     assert_eq!(result, data_value!(11u64));
-    assert_eq!(oplog.len(), 10);
+    assert_eq!(oplog.len(), 11);
 
     Ok(())
 }

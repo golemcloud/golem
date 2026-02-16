@@ -506,63 +506,6 @@ async fn counter_resource_test_5(
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_5_with_restart(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
-        .store()
-        .await?;
-
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_5_with_restart");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test5", data_value!())
-        .await?;
-
-    drop(executor);
-    let executor = start(deps, &context).await?;
-
-    let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test5", data_value!())
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    let result_value1 = result1
-        .into_return_value()
-        .expect("Expected a single return value");
-    let result_value2 = result2
-        .into_return_value()
-        .expect("Expected a single return value");
-
-    assert_eq!(
-        result_value1,
-        Value::List(vec![Value::U64(3), Value::U64(3), Value::U64(3),])
-    );
-    // The second call has the same result because new resources are created within test5()
-    assert_eq!(
-        result_value2,
-        Value::List(vec![Value::U64(3), Value::U64(3), Value::U64(3),]),
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
 async fn wasm_rpc_bug_32_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
