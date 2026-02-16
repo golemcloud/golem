@@ -6,6 +6,7 @@ import {
     UnstructuredBinary,
     createPromise,
     awaitPromise,
+    Principal
 } from '@golemcloud/golem-ts-sdk';
 import { createWebhook } from 'golem:agent/host';
 
@@ -192,5 +193,37 @@ class WebhookAgent extends BaseAgent {
     let data = await awaitPromise(promiseId);
 
     return { payloadLength: data.byteLength };
+  }
+}
+
+@agent({
+  mount: '/principal-agent/{agentName}',
+})
+class PrincipalAgent extends BaseAgent {
+  constructor(readonly agentName: string) {
+    super();
+  }
+
+  // only Principal
+  @endpoint({ get: "/echo-principal" })
+  echoPrincipal(principal: Principal): { value: Principal } {
+    return { value: principal }
+  }
+
+  // Principal in between
+  @endpoint({ get: "/echo-principal-mid/{foo}/{bar}" })
+  echoPrincipal2(foo: string, principal: Principal, bar: number): {value: Principal, foo: string, bar: number} {
+    return {value: principal,  foo: foo, bar: bar};
+  }
+
+  // Principal at the end
+  @endpoint({ get: "/echo-principal-last/{foo}/{bar}" })
+  echoPrincipal3(foo: string, bar: number, principal: Principal): {value: Principal, foo: string, bar: number} {
+    return {value: principal, foo, bar};
+  }
+
+  @endpoint({ get: "/authed-principal", auth: true })
+  authedPrincipal(principal: Principal): { value: Principal } {
+    return { value: principal }
   }
 }

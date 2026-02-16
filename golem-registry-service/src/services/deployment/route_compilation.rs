@@ -498,10 +498,10 @@ fn compile_agent_path_segment(
             value: inner.value.clone(),
         },
         AgentPathSegment::PathVariable(inner) => PathSegment::Variable {
-            display_name: inner.variable_name.clone(),
+            display_name: inner.variable_name.to_wit_naming(),
         },
         AgentPathSegment::RemainingPathVariable(inner) => PathSegment::CatchAll {
-            display_name: inner.variable_name.clone(),
+            display_name: inner.variable_name.to_wit_naming(),
         },
         AgentPathSegment::SystemVariable(system_var) => {
             let literal = match system_var.value {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Config, ProcessArgs } from './config';
+import { Config, ReplCliFlags } from './config';
 
 import tsm, { ts } from 'ts-morph';
 import pc from 'picocolors';
@@ -52,8 +52,8 @@ export class LanguageService {
   private snippetEndPos: number;
   private snippetStartPos: number;
 
-  constructor(config: Config, processArgs: ProcessArgs) {
-    this.snippetImports = processArgs.disableAutoImports
+  constructor(config: Config, replCliFlags: ReplCliFlags) {
+    this.snippetImports = replCliFlags.disableAutoImports
       ? ''
       : Object.entries(config.agents)
           .map(([agentTypeName, agentConfig]) => {

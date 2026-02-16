@@ -17,7 +17,8 @@ use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
     endpoint_on_static_method_error, generic_type_in_agent_method_error,
     generic_type_in_agent_return_type_error, generic_type_in_constructor_error, get_remote_client,
-    multiple_constructor_methods_error, no_constructor_method_error,
+    invalid_static_method_in_agent_error, multiple_constructor_methods_error,
+    no_constructor_method_error,
 };
 
 use syn::spanned::Spanned;
@@ -200,7 +201,10 @@ fn get_agent_type_with_remote_client(
             }
 
             if is_static_method(&trait_fn.sig) {
-                return None;
+                return Some(invalid_static_method_in_agent_error(
+                    trait_fn.sig.ident.span(),
+                    &trait_fn.sig.ident.to_string()
+                ));
             }
 
             let name = &trait_fn.sig.ident;
