@@ -697,7 +697,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "generate-idempotency-keys",
+            "generate_idempotency_keys",
             data_value!(),
         )
         .await?
@@ -709,7 +709,7 @@ async fn idempotency_keys_in_ephemeral_workers(
             &component.id,
             &agent_id,
             &idempotency_key1,
-            "generate-idempotency-keys",
+            "generate_idempotency_keys",
             data_value!(),
         )
         .await?
@@ -721,7 +721,7 @@ async fn idempotency_keys_in_ephemeral_workers(
             &component.id,
             &agent_id,
             &idempotency_key2,
-            "generate-idempotency-keys",
+            "generate_idempotency_keys",
             data_value!(),
         )
         .await?
@@ -732,7 +732,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "generate-idempotency-keys",
+            "generate_idempotency_keys",
             data_value!(),
         )
         .await?
@@ -744,7 +744,7 @@ async fn idempotency_keys_in_ephemeral_workers(
             &component.id,
             &agent_id,
             &idempotency_key1,
-            "generate-idempotency-keys",
+            "generate_idempotency_keys",
             data_value!(),
         )
         .await?
@@ -756,7 +756,7 @@ async fn idempotency_keys_in_ephemeral_workers(
             &component.id,
             &agent_id,
             &idempotency_key2,
-            "generate-idempotency-keys",
+            "generate_idempotency_keys",
             data_value!(),
         )
         .await?
