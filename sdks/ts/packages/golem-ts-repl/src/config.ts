@@ -29,6 +29,7 @@ export type ReplCliFlags = {
   script?: string;
   scriptPath?: string;
   disableAutoImports: boolean;
+  showTypeInfo: boolean;
   streamLogs: boolean;
 };
 
@@ -149,6 +150,7 @@ export function loadReplCliFlags(): ReplCliFlags {
       script: { type: 'string' },
       'script-file': { type: 'string' },
       'disable-auto-imports': { type: 'boolean' },
+      'disable-type-info': { type: 'boolean' },
       'disable-stream': { type: 'boolean' },
     },
     allowPositionals: true,
@@ -156,6 +158,7 @@ export function loadReplCliFlags(): ReplCliFlags {
 
   const streamLogs = !(values['disable-stream'] ?? false);
   const disableAutoImports = values['disable-auto-imports'] ?? false;
+  const showTypeInfo = !(values['disable-type-info'] ?? false);
   const scriptPath = values['script-file'];
 
   const script = (() => {
@@ -172,6 +175,7 @@ export function loadReplCliFlags(): ReplCliFlags {
     script,
     scriptPath,
     disableAutoImports,
+    showTypeInfo,
     streamLogs,
   };
 }

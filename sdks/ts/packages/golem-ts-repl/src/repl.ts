@@ -127,6 +127,7 @@ export class Repl {
   private setupReplEval(replServer: repl.REPLServer): repl.REPLEval {
     const tsxEval = replServer.eval;
     const languageService = this.getLanguageService();
+    const replCliFlags = this.replCliFlags;
     const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
@@ -147,13 +148,17 @@ export class Repl {
         const typeInfo = languageService.getSnippetTypeInfo();
 
         if (typeInfo && typeInfo.isPromise) {
-          logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
+          if (replCliFlags.showTypeInfo) {
+            logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
+          }
           evalCode('await ' + code);
         } else {
-          if (quickInfo) {
-            logSnippetInfo(pc.bold(quickInfo.formattedInfo));
-          } else if (typeInfo) {
-            logSnippetInfo(pc.bold(typeInfo.formattedType));
+          if (replCliFlags.showTypeInfo) {
+            if (quickInfo) {
+              logSnippetInfo(pc.bold(quickInfo.formattedInfo));
+            } else if (typeInfo) {
+              logSnippetInfo(pc.bold(typeInfo.formattedType));
+            }
           }
           evalCode(code);
         }
@@ -230,24 +235,42 @@ export class Repl {
   }
 
   private setupReplCommands(replServer: repl.REPLServer) {
+    replServer.defineCommand('quit', {
+      help: 'Quit the REPL (exit alias)',
+      action: () => {
+        replServer.close();
+      },
+    });
+
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
       async action() {
         await CliReplInterop.exitWithReloadCode();
       },
     });
+
     replServer.defineCommand('agentTypeInfo', {
       help: 'Show auto-imported agent client info',
       action: () => {
         this.showAutoImportClientInfo(replServer, true);
       },
     });
+
     this.defineFlagCommand(replServer, {
       name: 'streamLogs',
       help: 'Show or set agent stream logging (on/off)',
       get: () => this.replCliFlags.streamLogs,
       set: (value) => {
         this.replCliFlags.streamLogs = value;
+      },
+    });
+
+    this.defineFlagCommand(replServer, {
+      name: 'showTypeInfo',
+      help: 'Show or set type info logging before execution (on/off)',
+      get: () => this.replCliFlags.showTypeInfo,
+      set: (value) => {
+        this.replCliFlags.showTypeInfo = value;
       },
     });
 
@@ -268,9 +291,7 @@ export class Repl {
       action: (rawArgs: string) => {
         const trimmed = rawArgs.trim();
         if (!trimmed) {
-          logSnippetInfo(
-            `${opts.name} is ${opts.get() ? pc.green('on') : pc.red('off')}`,
-          );
+          logSnippetInfo(`${opts.name} is ${opts.get() ? pc.green('on') : pc.red('off')}`);
           replServer.displayPrompt();
           return;
         }
@@ -283,9 +304,7 @@ export class Repl {
         }
 
         opts.set(parsed);
-        logSnippetInfo(
-          `${opts.name} set to ${opts.get() ? pc.green('on') : pc.red('off')}`,
-        );
+        logSnippetInfo(`${opts.name} set to ${opts.get() ? pc.green('on') : pc.red('off')}`);
         replServer.displayPrompt();
       },
     });
