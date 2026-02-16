@@ -195,8 +195,7 @@ fn get_remote_agent_methods_info(
             let method_name = &method.sig.ident;
             let trigger_name = format_ident!("trigger_{}", method_name);
             let schedule_name = format_ident!("schedule_{}", method_name);
-            let schedule_cancelable_name =
-                format_ident!("schedule_cancelable_{}", method_name);
+            let schedule_cancelable_name = format_ident!("schedule_cancelable_{}", method_name);
 
             agent_method_names.extend(vec![
                 method_name.to_string(),

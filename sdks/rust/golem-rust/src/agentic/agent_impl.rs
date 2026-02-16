@@ -127,15 +127,13 @@ impl LoadSnapshotGuest for Component {
                 if bytes.len() < 5 {
                     return Err("Version 2 snapshot too short for principal length".into());
                 }
-                let principal_len =
-                    u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                let principal_len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
                 let principal_start = 5;
                 let principal_end = principal_start + principal_len;
                 if bytes.len() < principal_end {
                     return Err("Version 2 snapshot too short for principal data".into());
                 }
-                let principal =
-                    deserialize_principal(&bytes[principal_start..principal_end])?;
+                let principal = deserialize_principal(&bytes[principal_start..principal_end])?;
                 let agent_snapshot = bytes[principal_end..].to_vec();
                 (principal, agent_snapshot)
             }

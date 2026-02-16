@@ -172,10 +172,7 @@ impl Serialize for Principal {
             Principal::GolemUser(user) => {
                 let mut s = serializer.serialize_struct("Principal", 2)?;
                 s.serialize_field("type", "golemUser")?;
-                s.serialize_field(
-                    "accountId",
-                    &uuid_to_string(&user.account_id.uuid),
-                )?;
+                s.serialize_field("accountId", &uuid_to_string(&user.account_id.uuid))?;
                 s.end()
             }
         }
@@ -231,8 +228,7 @@ impl<'de> Deserialize<'de> for Principal {
                     }
                 }
 
-                let type_str = type_field
-                    .ok_or_else(|| de::Error::missing_field("type"))?;
+                let type_str = type_field.ok_or_else(|| de::Error::missing_field("type"))?;
 
                 match type_str.as_str() {
                     "anonymous" => Ok(Principal::Anonymous),
@@ -249,8 +245,8 @@ impl<'de> Deserialize<'de> for Principal {
                         claims: claims.ok_or_else(|| de::Error::missing_field("claims"))?,
                     })),
                     "agent" => {
-                        let cid = component_id
-                            .ok_or_else(|| de::Error::missing_field("componentId"))?;
+                        let cid =
+                            component_id.ok_or_else(|| de::Error::missing_field("componentId"))?;
                         let uuid = uuid_from_string(&cid).map_err(de::Error::custom)?;
                         Ok(Principal::Agent(AgentPrincipal {
                             agent_id: AgentId {
@@ -261,8 +257,8 @@ impl<'de> Deserialize<'de> for Principal {
                         }))
                     }
                     "golemUser" => {
-                        let aid = account_id
-                            .ok_or_else(|| de::Error::missing_field("accountId"))?;
+                        let aid =
+                            account_id.ok_or_else(|| de::Error::missing_field("accountId"))?;
                         let uuid = uuid_from_string(&aid).map_err(de::Error::custom)?;
                         Ok(Principal::GolemUser(GolemUserPrincipal {
                             account_id: AccountId { uuid },

@@ -33,7 +33,8 @@ impl IntoValue for UpdateMode {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.variant(Some("UpdateMode".to_string()), Some("golem".to_string()));
+        let mut builder =
+            builder.variant(Some("UpdateMode".to_string()), Some("golem".to_string()));
         builder = builder.unit_case("automatic");
         builder = builder.unit_case("snapshot-based");
         builder.finish()
@@ -105,10 +106,7 @@ impl FromValueAndType for FilterComparator {
             3 => Ok(FilterComparator::Greater),
             4 => Ok(FilterComparator::LessEqual),
             5 => Ok(FilterComparator::Less),
-            _ => Err(format!(
-                "Invalid FilterComparator variant index: {}",
-                idx
-            )),
+            _ => Err(format!("Invalid FilterComparator variant index: {}", idx)),
         }
     }
 }
@@ -233,8 +231,7 @@ impl IntoValue for AgentNameFilter {
             Some("AgentNameFilter".to_string()),
             Some("golem".to_string()),
         );
-        let builder =
-            <StringFilterComparator>::add_to_type_builder(builder.field("comparator"));
+        let builder = <StringFilterComparator>::add_to_type_builder(builder.field("comparator"));
         let builder = <String>::add_to_type_builder(builder.field("value"));
         builder.finish()
     }
@@ -392,8 +389,7 @@ impl IntoValue for AgentEnvFilter {
             Some("golem".to_string()),
         );
         let builder = <String>::add_to_type_builder(builder.field("name"));
-        let builder =
-            <StringFilterComparator>::add_to_type_builder(builder.field("comparator"));
+        let builder = <StringFilterComparator>::add_to_type_builder(builder.field("comparator"));
         let builder = <String>::add_to_type_builder(builder.field("value"));
         builder.finish()
     }
@@ -443,8 +439,7 @@ impl IntoValue for AgentConfigVarsFilter {
             Some("golem".to_string()),
         );
         let builder = <String>::add_to_type_builder(builder.field("name"));
-        let builder =
-            <StringFilterComparator>::add_to_type_builder(builder.field("comparator"));
+        let builder = <StringFilterComparator>::add_to_type_builder(builder.field("comparator"));
         let builder = <String>::add_to_type_builder(builder.field("value"));
         builder.finish()
     }
@@ -519,8 +514,7 @@ impl IntoValue for AgentPropertyFilter {
         builder = <AgentVersionFilter>::add_to_type_builder(builder.case("version"));
         builder = <AgentCreatedAtFilter>::add_to_type_builder(builder.case("created-at"));
         builder = <AgentEnvFilter>::add_to_type_builder(builder.case("env"));
-        builder =
-            <AgentConfigVarsFilter>::add_to_type_builder(builder.case("wasi-config-vars"));
+        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("wasi-config-vars"));
         builder.finish()
     }
 }
@@ -541,25 +535,22 @@ impl FromValueAndType for AgentPropertyFilter {
             }
             1 => {
                 let value = <AgentStatusFilter>::from_extractor(
-                    &inner
-                        .ok_or_else(|| "Missing AgentPropertyFilter::Status body".to_string())?,
+                    &inner.ok_or_else(|| "Missing AgentPropertyFilter::Status body".to_string())?,
                 )?;
                 Ok(AgentPropertyFilter::Status(value))
             }
             2 => {
                 let value = <AgentVersionFilter>::from_extractor(
-                    &inner.ok_or_else(|| {
-                        "Missing AgentPropertyFilter::Version body".to_string()
-                    })?,
+                    &inner
+                        .ok_or_else(|| "Missing AgentPropertyFilter::Version body".to_string())?,
                 )?;
                 Ok(AgentPropertyFilter::Version(value))
             }
             3 => {
-                let value = <AgentCreatedAtFilter>::from_extractor(
-                    &inner.ok_or_else(|| {
+                let value =
+                    <AgentCreatedAtFilter>::from_extractor(&inner.ok_or_else(|| {
                         "Missing AgentPropertyFilter::CreatedAt body".to_string()
-                    })?,
-                )?;
+                    })?)?;
                 Ok(AgentPropertyFilter::CreatedAt(value))
             }
             4 => {
@@ -569,11 +560,9 @@ impl FromValueAndType for AgentPropertyFilter {
                 Ok(AgentPropertyFilter::Env(value))
             }
             5 => {
-                let value = <AgentConfigVarsFilter>::from_extractor(
-                    &inner.ok_or_else(|| {
-                        "Missing AgentPropertyFilter::WasiConfigVars body".to_string()
-                    })?,
-                )?;
+                let value = <AgentConfigVarsFilter>::from_extractor(&inner.ok_or_else(|| {
+                    "Missing AgentPropertyFilter::WasiConfigVars body".to_string()
+                })?)?;
                 Ok(AgentPropertyFilter::WasiConfigVars(value))
             }
             _ => Err(format!(
@@ -598,8 +587,7 @@ impl IntoValue for AgentAllFilter {
             Some("AgentAllFilter".to_string()),
             Some("golem".to_string()),
         );
-        let builder =
-            <Vec<AgentPropertyFilter>>::add_to_type_builder(builder.field("filters"));
+        let builder = <Vec<AgentPropertyFilter>>::add_to_type_builder(builder.field("filters"));
         builder.finish()
     }
 }
@@ -665,16 +653,11 @@ impl IntoValue for AgentMetadata {
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let builder = builder.record(
-            Some("AgentMetadata".to_string()),
-            Some("golem".to_string()),
-        );
+        let builder = builder.record(Some("AgentMetadata".to_string()), Some("golem".to_string()));
         let builder = <AgentId>::add_to_type_builder(builder.field("agent-id"));
         let builder = <Vec<String>>::add_to_type_builder(builder.field("args"));
-        let builder =
-            <Vec<(String, String)>>::add_to_type_builder(builder.field("env"));
-        let builder =
-            <Vec<(String, String)>>::add_to_type_builder(builder.field("config-vars"));
+        let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("env"));
+        let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("config-vars"));
         let builder = <AgentStatus>::add_to_type_builder(builder.field("status"));
         let builder = <u64>::add_to_type_builder(builder.field("component-revision"));
         let builder = <u64>::add_to_type_builder(builder.field("retry-count"));
