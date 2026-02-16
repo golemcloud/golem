@@ -14,7 +14,6 @@
 
 import process from 'node:process';
 import { Writable } from 'node:stream';
-import * as console from 'node:console';
 
 type OutputKind = 'stdout' | 'stderr';
 
