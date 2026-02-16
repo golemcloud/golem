@@ -2,7 +2,7 @@ use golem_rust::golem_ai::golem::llm::llm;
 use golem_rust::golem_ai::golem::llm::llm::{
     Config, ContentPart, Event, Message, Response, Role, ToolResult,
 };
-use golem_rust::{agent_definition, agent_implementation, description};
+use golem_rust::{agent_definition, agent_implementation, description, endpoint};
 
 #[agent_definition(
     mount = "/chats/{chat_name}"
