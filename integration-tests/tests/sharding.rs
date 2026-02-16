@@ -18,6 +18,7 @@ test_r::enable!();
 mod tests {
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::worker;
+    use golem_common::agent_id;
     use golem_common::model::{IdempotencyKey, WorkerId};
     use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
     use golem_test_framework::config::{
@@ -379,9 +380,9 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let worker_name = format!("counter(\"sharding-test-{i}\")");
+                let agent_id = agent_id!("counter", format!("sharding-test-{i}"));
                 let worker_id = admin
-                    .start_worker(&component.id, &worker_name)
+                    .start_agent(&component.id, agent_id)
                     .await
                     .unwrap();
                 info!("Worker {i} started");

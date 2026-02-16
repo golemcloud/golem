@@ -137,17 +137,19 @@ async fn delete_interrupts_long_rpc_call(
         .store()
         .await?;
     let unique_id = context.redis_prefix();
+    let agent_id = agent_id!("test-agent", unique_id);
     let worker_id = executor
-        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke(
-            &worker_id,
-            "golem-it:agent-rpc/test-agent.{long-rpc-call}",
-            vec![600000f64.into_value_and_type()], // 10 minutes
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "long-rpc-call",
+            data_value!(600000f64), // 10 minutes
         )
-        .await??;
+        .await?;
 
     tokio::time::sleep(Duration::from_secs(10)).await;
     executor.delete_worker(&worker_id).await?;
@@ -435,32 +437,26 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
     let component = executor
         .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "ephemeral-counter(\"test\")".to_string(),
-    };
+    let agent_id = agent_id!("ephemeral-counter", "test");
+    let _worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
-    executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/ephemeral-counter.{increment}",
-            vec![],
-        )
-        .await??;
+    let _ = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/ephemeral-counter.{increment}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?
+        .into_return_value();
 
     drop(executor);
 
-    assert_eq!(result, vec![Value::U32(1)]);
+    assert_eq!(result, Some(Value::U32(1)));
     Ok(())
 }
 
@@ -1124,7 +1120,7 @@ async fn component_env_and_worker_env_priority(
     let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
 
     let worker_id = executor
-        .start_worker_with(&component.id, &agent_id.to_string(), worker_env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), worker_env, vec![])
         .await?;
 
     let WorkerMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;

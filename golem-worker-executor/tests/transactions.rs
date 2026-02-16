@@ -21,7 +21,7 @@ use axum::Router;
 use bytes::Bytes;
 use golem_common::model::agent::Principal;
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
@@ -693,77 +693,92 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let component = executor
         .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
 
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "host-function-tests(\"idempotency_keys_in_ephemeral_workers\")".to_string(),
-    };
+    let agent_id = agent_id!("host-function-tests", "idempotency_keys_in_ephemeral_workers");
+    let _worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 
     let result11 = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "generate-idempotency-keys",
+            data_value!(),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result21 = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key1,
-            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
-            vec![],
+            "generate-idempotency-keys",
+            data_value!(),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result31 = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key2,
-            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
-            vec![],
+            "generate-idempotency-keys",
+            data_value!(),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result12 = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "generate-idempotency-keys",
+            data_value!(),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result22 = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key1,
-            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
-            vec![],
+            "generate-idempotency-keys",
+            data_value!(),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result32 = executor
-        .invoke_and_await_with_key(
-            &worker_id,
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key2,
-            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
-            vec![],
+            "generate-idempotency-keys",
+            data_value!(),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
-    fn returned_keys_are_different(value: &[Value]) -> bool {
-        if value.len() == 1 {
-            if let Value::Tuple(items) = &value[0] {
-                if items.len() == 2 {
-                    items[0] != items[1]
-                } else {
-                    false
-                }
+    fn returned_keys_are_different(value: &Value) -> bool {
+        if let Value::Tuple(items) = value {
+            if items.len() == 2 {
+                items[0] != items[1]
             } else {
                 false
             }

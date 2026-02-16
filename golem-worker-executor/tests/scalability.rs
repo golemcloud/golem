@@ -19,7 +19,7 @@ use futures::StreamExt;
 use golem_common::model::agent::AgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -295,26 +295,31 @@ async fn initial_large_memory_allocation(
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
     let component = executor
-        .component(&context.default_environment_id, "large-initial-memory")
+        .component(
+            &context.default_environment_id,
+            "scalability_large_initial_memory_release",
+        )
+        .name("scalability:large-initial-memory")
         .store()
         .await?;
 
     let mut handles = JoinSet::new();
-    let mut results: Vec<Vec<Value>> = Vec::new();
+    let mut results = Vec::new();
 
     const N: usize = 10;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id_clone = component.id;
+        let component_id = component.id;
+        let agent_id = agent_id!("large-initial-memory-agent", format!("mem-{i}"));
         handles.spawn(
             async move {
-                let worker = executor_clone
-                    .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
+                executor_clone
+                    .start_agent(&component_id, agent_id.clone())
                     .await?;
 
                 let result = executor_clone
-                    .invoke_and_await(&worker, "run", vec![])
-                    .await??;
+                    .invoke_and_await_agent(&component_id, &agent_id, "run", data_value!())
+                    .await?;
 
                 Ok::<_, anyhow::Error>(result)
             }
@@ -327,7 +332,7 @@ async fn initial_large_memory_allocation(
     }
 
     for i in 0..N {
-        assert_eq!(results[i][0], Value::U64(536870912));
+        assert_eq!(results[i], data_value!(536870912u64));
     }
 
     Ok(())
@@ -345,26 +350,31 @@ async fn dynamic_large_memory_allocation(
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
     let component = executor
-        .component(&context.default_environment_id, "large-dynamic-memory")
+        .component(
+            &context.default_environment_id,
+            "scalability_large_dynamic_memory_release",
+        )
+        .name("scalability:large-dynamic-memory")
         .store()
         .await?;
 
     let mut handles = JoinSet::new();
-    let mut results: Vec<Vec<Value>> = Vec::new();
+    let mut results = Vec::new();
 
     const N: usize = 3;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id_clone = component.id;
+        let component_id = component.id;
+        let agent_id = agent_id!("large-dynamic-memory-agent", format!("mem-{i}"));
         handles.spawn(
             async move {
-                let worker = executor_clone
-                    .start_worker(&component_id_clone, &format!("large-initial-memory-{i}"))
+                executor_clone
+                    .start_agent(&component_id, agent_id.clone())
                     .await?;
 
                 let result = executor_clone
-                    .invoke_and_await(&worker, "run", vec![])
-                    .await??;
+                    .invoke_and_await_agent(&component_id, &agent_id, "run", data_value!())
+                    .await?;
 
                 Ok::<_, anyhow::Error>(result)
             }
@@ -377,7 +387,7 @@ async fn dynamic_large_memory_allocation(
     }
 
     for i in 0..N {
-        assert_eq!(results[i][0], Value::U64(0));
+        assert_eq!(results[i], data_value!(0u64));
     }
 
     Ok(())

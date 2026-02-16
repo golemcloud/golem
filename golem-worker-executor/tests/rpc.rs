@@ -15,7 +15,6 @@
 use crate::Tracing;
 use golem_common::base_model::agent::ElementValue;
 use golem_common::model::agent::{DataValue, ElementValues};
-use golem_common::model::WorkerId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
@@ -679,30 +678,35 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .name("it:agent-counters")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "counter(\"ephemeral_worker_invocation_via_rpc1\")".to_string(),
-    };
+    let agent_id = agent_id!("counter", "ephemeral_worker_invocation_via_rpc1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "increment-through-rpc-to-ephemeral",
+            data_value!(),
         )
         .await?;
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "increment-through-rpc-to-ephemeral",
+            data_value!(),
         )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    assert_eq!(result, Ok(vec![Value::U32(1)]));
+    let value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+    assert_eq!(value, Value::U32(1));
 
     Ok(())
 }
@@ -722,30 +726,35 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .name("it:agent-counters")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "counter(\"ephemeral_worker_invocation_via_rpc2\")".to_string(),
-    };
+    let agent_id = agent_id!("counter", "ephemeral_worker_invocation_via_rpc2");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "increment-through-rpc-to-ephemeral-phantom",
+            data_value!(),
         )
         .await;
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "increment-through-rpc-to-ephemeral-phantom",
+            data_value!(),
         )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
-    assert_eq!(result, Ok(vec![Value::U32(1)]));
+    let value = result
+        .into_return_value()
+        .expect("Expected a single return value");
+    assert_eq!(value, Value::U32(1));
 
     Ok(())
 }

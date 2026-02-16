@@ -21,7 +21,7 @@ use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, Rev
 use golem_common::model::OplogIndex;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::{update_counts, TestDsl};
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -151,16 +151,12 @@ async fn revert_failed_worker(
         .await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/failing-counter.{add}",
-            vec![50u64.into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .await;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await;
 
     executor
         .revert(
@@ -212,12 +208,8 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         .await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/failing-counter.{add}",
-            vec![50u64.into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .await;
 
     let revert_target = {
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;

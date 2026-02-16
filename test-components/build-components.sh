@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 rust_test_components=("oplog-processor")
-rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4")
+rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-rpc")
 benchmark_apps=("benchmarks")

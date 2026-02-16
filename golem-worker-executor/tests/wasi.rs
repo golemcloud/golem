@@ -3109,9 +3109,9 @@ async fn wasi_config_initial_worker_config(
     let agent_id = agent_id!("wasi-config", "worker-1");
 
     let worker_id = executor
-        .start_worker_with(
+        .start_agent_with(
             &component.id,
-            &agent_id.to_string(),
+            agent_id.clone(),
             HashMap::new(),
             vec![
                 ("k1".to_string(), "v1".to_string()),
