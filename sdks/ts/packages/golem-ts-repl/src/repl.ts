@@ -242,37 +242,53 @@ export class Repl {
         this.showAutoImportClientInfo(replServer, true);
       },
     });
-    replServer.defineCommand('streamLogs', {
-      help: 'Show or toggle agent stream logging (on/off)',
+    this.defineFlagCommand(replServer, {
+      name: 'streamLogs',
+      help: 'Show or set agent stream logging (on/off)',
+      get: () => this.replCliFlags.streamLogs,
+      set: (value) => {
+        this.replCliFlags.streamLogs = value;
+      },
+    });
+
+    this.cli.defineCommands(replServer);
+  }
+
+  private defineFlagCommand(
+    replServer: repl.REPLServer,
+    opts: {
+      name: string;
+      help: string;
+      get: () => boolean;
+      set: (value: boolean) => void;
+    },
+  ) {
+    replServer.defineCommand(opts.name, {
+      help: opts.help,
       action: (rawArgs: string) => {
         const trimmed = rawArgs.trim();
         if (!trimmed) {
           logSnippetInfo(
-            `streamLogs is ${this.replCliFlags.streamLogs ? pc.green('on') : pc.red('off')}`,
+            `${opts.name} is ${opts.get() ? pc.green('on') : pc.red('off')}`,
           );
           replServer.displayPrompt();
           return;
         }
 
-        const normalized = trimmed.toLowerCase();
-        if (['on', 'true', '1', 'yes'].includes(normalized)) {
-          this.replCliFlags.streamLogs = true;
-        } else if (['off', 'false', '0', 'no'].includes(normalized)) {
-          this.replCliFlags.streamLogs = false;
-        } else {
-          logSnippetInfo('Usage: .streamLogs [on|off]');
+        const parsed = parseToggleValue(trimmed);
+        if (parsed === undefined) {
+          logSnippetInfo(`Usage: .${opts.name} [on|off]`);
           replServer.displayPrompt();
           return;
         }
 
+        opts.set(parsed);
         logSnippetInfo(
-          `streamLogs set to ${this.replCliFlags.streamLogs ? pc.green('on') : pc.red('off')}`,
+          `${opts.name} set to ${opts.get() ? pc.green('on') : pc.red('off')}`,
         );
         replServer.displayPrompt();
       },
     });
-
-    this.cli.defineCommands(replServer);
   }
 
   private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
@@ -465,4 +481,11 @@ function countNewlines(value: string): number {
     }
   }
   return count;
+}
+
+function parseToggleValue(rawValue: string): boolean | undefined {
+  const normalized = rawValue.trim().toLowerCase();
+  if (['on', 'true', '1', 'yes'].includes(normalized)) return true;
+  if (['off', 'false', '0', 'no'].includes(normalized)) return false;
+  return undefined;
 }
