@@ -276,11 +276,29 @@ pub trait TestDsl {
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
+        self.invoke_agent_with_key(
+            component_id,
+            agent_id,
+            &IdempotencyKey::fresh(),
+            method_name,
+            params,
+        )
+        .await
+    }
+
+    async fn invoke_agent_with_key(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()> {
         let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
             .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
         self.invoke_with_key(
             &worker_id,
-            &IdempotencyKey::fresh(),
+            idempotency_key,
             "golem:agent/guest.{invoke}",
             vec![
                 method_name.into_value_and_type(),

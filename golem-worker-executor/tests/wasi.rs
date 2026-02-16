@@ -304,20 +304,26 @@ async fn initial_file_read_write(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "initial-file-read-write")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -327,25 +333,28 @@ async fn initial_file_read_write(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = executor
-        .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert_eq!(
         result,
-        vec![Value::Tuple(vec![
+        Value::Tuple(vec![
                 Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
                 Value::Option(None),
                 Value::Option(None),
                 Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
                 Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-            ])]
+            ])
     );
 
     Ok(())
@@ -358,25 +367,31 @@ async fn initial_file_listing_through_api(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::agent_id;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "initial-file-read-write")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -384,8 +399,9 @@ async fn initial_file_listing_through_api(
         .store()
         .await?;
 
+    let agent_id = agent_id!("file-read-write", "initial-file-listing-1");
     let worker_id = executor
-        .start_worker(&component.id, "initial-file-read-write-1")
+        .start_agent(&component.id, agent_id)
         .await?;
 
     let result = executor.get_file_system_node(&worker_id, "/").await?;
@@ -487,20 +503,26 @@ async fn initial_file_reading_through_api(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "initial-file-read-write")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -510,14 +532,15 @@ async fn initial_file_reading_through_api(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
     let worker_id = executor
-        .start_worker_with(&component.id, "initial-file-read-write-3", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
-    // run the worker so it can update the files.
+    // run the agent so it can update the files.
     executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
 
     let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await?;
     let result1 = std::str::from_utf8(&result1).unwrap();
@@ -754,49 +777,57 @@ async fn file_update_1(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_ifs_update")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[IFSEntry {
-            source_path: PathBuf::from("ifs-update/files/foo.txt"),
+            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
             target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         }])
         .store()
         .await?;
 
-    let worker_id = executor.start_worker(&component.id, "ifs-update-1").await?;
+    let agent_id = agent_id!("ifs-update", "ifs-update-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .await?;
 
     {
         let content_before_update = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_before_update[0], Value::String("foo\n".to_string()));
+        assert_eq!(content_before_update, Value::String("foo\n".to_string()));
     }
 
     {
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "golem_it_ifs_update",
+                "it_initial_file_system_release",
                 vec![IFSEntry {
-                    source_path: PathBuf::from("ifs-update/files/bar.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/bar.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 }],
@@ -810,71 +841,79 @@ async fn file_update_1(
 
     {
         let content_after_update = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_update[0], Value::String("foo\n".to_string()));
+        assert_eq!(content_after_update, Value::String("foo\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_crash[0], Value::String("foo\n".to_string()));
+        assert_eq!(content_after_crash, Value::String("foo\n".to_string()));
     }
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .await?;
 
     {
         let content_after_reload = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_reload[0], Value::String("bar\n".to_string()));
+        assert_eq!(content_after_reload, Value::String("bar\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_crash[0], Value::String("bar\n".to_string()));
+        assert_eq!(content_after_crash, Value::String("bar\n".to_string()));
     }
 
     {
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "golem_it_ifs_update",
+                "it_initial_file_system_release",
                 vec![IFSEntry {
-                    source_path: PathBuf::from("ifs-update/files/baz.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 }],
@@ -888,48 +927,53 @@ async fn file_update_1(
 
     {
         let content_after_manual_update = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_manual_update[0], Value::String("restored".to_string()));
+        assert_eq!(content_after_manual_update, Value::String("restored".to_string()));
     }
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .await?;
 
     {
         let content_after_reload = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_reload[0], Value::String("baz\n".to_string()));
+        assert_eq!(content_after_reload, Value::String("baz\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_file_content",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(content_after_crash[0], Value::String("baz\n".to_string()));
+        assert_eq!(content_after_crash, Value::String("baz\n".to_string()));
     }
 
     executor.delete_worker(&worker_id).await?;
@@ -944,6 +988,8 @@ async fn file_update_in_the_middle_of_exported_function(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -977,11 +1023,12 @@ async fn file_update_in_the_middle_of_exported_function(
     let component = executor
         .component(
             &context.default_environment_id,
-            "golem_it_ifs_update_inside_exported_function",
+            "it_initial_file_system_release",
         )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[IFSEntry {
-            source_path: PathBuf::from("ifs-update-inside-exported-function/files/foo.txt"),
+            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
             target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         }])
@@ -992,18 +1039,22 @@ async fn file_update_in_the_middle_of_exported_function(
         .store()
         .await?;
 
-    let worker_id = executor.start_worker(&component.id, "ifs-update-1").await?;
+    let agent_id = agent_id!("ifs-update-inside-exported-function", "ifs-update-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let idempotency_key = IdempotencyKey::fresh();
 
     executor
-        .invoke_with_key(
-            &worker_id,
+        .invoke_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key,
-            "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
-            vec![],
+            "run",
+            data_value!(),
         )
-        .await??;
+        .await?;
 
     latch.recv().await.expect("channel should produce value");
 
@@ -1011,9 +1062,9 @@ async fn file_update_in_the_middle_of_exported_function(
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "golem_it_ifs_update_inside_exported_function",
+                "it_initial_file_system_release",
                 vec![IFSEntry {
-                    source_path: PathBuf::from("ifs-update-inside-exported-function/files/bar.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/bar.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 }],
@@ -1027,16 +1078,19 @@ async fn file_update_in_the_middle_of_exported_function(
 
     {
         let result = executor
-            .invoke_and_await_with_key(
-                &worker_id,
+            .invoke_and_await_agent_with_key(
+                &component.id,
+                &agent_id,
                 &idempotency_key,
-                "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
-                vec![],
+                "run",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
         assert_eq!(
-            result[0],
+            result,
             Value::Tuple(vec![
                     Value::String("foo\n".to_string()),
                     Value::String("bar\n".to_string())

@@ -389,7 +389,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
         .create_component(
             &env.id.0,
             &ComponentCreation {
-                component_name: ComponentName("ifs-test".to_string()),
+                component_name: ComponentName("golem:it".to_string()),
                 file_options: BTreeMap::from_iter(vec![(
                     ComponentFilePath::from_abs_str("/bar/baz.txt").map_err(|e| anyhow!(e))?,
                     ComponentFileOptions {
@@ -403,13 +403,13 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
             },
             tokio::fs::File::open(
                 deps.component_directory()
-                    .join("initial-file-read-write.wasm"),
+                    .join("it_initial_file_system_release.wasm"),
             )
             .await?,
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("initial-file-read-write/files/archive.zip"),
+                        .join("initial-file-system/files/archive.zip"),
                 )
                 .await?,
             ),

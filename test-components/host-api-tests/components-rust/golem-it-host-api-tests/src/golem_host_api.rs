@@ -1,13 +1,15 @@
 use golem_rust::bindings::golem::api::host::{
-    get_self_metadata, resolve_agent_id, resolve_agent_id_strict, resolve_component_id,
+    get_agent_metadata, get_oplog_index, get_self_metadata, resolve_agent_id,
+    resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
+    AgentAnyFilter, AgentMetadata, ComponentId as HostComponentId, GetAgents, UpdateMode,
 };
 use golem_rust::{
-    agent_definition, agent_implementation, golem_operation, Schema,
+    agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
     atomically, get_promise, fork, oplog_commit,
     fallible_transaction, infallible_transaction,
     use_retry_policy, RetryPolicy, use_idempotence_mode, use_persistence_level,
     with_persistence_level, PersistenceLevel,
-    ForkResult, PromiseId, Transaction,
+    ForkResult, PromiseId, Transaction, Uuid,
 };
 use golem_wasi_http::{Client, Response};
 use serde::{Deserialize, Serialize};
@@ -37,6 +39,13 @@ pub trait GolemHostApi {
     fn fallible_transaction_test(&self) -> u64;
     fn infallible_transaction_test(&self) -> u64;
     fn fork_test(&self, input: String) -> String;
+
+    fn jump(&self) -> u64;
+    fn get_workers(&self, component_id: HostComponentId, filter: Option<AgentAnyFilter>, precise: bool) -> Vec<AgentMetadata>;
+    fn get_self_uri(&self) -> AgentMetadata;
+    fn get_worker_metadata(&self, agent_id: golem_rust::golem_wasm::AgentId) -> Option<AgentMetadata>;
+    fn update_worker(&self, agent_id: golem_rust::golem_wasm::AgentId, component_revision: u64, update_mode: UpdateMode);
+    fn generate_idempotency_keys(&self) -> (Uuid, Uuid);
 }
 
 pub struct GolemHostApiImpl {
@@ -223,6 +232,71 @@ impl GolemHostApi for GolemHostApiImpl {
         let part2: String = serde_json::from_str(&part2_raw).unwrap();
 
         format!("{part1}::{part2}")
+    }
+
+    fn jump(&self) -> u64 {
+        let mut state = 0;
+        println!("started: {state}");
+        state += 1;
+        let state1 = get_oplog_index();
+        state += 1;
+        println!("second: {state}");
+        if remote_call(state) {
+            set_oplog_index(state1);
+        }
+        state += 1;
+        println!("third: {state}");
+        let state2 = get_oplog_index();
+        state += 1;
+        println!("fourth: {state}");
+        if remote_call(state) {
+            set_oplog_index(state2);
+        }
+        state += 1;
+        println!("fifth: {state}");
+        state
+    }
+
+    fn get_workers(
+        &self,
+        component_id: HostComponentId,
+        filter: Option<AgentAnyFilter>,
+        precise: bool,
+    ) -> Vec<AgentMetadata> {
+        let mut workers: Vec<AgentMetadata> = Vec::new();
+        let getter = GetAgents::new(component_id, filter.as_ref(), precise);
+        loop {
+            match getter.get_next() {
+                Some(values) => {
+                    workers.extend(values);
+                }
+                None => break,
+            }
+        }
+        workers
+    }
+
+    fn get_self_uri(&self) -> AgentMetadata {
+        get_self_metadata()
+    }
+
+    fn get_worker_metadata(&self, agent_id: golem_rust::golem_wasm::AgentId) -> Option<AgentMetadata> {
+        get_agent_metadata(&agent_id)
+    }
+
+    fn update_worker(
+        &self,
+        agent_id: golem_rust::golem_wasm::AgentId,
+        component_revision: u64,
+        update_mode: UpdateMode,
+    ) {
+        update_agent(&agent_id, component_revision, update_mode);
+    }
+
+    fn generate_idempotency_keys(&self) -> (Uuid, Uuid) {
+        let key1 = generate_idempotency_key();
+        let key2 = generate_idempotency_key();
+        (key1, key2)
     }
 }
 

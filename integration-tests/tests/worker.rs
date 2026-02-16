@@ -1178,16 +1178,17 @@ async fn worker_use_initial_files(
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "initial-file-read-write")
+        .component(&env.id, "it_initial_file_system_release")
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -1197,26 +1198,30 @@ async fn worker_use_initial_files(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = user
-        .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result = user
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
 
     user.check_oplog_is_queryable(&worker_id).await?;
 
+    let result = result
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
     assert_eq!(
         result,
-        vec![Value::Tuple(vec![
+        Value::Tuple(vec![
             Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
             Value::Option(None),
             Value::Option(None),
             Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
             Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-        ])]
+        ])
     );
 
     Ok(())
@@ -1233,21 +1238,22 @@ async fn worker_list_files(
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "initial-file-read-write")
+        .component(&env.id, "it_initial_file_system_release")
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -1255,8 +1261,9 @@ async fn worker_list_files(
         .store()
         .await?;
 
+    let agent_id = agent_id!("file-read-write", "worker-list-files-1");
     let worker_id = user
-        .start_worker(&component.id, "initial-file-read-write-1")
+        .start_agent(&component.id, agent_id)
         .await?;
 
     let result = user.get_file_system_node(&worker_id, "/").await?;
@@ -1360,16 +1367,17 @@ async fn worker_read_files(
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "initial-file-read-write")
+        .component(&env.id, "it_initial_file_system_release")
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -1379,14 +1387,15 @@ async fn worker_read_files(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
     let worker_id = user
-        .start_worker_with(&component.id, "initial-file-read-write-3", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     // run the worker so it can update the files.
-    user.invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .collapse()?;
+    let _ = user
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
 
     let result1 = user.get_file_contents(&worker_id, "/foo.txt").await?;
     let result1 = std::str::from_utf8(&result1).unwrap();
@@ -1413,15 +1422,16 @@ async fn worker_initial_files_after_automatic_worker_update(
     let (_, env) = user.app_and_env().await?;
 
     let component = user
-        .component(&env.id, "initial-file-read-write")
+        .component(&env.id, "it_initial_file_system_release")
+        .name("golem-it:initial-file-system")
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -1429,32 +1439,33 @@ async fn worker_initial_files_after_automatic_worker_update(
         .store()
         .await?;
 
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = user
-        .start_worker(&component.id, "initial-file-read-write-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     // run the worker so it can update the files.
-    user.invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .collapse()?;
+    let _ = user
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
 
     let updated_component = user
         .update_component_with_files(
             &component.id,
-            "initial-file-read-write",
+            "it_initial_file_system_release",
             vec![
                 IFSEntry {
-                    source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 },
                 IFSEntry {
-                    source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                     target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,
                 },
                 IFSEntry {
-                    source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                     target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,
                 },
