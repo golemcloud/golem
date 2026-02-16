@@ -644,6 +644,7 @@ mod tests {
         mount = "/chats/{agent-type}/{foo}/{bar}",
         webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
         auth = true,
+        phantom_agent = true,
         cors = ["https://app.acme.com", "https://staging.acme.com"],
     )]
     trait ComplexHttpAgent {
@@ -705,6 +706,12 @@ mod tests {
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
+        );
+
+        assert_eq!(
+            agent.http_mount.as_ref().map(|hm| hm.phantom_agent),
+            Some(true),
+            "Agent phantom property should be set"
         );
 
         assert!(
