@@ -31,7 +31,7 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,
         vec![(
-            AgentTypeName("http-agent".to_string()),
+            AgentTypeName("principal-agent".to_string()),
             HttpApiDeploymentAgentOptions {
                 security: Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(
                     TestSessionHeaderAgentSecurity {
@@ -40,8 +40,8 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
                 )),
             },
         )],
-        "ts_principal",
-        "ts:principal",
+        "golem_it_agent_http_routes_ts",
+        "golem-it:agent-http-routes-ts",
     )
     .await
     .unwrap()
