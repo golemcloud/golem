@@ -135,8 +135,8 @@ fn agent_metas() -> Vec<AgentMeta> {
         ),
         AgentMeta::new(
             "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-            "ApprovalWorkflow",
-            "RustApprovalWorkflow",
+            "WorkflowAgent",
+            "RustWorkflowAgent",
             vec![
                 (
                     "components-rust/app-rust-human-in-the-loop/src/lib.rs",
@@ -145,8 +145,8 @@ fn agent_metas() -> Vec<AgentMeta> {
                 ),
                 (
                     "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                    "approval-workflow",
-                    "rust-approval-workflow",
+                    "workflow-agent",
+                    "rust-workflow-agent",
                 ),
             ],
         ),
