@@ -665,6 +665,9 @@ mod tests {
 
         #[endpoint(get = "/greet/{name}/{*file_path}")]
         fn greet3(&self, name: String, file_path: String) -> String;
+
+        #[endpoint(get = "/")]
+        fn empty_path(&self);
     }
 
     struct AgentWithHttpMountImpl {}
@@ -690,6 +693,8 @@ mod tests {
         fn greet3(&self, _name: String, _file_path: String) -> String {
             "baz".to_string()
         }
+
+        fn empty_path(&self) {}
     }
 
     #[test]
