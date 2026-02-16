@@ -14,6 +14,59 @@
 
 import process from 'node:process';
 import { Writable } from 'node:stream';
+import * as console from 'node:console';
+
+type OutputKind = 'stdout' | 'stderr';
+
+type Output = {
+  writeln: (text: string) => void;
+  writeChunk: (chunk: Buffer) => void;
+};
+
+const stdoutOutput: Output = {
+  writeln(text: string) {
+    process.stdout.write(text + '\n');
+  },
+  writeChunk(chunk: Buffer) {
+    process.stdout.write(chunk);
+  },
+};
+
+const stderrOutput: Output = {
+  writeln(text: string) {
+    process.stderr.write(text + '\n');
+  },
+  writeChunk(chunk: Buffer) {
+    process.stderr.write(chunk);
+  },
+};
+
+let currentOutput: Output = stdoutOutput;
+
+export function getOutput(): Output {
+  return currentOutput;
+}
+
+export function setOutput(sinkKind: OutputKind): void {
+  switch (sinkKind) {
+    case 'stdout':
+      currentOutput = stdoutOutput;
+      break;
+    case 'stderr':
+      currentOutput = stderrOutput;
+      break;
+    default:
+      assertNever(sinkKind);
+  }
+}
+
+export function writeln(text: string): void {
+  currentOutput.writeln(text);
+}
+
+export function writeChunk(chunk: Buffer): void {
+  currentOutput.writeChunk(chunk);
+}
 
 export function flushStream(stream: Writable): Promise<void> {
   return new Promise((resolve) => {
@@ -39,4 +92,8 @@ if (process.stdout.isTTY) {
 
 export function getTerminalWidth(): number {
   return terminalWidth;
+}
+
+function assertNever(x: never): never {
+  throw new Error('Unexpected object: ' + x);
 }

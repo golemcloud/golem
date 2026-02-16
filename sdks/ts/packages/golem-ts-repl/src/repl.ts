@@ -25,13 +25,15 @@ import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
-import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
-import { flushStdIO, getTerminalWidth } from './process';
+import { flushStdIO, setOutput, writeln } from './process';
+import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
 import * as base from './base';
 import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
+
+const MAX_COMPLETION_ENTRIES = 50;
 
 export class Repl {
   private readonly config: Config;
@@ -164,14 +166,10 @@ export class Repl {
             entries.push('...');
           }
 
-          logSnippetInfo(
-            formatAsTable(entries, {
-              maxLineLength: getTerminalWidth() - INFO_PREFIX_LENGTH,
-            }),
-          );
+          logSnippetInfo(formatAsTable(entries));
         }
 
-        replMessageSink.writeText(typeCheckResult.formattedErrors);
+        writeln(typeCheckResult.formattedErrors);
 
         callback(null, undefined);
       }
@@ -310,6 +308,8 @@ export class Repl {
   }
 
   async run() {
+    setOutput('stdout');
+
     const script = this.replCliFlags.script;
     const replServer = script
       ? this.newBaseReplServer({
@@ -333,8 +333,7 @@ export class Repl {
   }
 
   private async runScript(replServer: repl.REPLServer, script: string) {
-    const previousSink = replMessageSink;
-    replMessageSink = stderrMessageSink;
+    setOutput('stderr');
 
     let evalResult: { error: Error | null; result: unknown };
     try {
@@ -348,12 +347,10 @@ export class Repl {
       });
     } finally {
       this.overrideSnippetForNextEval = undefined;
-      replMessageSink = previousSink;
     }
 
     if (evalResult.error) {
-      process.stderr.write(formatEvalError(evalResult.error) + '\n');
-      return;
+      writeln(formatEvalError(evalResult.error));
     }
 
     const jsonResult = tryJsonStringify(evalResult.result);
@@ -362,100 +359,10 @@ export class Repl {
       return;
     }
 
-    this.printReplResult(replServer, evalResult.result);
-  }
-
-  private printReplResult(replServer: repl.REPLServer, result: unknown) {
-    if (result === undefined && replServer.ignoreUndefined) return;
-    const rendered = replServer.writer(result);
+    if (evalResult.result === undefined && replServer.ignoreUndefined) return;
+    const rendered = replServer.writer(evalResult.result);
     process.stdout.write(rendered + '\n');
   }
-}
-
-const INFO_PREFIX = pc.bold(pc.red('>'));
-const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
-
-type ReplMessageSink = {
-  writeText: (text: string) => void;
-};
-
-let replMessageSink: ReplMessageSink = {
-  writeText: (text: string) => {
-    console.log(text);
-  },
-};
-
-const stderrMessageSink: ReplMessageSink = {
-  writeText: (text: string) => {
-    process.stderr.write(text + '\n');
-  },
-};
-
-function logSnippetInfo(message: string | string[]) {
-  let lines = Array.isArray(message) ? message : message.split('\n');
-  if (lines.length === 0) return;
-
-  let maxLineLength = 0;
-  lines.forEach((line) => {
-    maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
-    replMessageSink.writeText(`${INFO_PREFIX} ${line}`);
-  });
-
-  if (maxLineLength > 0) {
-    replMessageSink.writeText(pc.dim('~'.repeat(getTerminalWidth())));
-  }
-}
-
-type FormatAsTableOptions = {
-  maxLineLength: number;
-  separator?: string;
-};
-
-export function formatAsTable(
-  items: string[],
-  { maxLineLength, separator = '  ' }: FormatAsTableOptions,
-): string {
-  if (items.length === 0) return '';
-
-  const colWidth = Math.max(...items.map((s) => s.length));
-  const sepLen = separator.length;
-
-  const cols = Math.max(1, Math.floor((maxLineLength + sepLen) / (colWidth + sepLen)));
-
-  const lines: string[] = [];
-  let line: string[] = [];
-
-  for (const item of items) {
-    if (item.length > maxLineLength) {
-      if (line.length) {
-        lines.push(line.join(separator).trimEnd());
-        line = [];
-      }
-      lines.push(item);
-      continue;
-    }
-
-    line.push(item.padEnd(colWidth, ' '));
-    if (line.length === cols) {
-      lines.push(line.join(separator).trimEnd());
-      line = [];
-    }
-  }
-
-  if (line.length) {
-    lines.push(line.join(separator).trimEnd());
-  }
-
-  return lines.join('\n');
-}
-
-const MAX_COMPLETION_ENTRIES = 50;
-
-function formatEvalError(error: unknown) {
-  if (error instanceof Error) {
-    return error.stack ?? error.message;
-  }
-  return String(error);
 }
 
 function tryJsonStringify(value: unknown): string | undefined {
