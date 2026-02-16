@@ -4,13 +4,13 @@ info:
   version: 1.0.0
 openapi: 3.0.0
 paths:
-  /cors-agents/{agent_name}/inherited:
+  /cors-agents/{agent-name}/inherited:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -52,7 +52,7 @@ paths:
               schema:
                 type: string
               style: simple
-  /cors-agents/{agent_name}/preflight-required:
+  /cors-agents/{agent-name}/preflight-required:
     options:
       responses:
         '204':
@@ -80,10 +80,10 @@ paths:
               style: simple
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -117,13 +117,13 @@ paths:
                 - received
                 type: object
           description: Response 200
-  /cors-agents/{agent_name}/wildcard:
+  /cors-agents/{agent-name}/wildcard:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -165,13 +165,13 @@ paths:
               schema:
                 type: string
               style: simple
-  /http-agents/{agent_name}/json-body/{id}:
+  /http-agents/{agent-name}/json-body/{id}:
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -213,13 +213,13 @@ paths:
                 - ok
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/multi-path-vars/{first}/{second}:
+  /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -252,21 +252,21 @@ paths:
                 - joined
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/path-and-header/{resource_id}:
+  /http-agents/{agent-name}/path-and-header/{resource-id}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
         style: simple
-      - description: 'Path parameter: resource_id'
+      - description: 'Path parameter: resource-id'
         explode: false
         in: path
-        name: resource_id
+        name: resource-id
         required: true
         schema:
           type: string
@@ -294,21 +294,21 @@ paths:
                 - request-id
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/path-and-query/{item_id}:
+  /http-agents/{agent-name}/path-and-query/{item-id}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
         style: simple
-      - description: 'Path parameter: item_id'
+      - description: 'Path parameter: item-id'
         explode: false
         in: path
-        name: item_id
+        name: item-id
         required: true
         schema:
           type: string
@@ -341,13 +341,13 @@ paths:
                 - limit
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/resp/binary:
+  /http-agents/{agent-name}/resp/binary:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -360,13 +360,13 @@ paths:
                 format: binary
                 type: string
           description: Response 200
-  /http-agents/{agent_name}/resp/json:
+  /http-agents/{agent-name}/resp/json:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -383,13 +383,13 @@ paths:
                 - value
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/resp/no-content:
+  /http-agents/{agent-name}/resp/no-content:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -397,13 +397,13 @@ paths:
       responses:
         '204':
           description: Response 204
-  /http-agents/{agent_name}/resp/optional/{found}:
+  /http-agents/{agent-name}/resp/optional/{found}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -430,13 +430,13 @@ paths:
           description: Response 200
         '404':
           description: Response 404
-  /http-agents/{agent_name}/resp/result-json-json/{ok}:
+  /http-agents/{agent-name}/resp/result-json-json/{ok}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -463,13 +463,13 @@ paths:
           description: Response 200
         '500':
           description: Response 500
-  /http-agents/{agent_name}/resp/result-json-void:
+  /http-agents/{agent-name}/resp/result-json-void:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -493,13 +493,13 @@ paths:
                 format: binary
                 type: string
           description: Response 500
-  /http-agents/{agent_name}/resp/result-void-json:
+  /http-agents/{agent-name}/resp/result-void-json:
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -514,13 +514,13 @@ paths:
           description: Response 200
         '500':
           description: Response 500
-  /http-agents/{agent_name}/rest/{tail}:
+  /http-agents/{agent-name}/rest/{tail}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -546,13 +546,13 @@ paths:
                 - tail
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/restricted-unstructured-binary/{bucket}:
+  /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -581,21 +581,21 @@ paths:
                 format: int64
                 type: integer
           description: Response 200
-  /http-agents/{agent_name}/string-path-var/{path_var}:
+  /http-agents/{agent-name}/string-path-var/{path-var}:
     get:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
         style: simple
-      - description: 'Path parameter: path_var'
+      - description: 'Path parameter: path-var'
         explode: false
         in: path
-        name: path_var
+        name: path-var
         required: true
         schema:
           type: string
@@ -612,13 +612,13 @@ paths:
                 - value
                 type: object
           description: Response 200
-  /http-agents/{agent_name}/unrestricted-unstructured-binary/{bucket}:
+  /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -657,13 +657,13 @@ paths:
                 additionalProperties: true
                 type: object
           description: Response 200
-  /webhook-agents/{agent_name}/set-test-server-url:
+  /webhook-agents/{agent-name}/set-test-server-url:
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string
@@ -683,13 +683,13 @@ paths:
       responses:
         '204':
           description: Response 204
-  /webhook-agents/{agent_name}/test-webhook:
+  /webhook-agents/{agent-name}/test-webhook:
     post:
       parameters:
-      - description: 'Path parameter: agent_name'
+      - description: 'Path parameter: agent-name'
         explode: false
         in: path
-        name: agent_name
+        name: agent-name
         required: true
         schema:
           type: string

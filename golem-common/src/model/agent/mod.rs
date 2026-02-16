@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod compact_value_formatter;
 mod conversions;
-
-pub mod compact_value_formatter;
 pub mod extraction;
+mod normalisation;
 mod protobuf;
 
 #[cfg(test)]
@@ -231,6 +231,28 @@ impl DataValue {
             }
         }
     }
+}
+
+static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
+});
+
+/// Parses the outer structure of an agent ID string into its components:
+/// (agent_type_name, param_list, optional_phantom_uuid_str)
+pub(crate) fn parse_agent_id_parts(s: &str) -> Result<(&str, &str, Option<&str>), String> {
+    let captures = AGENT_ID_REGEX.captures(s.trim()).ok_or_else(|| {
+        format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
+    })?;
+
+    let agent_type_name = captures.get(1).unwrap().as_str().trim();
+    let param_list = captures.get(2).unwrap().as_str();
+    let phantom_id_str = captures.get(3).map(|m| m.as_str().trim());
+
+    if agent_type_name.is_empty() {
+        return Err("Agent type name cannot be empty".to_string());
+    }
+
+    Ok((agent_type_name, param_list, phantom_id_str))
 }
 
 fn split_top_level_commas(s: &str) -> Vec<&str> {
@@ -551,36 +573,19 @@ impl AgentId {
     }
 
     pub fn parse_agent_type_name(s: &str) -> Result<AgentTypeName, String> {
-        static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
-        });
-
-        let captures = AGENT_ID_REGEX.captures(s).ok_or_else(|| {
-            format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
-        })?;
-
-        Ok(AgentTypeName(captures.get(1).unwrap().as_str().to_string()))
+        let (agent_type_name, _, _) = parse_agent_id_parts(s)?;
+        Ok(AgentTypeName(agent_type_name.to_string()))
     }
 
     pub fn parse_and_resolve_type(
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<(Self, AgentType), String> {
-        static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
-        });
-
         let s = s.as_ref();
+        let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
 
-        let captures = AGENT_ID_REGEX.captures(s).ok_or_else(|| {
-            format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
-        })?;
-
-        let agent_type_name = captures.get(1).unwrap().as_str();
-        let param_list = captures.get(2).unwrap().as_str();
-        let phantom_id = captures
-            .get(3)
-            .map(|m| Uuid::parse_str(m.as_str()))
+        let phantom_id = phantom_id_str
+            .map(Uuid::parse_str)
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
 
@@ -608,6 +613,12 @@ impl AgentId {
             phantom_id,
             ..self.clone()
         }
+    }
+
+    /// Normalizes an agent ID string without requiring component metadata.
+    /// Strips unnecessary whitespace by parsing WAVE values and re-emitting them compactly.
+    pub fn normalize_text(s: &str) -> Result<String, String> {
+        normalisation::normalize_agent_id_text(s)
     }
 }
 
