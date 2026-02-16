@@ -610,27 +610,34 @@ async fn get_workers_from_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "runtime-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let agent_id1 = agent_id!("golem-host-api", "worker-3");
     let worker_id1 = executor
-        .start_worker(&component.id, "runtime-service-3")
+        .start_agent(&component.id, agent_id1.clone())
         .await?;
 
+    let agent_id2 = agent_id!("golem-host-api", "worker-4");
     let worker_id2 = executor
-        .start_worker(&component.id, "runtime-service-4")
+        .start_agent(&component.id, agent_id2.clone())
         .await?;
 
     async fn get_check(
-        worker_id: &WorkerId,
+        component_id: &ComponentId,
+        caller_agent_id: &golem_common::base_model::agent::AgentId,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
         mut type_resolve: SharedAnalysedTypeResolve,
     ) -> anyhow::Result<()> {
         let component_id_val_and_type = {
-            let (high, low) = worker_id.component_id.0.as_u64_pair();
+            let (high, low) = component_id.0.as_u64_pair();
             Record(vec![(
                 "uuid",
                 Record(vec![
@@ -647,38 +654,47 @@ async fn get_workers_from_worker(
                 vec![Value::Variant {
                     case_idx: 0,
                     case_value: Some(Box::new(Value::Record(vec![
-                        Value::Enum(0),
-                        Value::String(name.clone()),
+                        Value::Variant {
+                            case_idx: 0,
+                            case_value: None,
+                        },
+                        Value::String(name),
                     ]))),
                 }],
             )])])])
         });
 
-        let result = executor
-            .invoke_and_await(
-                worker_id,
-                "golem:it/api.{get-workers}",
-                vec![
-                    component_id_val_and_type,
-                    ValueAndType {
-                        value: Value::Option(filter_val.map(Box::new)),
-                        typ: analysed_type::option(
-                            type_resolve
-                                .analysed_type(&TypeName {
-                                    package: Some("golem:api@1.3.0".to_string()),
-                                    owner: TypeOwner::Interface("host".to_string()),
-                                    name: Some("agent-any-filter".to_string()),
-                                })
-                                .unwrap(),
-                        ),
-                    },
-                    true.into_value_and_type(),
-                ],
-            )
-            .await??;
+        let filter_val_and_type = ValueAndType {
+            value: Value::Option(filter_val.map(Box::new)),
+            typ: analysed_type::option(
+                type_resolve
+                    .analysed_type(&TypeName {
+                        package: Some("golem:api@1.3.0".to_string()),
+                        owner: TypeOwner::Interface("host".to_string()),
+                        name: Some("agent-any-filter".to_string()),
+                    })
+                    .unwrap(),
+            ),
+        };
 
-        match result.first() {
-            Some(Value::List(list)) => {
+        let params = DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(component_id_val_and_type),
+                ElementValue::ComponentModel(filter_val_and_type),
+                ElementValue::ComponentModel(true.into_value_and_type()),
+            ],
+        });
+
+        let result = executor
+            .invoke_and_await_agent(component_id, caller_agent_id, "get_workers", params)
+            .await?;
+
+        let result_value = result
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        match result_value {
+            Value::List(list) => {
                 assert_eq!(list.len(), expected_count);
             }
             _ => {
@@ -687,10 +703,19 @@ async fn get_workers_from_worker(
         }
         Ok(())
     }
-    get_check(&worker_id1, None, 2, &executor, type_resolve.clone()).await?;
     get_check(
-        &worker_id2,
-        Some("runtime-service-3".to_string()),
+        &component.id,
+        &agent_id1,
+        None,
+        2,
+        &executor,
+        type_resolve.clone(),
+    )
+    .await?;
+    get_check(
+        &component.id,
+        &agent_id2,
+        Some("golem-host-api(\"worker-3\")".to_string()),
         1,
         &executor,
         type_resolve.clone(),
@@ -713,83 +738,100 @@ async fn get_metadata_from_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "runtime-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
+    let agent_id1 = agent_id!("golem-host-api", "worker-1");
     let worker_id1 = executor
-        .start_worker(&component.id, "runtime-service-1")
+        .start_agent(&component.id, agent_id1.clone())
         .await?;
 
+    let agent_id2 = agent_id!("golem-host-api", "worker-2");
     let worker_id2 = executor
-        .start_worker(&component.id, "runtime-service-2")
+        .start_agent(&component.id, agent_id2.clone())
         .await?;
 
-    fn get_worker_id_val(worker_id: &WorkerId) -> Value {
+    fn get_agent_id_val(component_id: &ComponentId, agent_id: &golem_common::base_model::agent::AgentId) -> Value {
         let component_id_val = {
-            let (high, low) = worker_id.component_id.0.as_u64_pair();
+            let (high, low) = component_id.0.as_u64_pair();
             Value::Record(vec![Value::Record(vec![Value::U64(high), Value::U64(low)])])
         };
 
         Value::Record(vec![
             component_id_val,
-            Value::String(worker_id.worker_name.clone()),
+            Value::String(agent_id.to_string()),
         ])
     }
 
     async fn get_check(
-        worker_id1: &WorkerId,
-        worker_id2: &WorkerId,
+        component_id: &ComponentId,
+        caller_agent_id: &golem_common::base_model::agent::AgentId,
+        other_agent_id: &golem_common::base_model::agent::AgentId,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
-        let worker_id_val1 = get_worker_id_val(worker_id1);
+        let agent_id_val1 = get_agent_id_val(component_id, caller_agent_id);
 
         let result = executor
-            .invoke_and_await(worker_id1, "golem:it/api.{get-self-metadata}", vec![])
-            .await??;
+            .invoke_and_await_agent(component_id, caller_agent_id, "get_self_uri", data_value!())
+            .await?;
 
-        match result.first() {
-            Some(Value::Record(values)) if !values.is_empty() => {
+        let result_value = result
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        match result_value {
+            Value::Record(values) if !values.is_empty() => {
                 let id_val = values.first().unwrap();
-                assert_eq!(worker_id_val1, *id_val);
+                assert_eq!(agent_id_val1, *id_val);
             }
             _ => {
                 panic!("unexpected");
             }
         }
 
-        let worker_id_val2 = get_worker_id_val(worker_id2);
+        let agent_id_val2 = get_agent_id_val(component_id, other_agent_id);
+
+        let other_agent_id_val_and_type = ValueAndType {
+            value: agent_id_val2.clone(),
+            typ: analysed_type::record(vec![
+                analysed_type::field(
+                    "component-id",
+                    analysed_type::record(vec![analysed_type::field(
+                        "uuid",
+                        analysed_type::record(vec![
+                            analysed_type::field("high-bits", analysed_type::u64()),
+                            analysed_type::field("low-bits", analysed_type::u64()),
+                        ]),
+                    )]),
+                ),
+                analysed_type::field("agent-id", analysed_type::str()),
+            ]),
+        };
+
+        let params = DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(other_agent_id_val_and_type)],
+        });
 
         let result = executor
-            .invoke_and_await(
-                worker_id1,
-                "golem:it/api.{get-worker-metadata}",
-                vec![ValueAndType {
-                    value: worker_id_val2.clone(),
-                    typ: analysed_type::record(vec![
-                        analysed_type::field(
-                            "component-id",
-                            analysed_type::record(vec![analysed_type::field(
-                                "uuid",
-                                analysed_type::record(vec![
-                                    analysed_type::field("high-bits", analysed_type::u64()),
-                                    analysed_type::field("low-bits", analysed_type::u64()),
-                                ]),
-                            )]),
-                        ),
-                        analysed_type::field("worker-name", analysed_type::str()),
-                    ]),
-                }],
-            )
-            .await??;
+            .invoke_and_await_agent(component_id, caller_agent_id, "get_worker_metadata", params)
+            .await?;
 
-        match result.first() {
-            Some(Value::Option(value)) if value.is_some() => {
-                let result = *value.clone().unwrap();
+        let result_value = result
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        match result_value {
+            Value::Option(value) if value.is_some() => {
+                let result = *value.unwrap();
                 match result {
                     Value::Record(values) if !values.is_empty() => {
                         let id_val = values.first().unwrap();
-                        assert_eq!(worker_id_val2, *id_val);
+                        assert_eq!(agent_id_val2, *id_val);
                     }
                     _ => {
                         panic!("unexpected");
@@ -803,8 +845,8 @@ async fn get_metadata_from_worker(
         Ok(())
     }
 
-    get_check(&worker_id1, &worker_id2, &executor).await?;
-    get_check(&worker_id2, &worker_id1, &executor).await?;
+    get_check(&component.id, &agent_id1, &agent_id2, &executor).await?;
+    get_check(&component.id, &agent_id2, &agent_id1, &executor).await?;
 
     executor.check_oplog_is_queryable(&worker_id1).await?;
     executor.check_oplog_is_queryable(&worker_id2).await?;

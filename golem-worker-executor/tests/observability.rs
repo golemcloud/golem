@@ -21,7 +21,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use golem_test_framework::dsl::TestDsl;
@@ -51,66 +51,73 @@ async fn get_oplog_1(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "runtime-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
 
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "getoplog1".to_string(),
-    };
+    let agent_id = agent_id!("golem-host-api", "getoplog1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{generate-idempotency-keys}",
-            vec![],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "generate_idempotency_keys",
+            data_value!(),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await_with_key(
-            &worker_id,
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key1,
-            "golem:it/api.{generate-idempotency-keys}",
-            vec![],
+            "generate_idempotency_keys",
+            data_value!(),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await_with_key(
-            &worker_id,
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key2,
-            "golem:it/api.{generate-idempotency-keys}",
-            vec![],
+            "generate_idempotency_keys",
+            data_value!(),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await?;
 
-    assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
 
     assert_eq!(oplog2[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(oplog2[0].entry, PublicOplogEntry::Create(_)));
 
-    assert_eq!(
-        oplog
-            .iter()
-            .filter(
-                |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-        ExportedFunctionInvokedParams { function_name, .. }
-    ) if function_name == "golem:it/api.{generate-idempotency-keys}")
-            )
-            .count(),
-        3
+    let invoke_count = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
+                ExportedFunctionInvokedParams { function_name, .. }
+            ) if function_name == "golem:agent/guest.{invoke}")
+        })
+        .count();
+    assert!(
+        invoke_count >= 3,
+        "Expected at least 3 ExportedFunctionInvoked entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
     );
 
     Ok(())

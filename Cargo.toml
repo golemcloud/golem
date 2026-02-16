@@ -32,7 +32,6 @@ exclude = [
     "test-components/ifs-update-inside-exported-function",
     "test-components/initial-file-read-write",
     "test-components/oplog-processor",
-    "test-components/runtime-service",
     "test-components/scheduled-invocation",
     "test-components/update-test-env-var",
     "sdks/golem-rust"
