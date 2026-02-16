@@ -419,52 +419,6 @@ pub trait TestDsl {
         params: Vec<ValueAndType>,
     ) -> WorkerInvocationResult<Vec<Value>>;
 
-    async fn invoke_and_await_typed(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> WorkerInvocationResult<Option<ValueAndType>> {
-        self.invoke_and_await_typed_with_key(
-            worker_id,
-            &IdempotencyKey::fresh(),
-            function_name,
-            params,
-        )
-        .await
-    }
-
-    async fn invoke_and_await_typed_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> WorkerInvocationResult<Option<ValueAndType>>;
-
-    async fn invoke_and_await_json(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> WorkerInvocationResult<Option<ValueAndType>> {
-        self.invoke_and_await_json_with_key(
-            worker_id,
-            &IdempotencyKey::fresh(),
-            function_name,
-            params,
-        )
-        .await
-    }
-
-    async fn invoke_and_await_json_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> WorkerInvocationResult<Option<ValueAndType>>;
-
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
     async fn get_oplog(

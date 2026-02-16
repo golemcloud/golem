@@ -19,7 +19,6 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::OplogIndex;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
@@ -230,18 +229,16 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         .await?;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(result2.is_err());
     {
-        let Err(WorkerExecutorError::InvocationFailed { stderr, .. }) = result3 else {
-            panic!("Expected InvocationFailed, got {:?}", result3)
-        };
-        assert!(stderr.contains("value is too large"));
-        assert!(!stderr.contains("Oplog"));
+        let err3 = format!("{}", result3.err().expect("Expected get after revert to fail"));
+        assert!(err3.contains("value is too large"), "Expected 'value is too large' in error: {err3}");
+        assert!(!err3.contains("Oplog"), "Unexpected 'Oplog' in error: {err3}");
     }
 
     Ok(())

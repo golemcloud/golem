@@ -2914,18 +2914,14 @@ async fn stderr_returned_for_failed_component(
         .await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/failing-counter.{add}",
-            vec![50u64.into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
@@ -2933,25 +2929,16 @@ async fn stderr_returned_for_failed_component(
         .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
         .await?;
 
-    info!(
-        "result2: {:?}",
-        worker_error_message(&result2.clone().err().unwrap())
-    );
-    info!(
-        "result3: {:?}",
-        worker_error_message(&result3.clone().err().unwrap())
-    );
-
     assert!(result2.is_err());
     assert!(result3.is_err());
 
-    let logs2 = worker_error_logs(&result2.clone().err().unwrap()).expect("Expected stderr logs");
-    assert!(logs2.contains("error log message"), "Expected 'error log message' in logs: {logs2}");
-    assert!(logs2.contains("value is too large"), "Expected 'value is too large' in logs: {logs2}");
+    let err2 = format!("{}", result2.err().unwrap());
+    assert!(err2.contains("error log message"), "Expected 'error log message' in error: {err2}");
+    assert!(err2.contains("value is too large"), "Expected 'value is too large' in error: {err2}");
 
-    let logs3 = worker_error_logs(&result3.clone().err().unwrap()).expect("Expected stderr logs");
-    assert!(logs3.contains("error log message"), "Expected 'error log message' in logs: {logs3}");
-    assert!(logs3.contains("value is too large"), "Expected 'value is too large' in logs: {logs3}");
+    let err3 = format!("{}", result3.err().unwrap());
+    assert!(err3.contains("error log message"), "Expected 'error log message' in error: {err3}");
+    assert!(err3.contains("value is too large"), "Expected 'value is too large' in error: {err3}");
 
     assert_eq!(metadata.status, WorkerStatus::Failed);
     assert!(metadata.last_error.is_some());

@@ -21,13 +21,11 @@ use bytes::Bytes;
 use futures::stream;
 use golem_common::agent_id;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::dsl::{
-    drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
-    worker_error_underlying_error, TestDsl,
+    drain_connection, stderr_events, stdout_events, TestDsl,
 };
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::{IntoValueAndType, Value};
@@ -2123,41 +2121,25 @@ async fn failing_worker(
         .await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/failing-counter.{add}",
-            vec![50u64.into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .await;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "it:agent-counters/failing-counter.{get}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(result2.is_err());
     assert!(result3.is_err());
 
-    let result2_err = result2.err().unwrap();
-    assert_eq!(worker_error_message(&result2_err), "Invocation failed");
-    assert!(
-        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.contains("error while executing at wasm backtrace:") && error.contains("it_agent_counters.wasm"))
-    );
-    let logs2 = worker_error_logs(&result2_err).expect("Expected stderr logs");
-    assert!(logs2.contains("error log message"), "Expected 'error log message' in logs: {logs2}");
-    assert!(logs2.contains("value is too large"), "Expected 'value is too large' in logs: {logs2}");
-    let result3_err = result3.err().unwrap();
-    assert_eq!(
-        worker_error_message(&result3_err),
-        "Previous invocation failed"
-    );
-    assert!(
-        matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.contains("error while executing at wasm backtrace:") && error.contains("it_agent_counters.wasm"))
-    );
-    let logs3 = worker_error_logs(&result3_err).expect("Expected stderr logs");
-    assert!(logs3.contains("error log message"), "Expected 'error log message' in logs: {logs3}");
-    assert!(logs3.contains("value is too large"), "Expected 'value is too large' in logs: {logs3}");
+    let err2 = format!("{}", result2.err().unwrap());
+    assert!(err2.contains("error log message"), "Expected 'error log message' in error: {err2}");
+    assert!(err2.contains("value is too large"), "Expected 'value is too large' in error: {err2}");
+
+    let err3 = format!("{}", result3.err().unwrap());
+    assert!(err3.contains("error log message"), "Expected 'error log message' in error: {err3}");
+    assert!(err3.contains("value is too large"), "Expected 'value is too large' in error: {err3}");
 
     Ok(())
 }

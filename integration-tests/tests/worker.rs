@@ -1529,17 +1529,18 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let unique_id = Uuid::new_v4();
-    let worker_id = user
-        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+    let agent_id = agent_id!("test-agent", unique_id.to_string());
+    let _worker_id = user
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    user.invoke_and_await(
-        &worker_id,
-        "golem-it:agent-rpc/test-agent.{run}",
-        vec![20f64.into_value_and_type()],
+    user.invoke_and_await_agent(
+        &component.id,
+        &agent_id,
+        "run",
+        data_value!(20f64),
     )
-    .await
-    .collapse()?;
+    .await?;
 
     Ok(())
 }

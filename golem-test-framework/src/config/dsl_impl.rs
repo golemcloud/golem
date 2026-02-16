@@ -50,7 +50,6 @@ use golem_common::model::worker::{
 use golem_common::model::{IdempotencyKey, WorkerEvent};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
-use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -349,19 +348,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         function_name: &str,
         params: Vec<ValueAndType>,
     ) -> WorkerInvocationResult<Vec<Value>> {
-        Ok(self
-            .invoke_and_await_typed_with_key(worker_id, idempotency_key, function_name, params)
-            .await?
-            .map(|v| v.into_iter().map(|v| v.value).collect()))
-    }
-
-    async fn invoke_and_await_typed_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> WorkerInvocationResult<Option<ValueAndType>> {
         let client = self
             .deps
             .worker_service()
@@ -382,36 +368,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 },
             )
             .await?;
-        Ok(Ok(result.result))
-    }
-
-    async fn invoke_and_await_json_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> WorkerInvocationResult<Option<ValueAndType>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
-        let result = client
-            .invoke_and_await_function(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
-                Some(&idempotency_key.value),
-                function_name,
-                &InvokeParameters {
-                    params: params
-                        .into_iter()
-                        .map(|value| OptionallyValueAndTypeJson { typ: None, value })
-                        .collect(),
-                },
-            )
-            .await?;
-        Ok(Ok(result.result))
+        Ok(Ok(result.result.into_iter().map(|v| v.value).collect()))
     }
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {

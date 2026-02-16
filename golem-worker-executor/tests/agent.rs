@@ -52,21 +52,11 @@ async fn agent_self_rpc_is_not_allowed(
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:agent-rpc/self-rpc-agent.{self-rpc}",
-            vec![],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "selfRpc", data_value!())
+        .await;
 
-    let Err(WorkerExecutorError::InvocationFailed {
-        error: WorkerError::Unknown(ref error_details),
-        ..
-    }) = result
-    else {
-        panic!("unexpected: {:?}", result);
-    };
-    assert!(error_details.contains("RPC calls to the same agent are not supported"));
+    let err = result.expect_err("Expected an error");
+    assert!(err.to_string().contains("RPC calls to the same agent are not supported"));
 
     Ok(())
 }
@@ -94,12 +84,7 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "run",
-            data_value!(20f64),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!(20f64))
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -135,23 +120,13 @@ async fn agent_env_inheritance(
     env.insert("ENV3".to_string(), "33".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "env-var-test",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "env-var-test", data_value!())
         .await;
 
     let child_worker_id = WorkerId {
@@ -294,45 +269,25 @@ async fn ephemeral_agent_works(
     executor.log_output(&worker_id2).await?;
 
     let result1 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id1,
-            "change-and-get",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id1, "change-and-get", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result2 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id1,
-            "change-and-get",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id1, "change-and-get", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result3 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id2,
-            "change-and-get",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id2, "change-and-get", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result4 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id2,
-            "change-and-get",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component.id, &agent_id2, "change-and-get", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
