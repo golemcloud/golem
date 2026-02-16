@@ -621,16 +621,20 @@ async fn auto_update_on_idle(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "update-test-v1").store().await?;
-
-    let worker_id = user
-        .start_worker(&component.id, "auto_update_on_idle")
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .unique()
+        .store()
         .await?;
-
+    let agent_id = agent_id!("update-test");
+    let worker_id = user
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
     user.log_output(&worker_id).await?;
 
     let updated_component = user
-        .update_component(&component.id, "update-test-v2")
+        .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
 
     info!(
@@ -642,16 +646,15 @@ async fn auto_update_on_idle(
         .await?;
 
     let result = user
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     info!("result: {result:?}");
     let metadata = user.get_worker_metadata(&worker_id).await?;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    assert_eq!(result[0], Value::U64(0));
+    assert_eq!(result, data_value!(0u64));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
@@ -666,16 +669,20 @@ async fn auto_update_on_idle_via_host_function(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "update-test-v1").store().await?;
-
-    let worker_id = user
-        .start_worker(&component.id, "auto_update_on_idle_via_host_function")
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .name("it:agent-update")
+        .unique()
+        .store()
         .await?;
-
+    let agent_id = agent_id!("update-test");
+    let worker_id = user
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
     user.log_output(&worker_id).await?;
 
     let updated_component = user
-        .update_component(&component.id, "update-test-v2")
+        .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
 
     info!(
@@ -683,16 +690,20 @@ async fn auto_update_on_idle_via_host_function(
         updated_component.revision
     );
 
-    let runtime_svc = user.component(&env.id, "runtime-service").store().await?;
-    let runtime_svc_worker = WorkerId {
-        component_id: runtime_svc.id,
-        worker_name: "runtime-service".to_string(),
-    };
+    let host_api_component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let host_api_agent_id = agent_id!("golem-host-api", "updater-1");
+    let host_api_worker_id = user
+        .start_agent(&host_api_component.id, host_api_agent_id.clone())
+        .await?;
 
     let (high_bits, low_bits) = worker_id.component_id.0.as_u64_pair();
     user.invoke_and_await(
-        &runtime_svc_worker,
-        "golem:it/api.{update-worker}",
+        &host_api_worker_id,
+        "golem-it:host-api-tests/golem-host-api.{update-worker}",
         vec![
             Record(vec![
                 (
@@ -708,15 +719,21 @@ async fn auto_update_on_idle_via_host_function(
                     .into_value_and_type(),
                 ),
                 (
-                    "worker-name",
-                    worker_id.worker_name.clone().into_value_and_type(),
+                    "agent-id",
+                    agent_id.to_string().into_value_and_type(),
                 ),
             ])
             .into_value_and_type(),
             updated_component.revision.into_value_and_type(),
             ValueAndType {
-                value: Value::Enum(0),
-                typ: analysed_type::r#enum(&["automatic", "snapshot-based"]),
+                value: Value::Variant {
+                    case_idx: 0,
+                    case_value: None,
+                },
+                typ: analysed_type::variant(vec![
+                    analysed_type::unit_case("automatic"),
+                    analysed_type::unit_case("snapshot-based"),
+                ]),
             },
         ],
     )
@@ -724,15 +741,14 @@ async fn auto_update_on_idle_via_host_function(
     .collapse()?;
 
     let result = user
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .collapse()?;
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     let metadata = user.get_worker_metadata(&worker_id).await?;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    assert_eq!(result[0], Value::U64(0));
+    assert_eq!(result, data_value!(0u64));
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
@@ -1321,8 +1337,9 @@ async fn agent_promise_await(
         .store()
         .await?;
 
-    let worker_name = "promise-agent(\"name\")";
-    let worker = user.start_worker(&component.id, worker_name).await?;
+    let worker = user
+        .start_agent(&component.id, agent_id!("promise-agent", "name"))
+        .await?;
 
     let mut result = user
         .invoke_and_await(
@@ -1561,7 +1578,7 @@ async fn agent_update_constructor_signature(
         .await?;
 
     let agent1 = user
-        .start_worker(&component.id, "counter-agent(\"agent1\")")
+        .start_agent(&component.id, agent_id!("counter-agent", "agent1"))
         .await?;
     let result1a = user
         .invoke_and_await(&agent1, "it:agent-update/counter-agent.{increment}", vec![])
@@ -1569,7 +1586,9 @@ async fn agent_update_constructor_signature(
         .collapse()?;
     assert_eq!(result1a, vec![Value::U32(1)]);
 
-    let old_singleton = user.start_worker(&component.id, "caller()").await?;
+    let old_singleton = user
+        .start_agent(&component.id, agent_id!("caller"))
+        .await?;
     user.log_output(&old_singleton).await?;
 
     let result1b = user
@@ -1586,7 +1605,7 @@ async fn agent_update_constructor_signature(
         .await?;
 
     let agent2 = user
-        .start_worker(&component.id, "counter-agent(123)")
+        .start_agent(&component.id, agent_id!("counter-agent", 123u64))
         .await?;
     let result2a = user
         .invoke_and_await(&agent2, "it:agent-update/counter-agent.{increment}", vec![])
@@ -1594,7 +1613,9 @@ async fn agent_update_constructor_signature(
         .collapse()?;
     assert_eq!(result2a, vec![Value::U32(1)]);
 
-    let new_singleton = user.start_worker(&component.id, "new-caller()").await?;
+    let new_singleton = user
+        .start_agent(&component.id, agent_id!("new-caller"))
+        .await?;
     let result2b = user
         .invoke_and_await(
             &new_singleton,

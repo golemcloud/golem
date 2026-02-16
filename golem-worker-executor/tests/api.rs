@@ -14,7 +14,6 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use pretty_assertions::assert_eq;
 use axum::routing::get;
 use axum::Router;
 use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
@@ -41,6 +40,7 @@ use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies,
 };
+use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;
 use std::env;
@@ -212,8 +212,15 @@ async fn simulated_crash(
     rx.recv_many(&mut events, 100).await;
     drop(executor);
 
-    assert!(result.is_ok(), "Expected successful result after simulated crash recovery, got: {:?}", result.err());
-    assert_eq!(stdout_events(events.into_iter()), vec!["Starting interruption test\n"]);
+    assert!(
+        result.is_ok(),
+        "Expected successful result after simulated crash recovery, got: {:?}",
+        result.err()
+    );
+    assert_eq!(
+        stdout_events(events.into_iter()),
+        vec!["Starting interruption test\n"]
+    );
     Ok(())
 }
 
@@ -553,12 +560,7 @@ async fn promise(
     let result = fiber.await??;
 
     let poll2 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "poll_promise",
-            promise_data,
-        )
+        .invoke_and_await_agent(&component.id, &agent_id, "poll_promise", promise_data)
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -576,7 +578,10 @@ async fn promise(
     let poll2_value = poll2?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(poll2_value, Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)])))));
+    assert_eq!(
+        poll2_value,
+        Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)]))))
+    );
     Ok(())
 }
 
@@ -748,16 +753,16 @@ async fn get_metadata_from_worker(
         .start_agent(&component.id, agent_id2.clone())
         .await?;
 
-    fn get_agent_id_val(component_id: &ComponentId, agent_id: &golem_common::base_model::agent::AgentId) -> Value {
+    fn get_agent_id_val(
+        component_id: &ComponentId,
+        agent_id: &golem_common::base_model::agent::AgentId,
+    ) -> Value {
         let component_id_val = {
             let (high, low) = component_id.0.as_u64_pair();
             Value::Record(vec![Value::Record(vec![Value::U64(high), Value::U64(low)])])
         };
 
-        Value::Record(vec![
-            component_id_val,
-            Value::String(agent_id.to_string()),
-        ])
+        Value::Record(vec![component_id_val, Value::String(agent_id.to_string())])
     }
 
     async fn get_check(
@@ -1645,43 +1650,6 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
-async fn trying_to_use_an_old_wasm_provides_good_error_message(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    // case: WASM is an old version, rejected by protector
-
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "old-component")
-        .unverified()
-        .store()
-        .await?;
-
-    let result = executor
-        .try_start_worker(&component.id, "old-component-1")
-        .await?;
-
-    let Err(WorkerExecutorError::ComponentParseFailed {
-        component_id,
-        component_revision,
-        reason,
-    }) = result
-    else {
-        panic!("Expected ComponentParseFailed, got {:?}", result)
-    };
-    assert_eq!(component_id, component.id);
-    assert_eq!(component_revision, ComponentRevision::INITIAL);
-    assert_eq!(reason, "failed to parse WebAssembly module");
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120_000)]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1719,9 +1687,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     .await
     .unwrap();
 
-    let result = executor
-        .try_start_worker(&component.id, "bad-wasm-1")
-        .await?;
+    let agent_id = agent_id!("clocks", "bad-wasm-1");
+    let result = executor.try_start_agent(&component.id, agent_id).await?;
 
     let Err(WorkerExecutorError::ComponentParseFailed {
         component_id,
@@ -1755,7 +1722,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         .store()
         .await?;
 
-    let worker_id = executor.start_worker(&component.id, "bad-wasm-2").await?;
+    let agent_id = agent_id!("clocks", "bad-wasm-2");
+    let worker_id = executor.try_start_agent(&component.id, agent_id).await??;
 
     // worker is idle. if we restart the server, it will get recovered
     drop(executor);
@@ -1862,7 +1830,12 @@ async fn long_running_poll_loop_works_as_expected(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -1959,7 +1932,12 @@ async fn long_running_poll_loop_http_failures_are_retried(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("stop now"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("stop now"),
+        )
         .await?;
 
     executor
@@ -2066,7 +2044,12 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -2135,7 +2118,12 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -2173,7 +2161,12 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("second"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("second"),
+        )
         .await?;
 
     executor
@@ -2271,7 +2264,12 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -2355,7 +2353,12 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -2433,7 +2436,12 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -2566,7 +2574,12 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("first"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("first"),
+        )
         .await?;
 
     executor
@@ -2749,7 +2762,12 @@ async fn invocation_queue_is_persistent(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "start_polling", data_value!("done"))
+        .invoke_agent(
+            &component.id,
+            &agent_id,
+            "start_polling",
+            data_value!("done"),
+        )
         .await?;
 
     executor
@@ -2933,25 +2951,49 @@ async fn stderr_returned_for_failed_component(
     assert!(result3.is_err());
 
     let err2 = format!("{}", result2.err().unwrap());
-    assert!(err2.contains("error log message"), "Expected 'error log message' in error: {err2}");
-    assert!(err2.contains("value is too large"), "Expected 'value is too large' in error: {err2}");
+    assert!(
+        err2.contains("error log message"),
+        "Expected 'error log message' in error: {err2}"
+    );
+    assert!(
+        err2.contains("value is too large"),
+        "Expected 'value is too large' in error: {err2}"
+    );
 
     let err3 = format!("{}", result3.err().unwrap());
-    assert!(err3.contains("error log message"), "Expected 'error log message' in error: {err3}");
-    assert!(err3.contains("value is too large"), "Expected 'value is too large' in error: {err3}");
+    assert!(
+        err3.contains("error log message"),
+        "Expected 'error log message' in error: {err3}"
+    );
+    assert!(
+        err3.contains("value is too large"),
+        "Expected 'value is too large' in error: {err3}"
+    );
 
     assert_eq!(metadata.status, WorkerStatus::Failed);
     assert!(metadata.last_error.is_some());
     let last_error = metadata.last_error.unwrap();
-    assert!(last_error.contains("error log message"), "Expected 'error log message' in last_error: {last_error}");
-    assert!(last_error.contains("value is too large"), "Expected 'value is too large' in last_error: {last_error}");
+    assert!(
+        last_error.contains("error log message"),
+        "Expected 'error log message' in last_error: {last_error}"
+    );
+    assert!(
+        last_error.contains("value is too large"),
+        "Expected 'value is too large' in last_error: {last_error}"
+    );
 
     assert!(next.is_none());
     assert_eq!(all.len(), 1);
     assert!(all[0].last_error.is_some());
     let all_last_error = all[0].last_error.clone().unwrap();
-    assert!(all_last_error.contains("error log message"), "Expected 'error log message' in all[0].last_error: {all_last_error}");
-    assert!(all_last_error.contains("value is too large"), "Expected 'value is too large' in all[0].last_error: {all_last_error}");
+    assert!(
+        all_last_error.contains("error log message"),
+        "Expected 'error log message' in all[0].last_error: {all_last_error}"
+    );
+    assert!(
+        all_last_error.contains("value is too large"),
+        "Expected 'value is too large' in all[0].last_error: {all_last_error}"
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -3020,23 +3062,11 @@ async fn cancelling_pending_invocations(
 
     // Queue inc_by(6) with ik2 and inc_by(7) with ik3 while suspended
     executor
-        .invoke_agent_with_key(
-            &component.id,
-            &agent_id,
-            &ik2,
-            "inc_by",
-            data_value!(6u64),
-        )
+        .invoke_agent_with_key(&component.id, &agent_id, &ik2, "inc_by", data_value!(6u64))
         .await?;
 
     executor
-        .invoke_agent_with_key(
-            &component.id,
-            &agent_id,
-            &ik3,
-            "inc_by",
-            data_value!(7u64),
-        )
+        .invoke_agent_with_key(&component.id, &agent_id, &ik3, "inc_by", data_value!(7u64))
         .await?;
 
     let cancel1 = executor.cancel_invocation(&worker_id, &ik1).await;
@@ -3093,7 +3123,10 @@ async fn resolve_components_from_name(
 
     // Make sure the name is unique
     let counter_component = executor
-        .component(&context.default_environment_id, "golem_it_agent_rpc_rust_release")
+        .component(
+            &context.default_environment_id,
+            "golem_it_agent_rpc_rust_release",
+        )
         .name("component-resolve-target")
         .store()
         .await?;
@@ -3232,12 +3265,7 @@ async fn scheduled_invocation(
     // third invocation: schedule increment on self in the future and poll
     {
         executor
-            .invoke_and_await_agent(
-                &component.id,
-                &client_agent_id,
-                "test3",
-                data_value!(),
-            )
+            .invoke_and_await_agent(&component.id, &client_agent_id, "test3", data_value!())
             .await?;
 
         let mut done = false;
@@ -3428,7 +3456,11 @@ async fn invoking_worker_while_its_getting_deleted_works(
     let invocation_result = invoking_task.await?.unwrap();
     deleting_task_cancel_token.cancel();
     // The agent invocation should fail because the worker is being deleted
-    assert!(invocation_result.is_err(), "Expected error when invoking agent while being deleted, got: {:?}", invocation_result);
+    assert!(
+        invocation_result.is_err(),
+        "Expected error when invoking agent while being deleted, got: {:?}",
+        invocation_result
+    );
     let err_msg = invocation_result.err().unwrap().to_string();
     assert!(err_msg.contains("being deleted") || err_msg.contains("Worker not found") || err_msg.contains("Previously deleted"), 
         "Expected 'being deleted' or 'Worker not found' or 'Previously deleted' in error: {err_msg}");

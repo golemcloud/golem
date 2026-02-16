@@ -30,18 +30,16 @@ use golem_common::model::component::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
-    ComponentTransformerPluginSpec, PluginRegistrationCreation, PluginSpecDto,
+    PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 use pretty_assertions::{assert_eq, assert_ne};
-use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
-use tracing::{debug, info};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 

@@ -12,37 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use axum::body::Bytes;
-use axum::extract::Multipart;
-use axum::routing::post;
-use axum::Router;
-use base64::Engine;
-use golem_api_grpc::proto::golem::worker::{log_event, Log};
-use golem_client::api::{RegistryServiceClient, RegistryServiceCreateComponentError};
+use golem_client::api::RegistryServiceClient;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
-    ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationCreation,
+    OplogProcessorPluginSpec, PluginRegistrationCreation,
     PluginSpecDto,
 };
-use golem_common::model::{Empty, ScanCursor};
+use golem_common::model::ScanCursor;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended, WorkerInvocationResultOps};
-use golem_test_framework::model::IFSEntry;
-use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use pretty_assertions::assert_eq;
-use reqwest::StatusCode;
-use serde_json::json;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use test_r::{inherit_test_dep, test};
-use tracing::{debug, info};
-use wac_graph::types::Package;
-use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 

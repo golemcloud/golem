@@ -188,19 +188,19 @@ pub trait TestDsl {
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
-    async fn try_start_worker(
+    async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
     ) -> WorkerInvocationResult<WorkerId> {
-        self.try_start_worker_with(component_id, name, HashMap::new(), vec![])
+        self.try_start_agent_with(component_id, id, HashMap::new(), vec![])
             .await
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> WorkerInvocationResult<WorkerId>;
@@ -210,7 +210,8 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
     ) -> anyhow::Result<WorkerId> {
-        self.start_worker(component_id, &id.to_string()).await
+        self.start_agent_with(component_id, id, HashMap::new(), vec![])
+            .await
     }
 
     async fn start_agent_with(
@@ -220,35 +221,10 @@ pub trait TestDsl {
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
-        self.start_worker_with(component_id, &id.to_string(), env, wasi_config_vars)
-            .await
-    }
-
-    async fn start_worker(
-        &self,
-        component_id: &ComponentId,
-        name: &str,
-    ) -> anyhow::Result<WorkerId> {
-        self.start_worker_with(component_id, name, HashMap::new(), vec![])
-            .await
-    }
-
-    async fn start_worker_with(
-        &self,
-        component_id: &ComponentId,
-        name: &str,
-        env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId>;
-
-    async fn invoke(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> WorkerInvocationResult<()> {
-        self.invoke_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
-            .await
+        let result = self
+            .try_start_agent_with(component_id, id, env, wasi_config_vars)
+            .await?;
+        Ok(result?)
     }
 
     async fn invoke_with_key(

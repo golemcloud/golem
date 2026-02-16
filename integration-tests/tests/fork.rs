@@ -799,8 +799,12 @@ async fn fork_and_sync_with_promise(
         .await?;
 
     let uuid = Uuid::new_v4();
-    let worker_name = format!("promise-agent(\"{uuid}\")");
-    let worker = user.start_worker(&component.id, &worker_name).await?;
+    let worker = user
+        .start_agent(
+            &component.id,
+            agent_id!("promise-agent", uuid.to_string()),
+        )
+        .await?;
 
     let result1 = user
         .invoke_and_await(

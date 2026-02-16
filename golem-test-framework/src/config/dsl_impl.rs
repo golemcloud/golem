@@ -33,6 +33,7 @@ use golem_client::model::{
     CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::base_model::agent::AgentId;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
@@ -271,10 +272,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(component)
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> WorkerInvocationResult<WorkerId> {
@@ -288,7 +289,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .launch_new_worker(
                 &component_id.0,
                 &WorkerCreationRequest {
-                    name: name.to_string(),
+                    name: id.to_string(),
                     env,
                     config_vars: wasi_config_vars.into(),
                 },
@@ -296,19 +297,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         Ok(Ok(response.worker_id))
-    }
-
-    async fn start_worker_with(
-        &self,
-        component_id: &ComponentId,
-        name: &str,
-        env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
-        let result = self
-            .try_start_worker_with(component_id, name, env, wasi_config_vars)
-            .await?;
-        Ok(result?)
     }
 
     async fn invoke_with_key(

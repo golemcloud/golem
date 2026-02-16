@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::data_value;
+use crate::{agent_id, data_value, phantom_agent_id};
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,

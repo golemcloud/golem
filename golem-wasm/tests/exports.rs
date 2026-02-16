@@ -1,5 +1,5 @@
 use golem_wasm::analysis::analysed_type::{
-    case, f32, field, handle, list, record, result, result_err, str, tuple, u32, u64, unit_case,
+    case, f32, field, handle, list, record, result, result_err, str, u32, u64,
     variant,
 };
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;

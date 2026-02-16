@@ -16,6 +16,7 @@ use super::TestWorkerExecutor;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
+use golem_common::base_model::agent::AgentId;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -258,10 +259,10 @@ impl TestDsl for TestWorkerExecutor {
         Ok(component)
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
@@ -269,7 +270,7 @@ impl TestDsl for TestWorkerExecutor {
 
         let worker_id = WorkerId {
             component_id: *component_id,
-            worker_name: name.to_string(),
+            worker_name: id.to_string(),
         };
 
         let response = self
@@ -295,19 +296,6 @@ impl TestDsl for TestWorkerExecutor {
                 .try_into()
                 .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
         }
-    }
-
-    async fn start_worker_with(
-        &self,
-        component_id: &ComponentId,
-        name: &str,
-        env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
-        let result = self
-            .try_start_worker_with(component_id, name, env, wasi_config_vars)
-            .await??;
-        Ok(result)
     }
 
     async fn invoke_with_key(
