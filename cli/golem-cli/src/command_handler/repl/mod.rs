@@ -171,8 +171,11 @@ impl ReplHandler {
             let repl_cli_commands_metadata_json_path =
                 fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
 
+            let component_names = app_ctx.application().component_names().cloned().collect();
+
             BridgeReplArgs {
                 environment,
+                component_names,
                 script,
                 stream_logs,
                 disable_auto_imports,
@@ -196,10 +199,12 @@ impl ReplHandler {
                         force_build: None,
                         post_deploy_args: post_deploy_args.clone(),
                         repl_bridge_sdk_target: Some(language),
+                        skip_build: false,
                     })
                     .await?;
             }
             None => {
+                // We explicitly trigger 'build', so we ensure that we have the REPL bridge SDKs
                 self.ctx
                     .app_handler()
                     .build(
@@ -209,6 +214,24 @@ impl ReplHandler {
                         &ApplicationComponentSelectMode::All,
                     )
                     .await?;
+
+                // We check for all components, but in practice we usually only have one, and the
+                // first missing one will trigger deployment for all components. We also skip
+                // building, as that was already done above.
+                for component_name in &args.component_names {
+                    self.ctx
+                        .component_handler()
+                        .component_by_name_with_auto_deploy(
+                            &args.environment,
+                            ComponentNameMatchKind::App,
+                            component_name,
+                            None,
+                            post_deploy_args,
+                            Some(language),
+                            true,
+                        )
+                        .await?;
+                }
             }
         }
 
@@ -253,6 +276,8 @@ impl ReplHandler {
                 &component_name,
                 component_revision.map(|r| r.into()),
                 post_deploy_args,
+                None,
+                false,
             )
             .await?;
 

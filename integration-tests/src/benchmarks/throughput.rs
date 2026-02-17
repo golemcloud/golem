@@ -12,30 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
+use crate::benchmarks::{delete_workers, invoke_and_await_agent, invoke_and_await_http};
 use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
+use golem_common::base_model::agent::{AgentId, DataValue};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-};
+use golem_common::model::component::ComponentId;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::{RoutingTable, WorkerId};
+use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use tracing::{info, Level};
 
 pub struct ThroughputEcho {
@@ -64,7 +63,7 @@ impl Benchmark for ThroughputEcho {
             The `size` should be chosen in a way that all workers fit in the available executor's memory,
             and `size=1` can be used to test isolated throughput of a single worker.
             The benchmarks measures multiple implementations separately after each other:
-            direct rust, native rust, TS agent, TS agent through rib mapping, direct Rust RPC and TS agent RPC
+            rust agent, TS agent, rust agent through HTTP mapping, TS agent through HTTP mapping, TS agent RPC and rust agent RPC
             "
         }
     }
@@ -77,16 +76,18 @@ impl Benchmark for ThroughputEcho {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
-            "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{echo}",
-            "benchmark:agent-rust/rust-benchmark-agent.{echo}",
-            "benchmark:agent-rust/rust-rpc-benchmark-agent.{echo}",
-            "benchmark:agent-ts/benchmark-agent.{echo}",
-            "benchmark:agent-ts/rpc-benchmark-agent.{echo}",
-            Box::new(|_| vec!["benchmark".into_value_and_type()]),
+            "echo",
+            Box::new(|_| data_value!("benchmark")),
             Box::new(|port, idx, _length| {
                 let url = Url::parse(&format!(
                     "http://localhost:{port}/test-{idx}-http/echo/test-message"
+                ))
+                .unwrap();
+                Request::new(Method::POST, url)
+            }),
+            Box::new(|port, idx, _length| {
+                let url = Url::parse(&format!(
+                    "http://localhost:{port}/rust/test-{idx}-http/echo/test-message"
                 ))
                 .unwrap();
                 Request::new(Method::POST, url)
@@ -158,7 +159,7 @@ impl Benchmark for ThroughputLargeInput {
             `size` should be chosen in a way that all workers fit in the available executor's memory,
             and `size=1` can be used to test isolated throughput of a single worker.
             The benchmarks measures multiple implementations separately after each other:
-            direct rust, native rust, TS agent, TS agent through rib mapping, direct Rust RPC and TS agent RPC
+            rust agent, TS agent, rust agent through HTTP mapping, TS agent through HTTP mapping, TS agent RPC and rust agent RPC
             "
         }
     }
@@ -171,18 +172,26 @@ impl Benchmark for ThroughputLargeInput {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "benchmark:direct-rust-exports/benchmark-direct-rust-api.{large-input}",
-            "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{large-input}",
-            "benchmark:agent-rust/rust-benchmark-agent.{large-input}",
-            "benchmark:agent-rust/rust-rpc-benchmark-agent.{large-input}",
-            "benchmark:agent-ts/benchmark-agent.{large-input}",
-            "benchmark:agent-ts/rpc-benchmark-agent.{large-input}",
+            "large-input",
             Box::new(|length| {
                 let bytes = vec![0u8; length];
-                vec![bytes.into_value_and_type()]
+                data_value!(bytes)
             }),
             Box::new(|port, idx, length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-http/large-input")).unwrap();
+                let url = Url::parse(&format!(
+                    "http://localhost:{port}/test-{idx}-http/large-input"
+                ))
+                .unwrap();
+                let json_body = json!({"input": vec![0u8; length]}).to_string();
+                let mut request = Request::new(Method::POST, url);
+                *request.body_mut() = Some(Body::wrap(json_body));
+                request
+            }),
+            Box::new(|port, idx, length| {
+                let url = Url::parse(&format!(
+                    "http://localhost:{port}/rust/test-{idx}-http/large-input"
+                ))
+                .unwrap();
                 let json_body = json!({"input": vec![0u8; length]}).to_string();
                 let mut request = Request::new(Method::POST, url);
                 *request.body_mut() = Some(Body::wrap(json_body));
@@ -255,7 +264,7 @@ impl Benchmark for ThroughputCpuIntensive {
             `size` should be chosen in a way that all workers fit in the available executor's memory,
             and `size=1` can be used to test isolated throughput of a single worker.
             The benchmarks measures multiple implementations separately after each other:
-            direct rust, native rust, TS agent, TS agent through rib mapping, direct Rust RPC and TS agent RPC
+            rust agent, TS agent, rust agent through HTTP mapping, TS agent through HTTP mapping, TS agent RPC and rust agent RPC
             "
         }
     }
@@ -268,15 +277,23 @@ impl Benchmark for ThroughputCpuIntensive {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "benchmark:direct-rust-exports/benchmark-direct-rust-api.{cpu-intensive}",
-            "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{cpu-intensive}",
-            "benchmark:agent-rust/rust-benchmark-agent.{cpu-intensive}",
-            "benchmark:agent-rust/rust-rpc-benchmark-agent.{cpu-intensive}",
-            "benchmark:agent-ts/benchmark-agent.{cpu-intensive}",
-            "benchmark:agent-ts/rpc-benchmark-agent.{cpu-intensive}",
-            Box::new(|length| vec![(length as f64).into_value_and_type()]),
+            "cpu-intensive",
+            Box::new(|length| data_value!(length as f64)),
             Box::new(|port, idx, length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-http/cpu-intensive")).unwrap();
+                let url = Url::parse(&format!(
+                    "http://localhost:{port}/test-{idx}-http/cpu-intensive"
+                ))
+                .unwrap();
+                let json_body = json!({"length": length}).to_string();
+                let mut request = Request::new(Method::POST, url);
+                *request.body_mut() = Some(Body::wrap(json_body));
+                request
+            }),
+            Box::new(|port, idx, length| {
+                let url = Url::parse(&format!(
+                    "http://localhost:{port}/rust/test-{idx}-http/cpu-intensive"
+                ))
+                .unwrap();
                 let json_body = json!({"length": length}).to_string();
                 let mut request = Request::new(Method::POST, url);
                 *request.body_mut() = Some(Body::wrap(json_body));
@@ -334,40 +351,55 @@ impl Benchmark for ThroughputCpuIntensive {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkerIdPair {
-    pub parent: WorkerId,
-    pub child: WorkerId,
+pub struct AgentIdPair {
+    pub component_id: ComponentId,
+    pub parent: AgentId,
+    pub child: AgentId,
 }
 
-impl WorkerIdPair {
+impl AgentIdPair {
     fn at_same_worker_executor(&self, routing_table: &RoutingTable) -> bool {
-        let parent_pod = routing_table.lookup(&self.parent);
-        let child_pod = routing_table.lookup(&self.child);
+        let parent_worker_id = WorkerId::from_agent_id(self.component_id, &self.parent)
+            .expect("Failed to create worker id from parent agent id");
+        let child_worker_id = WorkerId::from_agent_id(self.component_id, &self.child)
+            .expect("Failed to create worker id from child agent id");
+        let parent_pod = routing_table.lookup(&parent_worker_id);
+        let child_pod = routing_table.lookup(&child_worker_id);
 
         match (parent_pod, child_pod) {
             (Some(parent_pod), Some(child_pod)) => parent_pod == child_pod,
-            _ => panic!("Failed to find the pod of parent and child workers in RPC benchmark"),
+            _ => panic!("Failed to find the pod of parent and child agents in RPC benchmark"),
         }
     }
 }
 
-enum WorkerIdOrPair {
-    Id(WorkerId),
-    Pair(WorkerIdPair),
+enum AgentInvocationTarget {
+    Single {
+        component_id: ComponentId,
+        agent_id: AgentId,
+    },
+    Pair(AgentIdPair),
 }
 
-impl WorkerIdOrPair {
-    pub fn worker_id(&self) -> &WorkerId {
+impl AgentInvocationTarget {
+    pub fn component_id(&self) -> &ComponentId {
         match self {
-            WorkerIdOrPair::Id(id) => id,
-            WorkerIdOrPair::Pair(pair) => &pair.parent,
+            AgentInvocationTarget::Single { component_id, .. } => component_id,
+            AgentInvocationTarget::Pair(pair) => &pair.component_id,
+        }
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        match self {
+            AgentInvocationTarget::Single { agent_id, .. } => agent_id,
+            AgentInvocationTarget::Pair(pair) => &pair.parent,
         }
     }
 
     pub fn prefix(&self, prefix: &str, routing_table: &RoutingTable) -> String {
         match self {
-            WorkerIdOrPair::Id(_) => prefix.to_string(),
-            WorkerIdOrPair::Pair(pair) => {
+            AgentInvocationTarget::Single { .. } => prefix.to_string(),
+            AgentInvocationTarget::Pair(pair) => {
                 if pair.at_same_worker_executor(routing_table) {
                     format!("{prefix}local-")
                 } else {
@@ -378,55 +410,42 @@ impl WorkerIdOrPair {
     }
 }
 
-impl From<WorkerId> for WorkerIdOrPair {
-    fn from(id: WorkerId) -> Self {
-        WorkerIdOrPair::Id(id)
-    }
-}
-
-impl From<WorkerIdPair> for WorkerIdOrPair {
-    fn from(pair: WorkerIdPair) -> Self {
-        WorkerIdOrPair::Pair(pair)
-    }
-}
-
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     domain: Domain,
-    direct_rust_worker_ids: Vec<WorkerId>,
-    rust_agent_worker_ids: Vec<WorkerId>,
-    ts_agent_worker_ids: Vec<WorkerId>,
-    ts_agent_worker_ids_for_http: Vec<WorkerId>,
+    rust_agent_component_id: ComponentId,
+    ts_agent_component_id: ComponentId,
+    rust_agent_ids: Vec<AgentId>,
+    ts_agent_ids: Vec<AgentId>,
+    rust_agent_ids_for_http: Vec<AgentId>,
+    ts_agent_ids_for_http: Vec<AgentId>,
     length: usize,
-    direct_rust_rpc_worker_id_pairs: Vec<WorkerIdPair>,
     routing_table: RoutingTable,
-    ts_rpc_agent_worker_id_pairs: Vec<WorkerIdPair>,
-    rust_rpc_agent_worker_id_pairs: Vec<WorkerIdPair>,
+    ts_rpc_agent_id_pairs: Vec<AgentIdPair>,
+    rust_rpc_agent_id_pairs: Vec<AgentIdPair>,
 }
 
 pub struct ThroughputBenchmark {
-    rust_function_name: String,
-    rust_rpc_function_name: String,
-    rust_agent_function_name: String,
-    rust_agent_rpc_function_name: String,
-    ts_function_name: String,
-    ts_rpc_function_name: String,
-    function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
+    method_name: String,
+    agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
     http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+    rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
     deps: BenchmarkTestDependencies,
     call_count: usize,
 }
 
+fn agent_ids_to_worker_ids(component_id: ComponentId, ids: &[AgentId]) -> Vec<WorkerId> {
+    ids.iter()
+        .filter_map(|id| WorkerId::from_agent_id(component_id, id).ok())
+        .collect()
+}
+
 impl ThroughputBenchmark {
     pub async fn new(
-        rust_function_name: &str,
-        rust_rpc_function_name: &str,
-        rust_agent_function_name: &str,
-        rust_agent_rpc_function_name: &str,
-        ts_function_name: &str,
-        ts_rpc_function_name: &str,
-        function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
+        method_name: &str,
+        agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
         http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
+        rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
@@ -435,14 +454,10 @@ impl ThroughputBenchmark {
         otlp: bool,
     ) -> Self {
         Self {
-            rust_function_name: rust_function_name.to_string(),
-            rust_rpc_function_name: rust_rpc_function_name.to_string(),
-            rust_agent_function_name: rust_agent_function_name.to_string(),
-            rust_agent_rpc_function_name: rust_agent_rpc_function_name.to_string(),
-            ts_function_name: ts_function_name.to_string(),
-            ts_rpc_function_name: ts_rpc_function_name.to_string(),
-            function_params,
+            method_name: method_name.to_string(),
+            agent_params,
             http_request,
+            rust_http_request,
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -460,13 +475,12 @@ impl ThroughputBenchmark {
     }
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
-        let mut direct_rust_worker_ids = vec![];
-        let mut rust_agent_worker_ids = vec![];
-        let mut ts_agent_worker_ids = vec![];
-        let mut ts_agent_worker_ids_for_http = vec![];
-        let mut direct_rust_rpc_worker_id_pairs = vec![];
-        let mut ts_rpc_agent_worker_id_pairs = vec![];
-        let mut rust_rpc_agent_worker_id_pairs = vec![];
+        let mut rust_agent_ids = vec![];
+        let mut ts_agent_ids = vec![];
+        let mut rust_agent_ids_for_http = vec![];
+        let mut ts_agent_ids_for_http = vec![];
+        let mut ts_rpc_agent_id_pairs = vec![];
+        let mut rust_rpc_agent_id_pairs = vec![];
 
         let routing_table = self
             .deps
@@ -480,13 +494,6 @@ impl ThroughputBenchmark {
         let (_, env) = user.app_and_env().await.unwrap();
 
         info!("Registering components");
-
-        let rust_direct_component = user
-            .component(&env.id, "benchmark_direct_rust")
-            .name("benchmark:direct-rust")
-            .store()
-            .await
-            .unwrap();
 
         let rust_agent_component = user
             .component(&env.id, "benchmark_agent_rust_release")
@@ -502,85 +509,22 @@ impl ThroughputBenchmark {
             .await
             .unwrap();
 
-        let rust_rpc_parent_component = user
-            .component(&env.id, "benchmark_direct_rust_rpc_parent")
-            .name("benchmark:direct-rust-rpc-parent")
-            .with_dynamic_linking(&[(
-                "benchmark:direct-rust-rpc-child-client/benchmark-direct-rust-rpc-child-client",
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(vec![(
-                        "benchmark-direct-rust-rpc-child-api".to_string(),
-                        WasmRpcTarget {
-                            interface_name: "benchmark:direct-rust-rpc-child-exports/benchmark-direct-rust-rpc-child-api"
-                                .to_string(),
-                            component_name: "benchmark:direct-rust-rpc-child".to_string(),
-                        },
-                    )]),
-                }),
-            )])
-            .store()
-            .await
-            .unwrap();
-
-        let rust_rpc_child_component = user
-            .component(&env.id, "benchmark_direct_rust_rpc_child")
-            .name("benchmark:direct-rust-rpc-child")
-            .store()
-            .await
-            .unwrap();
-
         for n in 0..config.size {
-            direct_rust_worker_ids.push(WorkerId {
-                component_id: rust_direct_component.id,
-                worker_name: format!("benchmark-agent(\"test-{n}\")"),
+            rust_agent_ids.push(agent_id!("rust-benchmark-agent", format!("test-{n}")));
+            ts_agent_ids.push(agent_id!("benchmark-agent", format!("test-{n}")));
+            rust_agent_ids_for_http
+                .push(agent_id!("rust-benchmark-agent", format!("test-{n}-http")));
+            ts_agent_ids_for_http.push(agent_id!("benchmark-agent", format!("test-{n}-http")));
+
+            ts_rpc_agent_id_pairs.push(AgentIdPair {
+                component_id: ts_agent_component.id,
+                parent: agent_id!("rpc-benchmark-agent", format!("rpc-test-{n}")),
+                child: agent_id!("benchmark-agent", format!("rpc-test-{n}")),
             });
-            rust_agent_worker_ids.push(WorkerId {
+            rust_rpc_agent_id_pairs.push(AgentIdPair {
                 component_id: rust_agent_component.id,
-                worker_name: format!("rust-benchmark-agent(\"test-{n}\")"),
-            });
-            ts_agent_worker_ids.push(WorkerId {
-                component_id: ts_agent_component.id,
-                worker_name: format!("benchmark-agent(\"test-{n}\")"),
-            });
-            ts_agent_worker_ids_for_http.push(WorkerId {
-                component_id: ts_agent_component.id,
-                worker_name: format!("benchmark-agent(\"test-{n}-http\")"),
-            });
-            let direct_rust_rpc_parent = WorkerId {
-                component_id: rust_rpc_parent_component.id,
-                worker_name: format!("rpc-benchmark-agent(\"test-{n}\")"),
-            };
-            let direct_rust_rpc_child = WorkerId {
-                component_id: rust_rpc_child_component.id,
-                worker_name: format!("rpc-benchmark-agent(\"test-{n}\")"),
-            };
-            direct_rust_rpc_worker_id_pairs.push(WorkerIdPair {
-                parent: direct_rust_rpc_parent,
-                child: direct_rust_rpc_child,
-            });
-            let ts_agent_rpc_parent = WorkerId {
-                component_id: ts_agent_component.id,
-                worker_name: format!("rpc-benchmark-agent(\"rpc-test-{n}\")"),
-            };
-            let ts_agent_rpc_child = WorkerId {
-                component_id: ts_agent_component.id,
-                worker_name: format!("benchmark-agent(\"rpc-test-{n}\")"),
-            };
-            ts_rpc_agent_worker_id_pairs.push(WorkerIdPair {
-                parent: ts_agent_rpc_parent,
-                child: ts_agent_rpc_child,
-            });
-            let rust_agent_rpc_parent = WorkerId {
-                component_id: rust_agent_component.id,
-                worker_name: format!("rust-rpc-benchmark-agent(\"rpc-test-{n}\")"),
-            };
-            let rust_agent_rpc_child = WorkerId {
-                component_id: rust_agent_component.id,
-                worker_name: format!("rust-benchmark-agent(\"rpc-test-{n}\")"),
-            };
-            rust_rpc_agent_worker_id_pairs.push(WorkerIdPair {
-                parent: rust_agent_rpc_parent,
-                child: rust_agent_rpc_child,
+                parent: agent_id!("rust-rpc-benchmark-agent", format!("rpc-test-{n}")),
+                child: agent_id!("rust-benchmark-agent", format!("rpc-test-{n}")),
             });
         }
 
@@ -605,10 +549,16 @@ impl ThroughputBenchmark {
         let http_api_deployment_creation = HttpApiDeploymentCreation {
             domain: domain.clone(),
             webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
-            agents: BTreeMap::from_iter([(
-                AgentTypeName("benchmark-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            )]),
+            agents: BTreeMap::from_iter([
+                (
+                    AgentTypeName("benchmark-agent".to_string()),
+                    HttpApiDeploymentAgentOptions::default(),
+                ),
+                (
+                    AgentTypeName("rust-benchmark-agent".to_string()),
+                    HttpApiDeploymentAgentOptions::default(),
+                ),
+            ]),
         };
 
         client
@@ -625,119 +575,125 @@ impl ThroughputBenchmark {
         IterationContext {
             user,
             domain,
-            direct_rust_worker_ids,
-            rust_agent_worker_ids,
-            ts_agent_worker_ids,
-            ts_agent_worker_ids_for_http,
+            rust_agent_component_id: rust_agent_component.id,
+            ts_agent_component_id: ts_agent_component.id,
+            rust_agent_ids,
+            ts_agent_ids,
+            rust_agent_ids_for_http,
+            ts_agent_ids_for_http,
             length: config.length,
-            direct_rust_rpc_worker_id_pairs,
             routing_table,
-            ts_rpc_agent_worker_id_pairs,
-            rust_rpc_agent_worker_id_pairs,
+            ts_rpc_agent_id_pairs,
+            rust_rpc_agent_id_pairs,
         }
     }
 
     pub async fn warmup(&self, iteration: &IterationContext) {
-        async fn warmup_workers(
+        async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
+            component_id: &ComponentId,
+            ids: &[AgentId],
+            method_name: &str,
+            params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
             length: usize,
-            ids: &[WorkerId],
-            function_name: &str,
-            params: &(dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static),
         ) {
             let result_futures = ids
                 .iter()
-                .map(move |worker_id| async move {
+                .map(move |agent_id| async move {
                     let user_clone = user.clone();
-                    invoke_and_await(&user_clone, worker_id, function_name, (params)(length)).await
+                    invoke_and_await_agent(
+                        &user_clone,
+                        component_id,
+                        agent_id,
+                        method_name,
+                        (params)(length),
+                    )
+                    .await
                 })
                 .collect::<Vec<_>>();
 
             let _ = result_futures.join().await;
         }
 
-        info!("Warming up direct rust workers...");
-        warmup_workers(
-            &iteration.user,
-            iteration.length,
-            &iteration.direct_rust_worker_ids,
-            &self.rust_function_name,
-            &self.function_params,
-        )
-        .await;
-
         info!("Warming up rust agents...");
-        warmup_workers(
+        warmup_agents(
             &iteration.user,
+            &iteration.rust_agent_component_id,
+            &iteration.rust_agent_ids,
+            &self.method_name,
+            &self.agent_params,
             iteration.length,
-            &iteration.rust_agent_worker_ids,
-            &self.rust_agent_function_name,
-            &self.function_params,
         )
         .await;
 
         info!("Warming up TS agents...");
-        warmup_workers(
+        warmup_agents(
             &iteration.user,
+            &iteration.ts_agent_component_id,
+            &iteration.ts_agent_ids,
+            &self.method_name,
+            &self.agent_params,
             iteration.length,
-            &iteration.ts_agent_worker_ids,
-            &self.ts_function_name,
-            &self.function_params,
+        )
+        .await;
+
+        info!("Warming up Rust agents for http mapping...");
+        warmup_agents(
+            &iteration.user,
+            &iteration.rust_agent_component_id,
+            &iteration.rust_agent_ids_for_http,
+            &self.method_name,
+            &self.agent_params,
+            iteration.length,
         )
         .await;
 
         info!("Warming up TS agents for http mapping...");
-        warmup_workers(
+        warmup_agents(
             &iteration.user,
+            &iteration.ts_agent_component_id,
+            &iteration.ts_agent_ids_for_http,
+            &self.method_name,
+            &self.agent_params,
             iteration.length,
-            &iteration.ts_agent_worker_ids_for_http,
-            &self.ts_function_name,
-            &self.function_params,
-        )
-        .await;
-
-        info!("Warming up direct rust RPC parent workers...");
-        warmup_workers(
-            &iteration.user,
-            iteration.length,
-            &iteration
-                .direct_rust_rpc_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.parent)
-                .collect::<Vec<_>>(),
-            &self.rust_rpc_function_name,
-            &self.function_params,
         )
         .await;
 
         info!("Warming up TS RPC agents...");
-        warmup_workers(
+        warmup_agents(
             &iteration.user,
-            iteration.length,
+            iteration
+                .ts_rpc_agent_id_pairs
+                .first()
+                .map(|p| &p.component_id)
+                .unwrap_or(&iteration.ts_agent_component_id),
             &iteration
-                .ts_rpc_agent_worker_id_pairs
+                .ts_rpc_agent_id_pairs
                 .iter()
-                .cloned()
-                .map(|pair| pair.parent)
+                .map(|pair| pair.parent.clone())
                 .collect::<Vec<_>>(),
-            &self.ts_rpc_function_name,
-            &self.function_params,
+            &self.method_name,
+            &self.agent_params,
+            iteration.length,
         )
         .await;
 
         info!("Warming up Rust RPC agents...");
-        warmup_workers(
+        warmup_agents(
             &iteration.user,
-            iteration.length,
+            iteration
+                .rust_rpc_agent_id_pairs
+                .first()
+                .map(|p| &p.component_id)
+                .unwrap_or(&iteration.rust_agent_component_id),
             &iteration
-                .rust_rpc_agent_worker_id_pairs
+                .rust_rpc_agent_id_pairs
                 .iter()
-                .cloned()
-                .map(|pair| pair.parent)
+                .map(|pair| pair.parent.clone())
                 .collect::<Vec<_>>(),
-            &self.rust_agent_rpc_function_name,
-            &self.function_params,
+            &self.method_name,
+            &self.agent_params,
+            iteration.length,
         )
         .await;
 
@@ -745,106 +701,94 @@ impl ThroughputBenchmark {
     }
 
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
-        async fn measure_workers(
+        async fn measure_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             routing_table: &RoutingTable,
             recorder: &BenchmarkRecorder,
             length: usize,
             call_count: usize,
-            ids: &[WorkerIdOrPair],
-            function_name: &str,
-            params: &(dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static),
+            targets: &[AgentInvocationTarget],
+            method_name: &str,
+            params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
             prefix: &str,
         ) {
-            let result_futures = ids
+            let result_futures = targets
                 .iter()
-                .map(move |worker_id| async move {
-                    let worker_id = worker_id.worker_id();
+                .map(move |target| {
                     let user_clone = user.clone();
 
-                    let mut results = vec![];
-                    for _ in 0..call_count {
-                        results.push(
-                            invoke_and_await(
-                                &user_clone,
-                                worker_id,
-                                function_name,
-                                (params)(length),
+                    async move {
+                        let mut results = vec![];
+                        for _ in 0..call_count {
+                            results.push(
+                                invoke_and_await_agent(
+                                    &user_clone,
+                                    target.component_id(),
+                                    target.agent_id(),
+                                    method_name,
+                                    (params)(length),
+                                )
+                                .await,
                             )
-                            .await,
-                        )
+                        }
+                        results
                     }
-                    results
                 })
                 .collect::<Vec<_>>();
 
             let results = result_futures.join().await;
-            for (idx, (results, id)) in results.iter().zip(ids).enumerate() {
-                let prefix = id.prefix(prefix, routing_table);
+            for (idx, (results, target)) in results.iter().zip(targets).enumerate() {
+                let prefix = target.prefix(prefix, routing_table);
                 for result in results {
                     result.record(recorder, &prefix, idx.to_string().as_str());
                 }
             }
         }
 
-        info!("Measuring direct rust throughput");
-        measure_workers(
-            &iteration.user,
-            &iteration.routing_table,
-            &recorder,
-            iteration.length,
-            self.call_count,
-            &iteration
-                .direct_rust_worker_ids
-                .iter()
-                .cloned()
-                .map(|id| id.into())
-                .collect::<Vec<_>>(),
-            &self.rust_function_name,
-            &self.function_params,
-            "direct-rust-",
-        )
-        .await;
-
         info!("Measuring rust agent throughput");
-        measure_workers(
+        measure_agents(
             &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
             self.call_count,
             &iteration
-                .rust_agent_worker_ids
+                .rust_agent_ids
                 .iter()
                 .cloned()
-                .map(|id| id.into())
+                .map(|id| AgentInvocationTarget::Single {
+                    component_id: iteration.rust_agent_component_id,
+                    agent_id: id,
+                })
                 .collect::<Vec<_>>(),
-            &self.rust_agent_function_name,
-            &self.function_params,
+            &self.method_name,
+            &self.agent_params,
             "rust-agent-",
         )
         .await;
 
         info!("Measuring TS agent throughput...");
-        measure_workers(
+        measure_agents(
             &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
             self.call_count,
             &iteration
-                .ts_agent_worker_ids
+                .ts_agent_ids
                 .iter()
                 .cloned()
-                .map(|id| id.into())
+                .map(|id| AgentInvocationTarget::Single {
+                    component_id: iteration.ts_agent_component_id,
+                    agent_id: id,
+                })
                 .collect::<Vec<_>>(),
-            &self.ts_function_name,
-            &self.function_params,
+            &self.method_name,
+            &self.agent_params,
             "ts-agent-",
         )
         .await;
 
-        info!("Measuring TS agent throughput through HTTP mapping...");
         let port = self.deps.worker_service().custom_request_port();
 
         let client = {
@@ -856,11 +800,44 @@ impl ThroughputBenchmark {
                 .expect("Failed to create HTTP client")
         };
 
+        info!("Measuring Rust agent throughput through HTTP mapping...");
+        {
+            let client = client.clone();
+            let result_futures = iteration
+                .rust_agent_ids_for_http
+                .iter()
+                .enumerate()
+                .map(move |(idx, _agent_id)| {
+                    let client = client.clone();
+                    async move {
+                        let mut results = vec![];
+                        for _ in 0..self.call_count {
+                            results.push(
+                                invoke_and_await_http(client.clone(), || {
+                                    (self.rust_http_request)(port, idx, iteration.length)
+                                })
+                                .await,
+                            )
+                        }
+                        results
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let results = result_futures.join().await;
+            for (idx, results) in results.iter().enumerate() {
+                for result in results {
+                    result.record(&recorder, "rust-agent-http-", idx.to_string().as_str());
+                }
+            }
+        }
+
+        info!("Measuring TS agent throughput through HTTP mapping...");
         let result_futures = iteration
-            .ts_agent_worker_ids_for_http
+            .ts_agent_ids_for_http
             .iter()
             .enumerate()
-            .map(move |(idx, _worker_id)| {
+            .map(move |(idx, _agent_id)| {
                 let client = client.clone();
                 async move {
                     let mut results = vec![];
@@ -884,129 +861,93 @@ impl ThroughputBenchmark {
             }
         }
 
-        info!("Measuring direct rust throughput via RPC");
-        measure_workers(
-            &iteration.user,
-            &iteration.routing_table,
-            &recorder,
-            iteration.length,
-            self.call_count,
-            &iteration
-                .direct_rust_rpc_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.into())
-                .collect::<Vec<_>>(),
-            &self.rust_rpc_function_name,
-            &self.function_params,
-            "direct-rust-rpc-",
-        )
-        .await;
-
         info!("Measuring TS agent RPC throughput...");
-        measure_workers(
+        measure_agents(
             &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
             self.call_count,
             &iteration
-                .ts_rpc_agent_worker_id_pairs
+                .ts_rpc_agent_id_pairs
                 .iter()
                 .cloned()
-                .map(|pair| pair.into())
+                .map(AgentInvocationTarget::Pair)
                 .collect::<Vec<_>>(),
-            &self.ts_rpc_function_name,
-            &self.function_params,
+            &self.method_name,
+            &self.agent_params,
             "ts-agent-rpc-",
         )
         .await;
 
         info!("Measuring Rust agent RPC throughput...");
-        measure_workers(
+        measure_agents(
             &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
             self.call_count,
             &iteration
-                .rust_rpc_agent_worker_id_pairs
+                .rust_rpc_agent_id_pairs
                 .iter()
                 .cloned()
-                .map(|pair| pair.into())
+                .map(AgentInvocationTarget::Pair)
                 .collect::<Vec<_>>(),
-            &self.rust_agent_rpc_function_name,
-            &self.function_params,
+            &self.method_name,
+            &self.agent_params,
             "rust-agent-rpc-",
         )
         .await;
-        // TODO: native rust
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        delete_workers(&iteration.user, &iteration.direct_rust_worker_ids).await;
-        delete_workers(&iteration.user, &iteration.rust_agent_worker_ids).await;
-        delete_workers(&iteration.user, &iteration.ts_agent_worker_ids).await;
-        // delete_workers(&iteration.user, &iteration.ts_agent_worker_ids_for_rib).await;
         delete_workers(
             &iteration.user,
-            &iteration
-                .direct_rust_rpc_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.parent)
-                .collect::<Vec<_>>(),
+            &agent_ids_to_worker_ids(iteration.rust_agent_component_id, &iteration.rust_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &iteration
-                .direct_rust_rpc_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.child)
-                .collect::<Vec<_>>(),
+            &agent_ids_to_worker_ids(iteration.ts_agent_component_id, &iteration.ts_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &iteration
-                .ts_rpc_agent_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.parent)
-                .collect::<Vec<_>>(),
+            &agent_ids_to_worker_ids(
+                iteration.rust_agent_component_id,
+                &iteration.rust_agent_ids_for_http,
+            ),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &iteration
-                .ts_rpc_agent_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.child)
-                .collect::<Vec<_>>(),
+            &agent_ids_to_worker_ids(
+                iteration.ts_agent_component_id,
+                &iteration.ts_agent_ids_for_http,
+            ),
         )
         .await;
-        delete_workers(
-            &iteration.user,
-            &iteration
-                .rust_rpc_agent_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.parent)
-                .collect::<Vec<_>>(),
-        )
-        .await;
-        delete_workers(
-            &iteration.user,
-            &iteration
-                .rust_rpc_agent_worker_id_pairs
-                .iter()
-                .cloned()
-                .map(|pair| pair.child)
-                .collect::<Vec<_>>(),
-        )
-        .await;
+
+        let mut ts_rpc_workers: Vec<WorkerId> = Vec::new();
+        for pair in &iteration.ts_rpc_agent_id_pairs {
+            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.parent) {
+                ts_rpc_workers.push(id);
+            }
+            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.child) {
+                ts_rpc_workers.push(id);
+            }
+        }
+        delete_workers(&iteration.user, &ts_rpc_workers).await;
+
+        let mut rust_rpc_workers: Vec<WorkerId> = Vec::new();
+        for pair in &iteration.rust_rpc_agent_id_pairs {
+            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.parent) {
+                rust_rpc_workers.push(id);
+            }
+            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.child) {
+                rust_rpc_workers.push(id);
+            }
+        }
+        delete_workers(&iteration.user, &rust_rpc_workers).await;
     }
 }

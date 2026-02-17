@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateEnvironmentPluginGrantError,
     RegistryServiceDeleteEnvironmentPluginGrantError, RegistryServiceGetComponentError,
@@ -27,6 +26,7 @@ use golem_common::model::plugin_registration::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -84,11 +84,12 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
             )
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceCreateEnvironmentPluginGrantError::Error400(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     let plugin_grant = client_1
@@ -106,13 +107,13 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
             .list_environment_plugin_grants(&shared_env.id.0)
             .await?;
 
-        assert!(grants.values.len() == 1);
+        assert_eq!(grants.values.len(), 1);
         let grant = &grants.values[0];
 
-        assert!(grant.id == plugin_grant.id);
-        assert!(grant.environment_id == shared_env.id);
-        assert!(grant.plugin.id == plugin.id);
-        assert!(grant.plugin_account.id == user_1.account_id);
+        assert_eq!(grant.id, plugin_grant.id);
+        assert_eq!(grant.environment_id, shared_env.id);
+        assert_eq!(grant.plugin.id, plugin.id);
+        assert_eq!(grant.plugin_account.id, user_1.account_id);
     }
 
     // both users can see the plugin grant when getting by id
@@ -121,10 +122,10 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
             .await?;
 
-        assert!(fetched.id == plugin_grant.id);
-        assert!(fetched.environment_id == shared_env.id);
-        assert!(fetched.plugin.id == plugin.id);
-        assert!(fetched.plugin_account.id == user_1.account_id);
+        assert_eq!(fetched.id, plugin_grant.id);
+        assert_eq!(fetched.environment_id, shared_env.id);
+        assert_eq!(fetched.plugin.id, plugin.id);
+        assert_eq!(fetched.plugin_account.id, user_1.account_id);
     }
 
     client_1
@@ -136,11 +137,12 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         let result = client_1
             .delete_environment_plugin_grant(&plugin_grant.id.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceDeleteEnvironmentPluginGrantError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // both users do not see plugin grant anymore when listing
@@ -156,11 +158,12 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         let result = client
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // both users can see the plugin grant when explicitly fetching deleted
@@ -169,10 +172,10 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(true))
             .await?;
 
-        assert!(fetched.id == plugin_grant.id);
-        assert!(fetched.environment_id == shared_env.id);
-        assert!(fetched.plugin.id == plugin.id);
-        assert!(fetched.plugin_account.id == user_1.account_id);
+        assert_eq!(fetched.id, plugin_grant.id);
+        assert_eq!(fetched.environment_id, shared_env.id);
+        assert_eq!(fetched.plugin.id, plugin.id);
+        assert_eq!(fetched.plugin_account.id, user_1.account_id);
     }
 
     Ok(())
@@ -224,11 +227,12 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
             )
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceCreateEnvironmentPluginGrantError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -290,11 +294,12 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
     // User 2 cannot directly see plugin
     {
         let result = client_2.get_plugin_by_id(&plugin.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // But can see it via the grant
@@ -303,18 +308,19 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
             .get_environment_plugin_grant(&plugin_grant.id.0, Some(false))
             .await?;
 
-        assert!(fetched.plugin.id == plugin.id);
-        assert!(fetched.plugin_account.id == user_1.account_id);
+        assert_eq!(fetched.plugin.id, plugin.id);
+        assert_eq!(fetched.plugin_account.id, user_1.account_id);
     }
 
     // User 2 cannot see the underlying component
     {
         let result = client_2.get_component(&plugin_component.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetComponentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -358,11 +364,12 @@ async fn cannot_grant_deleted_plugin(deps: &EnvBasedTestDependencies) -> anyhow:
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateEnvironmentPluginGrantError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -413,11 +420,12 @@ async fn environment_owner_cannot_grant_foreign_plugin(
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateEnvironmentPluginGrantError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -474,11 +482,12 @@ async fn shared_user_with_readonly_role_cannot_grant_plugin(
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateEnvironmentPluginGrantError::Error403(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -539,11 +548,12 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
     let result_shared = client_shared
         .list_environment_plugin_grants(&env.id.0)
         .await;
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result_shared,
+        Err(golem_client::Error::Item(
             RegistryServiceListEnvironmentPluginGrantsError::Error404(_)
-        )) = result_shared
-    );
+        ))
+    ));
 
     // Environment owner can still list plugin grants
     let result_owner = client_owner
@@ -605,7 +615,7 @@ async fn environment_owner_can_fetch_deleted_grant_with_include_deleted(
         .get_environment_plugin_grant(&grant.id.0, Some(true))
         .await?;
 
-    assert!(fetched.id == grant.id);
+    assert_eq!(fetched.id, grant.id);
     Ok(())
 }
 
@@ -709,9 +719,9 @@ async fn fetch_deleted_grant_with_deleted_plugin_and_account(
         .get_environment_plugin_grant(&grant.id.0, Some(true))
         .await?;
 
-    assert!(fetched.id == grant.id);
-    assert!(fetched.plugin.id == plugin.id);
-    assert!(fetched.plugin_account.id == owner.account_id);
+    assert_eq!(fetched.id, grant.id);
+    assert_eq!(fetched.plugin.id, plugin.id);
+    assert_eq!(fetched.plugin_account.id, owner.account_id);
 
     Ok(())
 }
@@ -767,11 +777,12 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
             .get_environment_plugin_grant(&grant.id.0, Some(include_deleted))
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetEnvironmentPluginGrantError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())

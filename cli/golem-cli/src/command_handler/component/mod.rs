@@ -96,9 +96,15 @@ impl ComponentCommandHandler {
                 component_name,
                 update_mode,
                 r#await,
+                disable_wakeup,
             } => {
-                self.cmd_update_workers(component_name.component_name, update_mode, r#await)
-                    .await
+                self.cmd_update_workers(
+                    component_name.component_name,
+                    update_mode,
+                    r#await,
+                    disable_wakeup,
+                )
+                .await
             }
             ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
@@ -355,9 +361,10 @@ impl ComponentCommandHandler {
         component_name: Option<ComponentName>,
         update_mode: AgentUpdateMode,
         await_update: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         let components = self.components_for_deploy_args(component_name).await?;
-        self.update_workers_by_components(&components, update_mode, await_update)
+        self.update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
@@ -465,6 +472,7 @@ impl ComponentCommandHandler {
         components: &[ComponentDto],
         update: AgentUpdateMode,
         await_updates: bool,
+        disable_wakeup: bool,
     ) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
@@ -484,6 +492,7 @@ impl ComponentCommandHandler {
                     update,
                     component.revision,
                     await_updates,
+                    disable_wakeup,
                 )
                 .await?;
             update_results.extend(result);
@@ -731,6 +740,8 @@ impl ComponentCommandHandler {
         component_name: &ComponentName,
         component_revision_selection: Option<ComponentRevisionSelection<'_>>,
         post_deploy_args: Option<&PostDeployArgs>,
+        repl_bridge_sdk_target: Option<GuestLanguage>,
+        skip_build: bool,
     ) -> anyhow::Result<ComponentDto> {
         if post_deploy_args.is_some_and(|da| da.is_any_set(self.ctx.deploy_args())) {
             self.ctx
@@ -743,7 +754,8 @@ impl ComponentCommandHandler {
                     post_deploy_args: post_deploy_args
                         .cloned()
                         .unwrap_or_else(PostDeployArgs::none),
-                    repl_bridge_sdk_target: None,
+                    repl_bridge_sdk_target,
+                    skip_build,
                 })
                 .await?;
         }
@@ -797,7 +809,8 @@ impl ComponentCommandHandler {
                             approve_staging_steps: false,
                             force_build: None,
                             post_deploy_args: PostDeployArgs::none(),
-                            repl_bridge_sdk_target: None,
+                            repl_bridge_sdk_target,
+                            skip_build,
                         })
                         .await?;
 

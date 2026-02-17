@@ -39,7 +39,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 #[allow(clippy::await_holding_lock)]
 async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;

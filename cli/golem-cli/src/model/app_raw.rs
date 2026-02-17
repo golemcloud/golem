@@ -425,6 +425,8 @@ pub struct ComponentLayerProperties {
 pub struct HttpApiDeploymentAgentOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<SecuritySchemeName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_session_header_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

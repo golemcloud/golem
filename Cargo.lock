@@ -4623,6 +4623,7 @@ dependencies = [
  "prometheus",
  "prost-types 0.14.1",
  "reqwest 0.12.24",
+ "rustc-hash 2.1.1",
  "scc",
  "serde",
  "serde_json",
@@ -5861,7 +5862,6 @@ name = "integration-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert2",
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
@@ -5869,11 +5869,11 @@ dependencies = [
  "bytes 1.11.0",
  "clap",
  "futures-concurrency",
+ "goldenfile",
  "golem-api-grpc",
  "golem-client",
  "golem-common",
  "golem-rib",
- "golem-rib-repl",
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",

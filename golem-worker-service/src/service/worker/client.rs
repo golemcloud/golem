@@ -206,6 +206,7 @@ pub trait WorkerClient: Send + Sync {
         worker_id: &WorkerId,
         update_mode: WorkerUpdateMode,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
@@ -1065,6 +1066,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         worker_id: &WorkerId,
         update_mode: WorkerUpdateMode,
         target_revision: ComponentRevision,
+        disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
@@ -1081,6 +1083,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     target_revision: target_revision.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    disable_wakeup,
                 }))
             },
             |response| match response.into_inner() {

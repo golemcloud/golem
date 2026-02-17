@@ -14,45 +14,66 @@
 
 import {
   cliCommandsConfigFromBaseConfig,
-  ClientConfig,
   clientConfigFromEnv,
   Config,
   ConfigureClient,
-  loadProcessArgs,
-  ProcessArgs,
+  loadReplCliFlags,
+  ReplCliFlags,
 } from './config';
 import { CliReplInterop } from './cli-repl-interop';
 import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
-import util from 'node:util';
 import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
-import { flushStdIO } from './process';
+import { flushStdIO, setOutput, writeln } from './process';
+import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
+import * as base from './base';
+import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
+
+const MAX_COMPLETION_ENTRIES = 50;
 
 export class Repl {
   private readonly config: Config;
-  private readonly clientConfig: ClientConfig;
+  private readonly clientConfig: base.Configuration;
   private readonly cli: CliReplInterop;
-  private readonly processArgs: ProcessArgs;
+  private readonly replCliFlags: ReplCliFlags;
   private languageService: LanguageService | undefined;
   private overrideSnippetForNextEval: string | undefined;
 
   constructor(config: Config) {
     this.config = config;
-    this.processArgs = loadProcessArgs();
-    this.clientConfig = clientConfigFromEnv();
-    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
+    this.replCliFlags = loadReplCliFlags();
     this.overrideSnippetForNextEval = undefined;
+
+    const clientConfig = clientConfigFromEnv();
+    this.clientConfig = clientConfig;
+
+    this.cli = new CliReplInterop(cliCommandsConfigFromBaseConfig(this.config, this.clientConfig));
+    const cli = this.cli;
+    const replCliFlags = this.replCliFlags;
+    clientConfig.aroundInvokeHook = {
+      async beforeInvoke(request: AgentInvocationRequest): Promise<void> {
+        if (replCliFlags.streamLogs) {
+          cli.startAgentStream(request);
+        }
+      },
+
+      async afterInvoke(
+        request: AgentInvocationRequest,
+        result: JsonResult<AgentInvocationResult, any>,
+      ): Promise<void> {
+        void result;
+        await cli.stopAgentStream(request);
+      },
+    };
   }
 
   private getLanguageService(): LanguageService {
     if (!this.languageService) {
-      this.languageService = new LanguageService(this.config, {
-        disableAutoImports: this.processArgs.disableAutoImports,
-      });
+      this.languageService = new LanguageService(this.config, this.replCliFlags);
     }
     return this.languageService;
   }
@@ -64,7 +85,7 @@ export class Repl {
   }): repl.REPLServer {
     const output = options?.output ?? process.stdout;
     const terminal = options?.terminal ?? Boolean((output as any).isTTY);
-    const prompt = this.processArgs.script
+    const prompt = this.replCliFlags.script
       ? ''
       : `${pc.cyan('golem-ts-repl')}` +
         `[${pc.bold(pc.green(this.clientConfig.application))}]` +
@@ -106,6 +127,7 @@ export class Repl {
   private setupReplEval(replServer: repl.REPLServer): repl.REPLEval {
     const tsxEval = replServer.eval;
     const languageService = this.getLanguageService();
+    const replCliFlags = this.replCliFlags;
     const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
@@ -126,13 +148,17 @@ export class Repl {
         const typeInfo = languageService.getSnippetTypeInfo();
 
         if (typeInfo && typeInfo.isPromise) {
-          logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
+          if (replCliFlags.showTypeInfo) {
+            logSnippetInfo(pc.bold('awaiting ' + typeInfo.formattedType));
+          }
           evalCode('await ' + code);
         } else {
-          if (quickInfo) {
-            logSnippetInfo(pc.bold(quickInfo.formattedInfo));
-          } else if (typeInfo) {
-            logSnippetInfo(pc.bold(typeInfo.formattedType));
+          if (replCliFlags.showTypeInfo) {
+            if (quickInfo) {
+              logSnippetInfo(pc.bold(quickInfo.formattedInfo));
+            } else if (typeInfo) {
+              logSnippetInfo(pc.bold(typeInfo.formattedType));
+            }
           }
           evalCode(code);
         }
@@ -145,14 +171,10 @@ export class Repl {
             entries.push('...');
           }
 
-          logSnippetInfo(
-            formatAsTable(entries, {
-              maxLineLength: terminalWidth - INFO_PREFIX_LENGTH,
-            }),
-          );
+          logSnippetInfo(formatAsTable(entries));
         }
 
-        replMessageSink.writeText(typeCheckResult.formattedErrors);
+        writeln(typeCheckResult.formattedErrors);
 
         callback(null, undefined);
       }
@@ -198,7 +220,7 @@ export class Repl {
   }
 
   private setupReplContext(replServer: repl.REPLServer) {
-    if (this.processArgs.disableAutoImports) {
+    if (this.replCliFlags.disableAutoImports) {
       return;
     }
 
@@ -213,12 +235,20 @@ export class Repl {
   }
 
   private setupReplCommands(replServer: repl.REPLServer) {
+    replServer.defineCommand('quit', {
+      help: 'Quit the REPL (exit alias)',
+      action: () => {
+        replServer.close();
+      },
+    });
+
     replServer.defineCommand('reload', {
       help: 'Reload the REPL',
       async action() {
         await CliReplInterop.exitWithReloadCode();
       },
     });
+
     replServer.defineCommand('agentTypeInfo', {
       help: 'Show auto-imported agent client info',
       action: () => {
@@ -226,11 +256,62 @@ export class Repl {
       },
     });
 
+    this.defineFlagCommand(replServer, {
+      name: 'streamLogs',
+      help: 'Show or set agent stream logging (on/off)',
+      get: () => this.replCliFlags.streamLogs,
+      set: (value) => {
+        this.replCliFlags.streamLogs = value;
+      },
+    });
+
+    this.defineFlagCommand(replServer, {
+      name: 'showTypeInfo',
+      help: 'Show or set type info logging before execution (on/off)',
+      get: () => this.replCliFlags.showTypeInfo,
+      set: (value) => {
+        this.replCliFlags.showTypeInfo = value;
+      },
+    });
+
     this.cli.defineCommands(replServer);
   }
 
+  private defineFlagCommand(
+    replServer: repl.REPLServer,
+    opts: {
+      name: string;
+      help: string;
+      get: () => boolean;
+      set: (value: boolean) => void;
+    },
+  ) {
+    replServer.defineCommand(opts.name, {
+      help: opts.help,
+      action: (rawArgs: string) => {
+        const trimmed = rawArgs.trim();
+        if (!trimmed) {
+          logSnippetInfo(`${opts.name} is ${opts.get() ? pc.green('on') : pc.red('off')}`);
+          replServer.displayPrompt();
+          return;
+        }
+
+        const parsed = parseToggleValue(trimmed);
+        if (parsed === undefined) {
+          logSnippetInfo(`Usage: .${opts.name} [on|off]`);
+          replServer.displayPrompt();
+          return;
+        }
+
+        opts.set(parsed);
+        logSnippetInfo(`${opts.name} set to ${opts.get() ? pc.green('on') : pc.red('off')}`);
+        replServer.displayPrompt();
+      },
+    });
+  }
+
   private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
-    if (this.processArgs.disableAutoImports) return;
+    if (this.replCliFlags.disableAutoImports) return;
 
     const agentNames = Object.keys(this.config.agents).sort((a, b) => a.localeCompare(b));
     if (agentNames.length === 0) return;
@@ -238,7 +319,7 @@ export class Repl {
     const languageService = this.getLanguageService();
     const lines: string[] = [];
     lines.push('');
-    lines.push(pc.bold('Available agents:'));
+    lines.push(pc.bold('Available agents client types:'));
 
     for (const agentTypeName of agentNames) {
       const methods = languageService.getClientMethodSignatures(agentTypeName);
@@ -262,7 +343,9 @@ export class Repl {
   }
 
   async run() {
-    const script = this.processArgs.script;
+    setOutput('stdout');
+
+    const script = this.replCliFlags.script;
     const replServer = script
       ? this.newBaseReplServer({
           input: new PassThrough(),
@@ -285,13 +368,12 @@ export class Repl {
   }
 
   private async runScript(replServer: repl.REPLServer, script: string) {
-    const previousSink = replMessageSink;
-    replMessageSink = stderrMessageSink;
+    setOutput('stderr');
 
     let evalResult: { error: Error | null; result: unknown };
     try {
       const preparedScript = prepareScriptForEval(script);
-      const filename = this.processArgs.scriptPath ?? 'repl-script';
+      const filename = this.replCliFlags.scriptPath ?? 'repl-script';
       this.overrideSnippetForNextEval = script;
       evalResult = await new Promise((resolve) => {
         replServer.eval(preparedScript.script, replServer.context, filename, (err, result) => {
@@ -300,12 +382,10 @@ export class Repl {
       });
     } finally {
       this.overrideSnippetForNextEval = undefined;
-      replMessageSink = previousSink;
     }
 
     if (evalResult.error) {
-      process.stderr.write(formatEvalError(evalResult.error) + '\n');
-      return;
+      writeln(formatEvalError(evalResult.error));
     }
 
     const jsonResult = tryJsonStringify(evalResult.result);
@@ -314,108 +394,10 @@ export class Repl {
       return;
     }
 
-    this.printReplResult(replServer, evalResult.result);
-  }
-
-  private printReplResult(replServer: repl.REPLServer, result: unknown) {
-    if (result === undefined && replServer.ignoreUndefined) return;
-    const rendered = replServer.writer(result);
+    if (evalResult.result === undefined && replServer.ignoreUndefined) return;
+    const rendered = replServer.writer(evalResult.result);
     process.stdout.write(rendered + '\n');
   }
-}
-
-const INFO_PREFIX = pc.bold(pc.red('>'));
-const INFO_PREFIX_LENGTH = util.stripVTControlCharacters(INFO_PREFIX).length + 1;
-
-type ReplMessageSink = {
-  writeText: (text: string) => void;
-};
-
-let replMessageSink: ReplMessageSink = {
-  writeText: (text: string) => {
-    console.log(text);
-  },
-};
-
-const stderrMessageSink: ReplMessageSink = {
-  writeText: (text: string) => {
-    process.stderr.write(text + '\n');
-  },
-};
-
-function logSnippetInfo(message: string | string[]) {
-  let lines = Array.isArray(message) ? message : message.split('\n');
-  if (lines.length === 0) return;
-
-  let maxLineLength = 0;
-  lines.forEach((line) => {
-    maxLineLength = Math.max(maxLineLength, util.stripVTControlCharacters(line).length);
-    replMessageSink.writeText(`${INFO_PREFIX} ${line}`);
-  });
-
-  if (maxLineLength > 0) {
-    replMessageSink.writeText(pc.dim('~'.repeat(terminalWidth)));
-  }
-}
-
-type FormatAsTableOptions = {
-  maxLineLength: number;
-  separator?: string;
-};
-
-export function formatAsTable(
-  items: string[],
-  { maxLineLength, separator = '  ' }: FormatAsTableOptions,
-): string {
-  if (items.length === 0) return '';
-
-  const colWidth = Math.max(...items.map((s) => s.length));
-  const sepLen = separator.length;
-
-  const cols = Math.max(1, Math.floor((maxLineLength + sepLen) / (colWidth + sepLen)));
-
-  const lines: string[] = [];
-  let line: string[] = [];
-
-  for (const item of items) {
-    if (item.length > maxLineLength) {
-      if (line.length) {
-        lines.push(line.join(separator).trimEnd());
-        line = [];
-      }
-      lines.push(item);
-      continue;
-    }
-
-    line.push(item.padEnd(colWidth, ' '));
-    if (line.length === cols) {
-      lines.push(line.join(separator).trimEnd());
-      line = [];
-    }
-  }
-
-  if (line.length) {
-    lines.push(line.join(separator).trimEnd());
-  }
-
-  return lines.join('\n');
-}
-
-const MAX_COMPLETION_ENTRIES = 50;
-
-let terminalWidth = process.stdout.isTTY ? process.stdout.columns : 80;
-
-if (process.stdout.isTTY) {
-  process.stdout.on('resize', () => {
-    terminalWidth = process.stdout.columns;
-  });
-}
-
-function formatEvalError(error: unknown) {
-  if (error instanceof Error) {
-    return error.stack ?? error.message;
-  }
-  return String(error);
 }
 
 function tryJsonStringify(value: unknown): string | undefined {
@@ -518,4 +500,11 @@ function countNewlines(value: string): number {
     }
   }
   return count;
+}
+
+function parseToggleValue(rawValue: string): boolean | undefined {
+  const normalized = rawValue.trim().toLowerCase();
+  if (['on', 'true', '1', 'yes'].includes(normalized)) return true;
+  if (['off', 'false', '0', 'no'].includes(normalized)) return false;
+  return undefined;
 }

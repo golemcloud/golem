@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::oidc::IdentityProviderError;
+use super::oidc::session_store::SessionStoreError;
 use super::route_resolver::RouteResolverError;
-use super::security::IdentityProviderError;
-use super::security::session_store::SessionStoreError;
 use crate::service::worker::WorkerServiceError;
 use golem_common::{SafeDisplay, error_forwarding};
 
@@ -46,12 +46,16 @@ pub enum RequestHandlerError {
     UnknownOidcState,
     #[error("OIDC token exchange failed")]
     OidcTokenExchangeFailed,
+    #[error("OpenAPI spec generation for api failed")]
+    OpenApiSpecGenerationFailed,
     #[error("Invariant violated: {msg}")]
     InvariantViolated { msg: &'static str },
     #[error("Resolving route failed: {0}")]
     ResolvingRouteFailed(#[from] RouteResolverError),
     #[error("Invocation failed: {0}")]
     AgentInvocationFailed(#[from] WorkerServiceError),
+    #[error("OIDC loging state is associated with a different security scheme")]
+    OidcSchemeMismatch,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -75,6 +79,8 @@ impl SafeDisplay for RequestHandlerError {
             Self::UnsupportedMimeType { .. } => self.to_string(),
             Self::UnknownOidcState => self.to_string(),
             Self::OidcTokenExchangeFailed => self.to_string(),
+            Self::OidcSchemeMismatch => self.to_string(),
+            Self::OpenApiSpecGenerationFailed { .. } => self.to_string(),
 
             Self::InvariantViolated { .. } => "internal error".to_string(),
 

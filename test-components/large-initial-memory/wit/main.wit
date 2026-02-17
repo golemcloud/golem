@@ -1,5 +1,0 @@
-package golem:it;
-
-world c-api1 {
-    export run: func() -> u64;
-}

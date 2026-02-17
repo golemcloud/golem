@@ -12,14 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff;
-
 pub use crate::base_model::http_api_deployment::*;
+use crate::model::diff;
 
 impl HttpApiDeploymentAgentOptions {
     pub fn to_diffable(&self) -> diff::HttpApiDeploymentAgentOptions {
+        let mut security_scheme = None;
+        let mut test_session_header = None;
+
+        match &self.security {
+            None => {}
+            Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(inner)) => {
+                test_session_header = Some(inner.header_name.clone());
+            }
+            Some(HttpApiDeploymentAgentSecurity::SecurityScheme(inner)) => {
+                security_scheme = Some(inner.security_scheme.0.clone());
+            }
+        }
+
         diff::HttpApiDeploymentAgentOptions {
-            security_scheme: self.security_scheme.as_ref().map(|v| v.0.clone()),
+            security_scheme,
+            test_session_header,
         }
     }
 }

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::http_test_context::{test_context_internal, HttpTestContext};
+use crate::custom_api::http_test_context::{make_test_context, HttpTestContext};
+use golem_common::base_model::agent::AgentTypeName;
+use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use reqwest::Url;
@@ -24,9 +26,27 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
-    test_context_internal(deps, "http_rust", "http:rust")
-        .await
-        .unwrap()
+    make_test_context(
+        deps,
+        vec![
+            (
+                AgentTypeName("http-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("cors-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("webhook-agent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ],
+        "http_rust_release",
+        "http:rust",
+    )
+    .await
+    .unwrap()
 }
 
 #[test]
@@ -44,6 +64,7 @@ async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     let body: serde_json::Value = response.json().await?;
+
     assert_eq!(body, json!({ "value": "foo" }));
     Ok(())
 }

@@ -1,3 +1,0 @@
-[workspace]
-members = ["child-component", "parent-component"]
-resolver = "2"
