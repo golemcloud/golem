@@ -52,7 +52,7 @@ export class BaseAgent {
    * @throws Will throw if accessed before the agent is initialized.
    */
   getId(): AgentId {
-    const agentId = getAgentId()
+    const agentId = getAgentId();
 
     if (!agentId) {
       throw new Error(
