@@ -65,7 +65,7 @@ async fn http_client(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -135,7 +135,7 @@ async fn http_client_using_reqwest(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -213,7 +213,7 @@ async fn http_client_using_reqwest_async(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -290,7 +290,7 @@ async fn http_client_using_reqwest_async_parallel(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -395,7 +395,7 @@ async fn outgoing_http_contains_idempotency_key(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;

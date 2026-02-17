@@ -1776,7 +1776,7 @@ async fn long_running_poll_loop_works_as_expected(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1879,7 +1879,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
         start_http_poll_server(response.clone(), poll_count.clone(), None).await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1991,7 +1991,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2067,7 +2067,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2213,7 +2213,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2301,7 +2301,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2384,7 +2384,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2522,7 +2522,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2710,7 +2710,7 @@ async fn invocation_queue_is_persistent(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(&context.default_environment_id, "golem_it_http_tests_release")
         .name("golem-it:http-tests")
         .store()
         .await?;
