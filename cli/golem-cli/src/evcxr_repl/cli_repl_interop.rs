@@ -14,6 +14,7 @@
 
 use crate::evcxr_repl::config::{ClientConfig, ReplResolvedConfig};
 use crate::model::cli_command_metadata::{CliArgMetadata, CliCommandMetadata};
+use crate::GOLEM_EVCXR_REPL;
 use anyhow::Context;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -384,10 +385,12 @@ impl GolemCli {
 
     async fn run(&self, opts: RunOptions) -> anyhow::Result<RunResult> {
         let mut command = Command::new(&self.binary_name);
-        command.current_dir(&self.cwd);
-        command.arg("--environment");
-        command.arg(&self.client_config.environment);
-        command.args(&opts.args);
+        command
+            .current_dir(&self.cwd)
+            .env(GOLEM_EVCXR_REPL, "0")
+            .arg("--environment")
+            .arg(&self.client_config.environment)
+            .args(&opts.args);
 
         match opts.mode {
             RunMode::Inherit => {

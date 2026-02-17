@@ -107,8 +107,15 @@ impl Repl {
                             continue;
                         }
                     }
-                    if let Err(err) = self.context.borrow_mut().execute(&line) {
-                        eprintln!("{err}");
+                    match self.context.borrow_mut().execute(&line) {
+                        Ok(output) => {
+                            if let Some(text) = output.get("text/plain") {
+                                println!("{text}");
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("{err}");
+                        }
                     }
                 }
                 Err(ReadlineError::Interrupted) => {
@@ -243,6 +250,8 @@ fn block_on_completion(
     handle.block_on(cli_repl.complete(line, pos))
 }
 
-fn build_cli_repl_interop(config: &ReplResolvedConfig) -> anyhow::Result<Option<Rc<CliReplInterop>>> {
+fn build_cli_repl_interop(
+    config: &ReplResolvedConfig,
+) -> anyhow::Result<Option<Rc<CliReplInterop>>> {
     Ok(Some(Rc::new(CliReplInterop::new(config))))
 }
