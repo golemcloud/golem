@@ -34,9 +34,6 @@ pub struct ColdStartUnknownSmall {
 pub struct ColdStartUnknownMedium {
     config: RunConfig,
 }
-pub struct ColdStartUnknownLarge {
-    config: RunConfig,
-}
 
 #[async_trait]
 impl Benchmark for ColdStartUnknownSmall {
@@ -145,85 +142,6 @@ impl Benchmark for ColdStartUnknownMedium {
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts",
-            "benchmark-agent",
-            mode,
-            verbosity,
-            cluster_size,
-            disable_compilation_cache,
-            otlp,
-        )
-        .await
-    }
-
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
-    }
-
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
-    }
-
-    async fn setup_iteration(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
-    }
-
-    async fn warmup(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        _context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(&self.config).await
-    }
-
-    async fn run(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: &Self::IterationContext,
-        recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
-    }
-
-    async fn cleanup_iteration(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
-    }
-}
-
-#[async_trait]
-impl Benchmark for ColdStartUnknownLarge {
-    type BenchmarkContext = ColdStartUnknownBenchmark;
-    type IterationContext = IterationContext;
-
-    fn name() -> &'static str {
-        "cold-start-unknown-large"
-    }
-
-    fn description() -> &'static str {
-        indoc! {
-            "Benchmarks the first-time invocation of a component that have never been instantiated before.
-             This variant uses a TypeScript agent component with a lot of linked AI libraries. The `size` parameter
-             is the number of unique components, and `length` is the time in seconds _per component_
-             to wait for pre-compilation.
-             "
-        }
-    }
-
-    async fn create_benchmark_context(
-        mode: &TestMode,
-        verbosity: Level,
-        cluster_size: usize,
-        disable_compilation_cache: bool,
-        otlp: bool,
-    ) -> Self::BenchmarkContext {
-        ColdStartUnknownBenchmark::new(
-            "benchmark_agent_ts_large",
             "benchmark-agent",
             mode,
             verbosity,

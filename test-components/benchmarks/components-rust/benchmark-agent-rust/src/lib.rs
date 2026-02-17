@@ -1,11 +1,18 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, endpoint};
 
-#[agent_definition]
+#[agent_definition(mount = "/rust/{name}")]
 trait RustBenchmarkAgent {
     fn new(name: String) -> Self;
+
+    #[endpoint(post = "/echo/{message}")]
     fn echo(&mut self, message: String) -> String;
+
+    #[endpoint(post = "/large-input")]
     fn large_input(&mut self, input: Vec<u8>) -> u32;
+
+    #[endpoint(post = "/cpu-intensive")]
     fn cpu_intensive(&mut self, length: f64) -> u32; // length is f64 to have the same interface as the TS agent
+
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32;
     fn sleep(&mut self, millis: u64) -> bool;
 }

@@ -34,9 +34,6 @@ pub struct LatencySmall {
 pub struct LatencyMedium {
     config: RunConfig,
 }
-pub struct LatencyLarge {
-    config: RunConfig,
-}
 
 #[async_trait]
 impl Benchmark for LatencySmall {
@@ -147,86 +144,6 @@ impl Benchmark for LatencyMedium {
         LatencyBenchmark::new(
             "benchmark_agent_ts",
             "benchmark:agent-ts",
-            "benchmark-agent",
-            mode,
-            verbosity,
-            cluster_size,
-            disable_compilation_cache,
-            otlp,
-        )
-        .await
-    }
-
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
-    }
-
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
-    }
-
-    async fn setup_iteration(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
-    }
-
-    async fn warmup(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        _context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(&self.config).await
-    }
-
-    async fn run(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: &Self::IterationContext,
-        recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
-    }
-
-    async fn cleanup_iteration(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
-    }
-}
-
-#[async_trait]
-impl Benchmark for LatencyLarge {
-    type BenchmarkContext = LatencyBenchmark;
-    type IterationContext = IterationContext;
-
-    fn name() -> &'static str {
-        "latency-large"
-    }
-
-    fn description() -> &'static str {
-        indoc! {
-            "Benchmarks both the cold and hot latency of a invoking a component that can potentially
-            be swapped out of the executor's memory. This variant uses a TypeScript agent with many AI dependencies.
-            The `size` parameter is the number of workers to create. The `length` parameter is the number
-            of hot invocations to be done per worker (the first one is separately recorded as cold).
-            "
-        }
-    }
-
-    async fn create_benchmark_context(
-        mode: &TestMode,
-        verbosity: Level,
-        cluster_size: usize,
-        disable_compilation_cache: bool,
-        otlp: bool,
-    ) -> Self::BenchmarkContext {
-        LatencyBenchmark::new(
-            "benchmark_agent_ts_large",
-            "benchmark:agent-ts-large",
             "benchmark-agent",
             mode,
             verbosity,
