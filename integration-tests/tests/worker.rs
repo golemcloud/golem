@@ -1344,8 +1344,7 @@ async fn agent_promise_await(
     let promise_id_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    let promise_id =
-        PromiseId::from_value(promise_id_value.clone()).map_err(|e| anyhow!("{e}"))?;
+    let promise_id = PromiseId::from_value(promise_id_value.clone()).map_err(|e| anyhow!("{e}"))?;
     let promise_id_vat = ValueAndType::new(promise_id_value, PromiseId::get_type());
 
     let task = {
