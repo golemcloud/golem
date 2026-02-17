@@ -39,9 +39,9 @@ use golem_worker_executor_test_utils::{
 use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;
-use std::env;
+
 use std::io::Write;
-use std::path::Path;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1631,9 +1631,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         .store()
         .await?;
 
-    let cwd = env::current_dir()?;
-    debug!("Current directory: {cwd:?}");
-    let target_dir = cwd.join(Path::new("data/components"));
+    let target_dir = deps.component_service_directory.clone();
     let component_path = target_dir.join(format!("wasms/{}-0.wasm", component.id));
 
     let span = Span::current();
@@ -1696,13 +1694,13 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     drop(executor);
 
     // corrupting the uploaded WASM
-    let cwd = env::current_dir().expect("Failed to get current directory");
-    debug!("Current directory: {cwd:?}");
-    let component_path = cwd.join(format!("data/components/wasms/{}-0.wasm", component.id));
-    let compiled_component_path = cwd.join(Path::new(&format!(
-        "data/blobs/compilation_cache/{}/{}/0.cwasm",
+    let component_path = deps
+        .component_service_directory
+        .join(format!("wasms/{}-0.wasm", component.id));
+    let compiled_component_path = deps.blob_storage_root().join(format!(
+        "compilation_cache/{}/{}/0.cwasm",
         component.environment_id, component.id
-    )));
+    ));
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
