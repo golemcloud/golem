@@ -18,6 +18,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'golem:rpc/types@0.2.2';
 import { Uuid } from 'golem:agent/host';
+import { AgentIdRegistry } from './internal/registry/agentIdRegistry';
 
 /**
  * BaseAgent is the foundational class for defining agent implementations.
@@ -51,10 +52,16 @@ export class BaseAgent {
    * @throws Will throw if accessed before the agent is initialized.
    */
   getId(): AgentId {
-    throw new Error(
-      `AgentId is not available for \`${this.constructor.name}\`. ` +
-        `Ensure the class is decorated with @agent()`,
-    );
+    const agentId = AgentIdRegistry.get();
+
+    if (!agentId) {
+      throw new Error(
+        `AgentId is not available for \`${this.constructor.name}\`. ` +
+          `Ensure the class is decorated with @agent()`,
+      );
+    }
+
+    return agentId;
   }
 
   /**

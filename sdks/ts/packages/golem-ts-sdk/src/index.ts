@@ -20,6 +20,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
+import { AgentIdRegistry } from './internal/registry/agentIdRegistry';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -67,6 +68,8 @@ async function initialize(
       `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`,
     );
   }
+
+  AgentIdRegistry.register(getRawSelfAgentId());
 
   const initiateResult = initiator.initiate(input, principal);
 

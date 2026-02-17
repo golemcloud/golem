@@ -34,6 +34,7 @@ import { getHttpMountDetails } from '../internal/http/mount';
 import { validateHttpMount } from '../internal/http/validation';
 import { getAgentConstructorSchema } from '../internal/schema/constructor';
 import { getAgentMethodSchema } from '../internal/schema/method';
+import { AgentIdRegistry } from '../internal/registry/agentIdRegistry';
 
 export type AgentDecoratorOptions = {
   name?: string;
@@ -300,21 +301,13 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        const instance = new ctor(...deserializedConstructorArgs.val);
+        const agentId = AgentIdRegistry.get();
 
-        const agentId = getRawSelfAgentId();
-        if (!agentId.value.startsWith(agentTypeName.asWit)) {
-          const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${agentId.value}"`,
-          );
-
-          return {
-            tag: 'err',
-            val: error,
-          };
+        if (!agentId) {
+          throw new Error('Internal Error: Unavailable agent id');
         }
 
-        instance.getId = () => agentId;
+        const instance = new ctor(...deserializedConstructorArgs.val);
 
         const resolvedAgent = new ResolvedAgent(
           instance,
