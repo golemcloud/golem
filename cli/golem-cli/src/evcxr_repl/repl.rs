@@ -96,7 +96,11 @@ impl Repl {
             help_output
                 .split('\n')
                 .filter_map(|line| line.trim().split_once(' '))
-                .map(|(name, desc)| (name.to_string(), desc.trim_start()))
+                .filter_map(|(name, desc)| {
+                    (name
+                        .strip_prefix(':')
+                        .map(|name| (name.to_string(), desc.trim_start().to_string())))
+                })
                 .collect::<HashMap<String, String>>()
         };
 

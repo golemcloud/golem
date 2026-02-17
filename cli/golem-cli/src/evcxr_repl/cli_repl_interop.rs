@@ -17,7 +17,7 @@ use crate::model::cli_command_metadata::{CliArgMetadata, CliCommandMetadata};
 use crate::GOLEM_EVCXR_REPL;
 use anyhow::Context;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -170,6 +170,11 @@ impl CliReplInterop {
             None => return Ok(false),
         };
 
+        if command_name == "help" {
+            self.print_help();
+            return Ok(true);
+        }
+
         if self.builtin_commands.contains_key(&command_name) {
             return Ok(false);
         }
@@ -201,6 +206,20 @@ impl CliReplInterop {
         }
 
         Ok(true)
+    }
+
+    fn print_help(&self) {
+        let mut entries = BTreeMap::<&str, &str>::new();
+        for (name, desc) in &self.builtin_commands {
+            entries.insert(name, desc);
+        }
+        for command in &self.commands {
+            entries.insert(&command.repl_command, &command.about);
+        }
+        let name_width = entries.keys().map(|name| name.len()).max().unwrap_or(0);
+        for (name, desc) in entries {
+            println!(":{name:width$} {desc}", width = name_width);
+        }
     }
 
     fn complete_arg_value(&self, arg: &CliArgMetadata, current_token: &str) -> CompletionValues {
