@@ -23,9 +23,9 @@ mod repl;
 pub use config::ReplConfig;
 pub use config::REPL_CONFIG_FILE_NAME;
 
-pub async fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     let result = match Repl::new() {
-        Ok(repl) => repl.run().await,
+        Ok(repl) => repl.run(),
         Err(err) => Err(err),
     };
 

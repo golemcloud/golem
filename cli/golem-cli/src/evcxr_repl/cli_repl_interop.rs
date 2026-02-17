@@ -19,9 +19,7 @@ use anyhow::Context;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::process::Stdio;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use std::process::{Command, Stdio};
 
 pub struct CompletionResult {
     pub start: usize,
@@ -56,7 +54,7 @@ impl CliReplInterop {
         }
     }
 
-    pub async fn complete(&self, line: &str, pos: usize) -> Option<CompletionResult> {
+    pub fn complete(&self, line: &str, pos: usize) -> Option<CompletionResult> {
         let line_prefix = line.get(..pos)?;
         let trimmed_start = line_prefix.trim_start();
         let start_trimmed = trimmed_start.strip_prefix(':')?;
@@ -105,9 +103,7 @@ impl CliReplInterop {
         let parsed = parse_args(command, &arg_tokens);
 
         if let Some(expecting_value_for) = parsed.expecting_value_for {
-            let result = self
-                .complete_arg_value(&expecting_value_for, &current_token)
-                .await;
+            let result = self.complete_arg_value(&expecting_value_for, &current_token);
             if result.values.is_empty() {
                 return None;
             }
@@ -131,9 +127,7 @@ impl CliReplInterop {
         let next_positional = command.positional_args.get(parsed.positional_values.len());
         if !current_token.is_empty() {
             if let Some(next_positional) = next_positional {
-                let result = self
-                    .complete_arg_value(next_positional, &current_token)
-                    .await;
+                let result = self.complete_arg_value(next_positional, &current_token);
                 if result.values.is_empty() {
                     return None;
                 }
@@ -146,7 +140,6 @@ impl CliReplInterop {
 
         let positional_values_list = if let Some(next_positional) = next_positional {
             self.complete_arg_value(next_positional, &current_token)
-                .await
                 .values
         } else {
             Vec::new()
@@ -162,7 +155,7 @@ impl CliReplInterop {
         })
     }
 
-    pub async fn try_run_command(&self, line: &str) -> anyhow::Result<bool> {
+    pub fn try_run_command(&self, line: &str) -> anyhow::Result<bool> {
         let trimmed_start = line.trim_start();
         let start_trimmed = match trimmed_start.strip_prefix(':') {
             Some(value) => value.trim_start(),
@@ -199,22 +192,19 @@ impl CliReplInterop {
             .chain(args.iter().cloned())
             .collect::<Vec<_>>();
 
-        let result = self
-            .cli
-            .run(RunOptions {
-                args: full_args.clone(),
-                mode: RunMode::Inherit,
-            })
-            .await?;
+        let result = self.cli.run(RunOptions {
+            args: full_args.clone(),
+            mode: RunMode::Inherit,
+        })?;
 
         if let Some(hook) = command_hook(&command.repl_command) {
-            (hook.handle_result)(full_args.clone(), result.ok, result.code).await?;
+            (hook.handle_result)(full_args.clone(), result.ok, result.code)?;
         }
 
         Ok(true)
     }
 
-    async fn complete_arg_value(
+    fn complete_arg_value(
         &self,
         arg: &CliArgMetadata,
         current_token: &str,
@@ -235,7 +225,7 @@ impl CliReplInterop {
             return CompletionValues { values: Vec::new() };
         };
 
-        let values = (hook.complete)(self.cli.clone(), current_token.to_string()).await;
+        let values = (hook.complete)(self.cli.clone(), current_token.to_string());
         CompletionValues { values }
     }
 }
@@ -262,11 +252,8 @@ struct ParsedArgs {
 
 struct CommandHook {
     adapt_args: fn(Vec<String>) -> Vec<String>,
-    handle_result: fn(Vec<String>, bool, Option<i32>) -> CommandHookFuture,
+    handle_result: fn(Vec<String>, bool, Option<i32>) -> anyhow::Result<()>,
 }
-
-type CommandHookFuture =
-    std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
 
 fn command_hook(command: &str) -> Option<CommandHook> {
     match command {
@@ -279,15 +266,13 @@ fn command_hook(command: &str) -> Option<CommandHook> {
                 adapted
             },
             handle_result: |args, ok, _code| {
-                Box::pin(async move {
-                    if args.iter().any(|arg| arg == "--plan" || arg == "stage") {
-                        return Ok(());
-                    }
-                    if !ok {
-                        return Ok(());
-                    }
-                    exit_with_reload_code().await
-                })
+                if args.iter().any(|arg| arg == "--plan" || arg == "stage") {
+                    return Ok(());
+                }
+                if !ok {
+                    return Ok(());
+                }
+                exit_with_reload_code()
             },
         }),
         _ => None,
@@ -295,11 +280,8 @@ fn command_hook(command: &str) -> Option<CommandHook> {
 }
 
 struct CompletionHook {
-    complete: fn(GolemCli, String) -> CompletionHookFuture,
+    complete: fn(GolemCli, String) -> Vec<String>,
 }
-
-type CompletionHookFuture =
-    std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send>>;
 
 fn find_arg_completion_hook(arg: &CliArgMetadata) -> Option<CompletionHook> {
     let mut candidates = Vec::with_capacity(1 + arg.value_names.len());
@@ -317,50 +299,46 @@ fn completion_hook(id: &str) -> Option<CompletionHook> {
     match id {
         "AGENT_ID" => Some(CompletionHook {
             complete: |cli, current_token| {
-                Box::pin(async move {
-                    let result = cli.run_json(&["agent", "list"]).await;
-                    let Ok(result) = result else {
-                        return Vec::new();
-                    };
-                    if !result.ok {
-                        return Vec::new();
-                    }
-                    let Some(workers) = result
-                        .json
-                        .get("workers")
-                        .and_then(|value| value.as_array())
-                    else {
-                        return Vec::new();
-                    };
-                    let values = workers
-                        .iter()
-                        .filter_map(|worker| worker.get("workerName"))
-                        .filter_map(|value| value.as_str().map(|value| value.to_string()))
-                        .collect::<Vec<_>>();
-                    filter_by_prefix(values, &current_token)
-                })
+                let result = cli.run_json(&["agent", "list"]);
+                let Ok(result) = result else {
+                    return Vec::new();
+                };
+                if !result.ok {
+                    return Vec::new();
+                }
+                let Some(workers) = result
+                    .json
+                    .get("workers")
+                    .and_then(|value| value.as_array())
+                else {
+                    return Vec::new();
+                };
+                let values = workers
+                    .iter()
+                    .filter_map(|worker| worker.get("workerName"))
+                    .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                    .collect::<Vec<_>>();
+                filter_by_prefix(values, &current_token)
             },
         }),
         "COMPONENT_NAME" => Some(CompletionHook {
             complete: |cli, current_token| {
-                Box::pin(async move {
-                    let result = cli.run_json(&["component", "list"]).await;
-                    let Ok(result) = result else {
-                        return Vec::new();
-                    };
-                    if !result.ok {
-                        return Vec::new();
-                    }
-                    let Some(components) = result.json.as_array() else {
-                        return Vec::new();
-                    };
-                    let values = components
-                        .iter()
-                        .filter_map(|component| component.get("componentName"))
-                        .filter_map(|value| value.as_str().map(|value| value.to_string()))
-                        .collect::<Vec<_>>();
-                    filter_by_prefix(values, &current_token)
-                })
+                let result = cli.run_json(&["component", "list"]);
+                let Ok(result) = result else {
+                    return Vec::new();
+                };
+                if !result.ok {
+                    return Vec::new();
+                }
+                let Some(components) = result.json.as_array() else {
+                    return Vec::new();
+                };
+                let values = components
+                    .iter()
+                    .filter_map(|component| component.get("componentName"))
+                    .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                    .collect::<Vec<_>>();
+                filter_by_prefix(values, &current_token)
             },
         }),
         _ => None,
@@ -383,7 +361,7 @@ impl GolemCli {
         }
     }
 
-    async fn run(&self, opts: RunOptions) -> anyhow::Result<RunResult> {
+    fn run(&self, opts: RunOptions) -> anyhow::Result<RunResult> {
         let mut command = Command::new(&self.binary_name);
         command
             .current_dir(&self.cwd)
@@ -399,7 +377,6 @@ impl GolemCli {
                 command.stderr(Stdio::inherit());
                 let status = command
                     .status()
-                    .await
                     .with_context(|| "Failed to execute golem cli")?;
                 return Ok(RunResult {
                     ok: status.success(),
@@ -409,42 +386,29 @@ impl GolemCli {
                 });
             }
             RunMode::Collect => {
-                command.stdout(Stdio::piped());
-                command.stderr(Stdio::piped());
+                let output = command
+                    .output()
+                    .with_context(|| "Failed to spawn golem cli")?;
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Ok(RunResult {
+                    ok: output.status.success(),
+                    code: output.status.code(),
+                    stdout,
+                    stderr,
+                });
             }
         }
-
-        let mut child = command
-            .spawn()
-            .with_context(|| "Failed to spawn golem cli")?;
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-
-        if let Some(mut stdout_reader) = child.stdout.take() {
-            stdout_reader.read_to_string(&mut stdout).await?;
-        }
-        if let Some(mut stderr_reader) = child.stderr.take() {
-            stderr_reader.read_to_string(&mut stderr).await?;
-        }
-        let status = child.wait().await?;
-
-        Ok(RunResult {
-            ok: status.success(),
-            code: status.code(),
-            stdout,
-            stderr,
-        })
     }
 
-    async fn run_json(&self, args: &[&str]) -> anyhow::Result<RunJsonResult> {
+    fn run_json(&self, args: &[&str]) -> anyhow::Result<RunJsonResult> {
         let mut full_args = vec!["--format".to_string(), "json".to_string()];
         full_args.extend(args.iter().map(|value| value.to_string()));
         let result = self
             .run(RunOptions {
                 args: full_args,
                 mode: RunMode::Collect,
-            })
-            .await?;
+            })?;
         let json = serde_json::from_str(&result.stdout).unwrap_or(Value::Null);
         Ok(RunJsonResult {
             ok: result.ok,
@@ -889,6 +853,6 @@ fn evcxr_builtin_commands() -> HashSet<String> {
     .collect()
 }
 
-async fn exit_with_reload_code() -> anyhow::Result<()> {
+fn exit_with_reload_code() -> anyhow::Result<()> {
     std::process::exit(75);
 }

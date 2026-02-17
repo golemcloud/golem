@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::evcxr_repl::cli_repl_interop::{CliReplInterop, CompletionResult};
+use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
 use colored::Colorize;
-use evcxr::{CommandContext, EvalContextOutputs};
+use evcxr::{CommandContext, EvalContext, EvalContextOutputs};
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::Builder;
 use rustyline::error::ReadlineError;
@@ -26,26 +26,30 @@ use rustyline::validate::Validator;
 use rustyline::{CompletionType, Editor, ExternalPrinter, Helper};
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::process::Child;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub struct Repl {
-    context: Rc<RefCell<CommandContext>>,
+    command_context: Rc<RefCell<CommandContext>>,
     outputs: EvalContextOutputs,
-    editor: Editor<ReplHelper, DefaultHistory>,
+    editor: Editor<ReplRustyLineEditorHelper, DefaultHistory>,
     history_path: PathBuf,
     config: ReplResolvedConfig,
-    cli_repl: Option<Rc<CliReplInterop>>,
+    cli_repl: Rc<CliReplInterop>,
 }
 
 impl Repl {
     pub fn new() -> anyhow::Result<Self> {
         evcxr::runtime_hook();
-        let (context, outputs) = CommandContext::new()?;
-        let context = Rc::new(RefCell::new(context));
+
+        let (mut eval_context, outputs) = EvalContext::new()?;
+        let command_context = Rc::new(RefCell::new(CommandContext::with_eval_context(
+            eval_context,
+        )));
 
         let config = ReplResolvedConfig::load()?;
-        let cli_repl = build_cli_repl_interop(&config)?;
+        let cli_repl = Rc::new(CliReplInterop::new(&config));
 
         let mut config_builder = Builder::new().history_ignore_space(true);
         config_builder = config_builder.history_ignore_dups(true)?;
@@ -53,14 +57,18 @@ impl Repl {
             .completion_type(CompletionType::List)
             .auto_add_history(true)
             .build();
-        let mut editor = Editor::<ReplHelper, DefaultHistory>::with_config(editor_config)?;
-        editor.set_helper(Some(ReplHelper::new(Rc::clone(&context), cli_repl.clone())));
+        let mut editor =
+            Editor::<ReplRustyLineEditorHelper, DefaultHistory>::with_config(editor_config)?;
+        editor.set_helper(Some(ReplRustyLineEditorHelper::new(
+            command_context.clone(),
+            cli_repl.clone(),
+        )));
 
         let history_path = PathBuf::from(&config.base_config.history_file);
         editor.load_history(&history_path)?;
 
         Ok(Self {
-            context,
+            command_context,
             outputs,
             editor,
             history_path,
@@ -69,15 +77,10 @@ impl Repl {
         })
     }
 
-    pub async fn run(mut self) -> anyhow::Result<()> {
-        let printer = self.editor.create_external_printer().ok().map(|printer| {
-            Arc::new(Mutex::new(
-                Box::new(printer) as Box<dyn ExternalPrinter + Send>
-            ))
-        });
-        let stdout_handle = spawn_output_task(self.outputs.stdout, printer.clone(), false);
-        let stderr_handle = spawn_output_task(self.outputs.stderr, printer.clone(), true);
-        let mut saw_interrupt = false;
+    pub fn run(mut self) -> anyhow::Result<()> {
+        spawn_output_task(self.outputs.stdout, self.editor.create_external_printer()?);
+        spawn_output_task(self.outputs.stderr, self.editor.create_external_printer()?);
+        let mut printer = self.editor.create_external_printer()?;
 
         let prompt = {
             if self.config.script_mode() {
@@ -94,23 +97,40 @@ impl Repl {
             }
         };
 
+        let mut interrupted = false;
         loop {
-            let line = tokio::task::block_in_place(|| self.editor.readline(&prompt));
+            let line = self.editor.readline(&prompt);
             match line {
                 Ok(line) => {
-                    saw_interrupt = false;
-                    if line.trim().is_empty() {
+                    interrupted = false;
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
                         continue;
                     }
-                    if let Some(cli_repl) = self.cli_repl.as_ref() {
-                        if cli_repl.try_run_command(&line).await? {
-                            continue;
-                        }
+
+                    if self.cli_repl.try_run_command(&line)? {
+                        continue;
                     }
-                    match self.context.borrow_mut().execute(&line) {
+
+                    match self.command_context.borrow_mut().execute(&line) {
                         Ok(output) => {
                             if let Some(text) = output.get("text/plain") {
                                 println!("{text}");
+                            }
+                            if let Some(duration) = output.timing {
+                                println!("{}", format!("Took {}ms", duration.as_millis()).blue());
+
+                                for phase in output.phases {
+                                    println!(
+                                        "{}",
+                                        format!(
+                                            "  {}: {}ms",
+                                            phase.name,
+                                            phase.duration.as_millis()
+                                        )
+                                        .blue()
+                                    );
+                                }
                             }
                         }
                         Err(err) => {
@@ -119,41 +139,42 @@ impl Repl {
                     }
                 }
                 Err(ReadlineError::Interrupted) => {
-                    if saw_interrupt {
+                    if interrupted {
                         break;
                     }
-                    saw_interrupt = true;
-                    print_exit_hint(&printer);
+                    interrupted = true;
+                    let _ = printer.print(
+                        "(To exit, press Ctrl+C again or Ctrl+D or type :quit)\n".to_string(),
+                    );
                 }
-                Err(ReadlineError::Eof) => break,
-                Err(err) => return Err(err.into()),
+                Err(ReadlineError::Eof) => {
+                    break;
+                }
+                Err(err) => {
+                    return Err(err.into());
+                }
             }
         }
 
         self.editor.save_history(&self.history_path)?;
-
-        drop(self.context);
-        let _ = stdout_handle.await;
-        let _ = stderr_handle.await;
-
         Ok(())
     }
 }
 
-struct ReplHelper {
+struct ReplRustyLineEditorHelper {
     context: Rc<RefCell<CommandContext>>,
-    cli_repl: Option<Rc<CliReplInterop>>,
+    cli_repl: Rc<CliReplInterop>,
 }
 
-impl ReplHelper {
-    fn new(context: Rc<RefCell<CommandContext>>, cli_repl: Option<Rc<CliReplInterop>>) -> Self {
+impl ReplRustyLineEditorHelper {
+    fn new(context: Rc<RefCell<CommandContext>>, cli_repl: Rc<CliReplInterop>) -> Self {
         Self { context, cli_repl }
     }
 }
 
-impl Helper for ReplHelper {}
+impl Helper for ReplRustyLineEditorHelper {}
 
-impl Hinter for ReplHelper {
+impl Hinter for ReplRustyLineEditorHelper {
     type Hint = String;
 
     fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
@@ -161,11 +182,11 @@ impl Hinter for ReplHelper {
     }
 }
 
-impl Highlighter for ReplHelper {}
+impl Highlighter for ReplRustyLineEditorHelper {}
 
-impl Validator for ReplHelper {}
+impl Validator for ReplRustyLineEditorHelper {}
 
-impl Completer for ReplHelper {
+impl Completer for ReplRustyLineEditorHelper {
     type Candidate = Pair;
 
     fn complete(
@@ -174,18 +195,16 @@ impl Completer for ReplHelper {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        if let Some(cli_repl) = self.cli_repl.as_ref() {
-            if let Some(result) = block_on_completion(cli_repl, line, pos) {
-                let pairs = result
-                    .values
-                    .into_iter()
-                    .map(|value| Pair {
-                        display: value.clone(),
-                        replacement: value,
-                    })
-                    .collect();
-                return Ok((result.start, pairs));
-            }
+        if let Some(result) = self.cli_repl.complete(line, pos) {
+            let pairs = result
+                .values
+                .into_iter()
+                .map(|value| Pair {
+                    display: value.clone(),
+                    replacement: value,
+                })
+                .collect();
+            return Ok((result.start, pairs));
         }
 
         let completions = match self.context.borrow_mut().completions(line, pos) {
@@ -205,53 +224,16 @@ impl Completer for ReplHelper {
     }
 }
 
+// TODO: handle fallbacks + decide output based on scrip mode
 fn spawn_output_task(
     receiver: crossbeam_channel::Receiver<String>,
-    printer: Option<Arc<Mutex<Box<dyn ExternalPrinter + Send>>>>,
-    is_stderr: bool,
-) -> tokio::task::JoinHandle<()> {
-    tokio::task::spawn_blocking(move || {
-        for msg in receiver.iter() {
-            if let Some(printer) = printer.as_ref() {
-                if let Ok(mut printer) = printer.lock() {
-                    if printer.print(msg.clone()).is_ok() {
-                        continue;
-                    }
-                }
-            }
-
-            if is_stderr {
-                eprint!("{msg}");
-            } else {
-                print!("{msg}");
-            }
+    mut printer: impl ExternalPrinter + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in receiver.iter() {
+            if printer.print(format!("{line}\n")).is_err() {
+                break;
+            };
         }
     })
-}
-
-fn print_exit_hint(printer: &Option<Arc<Mutex<Box<dyn ExternalPrinter + Send>>>>) {
-    let message = "(To exit, press Ctrl+C again or Ctrl+D or type :quit)\n";
-    if let Some(printer) = printer.as_ref() {
-        if let Ok(mut printer) = printer.lock() {
-            if printer.print(message.to_string()).is_ok() {
-                return;
-            }
-        }
-    }
-    eprint!("{message}");
-}
-
-fn block_on_completion(
-    cli_repl: &CliReplInterop,
-    line: &str,
-    pos: usize,
-) -> Option<CompletionResult> {
-    let handle = tokio::runtime::Handle::try_current().ok()?;
-    handle.block_on(cli_repl.complete(line, pos))
-}
-
-fn build_cli_repl_interop(
-    config: &ReplResolvedConfig,
-) -> anyhow::Result<Option<Rc<CliReplInterop>>> {
-    Ok(Some(Rc::new(CliReplInterop::new(config))))
 }
