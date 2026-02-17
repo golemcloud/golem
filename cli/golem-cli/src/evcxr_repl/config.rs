@@ -14,6 +14,7 @@
 
 use crate::fs;
 use crate::model::cli_command_metadata::CliCommandMetadata;
+use crate::model::repl::ReplMetadata;
 use anyhow::Context;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
 pub struct ReplResolvedConfig {
     pub base_config: ReplConfig,
     pub cli_command_metadata: CliCommandMetadata,
+    pub repl_metadata: ReplMetadata,
     pub client_config: ClientConfig,
     pub cli_args: CliArgs,
 }
@@ -46,9 +48,15 @@ impl ReplResolvedConfig {
             )
         })?;
 
+        let repl_metadata = serde_json::from_str::<ReplMetadata>(&fs::read_to_string(
+            &base_config.repl_metadata_json_path,
+        )?)
+        .with_context(|| format!("Failed to parse {}", base_config.repl_metadata_json_path))?;
+
         Ok(Self {
             base_config,
             cli_command_metadata,
+            repl_metadata,
             client_config,
             cli_args,
         })
@@ -112,9 +120,9 @@ pub struct CliArgs {
     #[arg(long = "script-file")]
     script_file: Option<String>,
     #[arg(long = "disable-auto-imports")]
-    disable_auto_imports: bool,
+    pub disable_auto_imports: bool,
     #[arg(long = "disable-stream")]
-    disable_stream: bool,
+    pub disable_stream: bool,
 }
 
 pub const REPL_CONFIG_FILE_NAME: &str = "repl-config.json";

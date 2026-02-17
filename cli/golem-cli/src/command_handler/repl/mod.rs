@@ -170,7 +170,13 @@ impl ReplHandler {
             }
             let repl_cli_commands_metadata_json_path =
                 fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
+
             let repl_metadata_json_path = app_ctx.application().repl_metadata_json(language);
+            // TODO: cleanup
+            if !repl_metadata_json_path.exists() {
+                fs::write(&repl_metadata_json_path, "")?;
+            }
+            let repl_metadata_json_path = fs::canonicalize_path(&repl_metadata_json_path)?;
 
             let component_names = app_ctx.application().component_names().cloned().collect();
 
@@ -390,4 +396,8 @@ async fn load_repl_metadata(
         app_ctx.application().repl_metadata_json(language),
     )?)?;
     Ok(metadata)
+}
+
+fn js_string_literal(s: impl AsRef<str>) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(s.as_ref())?)
 }

@@ -14,8 +14,11 @@
 
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
+use crate::fs;
 use colored::Colorize;
-use evcxr::{CommandContext, EvalContext, EvalContextOutputs};
+use evcxr::{CommandContext, EvalContextOutputs};
+use heck::{ToKebabCase, ToSnakeCase};
+use indoc::{formatdoc, indoc};
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::Builder;
 use rustyline::error::ReadlineError;
@@ -25,17 +28,16 @@ use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
 use rustyline::{CompletionType, Editor, ExternalPrinter, Helper};
 use std::cell::RefCell;
+use std::fmt::Write;
 use std::path::PathBuf;
-use std::process::Child;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 
 pub struct Repl {
+    config: ReplResolvedConfig,
     command_context: Rc<RefCell<CommandContext>>,
     outputs: EvalContextOutputs,
     editor: Editor<ReplRustyLineEditorHelper, DefaultHistory>,
     history_path: PathBuf,
-    config: ReplResolvedConfig,
     cli_repl: Rc<CliReplInterop>,
 }
 
@@ -43,12 +45,47 @@ impl Repl {
     pub fn new() -> anyhow::Result<Self> {
         evcxr::runtime_hook();
 
-        let (mut eval_context, outputs) = EvalContext::new()?;
-        let command_context = Rc::new(RefCell::new(CommandContext::with_eval_context(
-            eval_context,
-        )));
-
         let config = ReplResolvedConfig::load()?;
+
+        let mut dependencies = String::new();
+        let mut prelude = String::new();
+
+        if !config.cli_args.disable_auto_imports {
+            for (agent_type_name, agent) in &config.repl_metadata.agents {
+                // TODO: from meta?
+                let agent_package_name = format!("{}-client", agent_type_name.0.to_kebab_case());
+                let agent_client_mod_name = format!("{}_client", agent_type_name.0.to_snake_case());
+                let agent_client_name = &agent_type_name;
+
+                let path = toml_string_literal(fs::path_to_str(
+                    &PathBuf::from(&config.base_config.app_main_dir).join(&agent.client_dir),
+                )?)?;
+
+                dependencies.push_str(&format!("{agent_package_name} = {{ path = {path} }}\n"));
+                prelude.push_str(&format!("use {agent_client_mod_name};\n"));
+                prelude.push_str(&format!(
+                    "use {agent_client_mod_name}::{agent_client_name};\n"
+                ));
+            }
+        }
+
+        fs::write_str(
+            "evcxr.toml",
+            formatdoc! { r#"
+                [evcxr]
+                tmpdir = "."
+                prelude = """
+                {prelude}
+                """
+
+                [dependencies]
+                {dependencies}
+            "#,},
+        )?;
+
+        let (command_context, outputs) = CommandContext::new()?;
+        let command_context = Rc::new(RefCell::new(command_context));
+
         let cli_repl = Rc::new(CliReplInterop::new(&config));
 
         let mut config_builder = Builder::new().history_ignore_space(true);
@@ -81,6 +118,8 @@ impl Repl {
         spawn_output_task(self.outputs.stdout, self.editor.create_external_printer()?);
         spawn_output_task(self.outputs.stderr, self.editor.create_external_printer()?);
         let mut printer = self.editor.create_external_printer()?;
+
+        self.command_context.borrow_mut().execute(":load_config")?;
 
         let prompt = {
             if self.config.script_mode() {
@@ -236,4 +275,8 @@ fn spawn_output_task(
             };
         }
     })
+}
+
+fn toml_string_literal(s: impl AsRef<str>) -> anyhow::Result<String> {
+    Ok(toml::Value::String(s.as_ref().to_string()).to_string())
 }

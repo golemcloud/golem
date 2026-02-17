@@ -24,12 +24,7 @@ pub use config::ReplConfig;
 pub use config::REPL_CONFIG_FILE_NAME;
 
 pub fn main() -> ExitCode {
-    let result = match Repl::new() {
-        Ok(repl) => repl.run(),
-        Err(err) => Err(err),
-    };
-
-    match result {
+    match Repl::new().map(|repl| repl.run()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             log_anyhow_error(&err);
