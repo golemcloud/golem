@@ -42,7 +42,7 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ],
-        "http_rust",
+        "http_rust_release",
         "http:rust",
     )
     .await

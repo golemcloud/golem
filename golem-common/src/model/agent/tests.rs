@@ -20,6 +20,7 @@ use crate::model::agent::{
     TextReference, TextReferenceValue, TextSource, TextType, UntypedJsonDataValue,
     UntypedJsonElementValue, UntypedJsonElementValues, Url,
 };
+use crate::{agent_id, data_value, phantom_agent_id};
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, str, u32, u64};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -963,4 +964,207 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         result.insert(agent_type.type_name.clone(), agent_type.clone());
     }
     result
+}
+
+#[test]
+fn data_value_macro_empty() {
+    let value = data_value!();
+    assert_eq!(value, DataValue::Tuple(ElementValues { elements: vec![] }));
+}
+
+#[test]
+fn data_value_macro_single_u32() {
+    let value = data_value!(42u32);
+    assert_eq!(
+        value,
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(42u32.into_value_and_type())]
+        })
+    );
+}
+
+#[test]
+fn data_value_macro_multiple_primitives() {
+    let value = data_value!(42u32, 100u64, 3u8);
+    assert_eq!(
+        value,
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(42u32.into_value_and_type()),
+                ElementValue::ComponentModel(100u64.into_value_and_type()),
+                ElementValue::ComponentModel(3u8.into_value_and_type()),
+            ]
+        })
+    );
+}
+
+#[test]
+fn data_value_macro_mixed_types() {
+    let value = data_value!(42u32, 3u8);
+    let elements = match value {
+        DataValue::Tuple(ElementValues { elements }) => elements,
+        _ => panic!("Expected DataValue::Tuple"),
+    };
+
+    assert_eq!(elements.len(), 2);
+
+    // Verify first element is a ComponentModel
+    match &elements[0] {
+        ElementValue::ComponentModel(vat) => {
+            assert_eq!(vat.value, Value::U32(42));
+        }
+        _ => panic!("Expected ComponentModel"),
+    }
+
+    // Verify second element is a ComponentModel
+    match &elements[1] {
+        ElementValue::ComponentModel(vat) => {
+            assert_eq!(vat.value, Value::U8(3));
+        }
+        _ => panic!("Expected ComponentModel"),
+    }
+}
+
+#[test]
+fn data_value_macro_trailing_comma() {
+    let value = data_value!(42u32, 100u64,);
+    assert_eq!(
+        value,
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(42u32.into_value_and_type()),
+                ElementValue::ComponentModel(100u64.into_value_and_type()),
+            ]
+        })
+    );
+}
+
+#[test]
+fn agent_id_macro_no_parameters() {
+    let id = agent_id!("agent-1");
+    assert_eq!(id.agent_type, AgentTypeName("agent-1".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues { elements: vec![] })
+    );
+    assert_eq!(id.phantom_id, None);
+}
+
+#[test]
+fn agent_id_macro_single_parameter() {
+    let id = agent_id!("agent-2", 42u32);
+    assert_eq!(id.agent_type, AgentTypeName("agent-2".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(42u32.into_value_and_type())]
+        })
+    );
+    assert_eq!(id.phantom_id, None);
+}
+
+#[test]
+fn agent_id_macro_multiple_parameters() {
+    let id = agent_id!("agent-3", 42u32, 100u64, 3u8);
+    assert_eq!(id.agent_type, AgentTypeName("agent-3".to_string()));
+    let expected_params = DataValue::Tuple(ElementValues {
+        elements: vec![
+            ElementValue::ComponentModel(42u32.into_value_and_type()),
+            ElementValue::ComponentModel(100u64.into_value_and_type()),
+            ElementValue::ComponentModel(3u8.into_value_and_type()),
+        ],
+    });
+    assert_eq!(id.parameters, expected_params);
+    assert_eq!(id.phantom_id, None);
+}
+
+#[test]
+fn agent_id_macro_with_trailing_comma() {
+    let id = agent_id!("agent-4", 42u32, 100u64,);
+    assert_eq!(id.agent_type, AgentTypeName("agent-4".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(42u32.into_value_and_type()),
+                ElementValue::ComponentModel(100u64.into_value_and_type()),
+            ]
+        })
+    );
+    assert_eq!(id.phantom_id, None);
+}
+
+#[test]
+fn phantom_agent_id_macro_no_parameters() {
+    let phantom_uuid = Uuid::now_v7();
+    let id = phantom_agent_id!("phantom-1", phantom_uuid);
+    assert_eq!(id.agent_type, AgentTypeName("phantom-1".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues { elements: vec![] })
+    );
+    assert_eq!(id.phantom_id, Some(phantom_uuid));
+}
+
+#[test]
+fn phantom_agent_id_macro_single_parameter() {
+    let phantom_uuid = Uuid::now_v7();
+    let id = phantom_agent_id!("phantom-2", phantom_uuid, 42u32);
+    assert_eq!(id.agent_type, AgentTypeName("phantom-2".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(42u32.into_value_and_type())]
+        })
+    );
+    assert_eq!(id.phantom_id, Some(phantom_uuid));
+}
+
+#[test]
+fn phantom_agent_id_macro_multiple_parameters() {
+    let phantom_uuid = Uuid::now_v7();
+    let id = phantom_agent_id!("phantom-3", phantom_uuid, 42u32, 100u64);
+    assert_eq!(id.agent_type, AgentTypeName("phantom-3".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(42u32.into_value_and_type()),
+                ElementValue::ComponentModel(100u64.into_value_and_type()),
+            ]
+        })
+    );
+    assert_eq!(id.phantom_id, Some(phantom_uuid));
+}
+
+#[test]
+fn phantom_agent_id_macro_with_trailing_comma() {
+    let phantom_uuid = Uuid::now_v7();
+    let id = phantom_agent_id!("phantom-4", phantom_uuid, 42u32, 100u64,);
+    assert_eq!(id.agent_type, AgentTypeName("phantom-4".to_string()));
+    assert_eq!(
+        id.parameters,
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(42u32.into_value_and_type()),
+                ElementValue::ComponentModel(100u64.into_value_and_type()),
+            ]
+        })
+    );
+    assert_eq!(id.phantom_id, Some(phantom_uuid));
+}
+
+#[test]
+fn agent_id_vs_phantom_agent_id() {
+    let uuid = Uuid::now_v7();
+    let regular_id = agent_id!("test", 42u32);
+    let phantom_id = phantom_agent_id!("test", uuid, 42u32);
+
+    // Both should have the same type name and parameters
+    assert_eq!(regular_id.agent_type, phantom_id.agent_type);
+    assert_eq!(regular_id.parameters, phantom_id.parameters);
+
+    // But different phantom_id values
+    assert_eq!(regular_id.phantom_id, None);
+    assert_eq!(phantom_id.phantom_id, Some(uuid));
 }

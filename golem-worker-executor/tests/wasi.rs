@@ -13,27 +13,24 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::{assert, check};
+use anyhow::anyhow;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
+use golem_common::agent_id;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{IdempotencyKey, WorkerStatus};
-use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-use golem_test_framework::dsl::{
-    drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
-    worker_error_underlying_error, TestDsl,
-};
+use golem_test_framework::dsl::{drain_connection, stderr_events, stdout_events, TestDsl};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::{HeaderMap, StatusCode};
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
@@ -57,26 +54,33 @@ async fn write_stdout(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "write-stdout")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("logging", "write-stdout-1");
     let worker_id = executor
-        .start_worker(&component.id, "write-stdout-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "write_stdout", data_value!())
+        .await?;
 
     let mut events = vec![];
     let start_time = Instant::now();
-    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+    while events.len() < 4 && start_time.elapsed() < Duration::from_secs(5) {
         if let Some(event) = rx.recv().await {
             events.push(event);
         } else {
@@ -86,7 +90,10 @@ async fn write_stdout(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(stdout_events(events.into_iter()) == vec!["Sample text written to the output\n"]);
+    assert_eq!(
+        stdout_events(events.into_iter()),
+        vec!["Sample text written to the output\n"]
+    );
     Ok(())
 }
 
@@ -97,26 +104,33 @@ async fn write_stderr(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "write-stderr")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("logging", "write-stderr-1");
     let worker_id = executor
-        .start_worker(&component.id, "write-stderr-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "write_stderr", data_value!())
+        .await?;
 
     let mut events = vec![];
     let start_time = Instant::now();
-    while events.len() < 2 && start_time.elapsed() < Duration::from_secs(5) {
+    while events.len() < 4 && start_time.elapsed() < Duration::from_secs(5) {
         if let Some(event) = rx.recv().await {
             events.push(event);
         } else {
@@ -126,7 +140,10 @@ async fn write_stderr(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(stderr_events(events.into_iter()) == vec!["Sample text written to the error output\n"]);
+    assert_eq!(
+        stderr_events(events.into_iter()),
+        vec!["Sample text written to the error output\n"]
+    );
 
     Ok(())
 }
@@ -138,16 +155,27 @@ async fn read_stdin(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "read-stdin")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = executor.start_worker(&component.id, "read-stdin-1").await?;
+    let agent_id = agent_id!("io", "read-stdin-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
-    let result = executor.invoke_and_await(&worker_id, "run", vec![]).await?;
+    let result = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -162,34 +190,44 @@ async fn clocks(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clocks")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = executor.start_worker(&component.id, "clocks-1").await?;
+    let agent_id = agent_id!("clocks", "clocks-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "use_std_time_apis", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result.len() == 1);
-    let Value::Tuple(tuple) = &result[0] else {
-        panic!("expected tuple")
+    let Value::Record(fields) = &result else {
+        panic!("expected record, got {:?}", result)
     };
-    check!(tuple.len() == 3);
+    assert_eq!(fields.len(), 3);
 
-    let Value::F64(elapsed1) = &tuple[0] else {
+    let Value::F64(elapsed1) = &fields[0] else {
         panic!("expected f64")
     };
-    let Value::F64(elapsed2) = &tuple[1] else {
+    let Value::F64(elapsed2) = &fields[1] else {
         panic!("expected f64")
     };
-    let Value::String(odt) = &tuple[2] else {
+    let Value::String(odt) = &fields[2] else {
         panic!("expected string")
     };
 
@@ -201,10 +239,10 @@ async fn clocks(
     let parsed_odt = chrono::DateTime::parse_from_rfc3339(odt.as_str()).unwrap();
     let odt_diff = epoch_seconds - parsed_odt.timestamp() as f64;
 
-    check!(diff1 < 5.0);
-    check!(*elapsed2 >= 2.0);
-    check!(*elapsed2 < 3.0);
-    check!(odt_diff < 5.0);
+    assert!(diff1 < 5.0);
+    assert!(*elapsed2 >= 2.0);
+    assert!(*elapsed2 < 3.0);
+    assert!(odt_diff < 5.0);
 
     Ok(())
 }
@@ -216,32 +254,45 @@ async fn file_write_read_delete(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-write-read-delete")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("RUST_BACKTRACE".to_string(), "full".to_string())])
         .store()
         .await?;
-    let mut env = HashMap::new();
-    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-system", "file-write-read-delete-1");
     let worker_id = executor
-        .start_worker_with(&component.id, "file-write-read-delete-1", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "run_file_write_read_delete",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == vec![Value::Tuple(vec![
-                Value::Option(None),
-                Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-                Value::Option(None)
-            ])]
+    assert_eq!(
+        result,
+        Value::Record(vec![
+            Value::Option(None),
+            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
+            Value::Option(None)
+        ])
     );
 
     Ok(())
@@ -254,20 +305,26 @@ async fn initial_file_read_write(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "initial-file-read-write")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -277,25 +334,28 @@ async fn initial_file_read_write(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = executor
-        .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        result
-            == vec![Value::Tuple(vec![
-                Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
-                Value::Option(None),
-                Value::Option(None),
-                Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
-                Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
-            ])]
+    assert_eq!(
+        result,
+        Value::Tuple(vec![
+            Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
+            Value::Option(None),
+            Value::Option(None),
+            Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
+            Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
+        ])
     );
 
     Ok(())
@@ -308,25 +368,31 @@ async fn initial_file_listing_through_api(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::agent_id;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "initial-file-read-write")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -334,9 +400,8 @@ async fn initial_file_listing_through_api(
         .store()
         .await?;
 
-    let worker_id = executor
-        .start_worker(&component.id, "initial-file-read-write-1")
-        .await?;
+    let agent_id = agent_id!("file-read-write", "initial-file-listing-1");
+    let worker_id = executor.start_agent(&component.id, agent_id).await?;
 
     let result = executor.get_file_system_node(&worker_id, "/").await?;
 
@@ -350,31 +415,31 @@ async fn initial_file_listing_through_api(
 
     result.sort_by_key(|e| e.name.clone());
 
-    check!(
-        result
-            == vec![
-                FlatComponentFileSystemNode {
-                    name: "bar".to_string(),
-                    last_modified: 0,
-                    kind: FlatComponentFileSystemNodeKind::Directory,
-                    permissions: None,
-                    size: None
-                },
-                FlatComponentFileSystemNode {
-                    name: "baz.txt".to_string(),
-                    last_modified: 0,
-                    kind: FlatComponentFileSystemNodeKind::File,
-                    permissions: Some(ComponentFilePermissions::ReadWrite),
-                    size: Some(4),
-                },
-                FlatComponentFileSystemNode {
-                    name: "foo.txt".to_string(),
-                    last_modified: 0,
-                    kind: FlatComponentFileSystemNodeKind::File,
-                    permissions: Some(ComponentFilePermissions::ReadOnly),
-                    size: Some(4)
-                },
-            ]
+    assert_eq!(
+        result,
+        vec![
+            FlatComponentFileSystemNode {
+                name: "bar".to_string(),
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::Directory,
+                permissions: None,
+                size: None
+            },
+            FlatComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(ComponentFilePermissions::ReadWrite),
+                size: Some(4),
+            },
+            FlatComponentFileSystemNode {
+                name: "foo.txt".to_string(),
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(ComponentFilePermissions::ReadOnly),
+                size: Some(4)
+            },
+        ]
     );
 
     let result = executor.get_file_system_node(&worker_id, "/bar").await?;
@@ -389,15 +454,15 @@ async fn initial_file_listing_through_api(
 
     result.sort_by_key(|e| e.name.clone());
 
-    check!(
-        result
-            == vec![FlatComponentFileSystemNode {
-                name: "baz.txt".to_string(),
-                last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadWrite),
-                size: Some(4),
-            },]
+    assert_eq!(
+        result,
+        vec![FlatComponentFileSystemNode {
+            name: "baz.txt".to_string(),
+            last_modified: 0,
+            kind: FlatComponentFileSystemNodeKind::File,
+            permissions: Some(ComponentFilePermissions::ReadWrite),
+            size: Some(4),
+        },]
     );
 
     let result = executor
@@ -414,15 +479,15 @@ async fn initial_file_listing_through_api(
 
     result.sort_by_key(|e| e.name.clone());
 
-    check!(
-        result
-            == vec![FlatComponentFileSystemNode {
-                name: "baz.txt".to_string(),
-                last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadWrite),
-                size: Some(4),
-            },]
+    assert_eq!(
+        result,
+        vec![FlatComponentFileSystemNode {
+            name: "baz.txt".to_string(),
+            last_modified: 0,
+            kind: FlatComponentFileSystemNodeKind::File,
+            permissions: Some(ComponentFilePermissions::ReadWrite),
+            size: Some(4),
+        },]
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -437,20 +502,26 @@ async fn initial_file_reading_through_api(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "initial-file-read-write")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                 target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadWrite,
             },
@@ -460,14 +531,15 @@ async fn initial_file_reading_through_api(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
     let worker_id = executor
-        .start_worker_with(&component.id, "initial-file-read-write-3", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
-    // run the worker so it can update the files.
+    // run the agent so it can update the files.
     executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
 
     let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await?;
     let result1 = std::str::from_utf8(&result1).unwrap();
@@ -479,8 +551,8 @@ async fn initial_file_reading_through_api(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1 == "foo\n");
-    check!(result2 == "hello world");
+    assert_eq!(result1, "foo\n");
+    assert_eq!(result2, "hello world");
 
     Ok(())
 }
@@ -492,59 +564,68 @@ async fn directories(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "directories")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "directories-1");
     let worker_id = executor
-        .start_worker(&component.id, "directories-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "run_directories", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let Value::Tuple(tuple) = &result[0] else {
-        panic!("expected tuple")
+    let Value::Record(fields) = &result else {
+        panic!("expected record, got {:?}", result)
     };
-    check!(tuple.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+    assert_eq!(fields.len(), 4);
 
-    check!(tuple[0] == Value::U32(0)); // initial number of entries
-    check!(
-        tuple[1]
-            == Value::List(vec![Value::Tuple(vec![
-                Value::String("/test".to_string()),
-                Value::Bool(true)
-            ])])
+    assert_eq!(fields[0], Value::U32(0)); // initial number of entries
+    assert_eq!(
+        fields[1],
+        Value::List(vec![Value::Record(vec![
+            Value::String("/test".to_string()),
+            Value::Bool(true)
+        ])])
     ); // contents of /
 
     // contents of /test
-    let Value::List(list) = &tuple[2] else {
+    let Value::List(list) = &fields[2] else {
         panic!("expected list")
     };
-    check!(
-        *list
-            == vec![
-                Value::Tuple(vec![
-                    Value::String("/test/dir1".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Tuple(vec![
-                    Value::String("/test/dir2".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Tuple(vec![
-                    Value::String("/test/hello.txt".to_string()),
-                    Value::Bool(false)
-                ]),
-            ]
+    assert_eq!(
+        *list,
+        vec![
+            Value::Record(vec![
+                Value::String("/test/dir1".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/dir2".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/hello.txt".to_string()),
+                Value::Bool(false)
+            ]),
+        ]
     );
-    check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
     Ok(())
 }
@@ -556,20 +637,29 @@ async fn directories_replay(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "directories")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "directories-1");
     let worker_id = executor
-        .start_worker(&component.id, "directories-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "run", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "run_directories", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -582,44 +672,44 @@ async fn directories_replay(
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
         .await?;
 
-    check!(metadata.status == WorkerStatus::Idle);
+    assert_eq!(metadata.status, WorkerStatus::Idle);
 
-    let Value::Tuple(tuple) = &result[0] else {
-        panic!("expected tuple")
+    let Value::Record(fields) = &result else {
+        panic!("expected record, got {:?}", result)
     };
-    check!(tuple.len() == 4); //  tuple<u32, list<tuple<string, bool>>, list<tuple<string, bool>>, u32>;
+    assert_eq!(fields.len(), 4);
 
-    check!(tuple[0] == Value::U32(0)); // initial number of entries
-    check!(
-        tuple[1]
-            == Value::List(vec![Value::Tuple(vec![
-                Value::String("/test".to_string()),
-                Value::Bool(true)
-            ])])
+    assert_eq!(fields[0], Value::U32(0)); // initial number of entries
+    assert_eq!(
+        fields[1],
+        Value::List(vec![Value::Record(vec![
+            Value::String("/test".to_string()),
+            Value::Bool(true)
+        ])])
     ); // contents of /
 
     // contents of /test
-    let Value::List(list) = &tuple[2] else {
+    let Value::List(list) = &fields[2] else {
         panic!("expected list")
     };
-    check!(
-        *list
-            == vec![
-                Value::Tuple(vec![
-                    Value::String("/test/dir1".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Tuple(vec![
-                    Value::String("/test/dir2".to_string()),
-                    Value::Bool(true)
-                ]),
-                Value::Tuple(vec![
-                    Value::String("/test/hello.txt".to_string()),
-                    Value::Bool(false)
-                ]),
-            ]
+    assert_eq!(
+        *list,
+        vec![
+            Value::Record(vec![
+                Value::String("/test/dir1".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/dir2".to_string()),
+                Value::Bool(true)
+            ]),
+            Value::Record(vec![
+                Value::String("/test/hello.txt".to_string()),
+                Value::Bool(false)
+            ]),
+        ]
     );
-    check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+    assert_eq!(fields[3], Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 
     Ok(())
 }
@@ -631,27 +721,32 @@ async fn file_write_read(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-1");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file}",
-            vec![
-                "/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file",
+            data_value!("/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -659,18 +754,19 @@ async fn file_write_read(
     let executor = start(deps, &context).await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{read-file}",
-            vec!["/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "read_file",
+            data_value!("/testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(
-        result
-            == vec![Value::Result(Ok(Some(Box::new(Value::String(
-                "hello world".to_string()
-            )))))]
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
     );
 
     Ok(())
@@ -683,49 +779,52 @@ async fn file_update_1(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_ifs_update")
+        .component(
+            &context.default_environment_id,
+            "it_initial_file_system_release",
+        )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[IFSEntry {
-            source_path: PathBuf::from("ifs-update/files/foo.txt"),
+            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
             target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         }])
         .store()
         .await?;
 
-    let worker_id = executor.start_worker(&component.id, "ifs-update-1").await?;
+    let agent_id = agent_id!("ifs-update", "ifs-update-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .await?;
 
     {
         let content_before_update = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_before_update[0] == Value::String("foo\n".to_string()));
+        assert_eq!(content_before_update, Value::String("foo\n".to_string()));
     }
 
     {
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "golem_it_ifs_update",
+                "it_initial_file_system_release",
                 vec![IFSEntry {
-                    source_path: PathBuf::from("ifs-update/files/bar.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/bar.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 }],
@@ -739,71 +838,59 @@ async fn file_update_1(
 
     {
         let content_after_update = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_update[0] == Value::String("foo\n".to_string()));
+        assert_eq!(content_after_update, Value::String("foo\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_crash[0] == Value::String("foo\n".to_string()));
+        assert_eq!(content_after_crash, Value::String("foo\n".to_string()));
     }
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .await?;
 
     {
         let content_after_reload = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_reload[0] == Value::String("bar\n".to_string()));
+        assert_eq!(content_after_reload, Value::String("bar\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_crash[0] == Value::String("bar\n".to_string()));
+        assert_eq!(content_after_crash, Value::String("bar\n".to_string()));
     }
 
     {
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "golem_it_ifs_update",
+                "it_initial_file_system_release",
                 vec![IFSEntry {
-                    source_path: PathBuf::from("ifs-update/files/baz.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 }],
@@ -817,48 +904,41 @@ async fn file_update_1(
 
     {
         let content_after_manual_update = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_manual_update[0] == Value::String("restored".to_string()));
+        assert_eq!(
+            content_after_manual_update,
+            Value::String("restored".to_string())
+        );
     }
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .await?;
 
     {
         let content_after_reload = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_reload[0] == Value::String("baz\n".to_string()));
+        assert_eq!(content_after_reload, Value::String("baz\n".to_string()));
     }
 
     executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(content_after_crash[0] == Value::String("baz\n".to_string()));
+        assert_eq!(content_after_crash, Value::String("baz\n".to_string()));
     }
 
     executor.delete_worker(&worker_id).await?;
@@ -873,6 +953,8 @@ async fn file_update_in_the_middle_of_exported_function(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -906,11 +988,12 @@ async fn file_update_in_the_middle_of_exported_function(
     let component = executor
         .component(
             &context.default_environment_id,
-            "golem_it_ifs_update_inside_exported_function",
+            "it_initial_file_system_release",
         )
+        .name("golem-it:initial-file-system")
         .unique()
         .with_files(&[IFSEntry {
-            source_path: PathBuf::from("ifs-update-inside-exported-function/files/foo.txt"),
+            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
             target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         }])
@@ -921,18 +1004,22 @@ async fn file_update_in_the_middle_of_exported_function(
         .store()
         .await?;
 
-    let worker_id = executor.start_worker(&component.id, "ifs-update-1").await?;
+    let agent_id = agent_id!("ifs-update-inside-exported-function", "ifs-update-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let idempotency_key = IdempotencyKey::fresh();
 
     executor
-        .invoke_with_key(
-            &worker_id,
+        .invoke_agent_with_key(
+            &component.id,
+            &agent_id,
             &idempotency_key,
-            "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
-            vec![],
+            "run",
+            data_value!(),
         )
-        .await??;
+        .await?;
 
     latch.recv().await.expect("channel should produce value");
 
@@ -940,9 +1027,9 @@ async fn file_update_in_the_middle_of_exported_function(
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "golem_it_ifs_update_inside_exported_function",
+                "it_initial_file_system_release",
                 vec![IFSEntry {
-                    source_path: PathBuf::from("ifs-update-inside-exported-function/files/bar.txt"),
+                    source_path: PathBuf::from("initial-file-system/files/bar.txt"),
                     target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadOnly,
                 }],
@@ -956,20 +1043,23 @@ async fn file_update_in_the_middle_of_exported_function(
 
     {
         let result = executor
-            .invoke_and_await_with_key(
-                &worker_id,
+            .invoke_and_await_agent_with_key(
+                &component.id,
+                &agent_id,
                 &idempotency_key,
-                "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
-                vec![],
+                "run",
+                data_value!(),
             )
-            .await??;
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        check!(
-            result[0]
-                == Value::Tuple(vec![
-                    Value::String("foo\n".to_string()),
-                    Value::String("bar\n".to_string())
-                ])
+        assert_eq!(
+            result,
+            Value::Tuple(vec![
+                Value::String("foo\n".to_string()),
+                Value::String("bar\n".to_string())
+            ])
         );
     }
 
@@ -979,54 +1069,68 @@ async fn file_update_in_the_middle_of_exported_function(
 
 #[test]
 #[tracing::instrument]
-async fn environment_service(
+async fn environment_variables(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "environment-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("environment", "environment-service-1");
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component.id, "environment-service-1", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
 
-    let env_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await??;
+    let result = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        env_result
-            == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
-                Value::Tuple(vec![
-                    Value::String("TEST_ENV".to_string()),
-                    Value::String("test-value".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_AGENT_ID".to_string()),
-                    Value::String("environment-service-1".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_WORKER_NAME".to_string()),
-                    Value::String("environment-service-1".to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_COMPONENT_ID".to_string()),
-                    Value::String(component.id.to_string())
-                ]),
-                Value::Tuple(vec![
-                    Value::String("GOLEM_COMPONENT_REVISION".to_string()),
-                    Value::String("0".to_string())
-                ]),
-            ])))))]
+    let worker_name = agent_id.to_string();
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::List(vec![
+            Value::Tuple(vec![
+                Value::String("TEST_ENV".to_string()),
+                Value::String("test-value".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String(worker_name.clone())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String(worker_name)
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_ID".to_string()),
+                Value::String(component.id.to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
+                Value::String("0".to_string())
+            ]),
+            Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_TYPE".to_string()),
+                Value::String("Environment".to_string())
+            ])
+        ])))))
     );
 
     Ok(())
@@ -1039,6 +1143,8 @@ async fn http_client_response_persisted_between_invocations(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1068,20 +1174,22 @@ async fn http_client_response_persisted_between_invocations(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await(&worker_id, "golem:it/api.{send-request}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "send_request", data_value!())
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1091,17 +1199,12 @@ async fn http_client_response_persisted_between_invocations(
     let _rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{process-response}", vec![])
+        .invoke_and_await_agent(&component.id, &agent_id, "process_response", data_value!())
         .await?;
 
     http_server.abort();
 
-    check!(
-        result
-            == Ok(vec![Value::String(
-                "200 response is test-header test-body".to_string()
-            )])
-    );
+    assert_eq!(result, data_value!("200 response is test-header test-body"));
 
     Ok(())
 }
@@ -1113,6 +1216,8 @@ async fn http_client_interrupting_response_stream(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1158,30 +1263,34 @@ async fn http_client_interrupting_response_stream(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-2")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
         async move {
             let _ = executor_clone
-                .invoke_and_await_with_key(
-                    &worker_id_clone,
+                .invoke_and_await_agent_with_key(
+                    &component_id_clone,
+                    &agent_id_clone,
                     &key_clone,
-                    "golem:it/api.{slow-body-stream}",
-                    vec![],
+                    "slow_body_stream",
+                    data_value!(),
                 )
                 .await;
         }
@@ -1203,7 +1312,13 @@ async fn http_client_interrupting_response_stream(
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
+            &key,
+            "slow_body_stream",
+            data_value!(),
+        )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1211,11 +1326,11 @@ async fn http_client_interrupting_response_stream(
     drop(executor);
     http_server.abort();
 
-    check!(result == Ok(vec![Value::U64(100 * 1024)]));
+    assert_eq!(result, data_value!(100u64 * 1024u64));
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
-    check!(idempotency_keys.len() == 2);
-    check!(idempotency_keys[0] == idempotency_keys[1]);
+    assert_eq!(idempotency_keys.len(), 2);
+    assert_eq!(idempotency_keys[0], idempotency_keys[1]);
 
     Ok(())
 }
@@ -1227,6 +1342,8 @@ async fn http_client_interrupting_response_stream_async(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1272,30 +1389,34 @@ async fn http_client_interrupting_response_stream_async(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "http-client-3")
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("http-client3");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2-async", env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
         async move {
             let _ = executor_clone
-                .invoke_and_await_with_key(
-                    &worker_id_clone,
+                .invoke_and_await_agent_with_key(
+                    &component_id_clone,
+                    &agent_id_clone,
                     &key_clone,
-                    "golem:it/api.{slow-body-stream}",
-                    vec![],
+                    "slow_body_stream",
+                    data_value!(),
                 )
                 .await;
         }
@@ -1316,7 +1437,13 @@ async fn http_client_interrupting_response_stream_async(
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
+        .invoke_and_await_agent_with_key(
+            &component.id,
+            &agent_id,
+            &key,
+            "slow_body_stream",
+            data_value!(),
+        )
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1324,7 +1451,7 @@ async fn http_client_interrupting_response_stream_async(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(result, Ok(vec![Value::U64(100 * 1024)]));
+    assert_eq!(result, data_value!(100u64 * 1024u64));
 
     let idempotency_keys = idempotency_keys.lock().unwrap();
     assert_eq!(idempotency_keys.len(), 2);
@@ -1340,41 +1467,41 @@ async fn sleep(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-1");
     let worker_id = executor
-        .start_worker(&component.id, "clock-service-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep}",
-            vec![10u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(10u64))
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    let component_id = component.id;
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let start = Instant::now();
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component_id, &agent_id, "sleep", data_value!(0u64))
+        .await?;
     let duration = start.elapsed();
 
-    check!(duration.as_secs() < 2);
+    assert!(duration.as_secs() < 2);
     Ok(())
 }
 
@@ -1385,37 +1512,42 @@ async fn sleep_less_than_suspend_threshold(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-2");
     let worker_id = executor
-        .start_worker(&component.id, "clock-service-2")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep}",
-            vec![1u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(1u64))
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "healthcheck", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 1);
-    check!(result == vec![Value::Bool(true)]);
+    assert!(duration.as_secs() >= 1);
+    assert_eq!(result, Value::Bool(true));
     Ok(())
 }
 
@@ -1426,37 +1558,42 @@ async fn sleep_longer_than_suspend_threshold(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-3");
     let worker_id = executor
-        .start_worker(&component.id, "clock-service-3")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep}",
-            vec![12u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(12u64))
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "healthcheck", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 12);
-    check!(result == vec![Value::Bool(true)]);
+    assert!(duration.as_secs() >= 12);
+    assert_eq!(result, Value::Bool(true));
 
     Ok(())
 }
@@ -1490,29 +1627,38 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(10)).await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-4");
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-4", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep-during-request}",
-            vec![2u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "sleep_during_request",
+            data_value!(2u64),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1522,9 +1668,9 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 2);
-    check!(duration.as_secs() < 10);
-    check!(result == vec![Value::String("Timeout".to_string())]);
+    assert!(duration.as_secs() >= 2);
+    assert!(duration.as_secs() < 10);
+    assert_eq!(result, Value::String("Timeout".to_string()));
     Ok(())
 }
 
@@ -1535,29 +1681,38 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(5)).await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-5");
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-5", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep-during-request}",
-            vec![30u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "sleep_during_request",
+            data_value!(30u64),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1567,9 +1722,9 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 5);
-    check!(duration.as_secs() < 30);
-    check!(result == vec![Value::String("slow response".to_string())]);
+    assert!(duration.as_secs() >= 5);
+    assert!(duration.as_secs() < 30);
+    assert_eq!(result, Value::String("slow response".to_string()));
     Ok(())
 }
 
@@ -1580,29 +1735,38 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(30)).await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-6");
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-6", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep-during-request}",
-            vec![15u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "sleep_during_request",
+            data_value!(15u64),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1612,9 +1776,9 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
-    check!(duration.as_secs() >= 15);
-    check!(duration.as_secs() < 30);
-    check!(result == vec![Value::String("Timeout".to_string())]);
+    assert!(duration.as_secs() >= 15);
+    assert!(duration.as_secs() < 30);
+    assert_eq!(result, Value::String("Timeout".to_string()));
 
     Ok(())
 }
@@ -1626,32 +1790,42 @@ async fn sleep_and_awaiting_parallel_responses(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-7");
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-7", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep-during-parallel-requests}",
-            vec![20u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "sleep_during_parallel_requests",
+            data_value!(20u64),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    let component_id = component.id;
     drop(executor);
     server.abort();
 
@@ -1663,15 +1837,15 @@ async fn sleep_and_awaiting_parallel_responses(
     info!("Worker restarted");
 
     let healthcheck_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component_id, &agent_id, "healthcheck", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    // server.abort();
-
-    check!(duration.as_secs() >= 10);
-    check!(duration.as_secs() < 20);
-    check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
-    check!(healthcheck_result == vec![Value::Bool(true)]);
+    assert!(duration.as_secs() >= 10);
+    assert!(duration.as_secs() < 20);
+    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
+    assert_eq!(healthcheck_result, Value::Bool(true));
 
     Ok(())
 }
@@ -1683,35 +1857,45 @@ async fn sleep_below_threshold_between_http_responses(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-8");
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-8", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     let start = Instant::now();
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep-between-requests}",
-            vec![1u64.into_value_and_type(), 5u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "sleep_between_requests",
+            data_value!(1u64, 5u64),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
+    let component_id = component.id;
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -1721,12 +1905,14 @@ async fn sleep_below_threshold_between_http_responses(
     info!("Worker restarted");
 
     let healthcheck_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component_id, &agent_id, "healthcheck", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(duration.as_secs() >= 10);
-    check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
-    check!(healthcheck_result == vec![Value::Bool(true)]);
+    assert!(duration.as_secs() >= 10);
+    assert_eq!(result, Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()));
+    assert_eq!(healthcheck_result, Value::Bool(true));
     Ok(())
 }
 
@@ -1737,33 +1923,43 @@ async fn sleep_above_threshold_between_http_responses(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), port.to_string());
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-9");
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-9", env, vec![])
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let start = Instant::now();
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep-between-requests}",
-            vec![12u64.into_value_and_type(), 2u64.into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "sleep_between_requests",
+            data_value!(12u64, 2u64),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
+    let component_id = component.id;
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -1773,17 +1969,17 @@ async fn sleep_above_threshold_between_http_responses(
     info!("Worker restarted");
 
     let healthcheck_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component_id, &agent_id, "healthcheck", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(duration.as_secs() >= 14);
-    check!(
-        result
-            == vec![Value::String(
-                "Ok(\"slow response\")\nOk(\"slow response\")\n".to_string()
-            )]
+    assert!(duration.as_secs() >= 14);
+    assert_eq!(
+        result,
+        Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string())
     );
-    check!(healthcheck_result == vec![Value::Bool(true)]);
+    assert_eq!(healthcheck_result, Value::Bool(true));
 
     Ok(())
 }
@@ -1795,26 +1991,35 @@ async fn resuming_sleep(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "clock-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("clock", "clock-service-2");
     let worker_id = executor
-        .start_worker(&component.id, "clock-service-2")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:it/api.{sleep}",
-                    vec![10u64.into_value_and_type()],
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "sleep",
+                    data_value!(10u64),
                 )
                 .await
         }
@@ -1825,8 +2030,9 @@ async fn resuming_sleep(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    let component_id = component.id;
     drop(executor);
-    fiber.await???;
+    fiber.await??;
 
     info!("Restarting worker...");
 
@@ -1836,16 +2042,12 @@ async fn resuming_sleep(
 
     let start = Instant::now();
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{sleep}",
-            vec![10u64.into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component_id, &agent_id, "sleep", data_value!(10u64))
+        .await?;
     let duration = start.elapsed();
 
-    check!(duration.as_secs() < 20);
-    check!(duration.as_secs() >= 10);
+    assert!(duration.as_secs() < 20);
+    assert!(duration.as_secs() >= 10);
 
     Ok(())
 }
@@ -1857,58 +2059,57 @@ async fn failing_worker(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "failing-component")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
+    let agent_id = agent_id!("failing-counter", "failing-worker-1");
     let worker_id = executor
-        .start_worker(&component.id, "failing-worker-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{add}",
-            vec![5u64.into_value_and_type()],
-        )
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{add}",
-            vec![50u64.into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .await;
 
     let result3 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result1.is_ok());
-    check!(result2.is_err());
-    check!(result3.is_err());
+    assert!(result2.is_err());
+    assert!(result3.is_err());
 
-    let result2_err = result2.err().unwrap();
-    assert_eq!(worker_error_message(&result2_err), "Invocation failed");
+    let err2 = format!("{}", result2.err().unwrap());
     assert!(
-        matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
-    );
-    assert_eq!(worker_error_logs(&result2_err), Some("error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
-    let result3_err = result3.err().unwrap();
-    assert_eq!(
-        worker_error_message(&result3_err),
-        "Previous invocation failed"
+        err2.contains("error log message"),
+        "Expected 'error log message' in error: {err2}"
     );
     assert!(
-        matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
+        err2.contains("value is too large"),
+        "Expected 'value is too large' in error: {err2}"
     );
-    assert_eq!(worker_error_logs(&result3_err), Some("error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+
+    let err3 = format!("{}", result3.err().unwrap());
+    assert!(
+        err3.contains("error log message"),
+        "Expected 'error log message' in error: {err3}"
+    );
+    assert!(
+        err3.contains("value is too large"),
+        "Expected 'value is too large' in error: {err3}"
+    );
 
     Ok(())
 }
@@ -1920,27 +2121,32 @@ async fn file_service_write_direct(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-2");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-2")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file-direct}",
-            vec![
-                "testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file_direct",
+            data_value!("testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -1948,18 +2154,19 @@ async fn file_service_write_direct(
     let executor = start(deps, &context).await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{read-file}",
-            vec!["/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "read_file",
+            data_value!("/testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(
-        result
-            == vec![Value::Result(Ok(Some(Box::new(Value::String(
-                "hello world".to_string()
-            )))))]
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
     );
 
     Ok(())
@@ -1972,35 +2179,43 @@ async fn filesystem_write_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-3");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-3")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file-direct}",
-            vec![
-                "testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file_direct",
+            data_value!("testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     let times1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-file-info}",
-            vec!["/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_file_info",
+            data_value!("/testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2008,14 +2223,17 @@ async fn filesystem_write_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-file-info}",
-            vec!["/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_file_info",
+            data_value!("/testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2027,32 +2245,38 @@ async fn filesystem_create_dir_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-4");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-4")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test"),
         )
-        .await??;
+        .await?;
 
     let times1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2060,14 +2284,12 @@ async fn filesystem_create_dir_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2079,52 +2301,56 @@ async fn file_hard_link(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let worker_id = executor
-        .start_worker(&component.id, "file-service-5")
+    let agent_id = agent_id!("file-system", "file-service-5");
+    let _worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file}",
-            vec![
-                "/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file",
+            data_value!("/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-link}",
-            vec![
-                "/testfile.txt".into_value_and_type(),
-                "/link.txt".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_link",
+            data_value!("/testfile.txt", "/link.txt"),
         )
-        .await??;
+        .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{read-file}",
-            vec!["/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "read_file",
+            data_value!("/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(
-        result
-            == vec![Value::Result(Ok(Some(Box::new(Value::String(
-                "hello world".to_string()
-            )))))]
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String("hello world".to_string())))))
     );
 
     Ok(())
@@ -2137,70 +2363,76 @@ async fn filesystem_link_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-6");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-6")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test2".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test2"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file}",
-            vec![
-                "/test/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file",
+            data_value!("/test/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-link}",
-            vec![
-                "/test/testfile.txt".into_value_and_type(),
-                "/test2/link.txt".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_link",
+            data_value!("/test/testfile.txt", "/test2/link.txt"),
         )
-        .await??;
+        .await?;
 
     let times_file_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test2/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_dir_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2208,23 +2440,24 @@ async fn filesystem_link_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times_dir_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test2/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times_dir_1 == times_dir_2);
-    check!(times_file_1 == times_file_2);
+    assert_eq!(times_dir_1, times_dir_2);
+    assert_eq!(times_file_1, times_file_2);
 
     Ok(())
 }
@@ -2236,48 +2469,56 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-7");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-7")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test/a".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test/a"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{remove-directory}",
-            vec!["/test/a".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "remove_directory",
+            data_value!("/test/a"),
         )
-        .await??;
+        .await?;
 
     let times1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -2285,14 +2526,12 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2304,94 +2543,101 @@ async fn filesystem_symlink_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-8");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-8")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test2".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test2"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file-direct}",
-            vec![
-                "test/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file_direct",
+            data_value!("test/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-sym-link}",
-            vec![
-                "../test/testfile.txt".into_value_and_type(),
-                "/test2/link.txt".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_sym_link",
+            data_value!("../test/testfile.txt", "/test2/link.txt"),
         )
-        .await??;
+        .await?;
 
     let times_file_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test2/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_dir_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let times_dir_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test2/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times_dir_1 == times_dir_2);
-    check!(times_file_1 == times_file_2);
+    assert_eq!(times_dir_1, times_dir_2);
+    assert_eq!(times_file_1, times_file_2);
 
     Ok(())
 }
@@ -2403,111 +2649,114 @@ async fn filesystem_rename_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-9");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-9")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test2".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test2"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file}",
-            vec![
-                "/test/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file",
+            data_value!("/test/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{rename-file}",
-            vec![
-                "/test/testfile.txt".into_value_and_type(),
-                "/test2/link.txt".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "rename_file",
+            data_value!("/test/testfile.txt", "/test2/link.txt"),
         )
-        .await??;
+        .await?;
 
     let times_srcdir_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_destdir_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test2/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let times_srcdir_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_destdir_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test2/link.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test2/link.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times_srcdir_1 == times_srcdir_2);
-    check!(times_destdir_1 == times_destdir_2);
-    check!(times_file_1 == times_file_2);
+    assert_eq!(times_srcdir_1, times_srcdir_2);
+    assert_eq!(times_destdir_1, times_destdir_2);
+    assert_eq!(times_file_1, times_file_2);
 
     Ok(())
 }
@@ -2519,82 +2768,87 @@ async fn filesystem_remove_file_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-10");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-10")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-directory}",
-            vec!["/test".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_directory",
+            data_value!("/test"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file}",
-            vec![
-                "/test/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file",
+            data_value!("/test/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test/testfile.txt"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{remove-file}",
-            vec!["/test/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "remove_file",
+            data_value!("/test/testfile.txt"),
         )
-        .await??;
+        .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_info",
+            data_value!("/test/testfile.txt"),
         )
-        .await??;
+        .await?;
 
     let times1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-info}",
-            vec!["/test".into_value_and_type()],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2606,50 +2860,61 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-3");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-3")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file}",
-            vec![
-                "/testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file",
+            data_value!("/testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     let times1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-file-info}",
-            vec!["/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_file_info",
+            data_value!("/testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{get-file-info}",
-            vec!["/testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "get_file_info",
+            data_value!("/testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(times1 == times2);
+    assert_eq!(times1, times2);
 
     Ok(())
 }
@@ -2661,50 +2926,61 @@ async fn filesystem_metadata_hash(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "file-service")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("file-system", "file-service-3");
     let worker_id = executor
-        .start_worker(&component.id, "file-service-3")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{write-file-direct}",
-            vec![
-                "testfile.txt".into_value_and_type(),
-                "hello world".into_value_and_type(),
-            ],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "write_file_direct",
+            data_value!("testfile.txt", "hello world"),
         )
-        .await??;
+        .await?;
 
     let hash1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{hash}",
-            vec!["testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "hash",
+            data_value!("testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let hash2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{hash}",
-            vec!["testfile.txt".into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "hash",
+            data_value!("testfile.txt"),
         )
-        .await??;
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(hash1 == hash2);
+    assert_eq!(hash1, hash2);
 
     Ok(())
 }
@@ -2716,20 +2992,30 @@ async fn ip_address_resolve(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "networking")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("networking", "ip-address-resolve-1");
+    let component_id = component.id;
     let worker_id = executor
-        .start_worker(&component.id, "ip-address-resolve-1")
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -2737,372 +3023,23 @@ async fn ip_address_resolve(
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
-        .await??;
+        .invoke_and_await_agent(&component_id, &agent_id, "get", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
     // that it could resolve golem.cloud to at least one address.
-    check!(result1.len() > 0);
-    check!(result2.len() > 0);
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn wasi_incoming_request_handler(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(
-            &context.default_environment_id,
-            "wasi-http-incoming-request-handler",
-        )
-        .store()
-        .await?;
-
-    let worker_id = executor
-        .start_worker(&component.id, "wasi-http-incoming-request-handler-1")
-        .await?;
-
-    let args = ValueAndType {
-        value: Value::Record(vec![
-            Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            Value::String("localhost:8000".to_string()),
-            Value::String("/".to_string()),
-            Value::List(vec![]),
-            Value::Option(None),
-        ]),
-        typ: IncomingHttpRequest::analysed_type(),
+    let Value::List(entries1) = &result1 else {
+        panic!("expected list, got {:?}", result1)
     };
-
-    let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:http/incoming-handler.{handle}",
-            vec![args],
-        )
-        .await??;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    check!(result.len() == 1);
-    check!(
-        result[0]
-            == Value::Record(vec![
-                Value::U16(200),
-                Value::List(vec![]),
-                Value::Option(None)
-            ])
-    );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn wasi_incoming_request_handler_echo(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(
-            &context.default_environment_id,
-            "wasi-http-incoming-request-handler-echo",
-        )
-        .store()
-        .await?;
-
-    let worker_id = executor
-        .start_worker(&component.id, "wasi-http-incoming-request-handler-echo-1")
-        .await?;
-
-    let args = ValueAndType {
-        value: Value::Record(vec![
-            Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            Value::String("localhost:8000".to_string()),
-            Value::String("/foo?bar=baz".to_string()),
-            Value::List(vec![Value::Tuple(vec![
-                Value::String("test-header".to_string()),
-                Value::List(
-                    "foobar"
-                        .to_string()
-                        .into_bytes()
-                        .into_iter()
-                        .map(Value::U8)
-                        .collect(),
-                ),
-            ])]),
-            Value::Option(Some(Box::new(Value::Record(vec![
-                Value::List(
-                    "test-body"
-                        .to_string()
-                        .into_bytes()
-                        .into_iter()
-                        .map(Value::U8)
-                        .collect(),
-                ),
-                Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
-                    Value::String("test-trailer".to_string()),
-                    Value::List(
-                        "barfoo"
-                            .to_string()
-                            .into_bytes()
-                            .into_iter()
-                            .map(Value::U8)
-                            .collect(),
-                    ),
-                ])])))),
-            ])))),
-        ]),
-        typ: IncomingHttpRequest::analysed_type(),
+    let Value::List(entries2) = &result2 else {
+        panic!("expected list, got {:?}", result2)
     };
-
-    let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:http/incoming-handler.{handle}",
-            vec![args],
-        )
-        .await??;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    check!(result.len() == 1);
-    check!(
-        result[0]
-            == Value::Record(vec![
-                Value::U16(200),
-                Value::List(vec![
-                    Value::Tuple(vec![
-                        Value::String("echo-test-header".to_string()),
-                        Value::List(
-                            "foobar"
-                                .to_string()
-                                .into_bytes()
-                                .into_iter()
-                                .map(Value::U8)
-                                .collect()
-                        )
-                    ]),
-                    Value::Tuple(vec![
-                        Value::String("x-location".to_string()),
-                        Value::List(
-                            "http://localhost:8000/foo?bar=baz"
-                                .to_string()
-                                .into_bytes()
-                                .into_iter()
-                                .map(Value::U8)
-                                .collect()
-                        )
-                    ]),
-                    Value::Tuple(vec![
-                        Value::String("x-method".to_string()),
-                        Value::List(
-                            "POST"
-                                .to_string()
-                                .into_bytes()
-                                .into_iter()
-                                .map(Value::U8)
-                                .collect()
-                        )
-                    ])
-                ]),
-                Value::Option(Some(Box::new(Value::Record(vec![
-                    Value::List(
-                        "test-body"
-                            .to_string()
-                            .into_bytes()
-                            .into_iter()
-                            .map(Value::U8)
-                            .collect()
-                    ),
-                    Value::Option(Some(Box::new(Value::List(vec![Value::Tuple(vec![
-                        Value::String("echo-test-trailer".to_string()),
-                        Value::List(
-                            "barfoo"
-                                .to_string()
-                                .into_bytes()
-                                .into_iter()
-                                .map(Value::U8)
-                                .collect()
-                        )
-                    ])]),)))
-                ]))))
-            ])
-    );
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn wasi_incoming_request_handler_state(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component(
-            &context.default_environment_id,
-            "wasi-http-incoming-request-handler-state",
-        )
-        .store()
-        .await?;
-
-    let worker_id = executor
-        .start_worker(&component.id, "wasi-http-incoming-request-handler-state-1")
-        .await?;
-
-    let args_put = ValueAndType {
-        value: Value::Record(vec![
-            Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            Value::String("localhost:8000".to_string()),
-            Value::String("/".to_string()),
-            Value::List(vec![]),
-            Value::Option(Some(Box::new(Value::Record(vec![
-                Value::List(
-                    "1".to_string()
-                        .into_bytes()
-                        .into_iter()
-                        .map(Value::U8)
-                        .collect(),
-                ),
-                Value::Option(None),
-            ])))),
-        ]),
-        typ: IncomingHttpRequest::analysed_type(),
-    };
-
-    let args_get = ValueAndType {
-        value: Value::Record(vec![
-            Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            Value::String("localhost:8000".to_string()),
-            Value::String("/".to_string()),
-            Value::List(vec![]),
-            Value::Option(None),
-        ]),
-        typ: IncomingHttpRequest::analysed_type(),
-    };
-
-    let result1 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:http/incoming-handler.{handle}",
-            vec![args_put],
-        )
-        .await??;
-
-    let result2 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:http/incoming-handler.{handle}",
-            vec![args_get.clone()],
-        )
-        .await??;
-
-    check!(result1.len() == 1);
-    check!(
-        result1[0]
-            == Value::Record(vec![
-                Value::U16(200),
-                Value::List(vec![]),
-                Value::Option(None)
-            ])
-    );
-
-    check!(result2.len() == 1);
-    check!(
-        result2[0]
-            == Value::Record(vec![
-                Value::U16(200),
-                Value::List(vec![]),
-                Value::Option(Some(Box::new(Value::Record(vec![
-                    Value::List(
-                        "1".to_string()
-                            .into_bytes()
-                            .into_iter()
-                            .map(Value::U8)
-                            .collect()
-                    ),
-                    Value::Option(None)
-                ]))))
-            ])
-    );
-
-    // restart executor and check whether we are restoring the state
-    drop(executor);
-    let executor = start(deps, &context).await?;
-
-    let result3 = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:http/incoming-handler.{handle}",
-            vec![args_get.clone()],
-        )
-        .await??;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    check!(result3.len() == 1);
-    check!(
-        result3[0]
-            == Value::Record(vec![
-                Value::U16(200),
-                Value::List(vec![]),
-                Value::Option(Some(Box::new(Value::Record(vec![
-                    Value::List(
-                        "1".to_string()
-                            .into_bytes()
-                            .into_iter()
-                            .map(Value::U8)
-                            .collect()
-                    ),
-                    Value::Option(None)
-                ]))))
-            ])
-    );
+    assert!(!entries1.is_empty());
+    assert!(!entries2.is_empty());
 
     Ok(())
 }
@@ -3114,18 +3051,25 @@ async fn wasi_config_initial_worker_config(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_wasi_config")
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
         .store()
         .await?;
+    let agent_id = agent_id!("wasi-config", "worker-1");
 
     let worker_id = executor
-        .start_worker_with(
+        .start_agent_with(
             &component.id,
-            "worker-1",
+            agent_id.clone(),
             HashMap::new(),
             vec![
                 ("k1".to_string(), "v1".to_string()),
@@ -3138,18 +3082,14 @@ async fn wasi_config_initial_worker_config(
         // get existing key
 
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
-                vec!["k1".into_value_and_type()],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!("k1"))
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
         assert_eq!(
             result,
-            vec![Value::Option(Some(Box::new(Value::String(
-                "v1".to_string()
-            ))))]
+            Value::Option(Some(Box::new(Value::String("v1".to_string()))))
         )
     }
 
@@ -3157,30 +3097,26 @@ async fn wasi_config_initial_worker_config(
         // get non-existent key
 
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
-                vec!["k3".into_value_and_type()],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!("k3"))
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(result, vec![Value::Option(None)])
+        assert_eq!(result, Value::Option(None))
     }
 
     {
         // get all keys
 
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get-all}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "get_all", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
 
         assert_eq!(
             result,
-            vec![Value::List(vec![
+            Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
                     Value::String("v1".to_string())
@@ -3189,9 +3125,11 @@ async fn wasi_config_initial_worker_config(
                     Value::String("k2".to_string()),
                     Value::String("v2".to_string())
                 ])
-            ])]
+            ])
         )
     }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }

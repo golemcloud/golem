@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Value, ValueAndType};
+use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use std::str::FromStr;
+use uuid::Uuid;
 
 pub trait FromValue: Sized {
     fn from_value(value: Value) -> Result<Self, String>;
@@ -373,6 +374,20 @@ impl FromValue for uuid::Uuid {
         match value {
             Value::String(s) => uuid::Uuid::parse_str(&s).map_err(|e| format!("Invalid UUID: {e}")),
             _ => Err(format!("Expected String value for UUID, got {value:?}")),
+        }
+    }
+}
+
+impl FromValue for UuidRecord {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(mut fields) if fields.len() == 1 => {
+                let value = Uuid::from_value(fields.remove(0))?;
+                Ok(UuidRecord { value })
+            }
+            _ => Err(format!(
+                "Expected Record with value for UuidRecord, got {value:?}"
+            )),
         }
     }
 }

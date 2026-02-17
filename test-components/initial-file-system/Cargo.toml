@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["components-rust/*", "common-rust/*"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[workspace.dependencies]
+async-trait = {version = "0.1.89"}
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_load_snapshot", "export_save_snapshot", "export_golem_agentic"] }
+golem-wasi-http = { version = "0.1.0", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ctor = "0.4.3"
+wstd = {version = "=0.5.4", features = ["default", "json"] }

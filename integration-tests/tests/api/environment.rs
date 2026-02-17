@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateEnvironmentError,
     RegistryServiceGetApplicationEnvironmentError, RegistryServiceListApplicationEnvironmentsError,
@@ -22,6 +21,7 @@ use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -39,7 +39,7 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
         let result = client
             .get_application_environment(&app.id.0, &env_1.name.0)
             .await?;
-        assert!(result == env_1);
+        assert_eq!(result, env_1);
     }
 
     {
@@ -48,11 +48,11 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
             .await?
             .values;
 
-        assert!(envs.len() == 2);
+        assert_eq!(envs.len(), 2);
 
         let env_ids = envs.into_iter().map(|a| a.id).collect::<HashSet<_>>();
 
-        assert!(env_ids == HashSet::from_iter([env_1.id, env_2.id]));
+        assert_eq!(env_ids, HashSet::from_iter([env_1.id, env_2.id]));
     }
 
     client
@@ -63,11 +63,12 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
         let result = client
             .get_application_environment(&app.id.0, &env_2.name.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
@@ -76,11 +77,11 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
             .await?
             .values;
 
-        assert!(envs.len() == 1);
+        assert_eq!(envs.len(), 1);
 
         let env_ids = envs.into_iter().map(|a| a.id).collect::<Vec<_>>();
 
-        assert!(env_ids == vec![env_1.id]);
+        assert_eq!(env_ids, vec![env_1.id]);
     }
 
     Ok(())
@@ -100,12 +101,22 @@ async fn other_users_cannot_get_applications(
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceGetApplicationEnvironmentError::Error404(_))) = result);
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceGetApplicationEnvironmentError::Error404(_)
+            ))
+        ));
     }
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceListApplicationEnvironmentsError::Error404(_))) = result);
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
+                RegistryServiceListApplicationEnvironmentsError::Error404(_)
+            ))
+        ));
     }
 
     Ok(())
@@ -131,22 +142,24 @@ async fn deleting_account_hides_environments(
 
     {
         let result = admin_client.list_application_environments(&app.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = admin_client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
     Ok(())
 }
@@ -168,22 +181,24 @@ async fn deleting_application_hides_environments(
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceListApplicationEnvironmentsError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client
             .get_application_environment(&app.id.0, &env.name.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetApplicationEnvironmentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
     Ok(())
 }
@@ -212,11 +227,12 @@ async fn cannot_create_two_environments_with_same_name(
                 },
             )
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceCreateEnvironmentError::Error409(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // try to rename environment to conflicting name
@@ -234,11 +250,12 @@ async fn cannot_create_two_environments_with_same_name(
             )
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceUpdateEnvironmentError::Error409(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // delete the environment, now creating a new one will succeed

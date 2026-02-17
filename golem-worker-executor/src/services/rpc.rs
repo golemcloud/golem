@@ -613,43 +613,50 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         }
     }
 
-    /// As we know the target component's metadata, and it includes the root package name, we can
-    /// accept function names which are not fully qualified by falling back to use this root package
-    /// when the package part is missing.
     async fn enrich_function_name(
         &self,
         target_worker_id: &OwnedWorkerId,
         function_name: String,
     ) -> String {
-        let parsed_function_name: Option<ParsedFunctionName> =
-            ParsedFunctionName::parse(&function_name).ok();
-        if matches!(
-            parsed_function_name,
-            Some(ParsedFunctionName {
-                site: ParsedFunctionSite::Global,
-                function: _
-            }) | Some(ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface { .. },
-                function: _
-            })
-        ) {
-            // already valid function name, doing nothing
-            function_name
-        } else if let Ok(target_component) = self
-            .component_service
-            .get_metadata(target_worker_id.worker_id.component_id, None)
-            .await
-        {
-            enrich_function_name_by_target_information(
-                function_name,
-                target_component.metadata.root_package_name().clone(),
-                target_component.metadata.root_package_version().clone(),
-            )
-        } else {
-            // If we cannot get the target metadata, we just go with the original function name
-            // and let it fail on that.
-            function_name
-        }
+        enrich_function_name(&self.component_service, target_worker_id, function_name).await
+    }
+}
+
+/// As we know the target component's metadata, and it includes the root package name, we can
+/// accept function names which are not fully qualified by falling back to use this root package
+/// when the package part is missing.
+pub(crate) async fn enrich_function_name(
+    component_service: &Arc<dyn component::ComponentService>,
+    target_worker_id: &OwnedWorkerId,
+    function_name: String,
+) -> String {
+    let parsed_function_name: Option<ParsedFunctionName> =
+        ParsedFunctionName::parse(&function_name).ok();
+    if matches!(
+        parsed_function_name,
+        Some(ParsedFunctionName {
+            site: ParsedFunctionSite::Global,
+            function: _
+        }) | Some(ParsedFunctionName {
+            site: ParsedFunctionSite::PackagedInterface { .. },
+            function: _
+        })
+    ) {
+        // already valid function name, doing nothing
+        function_name
+    } else if let Ok(target_component) = component_service
+        .get_metadata(target_worker_id.worker_id.component_id, None)
+        .await
+    {
+        enrich_function_name_by_target_information(
+            function_name,
+            target_component.metadata.root_package_name().clone(),
+            target_component.metadata.root_package_version().clone(),
+        )
+    } else {
+        // If we cannot get the target metadata, we just go with the original function name
+        // and let it fail on that.
+        function_name
     }
 }
 

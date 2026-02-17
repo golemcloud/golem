@@ -37,6 +37,7 @@ mod errors;
 mod extended_agent_type;
 mod http;
 mod multimodal;
+mod principal_serde;
 mod resolved_agent;
 mod schema;
 mod unstructured_binary;

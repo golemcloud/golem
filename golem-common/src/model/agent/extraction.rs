@@ -348,7 +348,7 @@ mod tests {
     #[test]
     async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
         let result = extract_agent_types(
-            &PathBuf::from_str("../test-components/caller.wasm")?,
+            &PathBuf::from_str("../test-components/golem_it_agent_rpc_rust_release.wasm")?,
             false,
             false,
         )

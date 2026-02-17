@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateComponentError, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
@@ -30,18 +29,15 @@ use golem_common::model::component::{
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
-use golem_common::model::plugin_registration::{
-    ComponentTransformerPluginSpec, PluginRegistrationCreation, PluginSpecDto,
-};
+use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginSpecDto};
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
-use serde_json::json;
+use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
-use tracing::{debug, info};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -52,23 +48,27 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
 
     {
         let fetched_component = client.get_component(&component.id.0).await?;
-        assert!(fetched_component == component);
+        assert_eq!(fetched_component, component);
     }
 
     {
         let fetched_component = client
             .get_environment_component(&env.id.0, &component.component_name.0)
             .await?;
-        assert!(fetched_component == component);
+        assert_eq!(fetched_component, component);
     }
 
     {
         let fetched_components = client.get_environment_components(&env.id.0).await?;
-        assert!(fetched_components.values == vec![component]);
+        assert_eq!(fetched_components.values, vec![component]);
     }
 
     Ok(())
@@ -81,12 +81,15 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     let updated_component = user
         .update_component_with(
             &component.id,
             component.revision,
-            Some("update-test-v2"),
+            Some("it_agent_update_v2_release"),
             vec![],
             vec![],
             None,
@@ -94,24 +97,24 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         )
         .await?;
 
-    assert!(updated_component.id == component.id);
-    assert!(updated_component.wasm_hash != component.wasm_hash);
+    assert_eq!(updated_component.id, component.id);
+    assert_ne!(updated_component.wasm_hash, component.wasm_hash);
 
     {
         let fetched_component = client.get_component(&component.id.0).await?;
-        assert!(fetched_component == updated_component);
+        assert_eq!(fetched_component, updated_component);
     }
 
     {
         let fetched_component = client
             .get_environment_component(&env.id.0, &component.component_name.0)
             .await?;
-        assert!(fetched_component == updated_component);
+        assert_eq!(fetched_component, updated_component);
     }
 
     {
         let fetched_components = client.get_environment_components(&env.id.0).await?;
-        assert!(fetched_components.values == vec![updated_component]);
+        assert_eq!(fetched_components.values, vec![updated_component]);
     }
     Ok(())
 }
@@ -125,7 +128,10 @@ async fn component_update_with_wrong_revision_is_rejected(
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     let result = client
         .update_component(
             &component.id.0,
@@ -143,9 +149,12 @@ async fn component_update_with_wrong_revision_is_rejected(
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(RegistryServiceUpdateComponentError::Error409(_))) = result
-    );
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
+            RegistryServiceUpdateComponentError::Error409(_)
+        ))
+    ));
 
     Ok(())
 }
@@ -157,34 +166,39 @@ async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     client
         .delete_component(&component.id.0, component.revision.into())
         .await?;
 
     {
         let result = client.get_component(&component.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetComponentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client
             .get_environment_component(&env.id.0, &component.component_name.0)
             .await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetEnvironmentComponentError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let fetched_components = client.get_environment_components(&env.id.0).await?;
-        assert!(fetched_components.values == vec![]);
+        assert_eq!(fetched_components.values, vec![]);
     }
     Ok(())
 }
@@ -212,7 +226,7 @@ async fn create_component_with_plugins_and_update_installations(
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -231,16 +245,16 @@ async fn create_component_with_plugins_and_update_installations(
     let plugin_parameters = BTreeMap::from_iter(vec![("foo".to_string(), "bar".to_string())]);
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .with_parametrized_plugin(&library_plugin_grant.id, 0, plugin_parameters.clone())
         .store()
         .await?;
 
-    assert!(component.installed_plugins.len() == 1);
+    assert_eq!(component.installed_plugins.len(), 1);
 
     let installed_plugin = &component.installed_plugins[0];
-    assert!(installed_plugin.priority.0 == 0);
-    assert!(installed_plugin.parameters == plugin_parameters);
+    assert_eq!(installed_plugin.priority.0, 0);
+    assert_eq!(installed_plugin.parameters, plugin_parameters);
 
     // update priority of plugin
     let component_v2 = client
@@ -264,11 +278,11 @@ async fn create_component_with_plugins_and_update_installations(
         )
         .await?;
 
-    assert!(component_v2.installed_plugins.len() == 1);
+    assert_eq!(component_v2.installed_plugins.len(), 1);
 
     let installed_plugin = &component_v2.installed_plugins[0];
-    assert!(installed_plugin.priority.0 == 1);
-    assert!(installed_plugin.parameters == plugin_parameters);
+    assert_eq!(installed_plugin.priority.0, 1);
+    assert_eq!(installed_plugin.parameters, plugin_parameters);
 
     // update priority of plugin
     let component_v3 = client
@@ -290,7 +304,7 @@ async fn create_component_with_plugins_and_update_installations(
         )
         .await?;
 
-    assert!(component_v3.installed_plugins.len() == 0);
+    assert_eq!(component_v3.installed_plugins.len(), 0);
 
     Ok(())
 }
@@ -316,7 +330,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -335,7 +349,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
     let plugin_parameters = BTreeMap::from_iter(vec![("foo".to_string(), "bar".to_string())]);
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .store()
         .await?;
 
@@ -360,115 +374,13 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
         )
         .await?;
 
-    assert!(updated_component.installed_plugins.len() == 1);
+    assert_eq!(updated_component.installed_plugins.len(), 1);
 
     {
         let installed_plugin = &updated_component.installed_plugins[0];
-        assert!(installed_plugin.priority.0 == 0);
-        assert!(installed_plugin.parameters == plugin_parameters);
+        assert_eq!(installed_plugin.priority.0, 0);
+        assert_eq!(installed_plugin.parameters, plugin_parameters);
     }
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn install_component_transformer_plugin(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
-    use axum::extract::Multipart;
-    use axum::routing::post;
-    use axum::Router;
-
-    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
-        while let Some(field) = multipart.next_field().await.unwrap() {
-            let name = field.name().unwrap().to_string();
-            let data = field.bytes().await.unwrap();
-            debug!("Length of `{}` is {} bytes", name, data.len());
-
-            match name.as_str() {
-                "component" => {
-                    info!("Received component data");
-                }
-                "metadata" => {
-                    let json =
-                        std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
-                    info!("Metadata: {}", json);
-                }
-                _ => {
-                    let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
-                    info!("Configuration field: {} = {}", name, value);
-                }
-            }
-        }
-
-        let response = json!({
-            "env": {
-                "TEST_ENV_VAR_2": "value_2"
-            }
-        });
-
-        axum::Json(response)
-    }
-
-    let app = Router::new().route("/transform", post(transform));
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let user = deps.user().await?.with_auto_deploy(false);
-    let client = user.registry_service_client().await;
-    let (_, env) = user.app_and_env().await?;
-
-    let component_transformer_plugin = client
-        .create_plugin(
-            &user.account_id.0,
-            &PluginRegistrationCreation {
-                name: "test-library-plugin".to_string(),
-                version: "1.0.0".to_string(),
-                description: "description".to_string(),
-                icon: Base64(Vec::new()),
-                homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::ComponentTransformer(ComponentTransformerPluginSpec {
-                    provided_wit_package: None,
-                    json_schema: None,
-                    validate_url: "not-used".to_string(),
-                    transform_url: format!("http://localhost:{port}/transform"),
-                }),
-            },
-            None::<Vec<u8>>,
-        )
-        .await?;
-
-    let component_transformer_plugin_grant = client
-        .create_environment_plugin_grant(
-            &env.id.0,
-            &EnvironmentPluginGrantCreation {
-                plugin_registration_id: component_transformer_plugin.id,
-            },
-        )
-        .await?;
-
-    let component = user
-        .component(&env.id, "environment-service")
-        .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
-        .with_plugin(&component_transformer_plugin_grant.id, 0)
-        .store()
-        .await?;
-
-    server_handle.abort();
-
-    assert!(component.installed_plugins.len() == 1);
-    let installed_plugin = &component.installed_plugins[0];
-    assert!(installed_plugin.priority.0 == 0);
-
-    assert!(
-        component.env
-            == BTreeMap::from_iter(vec![
-                ("TEST_ENV_VAR_1".to_string(), "value_1".to_string()),
-                ("TEST_ENV_VAR_2".to_string(), "value_2".to_string())
-            ])
-    );
 
     Ok(())
 }
@@ -484,7 +396,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
         .create_component(
             &env.id.0,
             &ComponentCreation {
-                component_name: ComponentName("ifs-test".to_string()),
+                component_name: ComponentName("golem:it".to_string()),
                 file_options: BTreeMap::from_iter(vec![(
                     ComponentFilePath::from_abs_str("/bar/baz.txt").map_err(|e| anyhow!(e))?,
                     ComponentFileOptions {
@@ -498,27 +410,27 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
             },
             tokio::fs::File::open(
                 deps.component_directory()
-                    .join("initial-file-read-write.wasm"),
+                    .join("it_initial_file_system_release.wasm"),
             )
             .await?,
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("initial-file-read-write/files/archive.zip"),
+                        .join("initial-file-system/files/archive.zip"),
                 )
                 .await?,
             ),
         )
         .await?;
 
-    assert!(component.files.len() == 2);
-    assert!(
+    assert_eq!(component.files.len(), 2);
+    assert_eq!(
         component
             .files
             .iter()
             .filter(|cf| cf.permissions == ComponentFilePermissions::ReadWrite)
-            .count()
-            == 1
+            .count(),
+        1
     );
 
     Ok(())
@@ -531,14 +443,23 @@ async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     client
         .delete_component(&component.id.0, component.revision.into())
         .await?;
 
-    let recreated_component = user.component(&env.id, "update-test-v1").store().await?;
-    assert!(recreated_component.id == component.id);
-    assert!(recreated_component.revision == component.revision.next()?.next()?);
+    let recreated_component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
+    assert_eq!(recreated_component.id, component.id);
+    assert_eq!(
+        recreated_component.revision,
+        component.revision.next()?.next()?
+    );
 
     client
         .delete_component(&component.id.0, recreated_component.revision.into())
@@ -610,7 +531,10 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         )
         .await?;
 
-    assert!(component.metadata.agent_types() == std::slice::from_ref(&agent_type));
+    assert_eq!(
+        component.metadata.agent_types(),
+        std::slice::from_ref(&agent_type)
+    );
 
     let deployment = user.deploy_environment(&env.id).await?;
 
@@ -618,16 +542,16 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         .list_deployment_agent_types(&env.id.0, deployment.revision.into())
         .await?;
 
-    assert!(
-        agent_types.values
-            == vec![DeployedRegisteredAgentType {
-                agent_type,
-                implemented_by: RegisteredAgentTypeImplementer {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                },
-                webhook_prefix_authority_and_path: None
-            }]
+    assert_eq!(
+        agent_types.values,
+        vec![DeployedRegisteredAgentType {
+            agent_type,
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: component.id,
+                component_revision: component.revision,
+            },
+            webhook_prefix_authority_and_path: None
+        }]
     );
 
     Ok(())
@@ -656,7 +580,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -677,7 +601,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -724,17 +648,21 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                     },
                 ],
             },
-            tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
-                .await?,
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("it_agent_counters_release.wasm"),
+            )
+            .await?,
             None::<Vec<u8>>,
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateComponentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -762,7 +690,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -800,17 +728,21 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                     },
                 ],
             },
-            tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
-                .await?,
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("it_agent_counters_release.wasm"),
+            )
+            .await?,
             None::<Vec<u8>>,
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateComponentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -838,7 +770,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -859,7 +791,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -885,7 +817,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
         .await?;
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .store()
         .await?;
 
@@ -917,11 +849,12 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceUpdateComponentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -949,7 +882,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -966,7 +899,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
         .await?;
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .store()
         .await?;
 
@@ -998,11 +931,12 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceUpdateComponentError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }

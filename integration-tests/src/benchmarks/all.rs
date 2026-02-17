@@ -60,14 +60,6 @@ async fn main() {
         }),
     );
     benchmarks_by_name.insert(
-        "cold-start-unknown-large",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownLarge,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
         "latency-small",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
@@ -80,14 +72,6 @@ async fn main() {
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::latency::LatencyMedium,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "latency-large",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::latency::LatencyLarge,
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
