@@ -644,6 +644,7 @@ mod tests {
         mount = "/chats/{agent-type}/{foo}/{bar}",
         webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
         auth = true,
+        phantom_agent = true,
         cors = ["https://app.acme.com", "https://staging.acme.com"],
     )]
     trait ComplexHttpAgent {
@@ -664,6 +665,9 @@ mod tests {
 
         #[endpoint(get = "/greet/{name}/{*file_path}")]
         fn greet3(&self, name: String, file_path: String) -> String;
+
+        #[endpoint(get = "/")]
+        fn empty_path(&self);
     }
 
     struct AgentWithHttpMountImpl {}
@@ -689,6 +693,8 @@ mod tests {
         fn greet3(&self, _name: String, _file_path: String) -> String {
             "baz".to_string()
         }
+
+        fn empty_path(&self) {}
     }
 
     #[test]
@@ -705,6 +711,12 @@ mod tests {
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
+        );
+
+        assert_eq!(
+            agent.http_mount.as_ref().map(|hm| hm.phantom_agent),
+            Some(true),
+            "Agent phantom property should be set"
         );
 
         assert!(
