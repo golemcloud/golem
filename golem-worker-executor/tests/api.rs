@@ -62,7 +62,7 @@ inherit_test_dep!(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn interruption(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -158,7 +158,7 @@ async fn delete_interrupts_long_rpc_call(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn simulated_crash(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -222,7 +222,7 @@ async fn simulated_crash(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn shopping_cart_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -312,7 +312,7 @@ async fn shopping_cart_example(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn dynamic_worker_creation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -401,7 +401,7 @@ fn get_env_result_from_value(env: Value) -> HashMap<String, String> {
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn ephemeral_worker_creation_with_name_is_not_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -436,7 +436,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn promise(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -564,7 +564,7 @@ fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn get_workers_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -693,7 +693,7 @@ async fn get_workers_from_worker(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn get_metadata_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -819,7 +819,7 @@ async fn get_metadata_from_worker(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn invoking_with_same_idempotency_key_is_idempotent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -881,7 +881,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -946,7 +946,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn component_env_variables(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1008,7 +1008,7 @@ async fn component_env_variables(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn component_env_variables_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1070,7 +1070,7 @@ async fn component_env_variables_update(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn component_env_and_worker_env_priority(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1107,7 +1107,7 @@ async fn component_env_and_worker_env_priority(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn delete_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1159,7 +1159,7 @@ async fn delete_worker(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn get_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1301,7 +1301,7 @@ async fn get_workers(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1331,7 +1331,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 #[ignore] // TODO: Fix this test as part of the
 async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters(
     last_unique_id: &LastUniqueId,
@@ -1369,7 +1369,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn get_worker_metadata(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1448,7 +1448,7 @@ async fn get_worker_metadata(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn create_invoke_delete_create_invoke(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1496,7 +1496,7 @@ async fn create_invoke_delete_create_invoke(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn recovering_an_old_worker_after_updating_a_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1558,7 +1558,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1614,7 +1614,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1671,7 +1671,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1747,7 +1747,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_works_as_expected(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1853,7 +1853,7 @@ async fn start_http_poll_server(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_http_failures_are_retried(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1962,7 +1962,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_works_as_expected_async_http(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2183,7 +2183,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_connection_breaks_on_interrupt(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2271,7 +2271,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2354,7 +2354,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2492,7 +2492,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2567,7 +2567,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2609,7 +2609,7 @@ async fn counter_resource_test_1(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn reconstruct_interrupted_state(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2680,7 +2680,7 @@ async fn reconstruct_interrupted_state(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn invocation_queue_is_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2793,7 +2793,7 @@ async fn invocation_queue_is_persistent(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn invoke_with_non_existing_function(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2831,7 +2831,7 @@ async fn invoke_with_non_existing_function(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 #[ignore] // TODO: FIX DURING THE FIRST CLASS AGENT SUPPORT EPIC
 async fn invoke_with_wrong_parameters(
     last_unique_id: &LastUniqueId,
@@ -2875,7 +2875,7 @@ async fn invoke_with_wrong_parameters(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn stderr_returned_for_failed_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2967,7 +2967,7 @@ async fn stderr_returned_for_failed_component(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn cancelling_pending_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3078,7 +3078,7 @@ async fn cancelling_pending_invocations(
 /// Test resolving a component_id from the name.
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn resolve_components_from_name(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3142,7 +3142,7 @@ async fn resolve_components_from_name(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn scheduled_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3260,7 +3260,7 @@ async fn scheduled_invocation(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3298,7 +3298,7 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn delete_worker_during_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

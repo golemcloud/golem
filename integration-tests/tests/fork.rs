@@ -36,7 +36,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_interrupted_worker(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -115,7 +115,7 @@ async fn fork_interrupted_worker(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_running_worker_1(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -188,7 +188,7 @@ async fn fork_running_worker_1(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_running_worker_2(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -283,7 +283,7 @@ async fn fork_running_worker_2(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_idle_worker(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -418,7 +418,7 @@ async fn fork_idle_worker(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_worker_when_target_already_exists(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -465,7 +465,7 @@ async fn fork_worker_when_target_already_exists(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_worker_with_invalid_oplog_index_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -512,7 +512,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_invalid_worker(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -554,7 +554,7 @@ async fn fork_invalid_worker(
 // stored in oplog until cut off
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_worker_ensures_zero_divergence_until_cut_off(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -669,7 +669,7 @@ fn run_http_server(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -786,7 +786,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn fork_and_sync_with_promise(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

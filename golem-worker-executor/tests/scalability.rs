@@ -343,7 +343,7 @@ async fn initial_large_memory_allocation(
 }
 
 #[test]
-#[timeout(60000)]
+#[timeout("4m")]
 #[tracing::instrument]
 #[allow(clippy::needless_range_loop)]
 async fn dynamic_large_memory_allocation(

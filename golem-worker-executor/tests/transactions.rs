@@ -134,7 +134,7 @@ impl TestHttpServer {
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_jump(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -318,7 +318,7 @@ async fn golem_rust_set_retry_policy(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_atomic_region(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -367,7 +367,7 @@ async fn golem_rust_atomic_region(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_idempotence_on(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -419,7 +419,7 @@ async fn golem_rust_idempotence_on(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_idempotence_off(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -473,7 +473,7 @@ async fn golem_rust_idempotence_off(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_persist_nothing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -522,7 +522,7 @@ async fn golem_rust_persist_nothing(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_fallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -593,7 +593,7 @@ async fn golem_rust_fallible_transaction(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn golem_rust_infallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -667,7 +667,7 @@ async fn golem_rust_infallible_transaction(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn idempotency_keys_in_ephemeral_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

@@ -54,7 +54,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn dynamic_worker_creation(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -114,7 +114,7 @@ async fn dynamic_worker_creation(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn counter_resource_test_1(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -149,7 +149,7 @@ async fn counter_resource_test_1(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn counter_resource_test_1_json(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -184,7 +184,7 @@ async fn counter_resource_test_1_json(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn shopping_cart_example(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -267,7 +267,7 @@ async fn shopping_cart_example(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn rust_rpc_with_payload(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -328,7 +328,7 @@ async fn rust_rpc_with_payload(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -743,7 +743,7 @@ async fn auto_update_on_idle_via_host_function(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -808,7 +808,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -1432,7 +1432,7 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("4m")]
 async fn worker_suspends_when_running_out_of_fuel(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

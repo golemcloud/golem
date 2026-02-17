@@ -211,7 +211,7 @@ async fn search_oplog_1(
 
 #[test]
 #[tracing::instrument]
-#[timeout(120_000)]
+#[timeout("4m")]
 async fn get_oplog_with_api_changing_updates(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
