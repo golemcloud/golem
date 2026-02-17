@@ -405,7 +405,7 @@ impl GolemCli {
                     stderr: String::new(),
                 });
             }
-            RunMode::Piped => {
+            RunMode::Collect => {
                 command.stdout(Stdio::piped());
                 command.stderr(Stdio::piped());
             }
@@ -439,7 +439,7 @@ impl GolemCli {
         let result = self
             .run(RunOptions {
                 args: full_args,
-                mode: RunMode::Piped,
+                mode: RunMode::Collect,
             })
             .await?;
         let json = serde_json::from_str(&result.stdout).unwrap_or(Value::Null);
@@ -454,7 +454,7 @@ impl GolemCli {
 #[derive(Clone, Copy)]
 enum RunMode {
     Inherit,
-    Piped,
+    Collect,
 }
 
 struct RunOptions {
