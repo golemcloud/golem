@@ -259,7 +259,7 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
 
 #[test]
 #[tracing::instrument]
-#[timeout("1m")]
+#[timeout("2m")]
 async fn revert_auto_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

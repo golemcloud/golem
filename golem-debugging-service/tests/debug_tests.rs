@@ -517,7 +517,7 @@ async fn test_playback_with_overrides(
         .await?;
 
     // Fork from the list boundary
-    let target_agent_id = phantom_agent_id!("repository", uuid::Uuid::new_v4());
+    let target_agent_id = phantom_agent_id!("repository", uuid::Uuid::new_v4(), "overrides");
     let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &target_agent_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
