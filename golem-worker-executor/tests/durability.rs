@@ -20,11 +20,9 @@ use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{stream, StreamExt};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::WorkerId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
     start, start_with_snapshot_policy, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
@@ -294,21 +292,18 @@ async fn automatic_snapshot_disabled(
 
     let component = executor
         .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"disabled\")".to_string(),
-    };
+    let agent_id = agent_id!("snapshot-counter", "disabled");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
     }
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -343,21 +338,18 @@ async fn automatic_snapshot_every_2nd_invocation(
 
     let component = executor
         .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"every-2nd\")".to_string(),
-    };
+    let agent_id = agent_id!("snapshot-counter", "every-2nd");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
     }
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -395,21 +387,18 @@ async fn automatic_snapshot_periodic(
 
     let component = executor
         .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"periodic\")".to_string(),
-    };
+    let agent_id = agent_id!("snapshot-counter", "periodic");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
