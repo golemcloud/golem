@@ -360,7 +360,7 @@ mod tests {
     #[test]
     async fn can_extract_agent_types_2() -> anyhow::Result<()> {
         let result = extract_agent_types(
-            &PathBuf::from_str("../test-components/golem_it_agent_self_rpc.wasm")?,
+            &PathBuf::from_str("../test-components/golem_it_agent_rpc.wasm")?,
             false,
             false,
         )
