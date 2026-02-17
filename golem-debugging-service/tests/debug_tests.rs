@@ -1,4 +1,3 @@
-use crate::debug_mode::debug_worker_executor::UntypedJrpcMessage;
 use crate::*;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component::ComponentId;
