@@ -2648,7 +2648,7 @@ async fn reconstruct_interrupted_state(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clocks", "interruption-1");
+    let agent_id = agent_id!("clocks", "interruption-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
