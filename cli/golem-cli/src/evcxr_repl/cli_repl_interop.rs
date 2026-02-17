@@ -30,11 +30,11 @@ pub struct CliReplInterop {
     commands: Vec<ReplCliCommand>,
     commands_by_name: HashMap<String, ReplCliCommand>,
     cli: GolemCli,
-    builtin_commands: HashSet<String>,
+    builtin_commands: HashMap<String, String>,
 }
 
 impl CliReplInterop {
-    pub fn new(config: &ReplResolvedConfig) -> Self {
+    pub fn new(config: &ReplResolvedConfig, builtin_commands: HashMap<String, String>) -> Self {
         let commands = collect_repl_cli_commands(&config.cli_command_metadata);
         let commands_by_name = commands
             .iter()
@@ -45,7 +45,6 @@ impl CliReplInterop {
             config.base_config.app_main_dir.clone().into(),
             config.client_config.clone(),
         );
-        let builtin_commands = evcxr_builtin_commands();
         Self {
             commands,
             commands_by_name,
@@ -83,7 +82,7 @@ impl CliReplInterop {
                 &current_token,
             );
             let builtin_completions = filter_by_prefix(
-                self.builtin_commands.iter().cloned().collect(),
+                self.builtin_commands.keys().cloned().collect(),
                 &current_token,
             );
             completions.extend(builtin_completions);
@@ -171,7 +170,7 @@ impl CliReplInterop {
             None => return Ok(false),
         };
 
-        if self.builtin_commands.contains(&command_name) {
+        if self.builtin_commands.contains_key(&command_name) {
             return Ok(false);
         }
 
@@ -204,11 +203,7 @@ impl CliReplInterop {
         Ok(true)
     }
 
-    fn complete_arg_value(
-        &self,
-        arg: &CliArgMetadata,
-        current_token: &str,
-    ) -> CompletionValues {
+    fn complete_arg_value(&self, arg: &CliArgMetadata, current_token: &str) -> CompletionValues {
         if !arg.possible_values.is_empty() {
             let values = filter_by_prefix(
                 arg.possible_values
@@ -404,11 +399,10 @@ impl GolemCli {
     fn run_json(&self, args: &[&str]) -> anyhow::Result<RunJsonResult> {
         let mut full_args = vec!["--format".to_string(), "json".to_string()];
         full_args.extend(args.iter().map(|value| value.to_string()));
-        let result = self
-            .run(RunOptions {
-                args: full_args,
-                mode: RunMode::Collect,
-            })?;
+        let result = self.run(RunOptions {
+            args: full_args,
+            mode: RunMode::Collect,
+        })?;
         let json = serde_json::from_str(&result.stdout).unwrap_or(Value::Null);
         Ok(RunJsonResult {
             ok: result.ok,
@@ -821,36 +815,6 @@ fn parse_raw_args(raw_args: &str) -> Vec<String> {
 
     push_current(&mut args, &mut current);
     args
-}
-
-fn evcxr_builtin_commands() -> HashSet<String> {
-    [
-        "help",
-        "quit",
-        "exit",
-        "vars",
-        "types",
-        "clear",
-        "reset",
-        "dep",
-        "deps",
-        "toolchain",
-        "offline",
-        "allow_static_linking",
-        "timing",
-        "time_passes",
-        "sccache",
-        "cache",
-        "clear_cache",
-        "linker",
-        "compiler",
-        "debug",
-        "opt",
-        "edition",
-    ]
-    .into_iter()
-    .map(|value| value.to_string())
-    .collect()
 }
 
 fn exit_with_reload_code() -> anyhow::Result<()> {

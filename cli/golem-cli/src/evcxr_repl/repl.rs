@@ -15,10 +15,11 @@
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
 use crate::fs;
+use anyhow::anyhow;
 use colored::Colorize;
 use evcxr::{CommandContext, EvalContextOutputs};
 use heck::{ToKebabCase, ToSnakeCase};
-use indoc::{formatdoc, indoc};
+use indoc::formatdoc;
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::Builder;
 use rustyline::error::ReadlineError;
@@ -28,6 +29,7 @@ use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
 use rustyline::{CompletionType, Editor, ExternalPrinter, Helper};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -50,18 +52,18 @@ impl Repl {
         let mut dependencies = String::new();
         let mut prelude = String::new();
 
-        if !config.cli_args.disable_auto_imports {
-            for (agent_type_name, agent) in &config.repl_metadata.agents {
-                // TODO: from meta?
-                let agent_package_name = format!("{}-client", agent_type_name.0.to_kebab_case());
-                let agent_client_mod_name = format!("{}_client", agent_type_name.0.to_snake_case());
-                let agent_client_name = &agent_type_name;
+        for (agent_type_name, agent) in &config.repl_metadata.agents {
+            // TODO: from meta?
+            let agent_package_name = format!("{}-client", agent_type_name.0.to_kebab_case());
+            let agent_client_mod_name = format!("{}_client", agent_type_name.0.to_snake_case());
+            let agent_client_name = &agent_type_name;
 
-                let path = toml_string_literal(fs::path_to_str(
-                    &PathBuf::from(&config.base_config.app_main_dir).join(&agent.client_dir),
-                )?)?;
+            let path = toml_string_literal(fs::path_to_str(
+                &PathBuf::from(&config.base_config.app_main_dir).join(&agent.client_dir),
+            )?)?;
 
-                dependencies.push_str(&format!("{agent_package_name} = {{ path = {path} }}\n"));
+            dependencies.push_str(&format!("{agent_package_name} = {{ path = {path} }}\n"));
+            if !config.cli_args.disable_auto_imports {
                 prelude.push_str(&format!("use {agent_client_mod_name};\n"));
                 prelude.push_str(&format!(
                     "use {agent_client_mod_name}::{agent_client_name};\n"
@@ -83,10 +85,28 @@ impl Repl {
             "#,},
         )?;
 
-        let (command_context, outputs) = CommandContext::new()?;
+        let (mut command_context, outputs) = CommandContext::new()?;
+
+        let builtin_commands = {
+            let mut help_output = command_context.execute(":help")?;
+            let help_output = help_output
+                .content_by_mime_type
+                .remove("text/plain")
+                .ok_or_else(|| anyhow!("Missing help output"))?;
+            help_output
+                .split('\n')
+                .filter_map(|line| line.trim().split_once(' '))
+                .map(|(name, desc)| (name.to_string(), desc.trim_start()))
+                .collect::<HashMap<String, String>>()
+        };
+
+        println!("Building common dependencies...");
+        command_context.set_opt_level("0")?;
+        command_context.execute(":load_config --quiet")?;
+
         let command_context = Rc::new(RefCell::new(command_context));
 
-        let cli_repl = Rc::new(CliReplInterop::new(&config));
+        let cli_repl = Rc::new(CliReplInterop::new(&config, builtin_commands));
 
         let mut config_builder = Builder::new().history_ignore_space(true);
         config_builder = config_builder.history_ignore_dups(true)?;
@@ -118,8 +138,6 @@ impl Repl {
         spawn_output_task(self.outputs.stdout, self.editor.create_external_printer()?);
         spawn_output_task(self.outputs.stderr, self.editor.create_external_printer()?);
         let mut printer = self.editor.create_external_printer()?;
-
-        self.command_context.borrow_mut().execute(":load_config")?;
 
         let prompt = {
             if self.config.script_mode() {
