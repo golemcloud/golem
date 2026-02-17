@@ -18,7 +18,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'golem:rpc/types@0.2.2';
 import { Uuid } from 'golem:agent/host';
-import { AgentIdRegistry } from './internal/registry/agentIdRegistry';
+import { getAgentId } from './internal/registry/agentId';
 
 /**
  * BaseAgent is the foundational class for defining agent implementations.
@@ -52,7 +52,7 @@ export class BaseAgent {
    * @throws Will throw if accessed before the agent is initialized.
    */
   getId(): AgentId {
-    const agentId = AgentIdRegistry.get();
+    const agentId = getAgentId()
 
     if (!agentId) {
       throw new Error(

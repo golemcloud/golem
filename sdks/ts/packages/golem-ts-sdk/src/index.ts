@@ -20,7 +20,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
-import { AgentIdRegistry } from './internal/registry/agentIdRegistry';
+import { setAgentId } from './internal/registry/agentId';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -69,7 +69,7 @@ async function initialize(
     );
   }
 
-  AgentIdRegistry.register(getRawSelfAgentId());
+  setAgentId(getRawSelfAgentId());
 
   const initiateResult = initiator.initiate(input, principal);
 

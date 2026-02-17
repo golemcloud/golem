@@ -14,16 +14,12 @@
 
 import { AgentId } from '../../agentId';
 
-class AgentIdRegistryImpl {
-  private id: AgentId | null = null;
+let agentId: AgentId | null = null;
 
-  register(id: AgentId): void {
-    this.id = id;
-  }
-
-  get(): AgentId | null {
-    return this.id;
-  }
+export function setAgentId(id: AgentId): void {
+  agentId = id;
 }
 
-export const AgentIdRegistry: AgentIdRegistryImpl = new AgentIdRegistryImpl();
+export function getAgentId(): AgentId | null {
+  return agentId;
+}
