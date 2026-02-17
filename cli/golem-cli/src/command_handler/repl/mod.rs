@@ -170,6 +170,7 @@ impl ReplHandler {
             }
             let repl_cli_commands_metadata_json_path =
                 fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
+            let repl_metadata_json_path = app_ctx.application().repl_metadata_json(language);
 
             let component_names = app_ctx.application().component_names().cloned().collect();
 
@@ -185,6 +186,7 @@ impl ReplHandler {
                 repl_bridge_sdk_target,
                 repl_history_file_path,
                 repl_cli_commands_metadata_json_path,
+                repl_metadata_json_path,
             }
         };
 

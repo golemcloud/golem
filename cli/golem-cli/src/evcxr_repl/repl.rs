@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::evcxr_repl::cli_repl_interop::{CliReplInterop, CompletionResult};
-use crate::evcxr_repl::config::{CliCommandsConfig, ReplConfig};
+use crate::evcxr_repl::config::ReplResolvedConfig;
+use colored::Colorize;
 use evcxr::{CommandContext, EvalContextOutputs};
 use rustyline::completion::{Completer, Pair};
 use rustyline::config::Builder;
@@ -32,8 +33,8 @@ pub struct Repl {
     context: Rc<RefCell<CommandContext>>,
     outputs: EvalContextOutputs,
     editor: Editor<ReplHelper, DefaultHistory>,
-    history_path: Option<PathBuf>,
-    config: ReplConfig,
+    history_path: PathBuf,
+    config: ReplResolvedConfig,
     cli_repl: Option<Rc<CliReplInterop>>,
 }
 
@@ -43,7 +44,7 @@ impl Repl {
         let (context, outputs) = CommandContext::new()?;
         let context = Rc::new(RefCell::new(context));
 
-        let config = ReplConfig::load()?;
+        let config = ReplResolvedConfig::load()?;
         let cli_repl = build_cli_repl_interop(&config)?;
 
         let mut config_builder = Builder::new().history_ignore_space(true);
@@ -55,10 +56,8 @@ impl Repl {
         let mut editor = Editor::<ReplHelper, DefaultHistory>::with_config(editor_config)?;
         editor.set_helper(Some(ReplHelper::new(Rc::clone(&context), cli_repl.clone())));
 
-        let history_path = config.history_path()?;
-        if let Some(path) = history_path.as_ref() {
-            let _ = editor.load_history(path);
-        }
+        let history_path = PathBuf::from(&config.base_config.history_file);
+        editor.load_history(&history_path)?;
 
         Ok(Self {
             context,
@@ -80,7 +79,21 @@ impl Repl {
         let stderr_handle = spawn_output_task(self.outputs.stderr, printer.clone(), true);
         let mut saw_interrupt = false;
 
-        let prompt = self.config.prompt_string();
+        let prompt = {
+            if self.config.script_mode() {
+                "".to_string()
+            } else {
+                let name = "golem-rust-repl".cyan();
+                let app = format!("[{}]", self.config.client_config.application.green().bold());
+                let env = format!(
+                    "[{}]",
+                    self.config.client_config.environment.yellow().bold()
+                );
+                let arrow = ">".green().bold();
+                format!("{name}{app}{env}{arrow} ")
+            }
+        };
+
         loop {
             let line = tokio::task::block_in_place(|| self.editor.readline(&prompt));
             match line {
@@ -110,9 +123,7 @@ impl Repl {
             }
         }
 
-        if let Some(path) = self.history_path.as_ref() {
-            let _ = self.editor.save_history(path);
-        }
+        self.editor.save_history(&self.history_path)?;
 
         drop(self.context);
         let _ = stdout_handle.await;
@@ -232,21 +243,6 @@ fn block_on_completion(
     handle.block_on(cli_repl.complete(line, pos))
 }
 
-fn build_cli_repl_interop(config: &ReplConfig) -> anyhow::Result<Option<Rc<CliReplInterop>>> {
-    let Some(client_config) = config.client_config.clone() else {
-        return Ok(None);
-    };
-    let Some(command_metadata) = config.cli_command_metadata.clone() else {
-        return Ok(None);
-    };
-
-    let binary = std::env::current_exe()?.to_string_lossy().to_string();
-    let app_main_dir = std::env::current_dir()?;
-    let config = CliCommandsConfig {
-        binary,
-        app_main_dir,
-        client_config,
-        command_metadata,
-    };
+fn build_cli_repl_interop(config: &ReplResolvedConfig) -> anyhow::Result<Option<Rc<CliReplInterop>>> {
     Ok(Some(Rc::new(CliReplInterop::new(config))))
 }

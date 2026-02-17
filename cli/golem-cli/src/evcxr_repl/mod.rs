@@ -20,6 +20,9 @@ mod cli_repl_interop;
 mod config;
 mod repl;
 
+pub use config::ReplConfig;
+pub use config::REPL_CONFIG_FILE_NAME;
+
 pub async fn main() -> ExitCode {
     let result = match Repl::new() {
         Ok(repl) => repl.run().await,

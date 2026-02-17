@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::evcxr_repl::config::{CliCommandsConfig, ClientConfig};
+use crate::evcxr_repl::config::{ClientConfig, ReplResolvedConfig};
 use crate::model::cli_command_metadata::{CliArgMetadata, CliCommandMetadata};
 use anyhow::Context;
 use serde_json::Value;
@@ -35,13 +35,17 @@ pub struct CliReplInterop {
 }
 
 impl CliReplInterop {
-    pub fn new(config: CliCommandsConfig) -> Self {
-        let commands = collect_repl_cli_commands(&config.command_metadata);
+    pub fn new(config: &ReplResolvedConfig) -> Self {
+        let commands = collect_repl_cli_commands(&config.cli_command_metadata);
         let commands_by_name = commands
             .iter()
             .map(|command| (command.repl_command.clone(), command.clone()))
             .collect();
-        let cli = GolemCli::new(config.binary, config.app_main_dir, config.client_config);
+        let cli = GolemCli::new(
+            config.base_config.binary.clone(),
+            config.base_config.app_main_dir.clone().into(),
+            config.client_config.clone(),
+        );
         let builtin_commands = evcxr_builtin_commands();
         Self {
             commands,
@@ -883,11 +887,5 @@ fn evcxr_builtin_commands() -> HashSet<String> {
 }
 
 async fn exit_with_reload_code() -> anyhow::Result<()> {
-    flush_std_io();
     std::process::exit(75);
-}
-
-fn flush_std_io() {
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-    let _ = std::io::Write::flush(&mut std::io::stderr());
 }

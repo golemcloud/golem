@@ -51,42 +51,10 @@ impl TypeScriptRepl {
             self.generate_repl_package(&args).await?;
         }
 
-        let mut repl_args = vec!["tsx".to_string(), "repl.ts".to_string()];
-
-        if args.disable_auto_imports {
-            repl_args.push("--disable-auto-imports".to_string());
-        }
-
-        if !args.stream_logs {
-            repl_args.push("--disable-stream".to_string());
-        }
-
-        if let Some(script) = &args.script {
-            match script {
-                ReplScriptSource::Inline(script) => {
-                    repl_args.push("--script".to_string());
-                    repl_args.push(script.clone());
-                }
-                ReplScriptSource::FromFile(path) => {
-                    repl_args.push("--script-file".to_string());
-                    repl_args.push(fs::path_to_str(path)?.to_string());
-                }
-            }
-        }
-
         logln("");
 
         loop {
-            let result = Command::new("npx")
-                .args(&repl_args)
-                .current_dir(&args.repl_root_dir)
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .stdin(std::process::Stdio::inherit())
-                .envs(self.ctx.repl_handler().repl_server_env_vars().await?)
-                .spawn()?
-                .wait()
-                .await?;
+            let result = self.prepare_command(&args).await?.spawn()?.wait().await?;
 
             if args.script.is_some() {
                 set_log_output(Output::TracingDebug);
@@ -282,7 +250,6 @@ impl TypeScriptRepl {
                 const repl = new Repl({{
                   binary: {binary},
                   appMainDir: {app_main_dir},
-                  streamLogs: {stream},
                   agents: {{
                   {agents_config}
                   }},
@@ -294,13 +261,45 @@ impl TypeScriptRepl {
             ",
             binary = js_string_literal(binary_path_to_string()?)?,
             app_main_dir = js_string_literal(args.app_main_dir.display().to_string())?,
-            stream = args.stream_logs.to_string(),
             repl_history_file_path = js_string_literal(args.repl_history_file_path.display().to_string())?,
             repl_cli_commands_metadata_json_path =
                 js_string_literal(args.repl_cli_commands_metadata_json_path.display().to_string())?,
         };
 
         fs::write_str(repl_ts_path, repl_ts)
+    }
+
+    async fn prepare_command(&self, args: &BridgeReplArgs) -> anyhow::Result<Command> {
+        let mut command = Command::new("npx");
+
+        command
+            .current_dir(&args.repl_root_dir)
+            .args(&["tsx", "repl.ts"])
+            .envs(self.ctx.repl_handler().repl_server_env_vars().await?)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .stdin(std::process::Stdio::inherit());
+
+        if args.disable_auto_imports {
+            command.arg("--disable-auto-imports");
+        }
+        if !args.stream_logs {
+            command.arg("--disable-stream");
+        }
+        if let Some(script) = &args.script {
+            match script {
+                ReplScriptSource::Inline(script) => {
+                    command.arg("--script");
+                    command.arg(script);
+                }
+                ReplScriptSource::FromFile(path) => {
+                    command.arg("--script-file");
+                    command.arg(fs::path_to_str(&path)?);
+                }
+            }
+        }
+
+        Ok(command)
     }
 }
 
