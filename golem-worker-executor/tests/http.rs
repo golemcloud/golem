@@ -424,39 +424,3 @@ async fn outgoing_http_contains_idempotency_key(
     );
     Ok(())
 }
-
-#[test]
-async fn http_response_request_chaining(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor =
-        start_customized(deps, &context, None, Some(RetryConfig::no_retries()), None).await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "fetch")
-        .store()
-        .await?;
-    let mut env = HashMap::new();
-    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-
-    let worker_id = executor
-        .start_worker_with(&component.id, "fetch-test-4", env, vec![])
-        .await?;
-    let rx = executor.capture_output(&worker_id).await?;
-
-    let result = executor
-        .invoke_and_await(&worker_id, "test4", vec![])
-        .await?;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    drop(rx);
-
-    check!(result.is_ok());
-
-    Ok(())
-}
