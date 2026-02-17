@@ -1539,7 +1539,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
             }
         }
-        debug!("Function {full_function_name} finished with {output:?}");
+        debug!("Function {full_function_name} finished");
 
         Ok(())
     }
