@@ -77,10 +77,7 @@ impl TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 name: function_name.to_string(),
-                input: params
-                    .into_iter()
-                    .map(|param| param.into())
-                    .collect(),
+                input: params.into_iter().map(|param| param.into()).collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),

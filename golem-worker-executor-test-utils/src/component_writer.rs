@@ -417,7 +417,10 @@ impl FileSystemComponentWriter {
             .collect::<Vec<u64>>();
         revisions.sort();
         let rev = ComponentRevision::new(*revisions.last().unwrap_or(&0)).unwrap();
-        self.latest_revisions.lock().unwrap().insert(*component_id, rev);
+        self.latest_revisions
+            .lock()
+            .unwrap()
+            .insert(*component_id, rev);
         rev
     }
 
@@ -439,7 +442,8 @@ impl FileSystemComponentWriter {
         let root = self.root.clone();
         self.component_cache
             .get_or_insert_simple(&key, async || {
-                let metadata = load_metadata_from(&root, &key.0, key.1).await
+                let metadata = load_metadata_from(&root, &key.0, key.1)
+                    .await
                     .map_err(|err| format!("Failed to load component metadata: {err:#}"))?;
                 let component: ComponentDto = metadata.into();
                 Ok(component)
