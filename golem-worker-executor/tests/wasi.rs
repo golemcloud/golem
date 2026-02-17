@@ -1174,7 +1174,10 @@ async fn http_client_response_persisted_between_invocations(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_release")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1263,7 +1266,10 @@ async fn http_client_interrupting_response_stream(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_release")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1389,7 +1395,10 @@ async fn http_client_interrupting_response_stream_async(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_release")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
