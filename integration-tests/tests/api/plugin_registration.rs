@@ -110,8 +110,11 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 spec: PluginSpecDto::App(Empty {}),
             },
             Some(
-                tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
-                    .await?,
+                tokio::fs::File::open(
+                    deps.component_directory()
+                        .join("it_agent_counters_release.wasm"),
+                )
+                .await?,
             ),
         )
         .await?;
@@ -130,7 +133,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),

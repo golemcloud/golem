@@ -866,7 +866,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
 
     assert_eq!(result1.len(), 2, "G1002"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
     assert_eq!(result2.len(), 2, "imported-function");
-    assert_eq!(result3.len(), 0, "id:G1001 OR id:G1000"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
+    assert_eq!(result3.len(), 2, "id:G1001 OR id:G1000");
 
     Ok(())
 }

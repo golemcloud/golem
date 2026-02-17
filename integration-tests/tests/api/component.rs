@@ -81,12 +81,15 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     let updated_component = user
         .update_component_with(
             &component.id,
             component.revision,
-            Some("update-test-v2"),
+            Some("it_agent_update_v2_release"),
             vec![],
             vec![],
             None,
@@ -125,7 +128,10 @@ async fn component_update_with_wrong_revision_is_rejected(
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     let result = client
         .update_component(
             &component.id.0,
@@ -160,7 +166,10 @@ async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     client
         .delete_component(&component.id.0, component.revision.into())
         .await?;
@@ -217,7 +226,7 @@ async fn create_component_with_plugins_and_update_installations(
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -236,7 +245,7 @@ async fn create_component_with_plugins_and_update_installations(
     let plugin_parameters = BTreeMap::from_iter(vec![("foo".to_string(), "bar".to_string())]);
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .with_parametrized_plugin(&library_plugin_grant.id, 0, plugin_parameters.clone())
         .store()
         .await?;
@@ -321,7 +330,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
             Some(
                 tokio::fs::File::open(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -340,7 +349,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
     let plugin_parameters = BTreeMap::from_iter(vec![("foo".to_string(), "bar".to_string())]);
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .store()
         .await?;
 
@@ -434,12 +443,18 @@ async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     client
         .delete_component(&component.id.0, component.revision.into())
         .await?;
 
-    let recreated_component = user.component(&env.id, "update-test-v1").store().await?;
+    let recreated_component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .store()
+        .await?;
     assert_eq!(recreated_component.id, component.id);
     assert_eq!(
         recreated_component.revision,
@@ -565,7 +580,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -586,7 +601,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -633,8 +648,11 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                     },
                 ],
             },
-            tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
-                .await?,
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("it_agent_counters_release.wasm"),
+            )
+            .await?,
             None::<Vec<u8>>,
         )
         .await;
@@ -672,7 +690,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -710,8 +728,11 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                     },
                 ],
             },
-            tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
-                .await?,
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("it_agent_counters_release.wasm"),
+            )
+            .await?,
             None::<Vec<u8>>,
         )
         .await;
@@ -749,7 +770,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -770,7 +791,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -796,7 +817,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
         .await?;
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .store()
         .await?;
 
@@ -861,7 +882,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
             Some(
                 tokio::fs::read(
                     deps.component_directory()
-                        .join("app_and_library_library.wasm"),
+                        .join("it_agent_counters_release.wasm"),
                 )
                 .await?,
             ),
@@ -878,7 +899,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
         .await?;
 
     let component = user
-        .component(&env.id, "app_and_library_app")
+        .component(&env.id, "it_agent_counters_release")
         .store()
         .await?;
 

@@ -5,7 +5,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionCompletedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{Timestamp, WorkerId};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::ValueAndType;
@@ -205,63 +205,23 @@ async fn test_connect_and_playback_raw(
 
     let all_messages = debug_executor.all_read_messages();
 
-    assert!(matches!(
-        &all_messages[..],
-        [
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-        ]
-    ));
+    assert_eq!(
+        all_messages.iter().filter(|m| m.result.is_some()).count(),
+        4
+    );
 
-    for id in [1, 2, 3, 4, 6, 8, 9, 10] {
-        assert_eq!(all_messages[id].method, Some("emit-logs".to_string()))
-    }
+    let emit_log_indices: Vec<usize> = all_messages
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            if m.method == Some("emit-logs".to_string()) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(emit_log_indices, vec![1, 2, 3, 6, 7, 8]);
 
     assert_eq!(
         all_messages[1].params.clone().unwrap().as_array().unwrap()[0]
@@ -558,10 +518,9 @@ async fn test_playback_with_overrides(
         .await?;
 
     // Fork from the list boundary
-    let target_worker_id = WorkerId {
-        component_id: worker_id.component_id,
-        worker_name: "forked-worker".to_string(),
-    };
+    let target_agent_id = phantom_agent_id!("repository", uuid::Uuid::new_v4());
+    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &target_agent_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let fork = debug_executor
         .fork(&target_worker_id, workflow_result.list_boundary)

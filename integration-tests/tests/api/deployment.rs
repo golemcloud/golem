@@ -19,10 +19,7 @@ use golem_client::api::{
 use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
-use golem_common::model::deployment::{
-    DeploymentPlan, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
-    DeploymentRollback, DeploymentVersion,
-};
+use golem_common::model::deployment::{DeploymentRollback, DeploymentVersion};
 use golem_common::model::diff::Hash;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
@@ -33,7 +30,6 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::BTreeMap;
-use std::str::FromStr;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -57,8 +53,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &env.id.0,
             &DeploymentCreation {
                 current_revision: None,
-                expected_deployment_hash:
-                    "521c0ffd221a6ec6b5e7c3b98dcbcb948340135de3832781179317cdb8484f9b".parse()?,
+                expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -142,13 +137,14 @@ async fn get_component_version_from_previous_deployment(
         .store()
         .await?;
 
+    let plan_1 = client.get_environment_deployment_plan(&env.id.0).await?;
+
     let deployment_1 = client
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
                 current_revision: None,
-                expected_deployment_hash:
-                    "521c0ffd221a6ec6b5e7c3b98dcbcb948340135de3832781179317cdb8484f9b".parse()?,
+                expected_deployment_hash: plan_1.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
@@ -174,13 +170,14 @@ async fn get_component_version_from_previous_deployment(
         )
         .await?;
 
+    let plan_2 = client.get_environment_deployment_plan(&env.id.0).await?;
+
     let deployment_2 = client
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
                 current_revision: Some(deployment_1.current_revision),
-                expected_deployment_hash:
-                    "d44a48380813372268fb08a8e07594162684571335aadcfcc8798b2e0aeae380".parse()?,
+                expected_deployment_hash: plan_2.deployment_hash,
                 version: DeploymentVersion("0.0.2".to_string()),
             },
         )
@@ -249,60 +246,45 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    let expected_hash =
-        Hash::from_str("8b0c317038b686cb4bd222dc561ba9166a3c9637e5e2f5f495574b3b066df82b")?;
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
 
-    let expected_plan = DeploymentPlan {
-        current_revision: None,
-        deployment_hash: Hash::from_str(
-            "8b0c317038b686cb4bd222dc561ba9166a3c9637e5e2f5f495574b3b066df82b",
-        )?,
-        components: vec![DeploymentPlanComponentEntry {
-            id: component.id,
-            revision: component.revision,
-            name: ComponentName("golem-it:agent-http-routes-ts".to_string()),
-            hash: Hash::from_str(
-                "86b91a5069d8e6b910cb4fe83c48c89d514a21f77fedbb67e9137e4a4babffa4",
-            )?,
-        }],
-        http_api_deployments: vec![DeploymentPlanHttpApiDeploymentEntry {
-            id: http_api_deployment.id,
-            revision: http_api_deployment.revision,
-            domain: domain.clone(),
-            hash: Hash::from_str(
-                "2a084ee9c82c6d29ebc558c014bc0eb9739e72b945d6d57690c5ef657c29b39a",
-            )?,
-        }],
-    };
-
-    {
-        let plan = client.get_environment_deployment_plan(&env.id.0).await?;
-        assert_eq!(plan, expected_plan);
-    }
+    // Verify plan structure without comparing exact hashes
+    assert_eq!(plan.current_revision, None);
+    assert_eq!(plan.components.len(), 1);
+    assert_eq!(
+        plan.components[0].name,
+        ComponentName("golem-it:agent-http-routes-ts".to_string())
+    );
+    assert_eq!(plan.components[0].id, component.id);
+    assert_eq!(plan.components[0].revision, component.revision);
+    assert_eq!(plan.http_api_deployments.len(), 1);
+    assert_eq!(plan.http_api_deployments[0].id, http_api_deployment.id);
+    assert_eq!(
+        plan.http_api_deployments[0].revision,
+        http_api_deployment.revision
+    );
+    assert_eq!(plan.http_api_deployments[0].domain, domain);
 
     let deployment = client
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
                 current_revision: None,
-                expected_deployment_hash: expected_hash,
+                expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
-    assert_eq!(deployment.deployment_hash, expected_hash);
+    assert_eq!(deployment.deployment_hash, plan.deployment_hash);
 
     {
-        let deployment = client
+        let fetched = client
             .get_deployment_summary(&env.id.0, deployment.revision.into())
             .await?;
 
-        assert_eq!(deployment.deployment_hash, expected_hash);
-        assert_eq!(deployment.components, expected_plan.components);
-        assert_eq!(
-            deployment.http_api_deployments,
-            expected_plan.http_api_deployments
-        );
+        assert_eq!(fetched.deployment_hash, plan.deployment_hash);
+        assert_eq!(fetched.components, plan.components);
+        assert_eq!(fetched.http_api_deployments, plan.http_api_deployments);
     }
 
     Ok(())

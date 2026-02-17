@@ -422,7 +422,7 @@ mod tests {
                                     &component_id,
                                     &agent_id,
                                     &idempotency_key,
-                                    "it:agent-counters/counter.{increment}",
+                                    "increment",
                                     data_value!(),
                                 )
                                 .await,
