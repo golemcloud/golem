@@ -1192,8 +1192,7 @@ mod tests {
         let snapshot = result.unwrap();
         assert_eq!(snapshot.mime_type, "application/json");
         let json_value: serde_json::Value = serde_json::from_slice(&snapshot.data).unwrap();
-        assert_eq!(json_value["version"], 1);
-        assert_eq!(json_value["state"]["name"], "test-agent");
+        assert_eq!(json_value["name"], "test-agent");
 
         // Load: should deserialize from JSON
         let mut agent2 = SerializableAgentImpl {
