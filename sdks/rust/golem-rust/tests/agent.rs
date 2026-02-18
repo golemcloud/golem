@@ -1178,8 +1178,8 @@ mod tests {
 
     #[test]
     fn test_serializable_agent_auto_json_snapshot() {
-        use golem_rust::agentic::snapshot_auto::SaveHelper;
         use golem_rust::agentic::snapshot_auto::LoadHelper;
+        use golem_rust::agentic::snapshot_auto::SaveHelper;
 
         let agent = SerializableAgentImpl {
             name: "test-agent".to_string(),
@@ -1191,8 +1191,7 @@ mod tests {
         assert!(result.is_ok(), "Save should succeed for serializable agent");
         let snapshot = result.unwrap();
         assert_eq!(snapshot.mime_type, "application/json");
-        let json_value: serde_json::Value =
-            serde_json::from_slice(&snapshot.data).unwrap();
+        let json_value: serde_json::Value = serde_json::from_slice(&snapshot.data).unwrap();
         assert_eq!(json_value["version"], 1);
         assert_eq!(json_value["state"]["name"], "test-agent");
 
@@ -1202,28 +1201,37 @@ mod tests {
         };
         let mut load_helper = LoadHelper(&mut agent2);
         let load_result = load_helper.snapshot_load(&snapshot.data);
-        assert!(load_result.is_ok(), "Load should succeed for serializable agent");
+        assert!(
+            load_result.is_ok(),
+            "Load should succeed for serializable agent"
+        );
         assert_eq!(agent2.name, "test-agent");
     }
 
     #[test]
     fn test_non_serializable_agent_snapshot_returns_error() {
-        use golem_rust::agentic::snapshot_auto::{SaveHelper, SnapshotSaveFallback};
         use golem_rust::agentic::snapshot_auto::{LoadHelper, SnapshotLoadFallback};
+        use golem_rust::agentic::snapshot_auto::{SaveHelper, SnapshotSaveFallback};
 
         let agent = NonSerializableAgentImpl { value: 42 };
 
         // Save: should return error (fallback trait path)
         let helper = SaveHelper(&agent);
         let result = helper.snapshot_save();
-        assert!(result.is_err(), "Save should fail for non-serializable agent");
+        assert!(
+            result.is_err(),
+            "Save should fail for non-serializable agent"
+        );
         assert!(result.unwrap_err().contains("not implemented"));
 
         // Load: should return error
         let mut agent2 = NonSerializableAgentImpl { value: 0 };
         let mut load_helper = LoadHelper(&mut agent2);
         let load_result = load_helper.snapshot_load(b"{}");
-        assert!(load_result.is_err(), "Load should fail for non-serializable agent");
+        assert!(
+            load_result.is_err(),
+            "Load should fail for non-serializable agent"
+        );
         assert!(load_result.unwrap_err().contains("not implemented"));
     }
 

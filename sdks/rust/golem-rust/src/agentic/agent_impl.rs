@@ -155,8 +155,7 @@ impl LoadSnapshotGuest for Component {
                     if bytes.len() < principal_end {
                         return Err("Version 2 snapshot too short for principal data".into());
                     }
-                    let principal =
-                        deserialize_principal(&bytes[principal_start..principal_end])?;
+                    let principal = deserialize_principal(&bytes[principal_start..principal_end])?;
                     let agent_snapshot = bytes[principal_end..].to_vec();
                     (principal, agent_snapshot)
                 }
@@ -214,8 +213,8 @@ impl SaveSnapshotGuest for Component {
                         .expect("Failed to serialize principal"),
                     "state": state,
                 });
-                let data = serde_json::to_vec(&envelope)
-                    .expect("Failed to serialize snapshot envelope");
+                let data =
+                    serde_json::to_vec(&envelope).expect("Failed to serialize snapshot envelope");
                 crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
                     data,
                     mime_type: "application/json".to_string(),
