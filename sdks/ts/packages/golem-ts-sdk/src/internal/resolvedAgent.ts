@@ -93,9 +93,12 @@ export class ResolvedAgent {
     return this.agentInstance.loadSnapshot(bytes);
   }
 
-  async saveSnapshot(): Promise<{ data: Uint8Array; isCustom: boolean }> {
-    const data = await this.agentInstance.saveSnapshot();
-    return { data, isCustom: this.hasCustomSnapshot() };
+  async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
+    const result = await this.agentInstance.saveSnapshot();
+    if (result instanceof Uint8Array) {
+      return { data: result, mimeType: 'application/octet-stream' };
+    }
+    return result;
   }
 
   async invoke(

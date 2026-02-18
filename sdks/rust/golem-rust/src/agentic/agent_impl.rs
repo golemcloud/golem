@@ -120,8 +120,8 @@ impl LoadSnapshotGuest for Component {
         }
 
         let (principal, agent_snapshot) = if is_json {
-            // JSON snapshot: principal is embedded in the JSON object
-            let mut json: serde_json::Value = serde_json::from_slice(&bytes)
+            // JSON snapshot: unwrap envelope { version, principal, state }
+            let json: serde_json::Value = serde_json::from_slice(&bytes)
                 .map_err(|e| format!("Failed to parse JSON snapshot: {e}"))?;
             let principal = if let Some(p) = json.get("principal") {
                 serde_json::from_value(p.clone())
@@ -129,11 +129,11 @@ impl LoadSnapshotGuest for Component {
             } else {
                 get_principal().unwrap_or(Principal::Anonymous)
             };
-            if let Some(obj) = json.as_object_mut() {
-                obj.remove("principal");
-            }
-            let agent_snapshot = serde_json::to_vec(&json)
-                .map_err(|e| format!("Failed to re-serialize JSON snapshot: {e}"))?;
+            let state = json
+                .get("state")
+                .ok_or_else(|| "JSON snapshot missing 'state' field".to_string())?;
+            let agent_snapshot = serde_json::to_vec(state)
+                .map_err(|e| format!("Failed to re-serialize state from JSON snapshot: {e}"))?;
             (principal, agent_snapshot)
         } else {
             // Binary snapshot with version envelope
@@ -205,13 +205,17 @@ impl SaveSnapshotGuest for Component {
             let principal = get_principal().unwrap_or(Principal::Anonymous);
 
             if snapshot_data.mime_type == "application/json" {
-                // Default JSON snapshot: embed principal in the JSON
-                let mut json: serde_json::Value = serde_json::from_slice(&snapshot_data.data)
+                // JSON snapshot: wrap in envelope { version, principal, state }
+                let state: serde_json::Value = serde_json::from_slice(&snapshot_data.data)
                     .expect("Failed to parse snapshot JSON");
-                json["principal"] = serde_json::to_value(&principal)
-                    .expect("Failed to serialize principal");
-                let data = serde_json::to_vec(&json)
-                    .expect("Failed to serialize snapshot with principal");
+                let envelope = serde_json::json!({
+                    "version": 1,
+                    "principal": serde_json::to_value(&principal)
+                        .expect("Failed to serialize principal"),
+                    "state": state,
+                });
+                let data = serde_json::to_vec(&envelope)
+                    .expect("Failed to serialize snapshot envelope");
                 crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
                     data,
                     mime_type: "application/json".to_string(),

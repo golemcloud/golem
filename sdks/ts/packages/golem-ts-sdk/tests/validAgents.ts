@@ -293,7 +293,7 @@ export class FooAgent extends BaseAgent {
   }
 
   // With override keyword
-  override async saveSnapshot(): Promise<Uint8Array> {
+  override async saveSnapshot(): Promise<Uint8Array | { data: Uint8Array; mimeType: string }> {
     return super.saveSnapshot();
   }
 
