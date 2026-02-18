@@ -1243,49 +1243,6 @@ fn app_component_dynamic_linking(
     _component_name: &ComponentName,
 ) -> anyhow::Result<HashMap<String, DynamicLinkedInstance>> {
     Ok(HashMap::new())
-
-    // TODO: WASM RPC cleanup
-    /*
-    let mut mapping = Vec::new();
-    let wasm_rpc_deps = app_ctx
-        .application()
-        .component_dependencies(component_name)
-        .iter()
-        .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
-        .filter_map(|dep| dep.as_dependent_app_component())
-        .collect::<Vec<_>>();
-
-    for wasm_rpc_dep in wasm_rpc_deps {
-        mapping.push(app_ctx.component_stub_interfaces(&wasm_rpc_dep.name)?);
-    }
-
-    Ok(mapping
-        .into_iter()
-        .map(|stub_interfaces| {
-            (
-                stub_interfaces.stub_interface_name,
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(
-                        stub_interfaces
-                            .exported_interfaces_per_stub_resource
-                            .into_iter()
-                            .map(|(resource_name, interface_name)| {
-                                (
-                                    resource_name,
-                                    WasmRpcTarget {
-                                        interface_name,
-                                        component_name: stub_interfaces
-                                            .component_name
-                                            .as_str()
-                                            .to_string(),
-                                    },
-                                )
-                            }),
-                    ),
-                }),
-            )
-        })
-        .collect())*/
 }
 
 fn resolve_env_vars(

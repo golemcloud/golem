@@ -316,15 +316,6 @@
           "additionalProperties": {
             "type": "string"
           }
-        },
-        "dependenciesMergeMode": {
-          "$ref": "#/definitions/vecMergeMode"
-        },
-        "dependencies": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/componentDependency"
-          }
         }
       }
     },
@@ -570,68 +561,6 @@
           "targets"
         ]
       }
-    },
-    "componentDependency": {
-      "type": "object",
-      "description": "Component dependencies",
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "wasm-rpc",
-                "wasm",
-                "wasm-rpc-static"
-              ],
-              "description": "Type of the dependency"
-            },
-            "target": {
-              "type": "string",
-              "description": "Target component name."
-            }
-          },
-          "required": [
-            "type",
-            "target"
-          ]
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "wasm"
-              ],
-              "description": "Type of the dependency"
-            },
-            "path": {
-              "type": "string",
-              "description": "Target component WASM path."
-            }
-          },
-          "required": [
-            "type",
-            "path"
-          ]
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "wasm"
-              ],
-              "description": "Type of the dependency"
-            },
-            "url": {
-              "type": "string",
-              "description": "Target component remote URL."
-            }
-          },
-          "required": [
-            "type",
-            "url"
-          ]
-        }
-      ]
     },
     "initialComponentFile": {
       "type": "object",

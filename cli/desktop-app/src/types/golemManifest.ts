@@ -4,7 +4,6 @@ export interface GolemApplicationManifest {
   witDeps?: string[];
   templates?: Record<string, ComponentTemplate>;
   components?: Record<string, Component>;
-  dependencies?: Record<string, ComponentDependency[]>;
   clean?: string[];
   customCommands?: Record<string, ExternalCommand[]>;
   httpApi?: HttpApi;
@@ -45,26 +44,6 @@ export interface ExternalCommand {
   mkdirs?: string[];
   sources?: string[];
   targets?: string[];
-}
-
-export type ComponentDependency =
-  | WasmRpcDependency
-  | WasmDependencyPath
-  | WasmDependencyUrl;
-
-export interface WasmRpcDependency {
-  type: "wasm-rpc" | "wasm" | "wasm-rpc-static";
-  target: string;
-}
-
-export interface WasmDependencyPath {
-  type: "wasm";
-  path: string;
-}
-
-export interface WasmDependencyUrl {
-  type: "wasm";
-  url: string;
 }
 
 export interface InitialComponentFile {

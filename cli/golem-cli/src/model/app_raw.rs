@@ -412,10 +412,6 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies_merge_mode: Option<VecMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies: Option<Vec<Dependency>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -528,19 +524,6 @@ pub struct InjectToPrebuiltQuickJs {
     pub module_wasm: String,
     /// The path to the output WASM component containing the injected JS module
     pub into: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Dependency {
-    #[serde(rename = "type")]
-    pub type_: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -16,14 +16,13 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
-use crate::app::remote_components::RemoteComponents;
 use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode,
-    BinaryComponentSource, BuildConfig, CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget,
-    DependentComponent, DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
+    BuildConfig, CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget,
+    DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
@@ -149,7 +148,6 @@ pub struct ApplicationContext {
     agent_types: crate::app::agent_types::AgentTypeRegistry,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
-    remote_components: RemoteComponents,
     tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
 }
 
@@ -233,12 +231,10 @@ impl ApplicationContext {
     async fn create_context(
         app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
         config: ApplicationConfig,
-        file_download_client: reqwest::Client,
+        _file_download_client: reqwest::Client,
     ) -> ValidatedResult<ApplicationContext> {
         let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
         app_and_calling_working_dir.map(|(application, calling_working_dir)| {
-            let temp_dir = application.temp_dir().to_path_buf();
-            let offline = config.offline;
             let agent_types =
                 crate::app::agent_types::AgentTypeRegistry::new(config.enable_wasmtime_fs_cache);
             ApplicationContext {
@@ -248,7 +244,6 @@ impl ApplicationContext {
                 agent_types,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
-                remote_components: RemoteComponents::new(file_download_client, temp_dir, offline),
                 tools_with_ensured_common_deps,
             }
         })
@@ -394,24 +389,6 @@ impl ApplicationContext {
         clean_app(&BuildContext::new(self, build_config), mode)
     }
 
-    pub async fn resolve_binary_component_source(
-        &self,
-        dep: &DependentComponent,
-    ) -> anyhow::Result<PathBuf> {
-        match &dep.source {
-            BinaryComponentSource::AppComponent { name } => {
-                let component = self.application.component(name);
-                if dep.dep_type.is_wasm_rpc() {
-                    Ok(component.client_wasm().to_path_buf())
-                } else {
-                    Ok(component.wasm().to_path_buf())
-                }
-            }
-            BinaryComponentSource::LocalFile { path } => Ok(path.clone()),
-            BinaryComponentSource::Url { url } => self.remote_components.get_from_url(url).await,
-        }
-    }
-
     pub fn log_dynamic_help(&self, config: &DynamicHelpSections) -> anyhow::Result<()> {
         fn print_field(label_padding: usize, label: &'static str, value: String) {
             logln(format!(
@@ -474,9 +451,7 @@ impl ApplicationContext {
                 static LABEL_SOURCE: &str = "Source";
                 static LABEL_SELECTED: &str = "Selected";
                 static LABEL_LAYERS: &str = "Layers";
-                static LABEL_DEPENDENCIES: &str = "Dependencies";
-
-                let label_padding = padding(&[LABEL_SOURCE, LABEL_LAYERS, LABEL_DEPENDENCIES]);
+                let label_padding = padding(&[LABEL_SOURCE, LABEL_LAYERS]);
 
                 logln(format!(
                     "{}",
@@ -511,17 +486,6 @@ impl ApplicationContext {
                         format_component_applied_layers(component.applied_layers()),
                     );
 
-                    let dependencies = self.application.component_dependencies(component_name);
-                    if !dependencies.is_empty() {
-                        logln(format!("    {LABEL_DEPENDENCIES}:"));
-                        for dependency in dependencies {
-                            logln(format!(
-                                "      - {} ({})",
-                                dependency.source.to_string().bold(),
-                                dependency.dep_type.as_str(),
-                            ))
-                        }
-                    }
                     logln("")
                 }
             } else {
