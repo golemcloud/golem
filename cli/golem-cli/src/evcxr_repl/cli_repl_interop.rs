@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::evcxr_repl::config::{ClientConfig, ReplResolvedConfig};
+use crate::evcxr_repl::log::logln;
 use crate::model::cli_command_metadata::{CliArgMetadata, CliCommandMetadata};
 use crate::GOLEM_EVCXR_REPL;
 use anyhow::Context;
@@ -218,7 +219,7 @@ impl CliReplInterop {
         }
         let name_width = entries.keys().map(|name| name.len()).max().unwrap_or(0);
         for (name, desc) in entries {
-            println!(":{name:width$} {desc}", width = name_width);
+            logln(format!(":{name:width$} {desc}", width = name_width));
         }
     }
 

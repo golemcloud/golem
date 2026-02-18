@@ -14,6 +14,7 @@
 
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
+use crate::evcxr_repl::log::{logln, set_output, OutputMode};
 use crate::fs;
 use anyhow::anyhow;
 use colored::Colorize;
@@ -54,6 +55,10 @@ impl Repl {
         evcxr::runtime_hook();
 
         let config = ReplResolvedConfig::load()?;
+
+        if config.script_mode() {
+            set_output(OutputMode::Stderr);
+        }
 
         let mut dependencies = String::new();
         let mut prelude = String::new();
@@ -109,7 +114,7 @@ impl Repl {
                 .collect::<HashMap<String, String>>()
         };
 
-        println!("Building common dependencies...");
+        logln("Building common dependencies...");
         command_context.set_opt_level("0")?;
         if !config.script_mode() {
             let _spinner = SpinnerGuard::start_stdout("Loading config...");
@@ -197,26 +202,25 @@ impl Repl {
                     match result {
                         Ok(output) => {
                             if let Some(text) = output.get("text/plain") {
-                                println!("{text}");
+                                logln(text);
                             }
                             if let Some(duration) = output.timing {
-                                println!("{}", format!("Took {}ms", duration.as_millis()).blue());
+                                logln(format!("Took {}ms", duration.as_millis()).blue());
 
                                 for phase in output.phases {
-                                    println!(
-                                        "{}",
+                                    logln(
                                         format!(
                                             "  {}: {}ms",
                                             phase.name,
                                             phase.duration.as_millis()
                                         )
-                                        .blue()
+                                        .blue(),
                                     );
                                 }
                             }
                         }
                         Err(err) => {
-                            eprintln!("{err}");
+                            logln(err);
                         }
                     }
                 }
@@ -254,9 +258,12 @@ impl SpinnerGuard {
         T: ExternalPrinter + Send + 'static,
     {
         let mut printer = printer;
-        Self::start_with_writer(move |text| {
-            let _ = printer.print(text);
-        }, label)
+        Self::start_with_writer(
+            move |text| {
+                let _ = printer.print(text);
+            },
+            label,
+        )
     }
 
     fn start_stdout(label: &str) -> Self {
@@ -325,10 +332,7 @@ struct ReplRustyLineEditorHelper {
 }
 
 impl ReplRustyLineEditorHelper {
-    fn new(
-        context: Rc<RefCell<CommandContext>>,
-        cli_repl: Rc<CliReplInterop>,
-    ) -> Self {
+    fn new(context: Rc<RefCell<CommandContext>>, cli_repl: Rc<CliReplInterop>) -> Self {
         Self { context, cli_repl }
     }
 }

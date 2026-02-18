@@ -18,6 +18,7 @@ use std::process::ExitCode;
 
 mod cli_repl_interop;
 mod config;
+mod log;
 mod repl;
 
 pub use config::ReplConfig;
