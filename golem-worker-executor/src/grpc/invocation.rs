@@ -88,14 +88,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
     fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError> {
         match self.proto_invocation_context() {
-            Some(ctx) => Ok(Some(
-                ctx.wasi_config_vars
-                    .clone()
-                    .ok_or(WorkerExecutorError::invalid_request(
-                        "wasi_config_vars not found",
-                    ))?
-                    .into(),
-            )),
+            Some(ctx) => Ok(Some(ctx.wasi_config_vars.clone().into_iter().collect())),
             None => Ok(None),
         }
     }

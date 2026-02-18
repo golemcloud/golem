@@ -330,7 +330,7 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        wasi_config_vars: HashMap<String, String>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -347,7 +347,7 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
+                wasi_config_vars,
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
             })

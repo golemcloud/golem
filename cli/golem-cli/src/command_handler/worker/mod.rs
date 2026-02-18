@@ -64,9 +64,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::worker::{
-    RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WasiConfigVars,
-};
+use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
 use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
@@ -74,7 +72,7 @@ use golem_wasm::{parse_value_and_type, ValueAndType};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
 use rib::ParsedFunctionSite;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -99,7 +97,8 @@ impl WorkerCommandHandler {
             AgentSubcommand::New {
                 agent_id: worker_name,
                 env,
-            } => self.cmd_new(worker_name, env).await,
+                wasi_config_vars,
+            } => self.cmd_new(worker_name, env, wasi_config_vars).await,
             AgentSubcommand::Invoke {
                 agent_id: worker_name,
                 function_name,
@@ -224,6 +223,7 @@ impl WorkerCommandHandler {
         &self,
         worker_name: AgentIdArgs,
         env: Vec<(String, String)>,
+        wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -254,6 +254,7 @@ impl WorkerCommandHandler {
             component.id.0,
             worker_name_match.worker_name.0.clone(),
             env.into_iter().collect(),
+            BTreeMap::from_iter(wasi_config_vars),
         )
         .await?;
 
@@ -1198,6 +1199,7 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         worker_name: String,
         env: HashMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
@@ -1208,7 +1210,7 @@ impl WorkerCommandHandler {
                 &WorkerCreationRequest {
                     name: worker_name,
                     env,
-                    config_vars: WasiConfigVars::default(),
+                    wasi_config_vars,
                 },
             )
             .await
@@ -1673,6 +1675,7 @@ impl WorkerCommandHandler {
             worker_metadata.worker_id.component_id.0,
             worker_metadata.worker_id.worker_name,
             worker_metadata.env,
+            worker_metadata.wasi_config_vars,
         )
         .await?;
         log_action("Recreated", "agent");

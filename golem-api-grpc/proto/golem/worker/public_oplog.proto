@@ -12,7 +12,6 @@ import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
-import "golem/worker/wasi_config_vars.proto";
 
 message OplogEntry {
   oneof entry {
@@ -83,13 +82,13 @@ message CreateParameters {
   WorkerId worker_id = 2;
   uint64 component_revision = 3;
   map<string, string> env = 5;
-  golem.common.AccountId created_by = 6;
-  optional WorkerId parent = 7;
-  uint64 component_size = 8;
-  uint64 initial_total_linear_memory_size = 9;
-  repeated PluginInstallationDescription initial_active_plugins = 10;
-  golem.common.EnvironmentId environment_id = 11;
-  WasiConfigVars wasi_config_vars = 12;
+  map<string, string> wasi_config_vars = 6;
+  golem.common.AccountId created_by = 7;
+  optional WorkerId parent = 8;
+  uint64 component_size = 9;
+  uint64 initial_total_linear_memory_size = 10;
+  repeated PluginInstallationDescription initial_active_plugins = 11;
+  golem.common.EnvironmentId environment_id = 12;
   optional golem.common.UUID original_phantom_id = 13;
 }
 

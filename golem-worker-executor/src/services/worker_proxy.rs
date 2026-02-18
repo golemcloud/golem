@@ -257,7 +257,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     component_id: Some(owned_worker_id.component_id().into()),
                     name: owned_worker_id.worker_name(),
                     env: caller_env,
-                    wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                    wasi_config_vars: caller_wasi_config_vars.into_iter().collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
@@ -317,7 +317,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        wasi_config_vars: caller_wasi_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -385,7 +385,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        wasi_config_vars: caller_wasi_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),

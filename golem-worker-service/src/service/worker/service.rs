@@ -65,7 +65,7 @@ impl WorkerService {
         &self,
         worker_id: &WorkerId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<ComponentRevision> {
@@ -78,7 +78,7 @@ impl WorkerService {
             worker_id,
             component,
             environment_variables,
-            config_vars,
+            wasi_config_vars,
             ignore_already_existing,
             auth_ctx,
         )

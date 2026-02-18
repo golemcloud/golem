@@ -314,7 +314,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        wasi_config_vars: HashMap<String, String>,
     ) -> WorkerInvocationResult<WorkerId> {
         let client = self
             .deps
@@ -328,7 +328,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &WorkerCreationRequest {
                     name: id.to_string(),
                     env,
-                    config_vars: wasi_config_vars.into(),
+                    wasi_config_vars,
                 },
             )
             .await?;

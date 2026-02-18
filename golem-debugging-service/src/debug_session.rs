@@ -244,7 +244,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             env: env.into_iter().collect(),
             environment_id,
             created_by,
-            wasi_config_vars: wasi_config_vars.into(),
+            wasi_config_vars,
             parent,
             component_size,
             initial_total_linear_memory_size,

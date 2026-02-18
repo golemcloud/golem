@@ -223,25 +223,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let env = request
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let env = request.env.into_iter().collect();
+
+        let wasi_config_vars = request.wasi_config_vars.into_iter().collect();
 
         let worker = Worker::get_or_create_suspended(
             self,
             auth_ctx.account_id(),
             &owned_worker_id,
             Some(env),
-            Some(
-                request
-                    .wasi_config_vars
-                    .ok_or(WorkerExecutorError::invalid_request(
-                        "no wasi_config_vars field",
-                    ))?
-                    .into(),
-            ),
+            Some(wasi_config_vars),
             None,
             None,
             &InvocationContextStack::fresh(),
@@ -1722,8 +1713,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             worker_id: Some(metadata.worker_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
+            wasi_config_vars: metadata.wasi_config_vars.into_iter().collect(),
             created_by: Some(metadata.created_by.into()),
-            wasi_config_vars: Some(metadata.wasi_config_vars.into()),
             component_revision: latest_status.component_revision.into(),
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count

@@ -463,7 +463,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         worker_id: &WorkerId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -479,9 +479,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
                     env: environment_variables.clone(),
+                    wasi_config_vars: wasi_config_vars.clone().into_iter().collect(),
                     component_owner_account_id: Some(account_id_clone.into()),
                     environment_id: Some(environment_id.into()),
-                    wasi_config_vars: Some(config_vars.clone().into()),
                     ignore_already_existing,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))

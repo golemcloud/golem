@@ -196,7 +196,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
     ) -> WorkerInvocationResult<WorkerId> {
-        self.try_start_agent_with(component_id, id, HashMap::new(), vec![])
+        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
 
@@ -205,7 +205,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        wasi_config_vars: HashMap<String, String>,
     ) -> WorkerInvocationResult<WorkerId>;
 
     async fn start_agent(
@@ -213,7 +213,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
     ) -> anyhow::Result<WorkerId> {
-        self.start_agent_with(component_id, id, HashMap::new(), vec![])
+        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
 
@@ -222,7 +222,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        wasi_config_vars: HashMap<String, String>,
     ) -> anyhow::Result<WorkerId> {
         let result = self
             .try_start_agent_with(component_id, id, env, wasi_config_vars)
