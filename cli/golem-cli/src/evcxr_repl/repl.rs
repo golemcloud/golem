@@ -16,7 +16,8 @@ use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
 use crate::evcxr_repl::log::{logln, set_output, OutputMode};
 use crate::fs;
-use anyhow::anyhow;
+use crate::process::with_hidden_output_unless_error;
+use anyhow::{anyhow, bail};
 use colored::Colorize;
 use evcxr::{CommandContext, EvalContextOutputs};
 use heck::{ToKebabCase, ToSnakeCase};
@@ -44,14 +45,11 @@ use std::time::Duration;
 pub struct Repl {
     config: ReplResolvedConfig,
     command_context: Rc<RefCell<CommandContext>>,
-    outputs: EvalContextOutputs,
-    editor: Editor<ReplRustyLineEditorHelper, DefaultHistory>,
-    history_path: PathBuf,
     cli_repl: Rc<CliReplInterop>,
 }
 
 impl Repl {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn run() -> anyhow::Result<()> {
         evcxr::runtime_hook();
 
         let config = ReplResolvedConfig::load()?;
@@ -60,21 +58,81 @@ impl Repl {
             set_output(OutputMode::Stderr);
         }
 
+        let (mut command_context, outputs) = CommandContext::new()?;
+        let builtin_commands = Self::collect_builtin_commands(&mut command_context)?;
+        let command_context = Rc::new(RefCell::new(command_context));
+        let cli_repl = Rc::new(CliReplInterop::new(&config, builtin_commands));
+
+        let repl = Self {
+            command_context,
+            config,
+            cli_repl,
+        };
+
+        repl.setup_command_context()?;
+
+        if repl.config.script_mode() {
+            repl.run_script()
+        } else {
+            repl.run_interactive(outputs)
+        }
+    }
+
+    fn collect_builtin_commands(
+        command_context: &mut CommandContext,
+    ) -> anyhow::Result<HashMap<String, String>> {
+        let mut help_output = command_context.execute(":help")?;
+        let help_output = help_output
+            .content_by_mime_type
+            .remove("text/plain")
+            .ok_or_else(|| anyhow!("Missing help output"))?;
+        let commands = help_output
+            .split('\n')
+            .filter_map(|line| line.trim().split_once(' '))
+            .filter_map(|(name, desc)| {
+                name.strip_prefix(':')
+                    .map(|name| (name.to_string(), desc.trim_start().to_string()))
+            })
+            .collect::<HashMap<String, String>>();
+        Ok(commands)
+    }
+
+    fn build_editor(
+        command_context: Rc<RefCell<CommandContext>>,
+        cli_repl: Rc<CliReplInterop>,
+    ) -> anyhow::Result<Editor<ReplRustyLineEditorHelper, DefaultHistory>> {
+        let mut config_builder = Builder::new().history_ignore_space(true);
+        config_builder = config_builder.history_ignore_dups(true)?;
+        let editor_config = config_builder
+            .completion_type(CompletionType::List)
+            .auto_add_history(true)
+            .build();
+        let mut editor =
+            Editor::<ReplRustyLineEditorHelper, DefaultHistory>::with_config(editor_config)?;
+        editor.set_helper(Some(ReplRustyLineEditorHelper::new(
+            command_context,
+            cli_repl,
+        )));
+
+        Ok(editor)
+    }
+
+    fn write_evcxr_toml(&self) -> anyhow::Result<()> {
         let mut dependencies = String::new();
         let mut prelude = String::new();
 
-        for (agent_type_name, agent) in &config.repl_metadata.agents {
+        for (agent_type_name, agent) in &self.config.repl_metadata.agents {
             // TODO: from meta?
             let agent_package_name = format!("{}-client", agent_type_name.0.to_kebab_case());
             let agent_client_mod_name = format!("{}_client", agent_type_name.0.to_snake_case());
             let agent_client_name = &agent_type_name;
 
             let path = toml_string_literal(fs::path_to_str(
-                &PathBuf::from(&config.base_config.app_main_dir).join(&agent.client_dir),
+                &PathBuf::from(&self.config.base_config.app_main_dir).join(&agent.client_dir),
             )?)?;
 
             dependencies.push_str(&format!("{agent_package_name} = {{ path = {path} }}\n"));
-            if !config.cli_args.disable_auto_imports {
+            if !self.config.cli_args.disable_auto_imports {
                 prelude.push_str(&format!("use {agent_client_mod_name};\n"));
                 prelude.push_str(&format!(
                     "use {agent_client_mod_name}::{agent_client_name};\n"
@@ -96,67 +154,41 @@ impl Repl {
             "#,},
         )?;
 
-        let (mut command_context, outputs) = CommandContext::new()?;
-
-        let builtin_commands = {
-            let mut help_output = command_context.execute(":help")?;
-            let help_output = help_output
-                .content_by_mime_type
-                .remove("text/plain")
-                .ok_or_else(|| anyhow!("Missing help output"))?;
-            help_output
-                .split('\n')
-                .filter_map(|line| line.trim().split_once(' '))
-                .filter_map(|(name, desc)| {
-                    name.strip_prefix(':')
-                        .map(|name| (name.to_string(), desc.trim_start().to_string()))
-                })
-                .collect::<HashMap<String, String>>()
-        };
-
-        logln("Building common dependencies...");
-        command_context.set_opt_level("0")?;
-        if !config.script_mode() {
-            let _spinner = SpinnerGuard::start_stdout("Loading config...");
-            command_context.execute(":load_config --quiet")?;
-        } else {
-            command_context.execute(":load_config --quiet")?;
-        }
-
-        let command_context = Rc::new(RefCell::new(command_context));
-
-        let cli_repl = Rc::new(CliReplInterop::new(&config, builtin_commands));
-
-        let mut config_builder = Builder::new().history_ignore_space(true);
-        config_builder = config_builder.history_ignore_dups(true)?;
-        let editor_config = config_builder
-            .completion_type(CompletionType::List)
-            .auto_add_history(true)
-            .build();
-        let mut editor =
-            Editor::<ReplRustyLineEditorHelper, DefaultHistory>::with_config(editor_config)?;
-        editor.set_helper(Some(ReplRustyLineEditorHelper::new(
-            command_context.clone(),
-            cli_repl.clone(),
-        )));
-
-        let history_path = PathBuf::from(&config.base_config.history_file);
-        editor.load_history(&history_path)?;
-
-        Ok(Self {
-            command_context,
-            outputs,
-            editor,
-            history_path,
-            config,
-            cli_repl,
-        })
+        Ok(())
     }
 
-    pub fn run(mut self) -> anyhow::Result<()> {
-        spawn_output_task(self.outputs.stdout, self.editor.create_external_printer()?);
-        spawn_output_task(self.outputs.stderr, self.editor.create_external_printer()?);
-        let mut printer = self.editor.create_external_printer()?;
+    fn setup_command_context(&self) -> anyhow::Result<()> {
+        logln("Building common dependencies...");
+
+        self.write_evcxr_toml()?;
+
+        let mut command_context = self.command_context.borrow_mut();
+
+        command_context.set_opt_level("0")?;
+
+        if !self.config.script_mode() {
+            let _spinner = SpinnerGuard::start_stdout("Loading config...");
+            command_context.execute(":load_config --quiet")?;
+            Ok(())
+        } else {
+            with_hidden_output_unless_error(|| {
+                command_context
+                    .execute(":load_config --quiet")
+                    .map_err(|err| anyhow!(err))
+            })?;
+            Ok(())
+        }
+    }
+
+    fn run_interactive(&self, outputs: EvalContextOutputs) -> anyhow::Result<()> {
+        let mut editor = Self::build_editor(self.command_context.clone(), self.cli_repl.clone())?;
+
+        let history_path = PathBuf::from(&self.config.base_config.history_file);
+        editor.load_history(&history_path)?;
+
+        spawn_output_task(outputs.stdout, editor.create_external_printer()?);
+        spawn_output_task(outputs.stderr, editor.create_external_printer()?);
+        let mut printer = editor.create_external_printer()?;
 
         let prompt = {
             if self.config.script_mode() {
@@ -175,7 +207,7 @@ impl Repl {
 
         let mut interrupted = false;
         loop {
-            let line = self.editor.readline(&prompt);
+            let line = editor.readline(&prompt);
             match line {
                 Ok(line) => {
                     interrupted = false;
@@ -188,16 +220,13 @@ impl Repl {
                         continue;
                     }
 
-                    let spinner = if self.config.script_mode() {
-                        None
-                    } else {
-                        Some(SpinnerGuard::start_printer(
-                            self.editor.create_external_printer()?,
+                    let result = {
+                        let _spinner = SpinnerGuard::start_printer(
+                            editor.create_external_printer()?,
                             "Working...",
-                        ))
+                        );
+                        self.command_context.borrow_mut().execute(&line)
                     };
-                    let result = self.command_context.borrow_mut().execute(&line);
-                    drop(spinner);
 
                     match result {
                         Ok(output) => {
@@ -242,7 +271,25 @@ impl Repl {
             }
         }
 
-        self.editor.save_history(&self.history_path)?;
+        editor.save_history(&history_path)?;
+
+        Ok(())
+    }
+
+    pub fn run_script(&self) -> anyhow::Result<()> {
+        let script = if let Some(script_file) = &self.config.cli_args.script_file {
+            fs::read_to_string(script_file)?
+        } else if let Some(script) = &self.config.cli_args.script {
+            script.clone()
+        } else {
+            bail!("Missing script source");
+        };
+
+        let mut output = self.command_context.borrow_mut().execute(&script)?;
+        if let Some(output) = output.content_by_mime_type.remove("text/plain") {
+            logln(output);
+        }
+
         Ok(())
     }
 }

@@ -116,9 +116,9 @@ impl GolemServer {
 #[command(disable_help_flag = true, disable_help_subcommand = true)]
 pub struct CliArgs {
     #[arg(long)]
-    script: Option<String>,
+    pub script: Option<String>,
     #[arg(long = "script-file")]
-    script_file: Option<String>,
+    pub script_file: Option<String>,
     #[arg(long = "disable-auto-imports")]
     pub disable_auto_imports: bool,
     #[arg(long = "disable-stream")]
