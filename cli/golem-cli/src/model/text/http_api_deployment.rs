@@ -16,7 +16,7 @@ use crate::model::text::fmt::{
     format_main_id, format_message_highlight, log_table, FieldsBuilder, MessageWithFields, TextView,
 };
 use cli_table::Table;
-use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentSecurity};
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +49,14 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
             let mut result = String::new();
             for (agent_name, agent_options) in agents {
                 result.push_str(&format!("- Agent name: {}", agent_name));
-                if let Some(security_scheme) = &agent_options.security_scheme {
-                    result.push_str(&format!("  Security scheme: {}", security_scheme));
+                match &agent_options.security {
+                    None => {}
+                    Some(HttpApiDeploymentAgentSecurity::SecurityScheme(inner)) => {
+                        result.push_str(&format!("  Security scheme: {}", inner.security_scheme));
+                    }
+                    Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(inner)) => {
+                        result.push_str(&format!("  Test session header: {}", inner.header_name));
+                    }
                 }
             }
             result

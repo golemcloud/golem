@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CompiledRoute, CompiledRoutes};
+use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsPreflightBehaviour, MethodParameter,
-    OriginPattern, QueryOrHeaderType, WebhookCallbackBehaviour,
+    OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
@@ -134,7 +135,7 @@ impl TryFrom<proto::golem::customapi::CompiledRoute> for CompiledRoute {
                 .collect::<Result<_, _>>()?,
             body: value.body.ok_or("Missing body")?.try_into()?,
             behavior: value.behavior.ok_or("Missing behavior")?.try_into()?,
-            security_scheme: value.security_scheme.map(TryInto::try_into).transpose()?,
+            security: value.security.ok_or("Missing security")?.try_into()?,
             cors: value.cors.ok_or("Missing cors")?.try_into()?,
         })
     }
@@ -148,7 +149,7 @@ impl From<CompiledRoute> for proto::golem::customapi::CompiledRoute {
             path: value.path.into_iter().map(Into::into).collect(),
             body: Some(value.body.into()),
             behavior: Some(value.behavior.into()),
-            security_scheme: value.security_scheme.map(Into::into),
+            security: Some(value.security.into()),
             cors: Some(value.cors.into()),
         }
     }
@@ -207,6 +208,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .try_into()?,
                 }))
             }
+            Kind::OpenApiSpec(_) => Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {})),
         }
     }
 }
@@ -263,6 +265,64 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
+            RouteBehaviour::OpenApiSpec(_) => Self {
+                kind: Some(Kind::OpenApiSpec(
+                    proto::golem::customapi::route_behaviour::OpenApiSpec {},
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::RouteSecurity> for RouteSecurity {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::RouteSecurity) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_security::Kind;
+
+        match value.kind.ok_or("RouteSecurity.kind missing")? {
+            Kind::None(_) => Ok(RouteSecurity::None),
+            Kind::SessionFromHeader(session_from_header) => Ok(RouteSecurity::SessionFromHeader(
+                SessionFromHeaderRouteSecurity {
+                    header_name: session_from_header.header_name,
+                },
+            )),
+            Kind::SecurityScheme(security_scheme) => {
+                Ok(RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
+                    security_scheme_id: security_scheme
+                        .security_scheme_id
+                        .ok_or("Missing security_scheme_id")?
+                        .try_into()?,
+                }))
+            }
+        }
+    }
+}
+
+impl From<RouteSecurity> for proto::golem::customapi::RouteSecurity {
+    fn from(value: RouteSecurity) -> Self {
+        use proto::golem::customapi::route_security::Kind;
+
+        match value {
+            RouteSecurity::None => Self {
+                kind: Some(Kind::None(proto::golem::customapi::route_security::None {})),
+            },
+            RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity { header_name }) => {
+                Self {
+                    kind: Some(Kind::SessionFromHeader(
+                        proto::golem::customapi::route_security::SessionFromHeader { header_name },
+                    )),
+                }
+            }
+            RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity { security_scheme_id }) => {
+                Self {
+                    kind: Some(Kind::SecurityScheme(
+                        proto::golem::customapi::route_security::SecurityScheme {
+                            security_scheme_id: Some(security_scheme_id.into()),
+                        },
+                    )),
+                }
+            }
         }
     }
 }
@@ -540,11 +600,15 @@ impl TryFrom<proto::golem::customapi::PathSegment> for PathSegment {
         use proto::golem::customapi::path_segment::Kind;
 
         match value.kind.ok_or("PathSegment.kind missing")? {
-            Kind::Literal(lit) => Ok(PathSegment::Literal { value: lit.value }),
+            Kind::Literal(inner) => Ok(PathSegment::Literal { value: inner.value }),
 
-            Kind::Variable(_) => Ok(PathSegment::Variable),
+            Kind::Variable(inner) => Ok(PathSegment::Variable {
+                display_name: inner.display_name,
+            }),
 
-            Kind::CatchAll(_) => Ok(PathSegment::CatchAll),
+            Kind::CatchAll(inner) => Ok(PathSegment::CatchAll {
+                display_name: inner.display_name,
+            }),
         }
     }
 }
@@ -558,9 +622,13 @@ impl From<PathSegment> for proto::golem::customapi::PathSegment {
                 Kind::Literal(proto::golem::customapi::path_segment::Literal { value })
             }
 
-            PathSegment::Variable => Kind::Variable(golem_api_grpc::proto::golem::common::Empty {}),
+            PathSegment::Variable { display_name } => {
+                Kind::Variable(proto::golem::customapi::path_segment::Variable { display_name })
+            }
 
-            PathSegment::CatchAll => Kind::CatchAll(golem_api_grpc::proto::golem::common::Empty {}),
+            PathSegment::CatchAll { display_name } => {
+                Kind::CatchAll(proto::golem::customapi::path_segment::CatchAll { display_name })
+            }
         };
 
         Self { kind: Some(kind) }

@@ -12,16 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
-use super::router::Router;
+use super::openapi::HttpApiOpenApiSpec;
 use crate::config::RouteResolverConfig;
-use crate::custom_api::{OidcCallbackBehaviour, RichRouteBehaviour};
+use crate::custom_api::{
+    OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
+};
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::domain_registration::Domain;
-use golem_service_base::custom_api::{CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema};
+use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_service_base::custom_api::router::Router;
+use golem_service_base::custom_api::{
+    CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteSecurity,
+    SecuritySchemeDetails,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::debug;
@@ -30,6 +38,7 @@ pub struct ResolvedRouteEntry {
     pub domain: Domain,
     pub route: Arc<RichCompiledRoute>,
     pub captured_path_parameters: Vec<String>,
+    pub openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -51,7 +60,7 @@ impl SafeDisplay for RouteResolverError {
 }
 
 pub struct RouteResolver {
-    router_cache: Cache<Domain, (), Router<Arc<RichCompiledRoute>>, ()>,
+    domain_api_cache: Cache<Domain, (), DomainHttpApi, ()>,
     api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
 }
 
@@ -61,7 +70,7 @@ impl RouteResolver {
         api_definition_lookup: Arc<dyn HttpApiDefinitionsLookup>,
     ) -> Self {
         Self {
-            router_cache: Cache::new(
+            domain_api_cache: Cache::new(
                 Some(config.router_cache_max_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::OlderThan {
@@ -82,14 +91,15 @@ impl RouteResolver {
             .map_err(RouteResolverError::CouldNotGetDomainFromRequest)?;
         debug!("Resolving router for domain: {domain}");
 
-        let router = self.get_or_build_router(&domain).await?;
+        let domain_api = self.get_or_build_domain_api(&domain).await?;
 
         let decoded_path = urlencoding::decode(request.uri().path())
             .map_err(|err| RouteResolverError::MalformedPath(err.to_string()))?;
 
         let path_segments: Vec<&str> = split_path(&decoded_path).collect();
 
-        let (route_entry, captured_path_parameters) = router
+        let (route_entry, captured_path_parameters) = domain_api
+            .router
             .route(request.method(), &path_segments)
             .ok_or(RouteResolverError::NoMatchingRoute)?;
 
@@ -99,28 +109,33 @@ impl RouteResolver {
             domain,
             captured_path_parameters,
             route: route_entry.clone(),
+            openapi_spec: domain_api.openapi_spec.clone(),
         })
     }
 
-    async fn get_or_build_router(
+    async fn get_or_build_domain_api(
         &self,
         domain: &Domain,
-    ) -> Result<Router<Arc<RichCompiledRoute>>, RouteResolverError> {
-        self.router_cache
-            .get_or_insert_simple(domain, async || self.build_router_for_domain(domain).await)
+    ) -> Result<DomainHttpApi, RouteResolverError> {
+        self.domain_api_cache
+            .get_or_insert_simple(domain, async || {
+                self.fetch_and_build_domain_api(domain).await
+            })
             .await
             .map_err(|_| RouteResolverError::CouldNotBuildRouter)
     }
 
-    async fn build_router_for_domain(
-        &self,
-        domain: &Domain,
-    ) -> Result<Router<Arc<RichCompiledRoute>>, ()> {
+    async fn fetch_and_build_domain_api(&self, domain: &Domain) -> Result<DomainHttpApi, ()> {
         let compiled_routes = self.api_definition_lookup.get(domain).await;
 
         let compiled_routes = match compiled_routes {
             Ok(value) => value,
-            Err(ApiDefinitionLookupError::UnknownSite(_)) => return Ok(Router::new()),
+            Err(ApiDefinitionLookupError::UnknownSite(_)) => {
+                return Ok(DomainHttpApi {
+                    router: Router::new(),
+                    openapi_spec: None,
+                });
+            }
             Err(ApiDefinitionLookupError::InternalError(err)) => {
                 tracing::warn!("Failed to build router for domain {domain}: {err:?}");
                 return Err(());
@@ -135,7 +150,20 @@ impl RouteResolver {
             }
         };
 
-        Ok(Router::build_router(finalized_routes))
+        let openapi_spec = match HttpApiOpenApiSpec::from_routes(&finalized_routes) {
+            Ok(spec) => Some(Arc::new(spec)),
+            Err(e) => {
+                tracing::warn!("Failed to build openapi spec for http api: {e}");
+                None
+            }
+        };
+
+        let router = build_router(finalized_routes);
+
+        Ok(DomainHttpApi {
+            router,
+            openapi_spec,
+        })
     }
 
     async fn finalize_routes(
@@ -150,15 +178,7 @@ impl RouteResolver {
         let mut enriched_routes = Vec::with_capacity(compiled_routes.routes.len());
 
         for route in compiled_routes.routes {
-            let security_scheme = if let Some(security_scheme_id) = route.security_scheme {
-                let security_scheme = security_schemes
-                    .get(&security_scheme_id)
-                    .ok_or(format!("Security scheme {security_scheme_id} not found"))?
-                    .clone();
-                Some(security_scheme)
-            } else {
-                None
-            };
+            let security = compile_route_security(&security_schemes, route.security)?;
 
             let enriched = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
@@ -171,7 +191,7 @@ impl RouteResolver {
                 path: route.path,
                 body: route.body,
                 behavior: route.behavior.into(),
-                security_scheme,
+                security,
                 cors: route.cors,
             };
 
@@ -190,6 +210,9 @@ impl RouteResolver {
                 })
                 .collect();
 
+            // This route could be ambiguous with other agent routes,
+            // in which case it will fail to add to the router.
+            // This is too late to show an error to the user, so just continue as best we can in that case.
             let callback_route = RichCompiledRoute {
                 account_id: compiled_routes.account_id,
                 environment_id: compiled_routes.environment_id,
@@ -201,7 +224,7 @@ impl RouteResolver {
                 behavior: RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour {
                     security_scheme: scheme.clone(),
                 }),
-                security_scheme: None,
+                security: RichRouteSecurity::None,
                 cors: CorsOptions {
                     allowed_patterns: Vec::new(),
                 },
@@ -223,4 +246,46 @@ fn authority_from_request(request: &poem::Request) -> Result<Domain, String> {
 
 fn split_path(s: &str) -> impl Iterator<Item = &str> {
     s.trim_matches('/').split('/')
+}
+
+fn compile_route_security(
+    security_schemes: &HashMap<SecuritySchemeId, Arc<SecuritySchemeDetails>>,
+    security: RouteSecurity,
+) -> Result<RichRouteSecurity, String> {
+    match security {
+        RouteSecurity::None => Ok(RichRouteSecurity::None),
+        RouteSecurity::SessionFromHeader(inner) => Ok(RichRouteSecurity::SessionFromHeader(inner)),
+        RouteSecurity::SecurityScheme(inner) => {
+            let security_scheme_id = inner.security_scheme_id;
+
+            let security_scheme = security_schemes
+                .get(&security_scheme_id)
+                .ok_or(format!("Security scheme {security_scheme_id} not found"))?
+                .clone();
+
+            Ok(RichRouteSecurity::SecurityScheme(
+                RichSecuritySchemeRouteSecurity { security_scheme },
+            ))
+        }
+    }
+}
+
+fn build_router(routes: Vec<RichCompiledRoute>) -> Router<Arc<RichCompiledRoute>> {
+    let mut router = Router::new();
+
+    for route in routes {
+        let route_id = route.route_id;
+
+        if !router.add_route(route.method.clone(), route.path.clone(), Arc::new(route)) {
+            tracing::warn!("Failed to add route with route_id {route_id}");
+        }
+    }
+
+    router
+}
+
+#[derive(Clone)]
+struct DomainHttpApi {
+    router: Router<Arc<RichCompiledRoute>>,
+    openapi_spec: Option<Arc<HttpApiOpenApiSpec>>,
 }

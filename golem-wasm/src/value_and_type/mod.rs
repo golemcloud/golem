@@ -21,7 +21,10 @@ mod tests;
 
 use crate::analysis::AnalysedType;
 use crate::Value;
+use uuid::Uuid;
 
+#[cfg(any(feature = "host", feature = "client"))]
+pub use into::ConvertToValueAndType;
 #[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValue;
 #[cfg(any(feature = "host", feature = "client"))]
@@ -53,6 +56,10 @@ impl std::fmt::Display for ValueAndType {
 impl ValueAndType {
     pub fn new(value: Value, typ: AnalysedType) -> Self {
         Self { value, typ }
+    }
+
+    pub fn convert_to_value_and_type(self) -> ValueAndType {
+        self
     }
 
     pub fn into_list_items(self) -> Option<Vec<ValueAndType>> {
@@ -96,3 +103,21 @@ impl From<ValueAndType> for crate::WitType {
 
 /// Helper for dynamically creating record ValueAndType values with String keys
 pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
+
+/// Wrapped Uuid, matching the schema provided by the Golem Rust SDK
+#[derive(Clone, Debug)]
+pub struct UuidRecord {
+    pub value: Uuid,
+}
+
+impl From<Uuid> for UuidRecord {
+    fn from(uuid: Uuid) -> Self {
+        Self { value: uuid }
+    }
+}
+
+impl From<UuidRecord> for Uuid {
+    fn from(uuid_record: UuidRecord) -> Self {
+        uuid_record.value
+    }
+}

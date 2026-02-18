@@ -53,7 +53,18 @@ impl RichRequest {
     }
 
     pub fn origin(&self) -> Result<Option<&str>, RequestHandlerError> {
-        match self.underlying.headers().get("Origin") {
+        self.header_string_value("origin")
+    }
+
+    pub fn headers(&self) -> &HeaderMap {
+        self.underlying.headers()
+    }
+
+    pub fn header_string_value(
+        &self,
+        header_name: &str,
+    ) -> Result<Option<&str>, RequestHandlerError> {
+        match self.headers().get(header_name) {
             Some(header) => {
                 let result =
                     header
@@ -65,10 +76,6 @@ impl RichRequest {
             }
             None => Ok(None),
         }
-    }
-
-    pub fn headers(&self) -> &HeaderMap {
-        self.underlying.headers()
     }
 
     pub fn query_params(&self) -> &HashMap<String, Vec<String>> {

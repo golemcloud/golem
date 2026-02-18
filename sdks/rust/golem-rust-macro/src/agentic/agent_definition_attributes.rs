@@ -199,7 +199,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
                             ))
                         }
                     }
-                    "phantom-agent" => {
+                    "phantom_agent" => {
                         return if let Expr::Lit(ExprLit {
                             lit: Lit::Bool(b), ..
                         }) = &*assign.right

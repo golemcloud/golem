@@ -22,8 +22,8 @@ path = "src/lib.rs"
 harness = false
 
 [[test]]
-name = "session-store"
-path = "tests/session_store.rs"
+name = "oidc"
+path = "tests/oidc/lib.rs"
 harness = false
 
 # [[bench]]
