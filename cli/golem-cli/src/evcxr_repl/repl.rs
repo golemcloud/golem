@@ -18,6 +18,7 @@ use crate::evcxr_repl::log::{logln, set_output, OutputMode};
 use crate::fs;
 use crate::process::with_hidden_output_unless_error;
 use anyhow::{anyhow, bail};
+use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use evcxr::{CommandContext, EvalContextOutputs};
 use heck::{ToKebabCase, ToSnakeCase};
@@ -58,7 +59,11 @@ impl Repl {
             set_output(OutputMode::Stderr);
         }
 
-        let (mut command_context, outputs) = CommandContext::new()?;
+        let (mut command_context, outputs) = {
+            let _spinner: Option<SpinnerGuard> = (!config.script_mode())
+                .then(|| SpinnerGuard::start_stdout("Initializing REPL...", false));
+            CommandContext::new()?
+        };
         let builtin_commands = Self::collect_builtin_commands(&mut command_context)?;
         let command_context = Rc::new(RefCell::new(command_context));
         let cli_repl = Rc::new(CliReplInterop::new(&config, builtin_commands));
@@ -158,8 +163,6 @@ impl Repl {
     }
 
     fn setup_command_context(&self) -> anyhow::Result<()> {
-        logln("Building common dependencies...");
-
         self.write_evcxr_toml()?;
 
         let mut command_context = self.command_context.borrow_mut();
@@ -167,7 +170,7 @@ impl Repl {
         command_context.set_opt_level("0")?;
 
         if !self.config.script_mode() {
-            let _spinner = SpinnerGuard::start_stdout("Loading config...");
+            let _spinner = SpinnerGuard::start_stdout("Building dependencies...", false);
             command_context.execute(":load_config --quiet")?;
             Ok(())
         } else {
@@ -223,7 +226,8 @@ impl Repl {
                     let result = {
                         let _spinner = SpinnerGuard::start_printer(
                             editor.create_external_printer()?,
-                            "Working...",
+                            "Waiting for result...",
+                            true,
                         );
                         self.command_context.borrow_mut().execute(&line)
                     };
@@ -300,7 +304,7 @@ struct SpinnerGuard {
 }
 
 impl SpinnerGuard {
-    fn start_printer<T>(printer: T, label: &str) -> Self
+    fn start_printer<T>(printer: T, label: &str, with_initial_delay: bool) -> Self
     where
         T: ExternalPrinter + Send + 'static,
     {
@@ -310,10 +314,11 @@ impl SpinnerGuard {
                 let _ = printer.print(text);
             },
             label,
+            with_initial_delay,
         )
     }
 
-    fn start_stdout(label: &str) -> Self {
+    fn start_stdout(label: &str, with_initial_delay: bool) -> Self {
         Self::start_with_writer(
             |text| {
                 let mut out = io::stdout();
@@ -321,32 +326,49 @@ impl SpinnerGuard {
                 let _ = out.flush();
             },
             label,
+            with_initial_delay,
         )
     }
 
-    fn start_with_writer<F>(mut write: F, label: &str) -> Self
+    fn start_with_writer<F>(mut write: F, label: &str, with_initial_delay: bool) -> Self
     where
         F: FnMut(String) + Send + 'static,
     {
+        let missing_elem = "?".to_string();
+        let label = label.dimmed();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
         let label = label.to_string();
         let handle = thread::spawn(move || {
-            let frames = ["|", "/", "-", "\\"];
+            let frames: Vec<String> = {
+                if SHOULD_COLORIZE.should_colorize() {
+                    vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+                        .into_iter()
+                        .map(|s| s.dimmed().to_string())
+                        .collect()
+                } else {
+                    vec!["|", "/", "-", "\\"]
+                        .into_iter()
+                        .map(|s| s.to_string())
+                        .collect()
+                }
+            };
             let mut index = 0usize;
             let mut shown = false;
             let mut last_len = 0usize;
             let start = std::time::Instant::now();
             while !stop_clone.load(Ordering::Relaxed) {
                 if !shown {
-                    if start.elapsed() < Duration::from_millis(300) {
-                        thread::sleep(Duration::from_millis(50));
-                        continue;
+                    if with_initial_delay {
+                        if start.elapsed() < Duration::from_millis(300) {
+                            thread::sleep(Duration::from_millis(50));
+                            continue;
+                        }
                     }
                     shown = true;
                 }
 
-                let frame = frames[index % frames.len()];
+                let frame = frames.get(index % frames.len()).unwrap_or(&missing_elem);
                 let text = format!("{frame} {label}");
                 last_len = text.len();
                 write(format!("\r{text}"));
