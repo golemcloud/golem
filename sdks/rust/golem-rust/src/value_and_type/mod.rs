@@ -15,6 +15,7 @@
 // Guest binding version of `golem_wasm` crate's `IntoValueAndType` trait, to be upstreamed
 // eventually.
 
+pub mod golem_host;
 pub mod http_uri;
 pub mod tuples;
 pub mod type_builder;

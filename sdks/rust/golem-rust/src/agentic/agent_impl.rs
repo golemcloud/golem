@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::{agent_registry, get_principal, get_resolved_agent, register_principal};
+use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
@@ -20,10 +21,16 @@ use crate::{
     agentic::{
         with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
     },
-    golem_agentic::exports::golem::agent::guest::{
-        AgentError, AgentType, DataValue, Guest, Principal,
-    },
+    golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
+
+fn serialize_principal(p: &Principal) -> Vec<u8> {
+    serde_json::to_vec(p).expect("Failed to serialize principal to JSON")
+}
+
+fn deserialize_principal(bytes: &[u8]) -> Result<Principal, String> {
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to deserialize principal: {e}"))
+}
 
 pub struct Component;
 
@@ -112,23 +119,60 @@ impl LoadSnapshotGuest for Component {
             return Err("Snapshot is empty".into());
         }
 
-        let agent_snapshot = if is_json {
-            bytes
-        } else {
-            let version = bytes[0];
-            if version != 1 {
-                return Err(format!("Unsupported snapshot version: {}", version));
+        let (principal, agent_snapshot) = if is_json {
+            // JSON snapshot: principal is embedded in the JSON object
+            let mut json: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("Failed to parse JSON snapshot: {e}"))?;
+            let principal = if let Some(p) = json.get("principal") {
+                serde_json::from_value(p.clone())
+                    .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?
+            } else {
+                get_principal().unwrap_or(Principal::Anonymous)
+            };
+            if let Some(obj) = json.as_object_mut() {
+                obj.remove("principal");
             }
-            bytes[1..].to_vec()
+            let agent_snapshot = serde_json::to_vec(&json)
+                .map_err(|e| format!("Failed to re-serialize JSON snapshot: {e}"))?;
+            (principal, agent_snapshot)
+        } else {
+            // Binary snapshot with version envelope
+            let version = bytes[0];
+            match version {
+                1 => {
+                    let agent_snapshot = bytes[1..].to_vec();
+                    let principal = get_principal().unwrap_or(Principal::Anonymous);
+                    (principal, agent_snapshot)
+                }
+                2 => {
+                    if bytes.len() < 5 {
+                        return Err("Version 2 snapshot too short for principal length".into());
+                    }
+                    let principal_len =
+                        u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                    let principal_start = 5;
+                    let principal_end = principal_start + principal_len;
+                    if bytes.len() < principal_end {
+                        return Err("Version 2 snapshot too short for principal data".into());
+                    }
+                    let principal =
+                        deserialize_principal(&bytes[principal_start..principal_end])?;
+                    let agent_snapshot = bytes[principal_end..].to_vec();
+                    (principal, agent_snapshot)
+                }
+                _ => {
+                    return Err(format!("Unsupported snapshot version: {}", version));
+                }
+            }
         };
+
+        register_principal(&principal);
 
         let id = std::env::var("GOLEM_AGENT_ID")
             .expect("GOLEM_AGENT_ID environment variable must be set");
 
         let (agent_type_name, agent_parameters, _) =
             parse_agent_id(&id).map_err(|e| e.to_string())?;
-
-        let principal = get_principal().expect("Failed to get initialized principal");
 
         with_agent_initiator(
             |initiator| async move { initiator.initiate(agent_parameters, principal).await },
@@ -158,18 +202,33 @@ impl SaveSnapshotGuest for Component {
                 .await
                 .expect("Failed to save agent snapshot");
 
-            let data = if snapshot_data.mime_type == "application/json" {
-                snapshot_data.data
-            } else {
-                let mut full_snapshot = Vec::with_capacity(1 + snapshot_data.data.len());
-                full_snapshot.push(1);
-                full_snapshot.extend_from_slice(&snapshot_data.data);
-                full_snapshot
-            };
+            let principal = get_principal().unwrap_or(Principal::Anonymous);
 
-            crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                data,
-                mime_type: snapshot_data.mime_type,
+            if snapshot_data.mime_type == "application/json" {
+                // Default JSON snapshot: embed principal in the JSON
+                let mut json: serde_json::Value = serde_json::from_slice(&snapshot_data.data)
+                    .expect("Failed to parse snapshot JSON");
+                json["principal"] = serde_json::to_value(&principal)
+                    .expect("Failed to serialize principal");
+                let data = serde_json::to_vec(&json)
+                    .expect("Failed to serialize snapshot with principal");
+                crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                    data,
+                    mime_type: "application/json".to_string(),
+                }
+            } else {
+                // Custom binary snapshot: version 2 format with principal
+                let principal_bytes = serialize_principal(&principal);
+                let total_length = 1 + 4 + principal_bytes.len() + snapshot_data.data.len();
+                let mut full_snapshot = Vec::with_capacity(total_length);
+                full_snapshot.push(2);
+                full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+                full_snapshot.extend_from_slice(&principal_bytes);
+                full_snapshot.extend_from_slice(&snapshot_data.data);
+                crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                    data: full_snapshot,
+                    mime_type: "application/octet-stream".to_string(),
+                }
             }
         })
     }

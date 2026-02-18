@@ -63,9 +63,6 @@ mod tests {
     trait AgentWithTypeParameter<T: Schema + Clone + Debug> {
         fn new(init: String) -> Self;
         fn num(&self, i: String) -> u32;
-
-        #[allow(unused)]
-        fn identity(i: T) -> T;
     }
 
     #[agent_implementation]
@@ -77,10 +74,6 @@ mod tests {
         fn num(&self, _i: String) -> u32 {
             1
         }
-
-        fn identity(i: String) -> String {
-            i
-        }
     }
 
     struct AgentWithStaticMethodsImpl;
@@ -90,12 +83,10 @@ mod tests {
         fn new(init: UserId) -> Self;
 
         #[allow(unused)]
-        fn foo(param: String) -> String;
+        fn foo(&self, param: String) -> String;
 
         #[allow(unused)]
-        fn bar(param: String) -> String {
-            Self::foo(param)
-        }
+        fn bar(&self, param: String) -> String;
         fn baz(&self, param: String) -> String;
     }
 
@@ -105,12 +96,12 @@ mod tests {
             AgentWithStaticMethodsImpl
         }
 
-        fn foo(param: String) -> String {
+        fn foo(&self, param: String) -> String {
             param
         }
 
-        fn bar(param: String) -> String {
-            Self::foo(param)
+        fn bar(&self, param: String) -> String {
+            self.foo(param)
         }
 
         fn baz(&self, param: String) -> String {
@@ -136,10 +127,10 @@ mod tests {
         fn new(init: UserId) -> Self;
 
         #[allow(unused)]
-        fn foo() -> String;
+        fn foo(&self) -> String;
 
         #[allow(unused)]
-        fn bar(param: String) -> String;
+        fn bar(&self, param: String) -> String;
     }
 
     struct AgentWithOnlyStaticMethodsImpl;
@@ -149,10 +140,10 @@ mod tests {
         fn new(_init: UserId) -> Self {
             AgentWithOnlyStaticMethodsImpl
         }
-        fn foo() -> String {
-            Self::bar("foo".to_string())
+        fn foo(&self) -> String {
+            self.bar("foo".to_string())
         }
-        fn bar(param: String) -> String {
+        fn bar(&self, param: String) -> String {
             param
         }
     }
@@ -162,7 +153,7 @@ mod tests {
         fn new(init: UserId) -> Self;
 
         #[allow(unused)]
-        fn foo() -> String;
+        fn foo(&self) -> String;
         fn bar(&self) -> String;
     }
 
@@ -174,7 +165,7 @@ mod tests {
         fn new(_init: UserId) -> FooImpl {
             FooImpl
         }
-        fn foo() -> String {
+        fn foo(&self) -> String {
             "foo".to_string()
         }
         fn bar(&self) -> String {
@@ -655,6 +646,7 @@ mod tests {
         mount = "/chats/{agent-type}/{foo}/{bar}",
         webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
         auth = true,
+        phantom_agent = true,
         cors = ["https://app.acme.com", "https://staging.acme.com"],
     )]
     trait ComplexHttpAgent {
@@ -675,6 +667,9 @@ mod tests {
 
         #[endpoint(get = "/greet/{name}/{*file_path}")]
         fn greet3(&self, name: String, file_path: String) -> String;
+
+        #[endpoint(get = "/")]
+        fn empty_path(&self);
     }
 
     struct AgentWithHttpMountImpl {}
@@ -700,6 +695,8 @@ mod tests {
         fn greet3(&self, _name: String, _file_path: String) -> String {
             "baz".to_string()
         }
+
+        fn empty_path(&self) {}
     }
 
     #[test]
@@ -716,6 +713,12 @@ mod tests {
         assert!(
             agent.http_mount.is_some(),
             "HTTP mount details should be set"
+        );
+
+        assert_eq!(
+            agent.http_mount.as_ref().map(|hm| hm.phantom_agent),
+            Some(true),
+            "Agent phantom property should be set"
         );
 
         assert!(

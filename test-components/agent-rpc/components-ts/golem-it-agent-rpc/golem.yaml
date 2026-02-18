@@ -6,28 +6,6 @@
 # See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
 # For creating APIs see https://learn.golem.cloud/invoke/making-custom-apis
 
-httpApi:
-  definitions:
-    golem-it-agent-rpc-api:
-      version: '0.0.1'
-      routes:
-      - method: POST
-        path: /golem-it-agent-rpc-api/{name}/increment
-        binding:
-          type: default
-          componentName: golem-it:agent-rpc
-          response: |
-            let name: string = request.path.name;
-            let agent = counter-agent(name);
-            let new-value = agent.increment();
-            { status: 200, body: { result: "incremented ${name}, new value is ${new-value}" } }
-
-  deployments:
-    local:
-    - domain: localhost:9006
-      definitions:
-      - golem-it-agent-rpc-api
-
 components:
   golem-it:agent-rpc:
     templates: ts

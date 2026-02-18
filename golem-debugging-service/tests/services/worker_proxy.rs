@@ -118,6 +118,7 @@ impl WorkerProxy for TestWorkerProxy {
         _owned_worker_id: &OwnedWorkerId,
         _target_revision: ComponentRevision,
         _mode: UpdateMode,
+        _disable_wakeup: bool,
         _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(

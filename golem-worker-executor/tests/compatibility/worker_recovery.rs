@@ -18,231 +18,20 @@ use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use redis::AsyncCommands;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::inherit_test_dep;
 use tracing::info;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_shopping_cart_example(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "shopping_cart_example",
-        &["shopping-cart"],
-    )
-    .await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_shopping_cart_resource_example(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "shopping_cart_resource_example",
-        &["shopping-cart-resource"],
-    )
-    .await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_environment_example(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "environment_example",
-        &["environment-service"],
-    )
-    .await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_read_stdin(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id =
-        restore_from_recovery_golden_file(&executor, &context, "read_stdin_fails", &["read-stdin"])
-            .await?;
-
-    executor.interrupt(&worker_id).await?;
-    let _ = executor.resume(&worker_id, false).await; // this fails but we don't mind
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Failed);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_jump(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id =
-        restore_from_recovery_golden_file(&executor, &context, "jump", &["runtime-service"])
-            .await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_js_example_1(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id =
-        restore_from_recovery_golden_file(&executor, &context, "js_example_1", &["js-1"]).await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_auto_update_on_running(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "auto_update_on_running",
-        &["update-test-v1", "update-test-v2"],
-    )
-    .await?;
-
-    executor.interrupt(&worker_id).await?;
-    executor.resume(&worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
-async fn recover_counter_resource_test_2(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let caller_worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "counter_resource_test_2_caller",
-        &["caller_composed"],
-    )
-    .await?;
-
-    let counter_worker_id = restore_from_recovery_golden_file(
-        &executor,
-        &context,
-        "counter_resource_test_2_counter",
-        &["counters"],
-    )
-    .await?;
-
-    executor.interrupt(&caller_worker_id).await?;
-    executor.interrupt(&counter_worker_id).await?;
-    executor.resume(&caller_worker_id, false).await?;
-
-    let status = wait_for_worker_recovery(&executor, &caller_worker_id).await?;
-    assert_eq!(status, WorkerStatus::Idle);
-    Ok(())
-}
-
+#[allow(dead_code)]
 async fn restore_from_recovery_golden_file(
     executor: &TestWorkerExecutor,
     context: &TestContext,
@@ -310,6 +99,7 @@ async fn restore_from_recovery_golden_file(
 /// should be called at the end of some test cases performing various operations on a worker.
 /// If the UPDATE_GOLDENFILES environment variable is not set, it does nothing. The generated
 /// files should be verified (if they can be recovered) in separate test cases.
+#[allow(dead_code)]
 pub async fn save_recovery_golden_file(
     executor: &TestWorkerExecutor,
     context: &TestContext,
@@ -343,6 +133,7 @@ pub async fn save_recovery_golden_file(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn wait_for_worker_recovery(
     executor: &TestWorkerExecutor,
     worker_id: &WorkerId,

@@ -1,0 +1,3 @@
+components:
+  scalability:large-dynamic-memory:
+    templates: rust

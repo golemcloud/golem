@@ -120,7 +120,7 @@ impl CallAgentHandler {
 
                     values.push(ElementValue::ComponentModel(ValueAndType::new(
                         value,
-                        parameter_type.clone().into(),
+                        parameter_type.into(),
                     )));
                 }
             }
@@ -248,8 +248,10 @@ impl CallAgentHandler {
         request: &RichRequest,
     ) -> Result<Option<golem_wasm::ValueAndType>, RequestHandlerError> {
         let method_params_data_value = UntypedDataValue::Tuple(params);
+        tracing::debug!("Using params for invocation: {method_params_data_value:?}");
 
         let principal = principal_from_request(request)?;
+        tracing::debug!("Using principal for invocation: {principal:?}");
 
         self.worker_service
             .invoke_and_await_owned_agent(

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateSecuritySchemeError,
     RegistryServiceGetEnvironmentSecuritySchemesError, RegistryServiceGetSecuritySchemeError,
@@ -22,6 +21,7 @@ use golem_common::model::security_scheme::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::{assert_eq, assert_ne};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -47,16 +47,16 @@ async fn create_and_fetch_security_scheme(deps: &EnvBasedTestDependencies) -> an
         .create_security_scheme(&env.id.0, &security_scheme_creation)
         .await?;
 
-    assert!(security_scheme.name == security_scheme_creation.name);
+    assert_eq!(security_scheme.name, security_scheme_creation.name);
 
     {
         let fetched_security_scheme = client.get_security_scheme(&security_scheme.id.0).await?;
-        assert!(fetched_security_scheme == security_scheme);
+        assert_eq!(fetched_security_scheme, security_scheme);
     }
 
     {
         let result = client.get_environment_security_schemes(&env.id.0).await?;
-        assert!(result.values == vec![security_scheme]);
+        assert_eq!(result.values, vec![security_scheme]);
     }
 
     Ok(())
@@ -89,11 +89,12 @@ async fn delete_security_scheme(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     {
         let result = client.get_security_scheme(&security_scheme.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetSecuritySchemeError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
@@ -127,11 +128,12 @@ async fn invalid_redirect_url_fails_with_bad_request(
         .create_security_scheme(&env.id.0, &security_scheme_creation)
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateSecuritySchemeError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -163,20 +165,22 @@ async fn other_users_cannot_see_security_scheme(
 
     {
         let result = client_2.get_security_scheme(&security_scheme.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetSecuritySchemeError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client_2.get_environment_security_schemes(&env.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetEnvironmentSecuritySchemesError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -210,11 +214,12 @@ async fn creating_two_security_schemes_with_same_name_fails(
         .create_security_scheme(&env.id.0, &security_scheme_creation)
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreateSecuritySchemeError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -251,8 +256,8 @@ async fn security_scheme_name_can_be_reused_after_deletion(
         .create_security_scheme(&env.id.0, &security_scheme_creation)
         .await?;
 
-    assert!(recreated_security_scheme.name == security_scheme.name);
-    assert!(recreated_security_scheme.id != security_scheme.id);
+    assert_eq!(recreated_security_scheme.name, security_scheme.name);
+    assert_ne!(recreated_security_scheme.id, security_scheme.id);
 
     Ok(())
 }
@@ -294,12 +299,24 @@ async fn security_scheme_update(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     let fetched_updated_security_scheme = client.get_security_scheme(&security_scheme.id.0).await?;
 
-    assert!(fetched_updated_security_scheme == updated_security_scheme);
-    assert!(updated_security_scheme.id == security_scheme.id);
-    assert!(updated_security_scheme.provider_type == security_scheme_update.provider_type.unwrap());
-    assert!(updated_security_scheme.client_id == security_scheme_update.client_id.unwrap());
-    assert!(updated_security_scheme.redirect_url == security_scheme_update.redirect_url.unwrap());
-    assert!(updated_security_scheme.scopes == security_scheme_update.scopes.unwrap());
+    assert_eq!(fetched_updated_security_scheme, updated_security_scheme);
+    assert_eq!(updated_security_scheme.id, security_scheme.id);
+    assert_eq!(
+        updated_security_scheme.provider_type,
+        security_scheme_update.provider_type.unwrap()
+    );
+    assert_eq!(
+        updated_security_scheme.client_id,
+        security_scheme_update.client_id.unwrap()
+    );
+    assert_eq!(
+        updated_security_scheme.redirect_url,
+        security_scheme_update.redirect_url.unwrap()
+    );
+    assert_eq!(
+        updated_security_scheme.scopes,
+        security_scheme_update.scopes.unwrap()
+    );
 
     Ok(())
 }

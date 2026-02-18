@@ -529,7 +529,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .update(&owned_worker_id, target_revision, mode, self.created_by())
+                .update(
+                    &owned_worker_id,
+                    target_revision,
+                    mode,
+                    false,
+                    self.created_by(),
+                )
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;

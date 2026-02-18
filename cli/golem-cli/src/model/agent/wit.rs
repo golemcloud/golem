@@ -793,8 +793,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
@@ -841,8 +843,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
@@ -1005,8 +1009,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
@@ -1101,8 +1107,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
@@ -1152,8 +1160,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
@@ -1225,8 +1235,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
@@ -1276,8 +1288,10 @@ mod tests {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
               import golem:rpc/types@0.2.2;
+              import wasi:clocks/monotonic-clock@0.2.3;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/host@1.3.0;
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;

@@ -730,6 +730,9 @@ pub enum GolemCliSubcommand {
         /// Await the update to be completed
         #[arg(long, default_value_t = false)]
         r#await: bool,
+        /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+        #[arg(long, default_value_t = false)]
+        disable_wakeup: bool,
     },
     /// Redeploy all agents of the application using the latest version
     RedeployAgents {
@@ -991,6 +994,9 @@ pub mod component {
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
+            /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+            #[arg(long, default_value_t = false)]
+            disable_wakeup: bool,
         },
         /// Redeploy all agents of the selected component using the latest version
         RedeployAgents {
@@ -1079,6 +1085,7 @@ pub mod worker {
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::IdempotencyKey;
+    use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
@@ -1161,6 +1168,20 @@ pub mod worker {
             #[command(flatten)]
             stream_args: StreamArgs,
         },
+        /// Like stream, but for helping Bridge SDK-based REPLs
+        #[clap(hide = true)]
+        ReplStream {
+            /// AgentTypeName
+            agent_type_name: String,
+            /// Agent parameters in UntypedDataValue JSON format
+            parameters: String,
+            /// Idempotency key, used for filtering
+            idempotency_key: IdempotencyKey,
+            /// Phantom ID
+            phantom_id: Option<Uuid>,
+            #[command(flatten)]
+            stream_args: StreamArgs,
+        },
         /// Updates an agent
         Update {
             #[command(flatten)]
@@ -1172,6 +1193,9 @@ pub mod worker {
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
+            /// Do not wake up suspended agents, the update will be applied next time the agent wakes up
+            #[arg(long, default_value_t = false)]
+            disable_wakeup: bool,
         },
         /// Interrupts a running agent
         Interrupt {

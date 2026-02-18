@@ -5,10 +5,16 @@ export type GolemServer =
     | { type: 'cloud'; token: string }
     | { type: 'custom'; url: string; token: string };
 
+export type AroundInvokeHook = {
+    beforeInvoke: (request: AgentInvocationRequest) => Promise<void>;
+    afterInvoke: (request: AgentInvocationRequest, result: JsonResult<AgentInvocationResult, any>) => Promise<void>;
+};
+
 export type Configuration = {
     server: GolemServer,
     application: ApplicationName,
     environment: EnvironmentName,
+    aroundInvokeHook?: AroundInvokeHook,
 }
 
 export type ApplicationName = string;
@@ -118,6 +124,7 @@ export interface AgentInvocationResult {
 export async function invokeAgent(
     server: GolemServer,
     request: AgentInvocationRequest,
+    aroundInvokeHook: AroundInvokeHook | undefined = undefined,
 ): Promise<AgentInvocationResult> {
     let baseUrl: string;
     let token: string;
@@ -149,26 +156,40 @@ export async function invokeAgent(
         headers["Idempotency-Key"] = request.idempotencyKey!;
     }
 
-    const response = await fetch(
-        `${baseUrl}/v1/agents/invoke-agent`,
-        {
+    if (aroundInvokeHook) {
+        await aroundInvokeHook.beforeInvoke(request);
+    }
+
+    try {
+      const rawResponse = await fetch(
+          `${baseUrl}/v1/agents/invoke-agent`,
+          {
             method: "POST",
             headers,
             body: JSON.stringify(request),
-        },
-    );
+          },
+      );
 
-    if (!response.ok) {
-        const body = await response.text().catch(() => undefined);
-        if (body) {
-            throw new Error(`Agent invocation failed: ${response.statusText}, ${body}`);
-        } else {
-            throw new Error(`Agent invocation failed: ${response.statusText}`);
-        }
+      if (!rawResponse.ok) {
+          const body = await rawResponse.text().catch(() => undefined);
+          if (body) {
+            throw new Error(`Agent invocation failed: ${rawResponse.statusText}, ${body}`);
+          } else {
+            throw new Error(`Agent invocation failed: ${rawResponse.statusText}`);
+          }
+      }
 
+      let response = await (rawResponse.json() as Promise<AgentInvocationResult>);
+
+      if (aroundInvokeHook) {
+          await aroundInvokeHook.afterInvoke(request, {ok: response});
+      }
+
+      return response;
+    } catch (e) {
+        await aroundInvokeHook?.afterInvoke(request, {err: e});
+        throw e;
     }
-
-    return await (response.json() as Promise<AgentInvocationResult>);
 }
 
 /// The Result type representation in Golem's JSON type mapping
@@ -182,17 +203,22 @@ export type RemoteMethod<Args extends any[], R> = {
 
 export function createRemoteMethod<Args extends any[], R>(
     getServer: () => GolemServer,
+    aroundInvokeHook: () => AroundInvokeHook | undefined,
     getRequest: () => AgentInvocationRequest,
     encode: (args: Args) => DataValue,
-    decode: (result: AgentInvocationResult) => R
+    decode: (result: AgentInvocationResult) => R,
 ): RemoteMethod<Args, R> {
     const result = async function (...args: Args): Promise<R> {
-        const invokeResult = await invokeAgent(getServer(), {
-            ...getRequest(),
-            methodParameters: encode(args),
-            mode: "await",
-            scheduleAt: undefined
-        })
+        const invokeResult = await invokeAgent(
+            getServer(),
+            {
+                ...getRequest(),
+                methodParameters: encode(args),
+                mode: "await",
+                scheduleAt: undefined
+            },
+            aroundInvokeHook()
+        )
         return decode(invokeResult);
     }
     result.trigger = function (...args: Args): void {

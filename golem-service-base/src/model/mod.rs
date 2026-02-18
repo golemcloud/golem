@@ -124,6 +124,9 @@ pub struct GetFilesResponse {
 pub struct UpdateWorkerRequest {
     pub mode: WorkerUpdateMode,
     pub target_revision: ComponentRevision,
+    #[serde(default)]
+    #[oai(default)]
+    pub disable_wakeup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -405,6 +408,11 @@ impl<T> std::ops::Index<SafeIndex> for [T] {
 
     fn index(&self, index: SafeIndex) -> &Self::Output {
         &self[usize::from(index)]
+    }
+}
+impl std::ops::AddAssign<u32> for SafeIndex {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
     }
 }
 

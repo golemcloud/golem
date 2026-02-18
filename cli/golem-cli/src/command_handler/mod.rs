@@ -330,10 +330,16 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 component_name,
                 update_mode,
                 r#await,
+                disable_wakeup,
             } => {
                 self.ctx
                     .app_handler()
-                    .cmd_update_workers(component_name.component_name, update_mode, r#await)
+                    .cmd_update_workers(
+                        component_name.component_name,
+                        update_mode,
+                        r#await,
+                        disable_wakeup,
+                    )
                     .await
             }
             GolemCliSubcommand::RedeployAgents { component_name } => {
