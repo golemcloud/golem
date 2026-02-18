@@ -153,7 +153,7 @@ impl RustBridgeGenerator {
         doc["dependencies"]["golem-common"] = golem_dep("golem-common", &["client"]);
         doc["dependencies"]["golem-wasm"] = golem_dep("golem-wasm", &["client"]);
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
-        doc["dependencies"]["reqwest"] = dep("0.12", &["default-tls"]);
+        doc["dependencies"]["reqwest"] = dep("0.12", &["rustls-tls"]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())

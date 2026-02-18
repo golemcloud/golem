@@ -21,7 +21,7 @@ Use the locally built golem binary from the repo, not an installed version, to e
 Then copy the output to the test-components directory:
 
 ```shell
-cp golem-temp/agents/it_agent_counters_release.wasm ../..
+cp golem-temp/agents/it_agent_counters_release.wasm ..
 ```
 
 The compiled WASM file `test-components/it_agent_counters_release.wasm` is checked into the repository.
