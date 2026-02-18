@@ -122,11 +122,19 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, isCustom } = await resolvedAgent.saveSnapshot();
+  const { data: agentSnapshot, mimeType } = await resolvedAgent.saveSnapshot();
   const principal = initializationPrincipal ?? { tag: 'anonymous' };
 
-  if (isCustom) {
-    // Custom binary snapshot: version-2 binary envelope with principal
+  if (mimeType === 'application/json') {
+    // JSON snapshot: wrap in envelope { version, principal, state }
+    const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
+    const envelope = { version: 1, principal, state };
+    return {
+      data: new TextEncoder().encode(JSON.stringify(envelope)),
+      mimeType: 'application/json',
+    };
+  } else {
+    // Binary snapshot: version-2 binary envelope with principal
     const principalJson = JSON.stringify(principal);
     const principalBytes = new TextEncoder().encode(principalJson);
 
@@ -139,14 +147,6 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
     fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
 
     return { data: fullSnapshot, mimeType: 'application/octet-stream' };
-  } else {
-    // Default JSON snapshot: embed the principal directly in the JSON object
-    const agentJson = JSON.parse(new TextDecoder().decode(agentSnapshot));
-    agentJson.principal = principal;
-    return {
-      data: new TextEncoder().encode(JSON.stringify(agentJson)),
-      mimeType: 'application/json',
-    };
   }
 }
 
@@ -161,11 +161,13 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
   let principal: Principal;
 
   if (snapshot.mimeType === 'application/json') {
-    // Default JSON snapshot: principal is embedded in the JSON object
-    const parsed = JSON.parse(new TextDecoder().decode(bytes));
-    principal = parsed.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
-    delete parsed.principal;
-    agentSnapshot = new TextEncoder().encode(JSON.stringify(parsed));
+    // JSON snapshot: unwrap envelope { version, principal, state }
+    const envelope = JSON.parse(new TextDecoder().decode(bytes));
+    principal = envelope.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
+    if (envelope.state === undefined) {
+      throw `JSON snapshot missing 'state' field`;
+    }
+    agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
   } else {
     // Custom binary snapshot with version envelope
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

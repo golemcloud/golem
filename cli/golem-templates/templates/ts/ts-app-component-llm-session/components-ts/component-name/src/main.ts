@@ -1,13 +1,14 @@
 import {
   BaseAgent,
-  Result,
   agent,
-  prompt,
   description,
+  endpoint
 } from '@golemcloud/golem-ts-sdk';
 import * as llm from 'golem:llm/llm@1.0.0';
 
-@agent()
+@agent({
+  mount: "/chats/{chatName}"
+})
 class ChatAgent extends BaseAgent {
   private readonly chatName: string;
   private session: LlmSession;
@@ -28,6 +29,7 @@ class ChatAgent extends BaseAgent {
   }
 
   @description("Ask questions")
+  @endpoint({ post: "/ask" })
   async ask(question: string): Promise<string> {
     this.session.addMessage({
       role: "user",
@@ -44,6 +46,7 @@ class ChatAgent extends BaseAgent {
   }
 
   @description("Show full chat history")
+  @endpoint({ get: "/history" })
   async history(): Promise<llm.Event[]> {
     return this.session.events
   }

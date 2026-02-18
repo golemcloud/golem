@@ -184,6 +184,12 @@ pub use ctor;
 #[cfg(feature = "export_golem_agentic")]
 pub use async_trait;
 
+#[cfg(feature = "export_golem_agentic")]
+pub use serde;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use serde_json;
+
 #[cfg(feature = "export_oplog_processor")]
 pub mod oplog_processor {
     use wit_bindgen::generate;

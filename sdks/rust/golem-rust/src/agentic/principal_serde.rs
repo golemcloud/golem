@@ -141,38 +141,25 @@ impl Serialize for Principal {
         match self {
             Principal::Anonymous => {
                 let mut s = serializer.serialize_struct("Principal", 1)?;
-                s.serialize_field("type", "anonymous")?;
+                s.serialize_field("tag", "anonymous")?;
                 s.end()
             }
             Principal::Oidc(oidc) => {
-                let mut s = serializer.serialize_struct("Principal", 11)?;
-                s.serialize_field("type", "oidc")?;
-                s.serialize_field("sub", &oidc.sub)?;
-                s.serialize_field("issuer", &oidc.issuer)?;
-                s.serialize_field("email", &oidc.email)?;
-                s.serialize_field("name", &oidc.name)?;
-                s.serialize_field("emailVerified", &oidc.email_verified)?;
-                s.serialize_field("givenName", &oidc.given_name)?;
-                s.serialize_field("familyName", &oidc.family_name)?;
-                s.serialize_field("picture", &oidc.picture)?;
-                s.serialize_field("preferredUsername", &oidc.preferred_username)?;
-                s.serialize_field("claims", &oidc.claims)?;
+                let mut s = serializer.serialize_struct("Principal", 2)?;
+                s.serialize_field("tag", "oidc")?;
+                s.serialize_field("val", oidc)?;
                 s.end()
             }
             Principal::Agent(agent) => {
-                let mut s = serializer.serialize_struct("Principal", 3)?;
-                s.serialize_field("type", "agent")?;
-                s.serialize_field(
-                    "componentId",
-                    &uuid_to_string(&agent.agent_id.component_id.uuid),
-                )?;
-                s.serialize_field("agentId", &agent.agent_id.agent_id)?;
+                let mut s = serializer.serialize_struct("Principal", 2)?;
+                s.serialize_field("tag", "agent")?;
+                s.serialize_field("val", agent)?;
                 s.end()
             }
             Principal::GolemUser(user) => {
                 let mut s = serializer.serialize_struct("Principal", 2)?;
-                s.serialize_field("type", "golemUser")?;
-                s.serialize_field("accountId", &uuid_to_string(&user.account_id.uuid))?;
+                s.serialize_field("tag", "golem-user")?;
+                s.serialize_field("val", user)?;
                 s.end()
             }
         }
@@ -187,86 +174,48 @@ impl<'de> Deserialize<'de> for Principal {
             type Value = Principal;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a Principal object with a 'type' field")
+                formatter.write_str("a Principal object with a 'tag' field")
             }
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-                let mut type_field: Option<String> = None;
-                let mut sub: Option<String> = None;
-                let mut issuer: Option<String> = None;
-                let mut email: Option<String> = None;
-                let mut name: Option<String> = None;
-                let mut email_verified: Option<bool> = None;
-                let mut given_name: Option<String> = None;
-                let mut family_name: Option<String> = None;
-                let mut picture: Option<String> = None;
-                let mut preferred_username: Option<String> = None;
-                let mut claims: Option<String> = None;
-                let mut component_id: Option<String> = None;
-                let mut agent_id: Option<String> = None;
-                let mut account_id: Option<String> = None;
+                let mut tag_field: Option<String> = None;
+                let mut val_field: Option<serde_json::Value> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
-                        "type" => type_field = Some(map.next_value()?),
-                        "sub" => sub = Some(map.next_value()?),
-                        "issuer" => issuer = Some(map.next_value()?),
-                        "email" => email = map.next_value()?,
-                        "name" => name = map.next_value()?,
-                        "emailVerified" => email_verified = map.next_value()?,
-                        "givenName" => given_name = map.next_value()?,
-                        "familyName" => family_name = map.next_value()?,
-                        "picture" => picture = map.next_value()?,
-                        "preferredUsername" => preferred_username = map.next_value()?,
-                        "claims" => claims = Some(map.next_value()?),
-                        "componentId" => component_id = Some(map.next_value()?),
-                        "agentId" => agent_id = Some(map.next_value()?),
-                        "accountId" => account_id = Some(map.next_value()?),
+                        "tag" => tag_field = Some(map.next_value()?),
+                        "val" => val_field = Some(map.next_value()?),
                         _ => {
                             let _ = map.next_value::<serde::de::IgnoredAny>()?;
                         }
                     }
                 }
 
-                let type_str = type_field.ok_or_else(|| de::Error::missing_field("type"))?;
+                let tag_str = tag_field.ok_or_else(|| de::Error::missing_field("tag"))?;
 
-                match type_str.as_str() {
+                match tag_str.as_str() {
                     "anonymous" => Ok(Principal::Anonymous),
-                    "oidc" => Ok(Principal::Oidc(OidcPrincipal {
-                        sub: sub.ok_or_else(|| de::Error::missing_field("sub"))?,
-                        issuer: issuer.ok_or_else(|| de::Error::missing_field("issuer"))?,
-                        email,
-                        name,
-                        email_verified,
-                        given_name,
-                        family_name,
-                        picture,
-                        preferred_username,
-                        claims: claims.ok_or_else(|| de::Error::missing_field("claims"))?,
-                    })),
-                    "agent" => {
-                        let cid =
-                            component_id.ok_or_else(|| de::Error::missing_field("componentId"))?;
-                        let uuid = uuid_from_string(&cid).map_err(de::Error::custom)?;
-                        Ok(Principal::Agent(AgentPrincipal {
-                            agent_id: AgentId {
-                                component_id: ComponentId { uuid },
-                                agent_id: agent_id
-                                    .ok_or_else(|| de::Error::missing_field("agentId"))?,
-                            },
-                        }))
+                    "oidc" => {
+                        let val = val_field.ok_or_else(|| de::Error::missing_field("val"))?;
+                        let oidc: OidcPrincipal =
+                            serde_json::from_value(val).map_err(de::Error::custom)?;
+                        Ok(Principal::Oidc(oidc))
                     }
-                    "golemUser" => {
-                        let aid =
-                            account_id.ok_or_else(|| de::Error::missing_field("accountId"))?;
-                        let uuid = uuid_from_string(&aid).map_err(de::Error::custom)?;
-                        Ok(Principal::GolemUser(GolemUserPrincipal {
-                            account_id: AccountId { uuid },
-                        }))
+                    "agent" => {
+                        let val = val_field.ok_or_else(|| de::Error::missing_field("val"))?;
+                        let agent: AgentPrincipal =
+                            serde_json::from_value(val).map_err(de::Error::custom)?;
+                        Ok(Principal::Agent(agent))
+                    }
+                    "golem-user" => {
+                        let val = val_field.ok_or_else(|| de::Error::missing_field("val"))?;
+                        let user: GolemUserPrincipal =
+                            serde_json::from_value(val).map_err(de::Error::custom)?;
+                        Ok(Principal::GolemUser(user))
                     }
                     other => Err(de::Error::unknown_variant(
                         other,
-                        &["anonymous", "oidc", "agent", "golemUser"],
+                        &["anonymous", "oidc", "agent", "golem-user"],
                     )),
                 }
             }
