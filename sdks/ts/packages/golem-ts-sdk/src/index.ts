@@ -123,19 +123,31 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
   }
 
   const { data: agentSnapshot, isCustom } = await resolvedAgent.saveSnapshot();
+  const principal = initializationPrincipal ?? { tag: 'anonymous' };
 
-  const principalJson = JSON.stringify(initializationPrincipal ?? { tag: 'anonymous' });
-  const principalBytes = new TextEncoder().encode(principalJson);
+  if (isCustom) {
+    // Custom binary snapshot: version-2 binary envelope with principal
+    const principalJson = JSON.stringify(principal);
+    const principalBytes = new TextEncoder().encode(principalJson);
 
-  const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
-  const fullSnapshot = new Uint8Array(totalLength);
-  const view = new DataView(fullSnapshot.buffer);
-  view.setUint8(0, 2); // version
-  view.setUint32(1, principalBytes.length, false); // big-endian
-  fullSnapshot.set(principalBytes, 5);
-  fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
+    const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
+    const fullSnapshot = new Uint8Array(totalLength);
+    const view = new DataView(fullSnapshot.buffer);
+    view.setUint8(0, 2); // version
+    view.setUint32(1, principalBytes.length, false); // big-endian
+    fullSnapshot.set(principalBytes, 5);
+    fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
 
-  return { data: fullSnapshot, mimeType: 'application/octet-stream' };
+    return { data: fullSnapshot, mimeType: 'application/octet-stream' };
+  } else {
+    // Default JSON snapshot: embed the principal directly in the JSON object
+    const agentJson = JSON.parse(new TextDecoder().decode(agentSnapshot));
+    agentJson.principal = principal;
+    return {
+      data: new TextEncoder().encode(JSON.stringify(agentJson)),
+      mimeType: 'application/json',
+    };
+  }
 }
 
 async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
@@ -145,22 +157,31 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
     throw `Agent is already initialized in this container`;
   }
 
-  const view = new DataView(bytes.buffer);
-  const version = view.getUint8(0);
-
   let agentSnapshot: Uint8Array;
   let principal: Principal;
 
-  if (version === 1) {
-    agentSnapshot = bytes.slice(1);
-    principal = initializationPrincipal ?? { tag: 'anonymous' };
-  } else if (version === 2) {
-    const principalLen = view.getUint32(1, false); // big-endian
-    const principalBytes = bytes.slice(5, 5 + principalLen);
-    principal = JSON.parse(new TextDecoder().decode(principalBytes)) as Principal;
-    agentSnapshot = bytes.slice(5 + principalLen);
+  if (snapshot.mimeType === 'application/json') {
+    // Default JSON snapshot: principal is embedded in the JSON object
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    principal = parsed.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
+    delete parsed.principal;
+    agentSnapshot = new TextEncoder().encode(JSON.stringify(parsed));
   } else {
-    throw `Unsupported snapshot version ${version}`;
+    // Custom binary snapshot with version envelope
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const version = view.getUint8(0);
+
+    if (version === 1) {
+      agentSnapshot = bytes.slice(1);
+      principal = initializationPrincipal ?? { tag: 'anonymous' };
+    } else if (version === 2) {
+      const principalLen = view.getUint32(1, false); // big-endian
+      const principalBytes = bytes.slice(5, 5 + principalLen);
+      principal = JSON.parse(new TextDecoder().decode(principalBytes)) as Principal;
+      agentSnapshot = bytes.slice(5 + principalLen);
+    } else {
+      throw `Unsupported snapshot version ${version}`;
+    }
   }
 
   initializationPrincipal = principal;
