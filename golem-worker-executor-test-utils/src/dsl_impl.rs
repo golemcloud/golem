@@ -125,6 +125,7 @@ impl TestDsl for TestWorkerExecutor {
         files: Vec<IFSEntry>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         if !plugins.is_empty() {
@@ -193,6 +194,7 @@ impl TestDsl for TestWorkerExecutor {
                         dynamic_linking,
                         unverified,
                         env,
+                        wasi_config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -211,6 +213,7 @@ impl TestDsl for TestWorkerExecutor {
                         dynamic_linking,
                         unverified,
                         env,
+                        wasi_config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -254,6 +257,7 @@ impl TestDsl for TestWorkerExecutor {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        wasi_config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let latest_revision = self
             .deps
@@ -313,6 +317,7 @@ impl TestDsl for TestWorkerExecutor {
                 removed_files,
                 dynamic_linking,
                 env,
+                wasi_config_vars,
                 original_source_hash,
             )
             .await?;

@@ -105,6 +105,7 @@ pub trait TestDsl {
         files: Vec<IFSEntry>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -133,6 +134,7 @@ pub trait TestDsl {
             Vec::new(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -150,6 +152,7 @@ pub trait TestDsl {
             Some(name),
             files,
             latest_revision.files.into_iter().map(|f| f.path).collect(),
+            None,
             None,
             None,
         )
@@ -171,6 +174,7 @@ pub trait TestDsl {
             Vec::new(),
             None,
             Some(BTreeMap::from_iter(env.to_vec())),
+            None,
         )
         .await
     }
@@ -184,6 +188,7 @@ pub trait TestDsl {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        wasi_config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn try_start_agent(
@@ -671,6 +676,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     files: Vec<IFSEntry>,
     dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     env: BTreeMap<String, String>,
+    wasi_config_vars: BTreeMap<String, String>,
     plugins: Vec<PluginInstallation>,
 }
 
@@ -686,6 +692,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             files: Vec::new(),
             dynamic_linking: HashMap::new(),
             env: BTreeMap::new(),
+            wasi_config_vars: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }
@@ -778,6 +785,12 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
+    pub fn with_wasi_config_vars(mut self, wasi_config_vars: Vec<(String, String)>) -> Self {
+        let map = wasi_config_vars.into_iter().collect::<BTreeMap<_, _>>();
+        self.wasi_config_vars = map;
+        self
+    }
+
     pub fn with_plugin(
         self,
         environment_plugin_id: &EnvironmentPluginGrantId,
@@ -813,6 +826,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.files,
                 self.dynamic_linking,
                 self.env,
+                self.wasi_config_vars,
                 self.plugins,
             )
             .await

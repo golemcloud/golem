@@ -94,6 +94,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             vec![],
             None,
             None,
+            None,
         )
         .await?;
 
@@ -121,6 +122,50 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
 
 #[test]
 #[tracing::instrument]
+async fn update_wasi_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "it_agent_update_v1_release")
+        .with_wasi_config_vars(vec![("var1".to_string(), "value1".to_string())])
+        .store()
+        .await?;
+
+    assert_eq!(
+        component.wasi_config_vars,
+        BTreeMap::from_iter(vec![("var1".to_string(), "value1".to_string())])
+    );
+
+    let updated_component = user
+        .update_component_with(
+            &component.id,
+            component.revision,
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+            Some(BTreeMap::from_iter(vec![
+                ("var1".to_string(), "value11".to_string()),
+                ("var2".to_string(), "value2".to_string()),
+            ])),
+        )
+        .await?;
+
+    assert_eq!(
+        updated_component.wasi_config_vars,
+        BTreeMap::from_iter(vec![
+            ("var1".to_string(), "value11".to_string()),
+            ("var2".to_string(), "value2".to_string())
+        ])
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn component_update_with_wrong_revision_is_rejected(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
@@ -141,6 +186,7 @@ async fn component_update_with_wrong_revision_is_rejected(
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
                 env: None,
+                wasi_config_vars: None,
                 agent_types: None,
                 plugin_updates: Vec::new(),
             },
@@ -266,6 +312,7 @@ async fn create_component_with_plugins_and_update_installations(
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
                 env: None,
+                wasi_config_vars: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
                     environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
@@ -294,6 +341,7 @@ async fn create_component_with_plugins_and_update_installations(
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
                 env: None,
+                wasi_config_vars: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
                     environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
@@ -362,6 +410,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
                 env: None,
+                wasi_config_vars: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
                     environment_plugin_grant_id: library_plugin_grant.id,
@@ -405,6 +454,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
                 )]),
                 dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
+                wasi_config_vars: BTreeMap::new(),
                 agent_types: Vec::new(),
                 plugins: Vec::new(),
             },
@@ -520,6 +570,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 file_options: BTreeMap::new(),
                 dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
+                wasi_config_vars: BTreeMap::new(),
                 agent_types: vec![agent_type.clone()],
                 plugins: Vec::new(),
             },
@@ -635,6 +686,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 file_options: BTreeMap::new(),
                 dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
+                wasi_config_vars: BTreeMap::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
                     PluginInstallation {
@@ -715,6 +767,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 file_options: BTreeMap::new(),
                 dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
+                wasi_config_vars: BTreeMap::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
                     PluginInstallation {
@@ -831,6 +884,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
                 env: None,
+                wasi_config_vars: None,
                 agent_types: None,
                 plugin_updates: vec![
                     PluginInstallationAction::Install(PluginInstallation {
@@ -913,6 +967,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
                 env: None,
+                wasi_config_vars: None,
                 agent_types: None,
                 plugin_updates: vec![
                     PluginInstallationAction::Install(PluginInstallation {

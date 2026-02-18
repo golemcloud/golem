@@ -599,6 +599,9 @@ pub async fn test_component_stage(deps: &Deps) {
         )),
         original_env: BTreeMap::from([("X1".to_string(), "value1".to_string())]).into(),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+        original_wasi_config_vars: BTreeMap::from([("WC1".to_string(), "value1".to_string())])
+            .into(),
+        wasi_config_vars: BTreeMap::from([("WC".to_string(), "value".to_string())]).into(),
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
         transformed_object_store_key: "xys-transformed".to_string(),
@@ -1115,6 +1118,8 @@ pub async fn test_account_usage(deps: &Deps) {
                     )),
                     env: Default::default(),
                     original_env: Default::default(),
+                    wasi_config_vars: Default::default(),
+                    original_wasi_config_vars: Default::default(),
                     object_store_key: "".to_string(),
                     transformed_object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),

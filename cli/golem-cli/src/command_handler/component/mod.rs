@@ -921,6 +921,7 @@ impl ComponentCommandHandler {
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
+        let wasi_config_vars = component.wasi_config_vars().clone();
         let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
         Ok(ComponentDeployProperties {
@@ -930,6 +931,7 @@ impl ComponentCommandHandler {
             dynamic_linking,
             plugins,
             env,
+            wasi_config_vars,
         })
     }
 
@@ -1027,6 +1029,11 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
+                wasi_config_vars: properties
+                    .wasi_config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(&properties.dynamic_linking),
             }
             .into(),
@@ -1079,6 +1086,7 @@ impl ComponentCommandHandler {
                         .unwrap_or_default(),
                     dynamic_linking: component_stager.dynamic_linking(),
                     env: component_stager.env(),
+                    wasi_config_vars: component_stager.wasi_config_vars(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1173,6 +1181,7 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     dynamic_linking: component_stager.dynamic_linking_if_changed(),
+                    wasi_config_vars: component_stager.wasi_config_vars_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

@@ -28,6 +28,11 @@ impl ComponentDto {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
+                wasi_config_vars: self
+                    .wasi_config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
                     self.metadata.dynamic_linking(),
                 ),
@@ -218,8 +223,16 @@ mod protobuf {
                 .collect::<Result<Vec<_>, _>>()?;
 
             let original_env = value.original_env.into_iter().collect::<BTreeMap<_, _>>();
-
             let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
+
+            let original_wasi_config_vars = value
+                .original_wasi_config_vars
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+            let wasi_config_vars = value
+                .wasi_config_vars
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
 
             let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
 
@@ -243,6 +256,8 @@ mod protobuf {
                 installed_plugins,
                 original_env,
                 env,
+                original_wasi_config_vars,
+                wasi_config_vars,
                 wasm_hash,
                 hash,
             })
@@ -276,6 +291,8 @@ mod protobuf {
                     .collect(),
                 original_env: value.original_env.into_iter().collect(),
                 env: value.env.into_iter().collect(),
+                original_wasi_config_vars: value.original_wasi_config_vars.into_iter().collect(),
+                wasi_config_vars: value.wasi_config_vars.into_iter().collect(),
                 wasm_hash: Some(value.wasm_hash.into()),
                 hash: Some(value.hash.into()),
             }

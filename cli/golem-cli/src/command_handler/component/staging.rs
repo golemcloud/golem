@@ -269,6 +269,18 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
+    pub fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.component_deploy_properties.wasi_config_vars.clone()
+    }
+
+    pub fn wasi_config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
+        if self.diff.metadata_changed() {
+            Some(self.wasi_config_vars())
+        } else {
+            None
+        }
+    }
+
     pub fn plugins(&self) -> Vec<PluginInstallation> {
         self.component_deploy_properties
             .plugins

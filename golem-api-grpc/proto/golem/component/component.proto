@@ -27,7 +27,9 @@ message Component {
   golem.common.AccountId account_id = 11;
   map<string, string> env = 12;
   map<string, string> original_env = 13;
-  golem.common.Hash wasm_hash = 14;
-  golem.common.ApplicationId application_id = 15;
-  golem.common.Hash hash = 16;
+  map<string, string> wasi_config_vars = 14;
+  map<string, string> original_wasi_config_vars = 15;
+  golem.common.Hash wasm_hash = 16;
+  golem.common.ApplicationId application_id = 17;
+  golem.common.Hash hash = 18;
 }

@@ -207,10 +207,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        // TODO: pass config vars from component metadata
         let wasi_config_vars = effective_wasi_config_vars(
             worker_config.initial_wasi_config_vars.clone(),
-            BTreeMap::new(),
+            component_metadata.wasi_config_vars.clone(),
         );
 
         let stdin = ManagedStdIn::disabled();
@@ -1424,11 +1423,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        // TODO: take config vars from component metadata
         let mut wasi_config_vars = self.state.wasi_config_vars.write().unwrap();
         *wasi_config_vars = effective_wasi_config_vars(
             self.state.initial_wasi_config_vars.clone(),
-            BTreeMap::new(),
+            new_metadata.wasi_config_vars.clone(),
         );
 
         self.state.component_metadata = new_metadata;
