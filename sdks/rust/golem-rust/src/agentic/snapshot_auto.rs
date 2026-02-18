@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-const SNAPSHOT_VERSION: u64 = 1;
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SnapshotEnvelope<T> {
-    version: u64,
-    state: T,
-}
-
 /// Wrapper for save dispatch using the autoref specialization trick.
 ///
 /// When `T: Serialize`, `SaveHelper<T>` has an inherent `snapshot_save` method (preferred
@@ -46,11 +38,7 @@ impl<T> SnapshotSaveFallback for SaveHelper<'_, T> {
 // Serde path: inherent method on SaveHelper<T> when T: Serialize — higher priority
 impl<T: serde::Serialize> SaveHelper<'_, T> {
     pub fn snapshot_save(&self) -> Result<super::SnapshotData, String> {
-        let envelope = SnapshotEnvelope {
-            version: SNAPSHOT_VERSION,
-            state: self.0,
-        };
-        let data = serde_json::to_vec(&envelope)
+        let data = serde_json::to_vec(self.0)
             .map_err(|e| format!("Failed to serialize agent snapshot: {}", e))?;
         Ok(super::SnapshotData {
             data,
@@ -75,15 +63,8 @@ impl<T> SnapshotLoadFallback for LoadHelper<'_, T> {
 // Serde path: inherent method on LoadHelper<T> when T: DeserializeOwned — higher priority
 impl<T: serde::de::DeserializeOwned> LoadHelper<'_, T> {
     pub fn snapshot_load(&mut self, bytes: &[u8]) -> Result<(), String> {
-        let envelope: SnapshotEnvelope<T> = serde_json::from_slice(bytes)
+        *self.0 = serde_json::from_slice(bytes)
             .map_err(|e| format!("Failed to deserialize agent snapshot: {}", e))?;
-        if envelope.version != SNAPSHOT_VERSION {
-            return Err(format!(
-                "Unsupported snapshot version: {}, expected {}",
-                envelope.version, SNAPSHOT_VERSION
-            ));
-        }
-        *self.0 = envelope.state;
         Ok(())
     }
 }

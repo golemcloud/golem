@@ -102,8 +102,7 @@ export class BaseAgent {
    */
   async loadSnapshot(bytes: Uint8Array): Promise<void> {
     const text = new TextDecoder().decode(bytes);
-    const parsed = JSON.parse(text);
-    const state = parsed?.state ?? parsed;
+    const state = JSON.parse(text);
 
     for (const [k, v] of Object.entries(state)) {
       if (k === 'cachedAgentType' || k === 'agentClassName') continue;
@@ -132,9 +131,8 @@ export class BaseAgent {
       state[k] = v;
     }
 
-    const payload = { version: 1, state };
     return {
-      data: new TextEncoder().encode(JSON.stringify(payload)),
+      data: new TextEncoder().encode(JSON.stringify(state)),
       mimeType: 'application/json',
     };
   }
