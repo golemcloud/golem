@@ -4036,17 +4036,6 @@ components:
       properties:
         version:
           type: string
-    WasiConfigVarsEntry:
-      type: object
-      title: WasiConfigVarsEntry
-      required:
-      - key
-      - value
-      properties:
-        key:
-          type: string
-        value:
-          type: string
     WorkerAndFilter:
       type: object
       title: WorkerAndFilter
@@ -4082,11 +4071,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        configVars:
-          type: array
-          default: []
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        wasiConfigVars:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -4306,9 +4295,9 @@ components:
           additionalProperties:
             type: string
         wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+          type: object
+          additionalProperties:
+            type: string
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentRevision:
@@ -4637,9 +4626,9 @@ components:
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
         wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+          type: object
+          additionalProperties:
+            type: string
         originalPhantomId:
           type: string
           format: uuid

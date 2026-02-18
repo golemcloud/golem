@@ -6785,6 +6785,11 @@ components:
           default: {}
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
         agentTypes:
           type: array
           default: []
@@ -6814,6 +6819,8 @@ components:
       - installedPlugins
       - env
       - originalEnv
+      - wasiConfigVars
+      - originalWasiConfigVars
       - wasmHash
       properties:
         id:
@@ -6861,6 +6868,14 @@ components:
           additionalProperties:
             type: string
         originalEnv:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
+          type: object
+          additionalProperties:
+            type: string
+        originalWasiConfigVars:
           type: object
           additionalProperties:
             type: string
@@ -6968,6 +6983,10 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
         env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
           type: object
           additionalProperties:
             type: string

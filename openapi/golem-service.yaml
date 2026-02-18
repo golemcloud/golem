@@ -10116,17 +10116,6 @@ components:
           type: string
       required:
       - version
-    WasiConfigVarsEntry:
-      title: WasiConfigVarsEntry
-      type: object
-      properties:
-        key:
-          type: string
-        value:
-          type: string
-      required:
-      - key
-      - value
     WorkerAndFilter:
       title: WorkerAndFilter
       type: object
@@ -10159,11 +10148,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        configVars:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        wasiConfigVars:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
       required:
       - name
       - env
@@ -10368,9 +10357,9 @@ components:
           additionalProperties:
             type: string
         wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+          type: object
+          additionalProperties:
+            type: string
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentRevision:
@@ -10706,9 +10695,9 @@ components:
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
         wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+          type: object
+          additionalProperties:
+            type: string
         originalPhantomId:
           type: string
           format: uuid
@@ -11559,6 +11548,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
         agentTypes:
           default: []
           type: array
@@ -11623,6 +11617,14 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: object
+          additionalProperties:
+            type: string
+        originalWasiConfigVars:
+          type: object
+          additionalProperties:
+            type: string
         wasmHash:
           type: string
           format: hash
@@ -11642,6 +11644,8 @@ components:
       - installedPlugins
       - env
       - originalEnv
+      - wasiConfigVars
+      - originalWasiConfigVars
       - wasmHash
     ComponentFileOptions:
       title: ComponentFileOptions
@@ -11737,6 +11741,10 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
         env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
           type: object
           additionalProperties:
             type: string
