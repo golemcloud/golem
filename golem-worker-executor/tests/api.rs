@@ -84,6 +84,12 @@ async fn interruption(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    // Warmup: ensure the agent constructor has completed before we invoke the
+    // long-running function we intend to interrupt.
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
     let executor_clone = executor.clone();
     let component_id_clone = component.id;
     let agent_id_clone = agent_id.clone();
@@ -2651,6 +2657,12 @@ async fn reconstruct_interrupted_state(
     let agent_id = agent_id!("clocks", "interruption-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Warmup: ensure the agent constructor has completed before we invoke the
+    // long-running function we intend to interrupt.
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep_for", data_value!(0.0f64))
         .await?;
 
     let executor_clone = executor.clone();
