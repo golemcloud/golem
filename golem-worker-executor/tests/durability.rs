@@ -28,6 +28,7 @@ use golem_worker_executor_test_utils::{
     start, start_with_snapshot_policy, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::StatusCode;
+use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -420,5 +421,179 @@ async fn automatic_snapshot_periodic(
         snapshot_count <= SNAPSHOT_TEST_INVOCATIONS,
         "Expected at most {SNAPSHOT_TEST_INVOCATIONS} snapshots, got {snapshot_count}"
     );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn snapshot_based_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let agent_id = agent_id!("snapshot-counter", "recovery");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..5 {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
+    }
+
+    let result_before = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_count = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert!(
+        snapshot_count >= 1,
+        "Expected at least one snapshot before restart, got {snapshot_count}"
+    );
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let result_after = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
+
+    assert_eq!(
+        result_before, result_after,
+        "Worker state should be preserved across restart via snapshot recovery"
+    );
+
+    let was_recovered = executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "was_recovered_from_snapshot",
+            data_value!(),
+        )
+        .await?;
+
+    assert_eq!(
+        was_recovered.into_return_value(),
+        Some(Value::Bool(true)),
+        "Worker should have been recovered from snapshot, not replayed from scratch"
+    );
+
+    let increment_after = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
+
+    assert_eq!(
+        increment_after.into_return_value(),
+        Some(Value::U32(6)),
+        "Counter should continue from 6 after snapshot recovery"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let agent_id = agent_id!("snapshot-counter", "multi-restart");
+    let _worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
+    }
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
+    }
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
+
+    assert_eq!(
+        result.into_return_value(),
+        Some(Value::U32(6)),
+        "Counter should be 6 after two rounds of 3 increments across restarts"
+    );
+
+    let was_recovered = executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "was_recovered_from_snapshot",
+            data_value!(),
+        )
+        .await?;
+
+    assert_eq!(
+        was_recovered.into_return_value(),
+        Some(Value::Bool(true)),
+        "Worker should have been recovered from snapshot after multiple restarts"
+    );
+
+    drop(executor);
     Ok(())
 }

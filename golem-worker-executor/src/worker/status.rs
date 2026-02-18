@@ -166,6 +166,12 @@ pub fn update_status_with_new_entries(
 
     let active_plugins = calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
 
+    let last_snapshot_index = calculate_last_snapshot_index(
+        last_known.last_snapshot_index,
+        &deleted_regions,
+        &new_entries,
+    );
+
     let result = WorkerStatusRecord {
         oplog_idx: new_entries
             .keys()
@@ -189,6 +195,7 @@ pub fn update_status_with_new_entries(
         deleted_regions,
         component_revision_for_replay,
         current_retry_count,
+        last_snapshot_index,
     };
 
     Some(result)
@@ -757,6 +764,31 @@ fn calculate_active_plugins(
     result
 }
 
+fn calculate_last_snapshot_index(
+    initial: Option<OplogIndex>,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> Option<OplogIndex> {
+    let mut result = initial;
+
+    if let Some(idx) = result {
+        if deleted_regions.is_in_deleted_region(idx) {
+            result = None;
+        }
+    }
+
+    for (idx, entry) in entries {
+        if deleted_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        if matches!(entry, OplogEntry::Snapshot { .. }) {
+            result = Some(*idx);
+        }
+    }
+    result
+}
+
 fn is_worker_error_retriable(
     retry_config: &RetryConfig,
     error: &WorkerError,
@@ -1215,6 +1247,39 @@ mod test {
     }
 
     #[test]
+    async fn snapshot_tracking() {
+        let k1 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .exported_function_invoked("a", vec![], k1.clone())
+            .grow_memory(10)
+            .snapshot()
+            .grow_memory(100)
+            .snapshot()
+            .exported_function_completed(None, k1)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn snapshot_tracking_with_revert() {
+        let k1 = IdempotencyKey::fresh();
+
+        let test_case = TestCase::builder(0)
+            .exported_function_invoked("a", vec![], k1.clone())
+            .grow_memory(10)
+            .snapshot()
+            .grow_memory(100)
+            .snapshot()
+            .exported_function_completed(None, k1)
+            .revert(OplogIndex::from_u64(3))
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
     async fn non_existing_oplog() {
         let environment_id = EnvironmentId::new();
         let owned_worker_id = OwnedWorkerId::new(
@@ -1370,6 +1435,21 @@ mod test {
             )
         }
 
+        pub fn snapshot(self) -> Self {
+            let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
+            self.add(
+                OplogEntry::Snapshot {
+                    timestamp: Timestamp::now_utc(),
+                    data: OplogPayload::Inline(Box::new(vec![])),
+                    mime_type: "application/octet-stream".to_string(),
+                },
+                move |mut status| {
+                    status.last_snapshot_index = Some(oplog_idx);
+                    status
+                },
+            )
+        }
+
         pub fn jump(self, target: OplogIndex) -> Self {
             let current = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             let region = OplogRegion {
@@ -1418,6 +1498,7 @@ mod test {
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
                 status.component_revision_for_replay = old_status.component_revision_for_replay;
+                status.last_snapshot_index = old_status.last_snapshot_index;
 
                 status
             })
