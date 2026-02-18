@@ -28,8 +28,8 @@ use colored::Colorize;
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
-    PublicWorkerInvocation, StringAttributeValue,
+    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
+    PublicUpdateDescription, PublicWorkerInvocation, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
 use golem_common::model::Timestamp;
@@ -834,6 +834,32 @@ impl TextView for PublicOplogEntry {
                     "{pad}begin index:       {}",
                     format_id(&params.begin_index)
                 ));
+            }
+            PublicOplogEntry::Snapshot(params) => {
+                logln(format_message_highlight("SNAPSHOT"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                match &params.data {
+                    PublicSnapshotData::Raw(raw) => {
+                        logln(format!(
+                            "{pad}mime type:         {}",
+                            format_id(&raw.mime_type)
+                        ));
+                        logln(format!(
+                            "{pad}data:              ({} bytes)",
+                            raw.data.len()
+                        ));
+                    }
+                    PublicSnapshotData::Json(json) => {
+                        logln(format!(
+                            "{pad}data:              {}",
+                            serde_json::to_string_pretty(&json.data)
+                                .unwrap_or_else(|_| format!("{:?}", json.data))
+                        ));
+                    }
+                }
             }
         }
     }

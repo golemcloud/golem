@@ -3,9 +3,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 rust_test_components=("oplog-processor")
-rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability")
-c_test_components=("large-initial-memory" "large-dynamic-memory")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-rpc")
+rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-http-routes-rust" "agent-invocation-context" "agent-rpc")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-http-routes-ts")
 benchmark_apps=("benchmarks")
 
 # Optional arguments:
@@ -79,29 +78,6 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
 
     golem-cli --preset release  build
     golem-cli --preset release exec copy
-
-    popd || exit
-  done
-fi
-
-if [ "$single_group" = "false" ] || [ "$group" = "c" ]; then
-  echo "Building the C test components"
-  for subdir in "${c_test_components[@]}"; do
-    echo "Building $subdir..."
-    pushd "$subdir" || exit
-
-    if [ "$rebuild" = true ]; then
-      rm *.wasm
-    fi
-    wit-bindgen c --autodrop-borrows yes ./wit
-    # last built with wasi-sdk-0.25.0
-    $WASI_SDK_PATH/bin/clang --sysroot $WASI_SDK_PATH/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
-
-    echo "Turning the module into a WebAssembly Component..."
-    target="../$subdir.wasm"
-    target_wat="../$subdir.wat"
-    wasm-tools component new main.wasm -o "$target" --adapt ../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
-    wasm-tools print "$target" >"$target_wat"
 
     popd || exit
   done

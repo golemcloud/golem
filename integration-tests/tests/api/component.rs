@@ -20,7 +20,7 @@ use golem_client::api::{
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
     DeployedRegisteredAgentType, ElementSchema, NamedElementSchema, NamedElementSchemas,
-    RegisteredAgentTypeImplementer,
+    RegisteredAgentTypeImplementer, Snapshotting,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
@@ -509,6 +509,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     };
 
     let component = client

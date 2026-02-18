@@ -302,21 +302,31 @@ interface host {
     /// both sides. The newly created agent continues running from the same point, but the return value is
     /// going to be different in this agent and the forked agent.
     fork: func() -> fork-result;
+
+    /// Snapshot payload
+    record snapshot {
+        data: list<u8>,
+        mime-type: string
+    }
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
 /// when the new component incompatible with the old one.
 interface save-snapshot {
+    use host.{snapshot};
+
     /// Saves the component's state into a user-defined snapshot
-    save: func() -> list<u8>;
+    save: func() -> snapshot;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
 /// when the new component incompatible with the old one.
 interface load-snapshot {
+    use host.{snapshot};
+
     /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
     /// The function can return with a failure to indicate that the update is not possible.
-    load: func(bytes: list<u8>) -> result<_, string>;
+    load: func(snapshot: snapshot) -> result<_, string>;
 }
 
 world golem-host {

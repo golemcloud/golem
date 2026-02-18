@@ -24,7 +24,7 @@ import { AgentInitiator } from './internal/agentInitiator';
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { description } from './decorators/description';
-export { agent, AgentDecoratorOptions } from './decorators/agent';
+export { agent, AgentDecoratorOptions, SnapshottingOption } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 
@@ -117,7 +117,7 @@ async function getDefinition(): Promise<AgentType> {
   return resolvedAgent.getAgentType();
 }
 
-async function save(): Promise<Uint8Array> {
+async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
   if (!resolvedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
@@ -135,10 +135,12 @@ async function save(): Promise<Uint8Array> {
   fullSnapshot.set(principalBytes, 5);
   fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
 
-  return fullSnapshot;
+  return { data: fullSnapshot, mimeType: 'application/octet-stream' };
 }
 
-async function load(bytes: Uint8Array): Promise<void> {
+async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
+  const bytes = snapshot.data;
+
   if (resolvedAgent) {
     throw `Agent is already initialized in this container`;
   }

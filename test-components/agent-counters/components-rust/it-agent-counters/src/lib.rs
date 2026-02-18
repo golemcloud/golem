@@ -1,3 +1,4 @@
+mod snapshot_test;
 pub mod repository;
 
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};

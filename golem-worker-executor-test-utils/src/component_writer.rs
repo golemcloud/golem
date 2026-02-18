@@ -32,6 +32,7 @@ use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -49,6 +50,8 @@ struct CachedAnalysis {
 pub struct FileSystemComponentWriter {
     root: PathBuf,
     analysis_cache: Cache<blake3::Hash, (), CachedAnalysis, String>,
+    component_cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
+    latest_revisions: Mutex<HashMap<ComponentId, ComponentRevision>>,
 }
 
 impl FileSystemComponentWriter {
@@ -68,6 +71,13 @@ impl FileSystemComponentWriter {
                 BackgroundEvictionMode::None,
                 "component_analysis",
             ),
+            component_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_metadata",
+            ),
+            latest_revisions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -191,6 +201,17 @@ impl FileSystemComponentWriter {
         )
         .await?;
 
+        self.latest_revisions
+            .lock()
+            .unwrap()
+            .entry(*component_id)
+            .and_modify(|rev| {
+                if component_revision > *rev {
+                    *rev = component_revision;
+                }
+            })
+            .or_insert(component_revision);
+
         tracing::info!(
             "Wrote component {} with revision {} to local component service",
             metadata.component_id,
@@ -217,16 +238,7 @@ impl FileSystemComponentWriter {
         component_id: &ComponentId,
         component_revision: ComponentRevision,
     ) -> anyhow::Result<LocalFileSystemComponentMetadata> {
-        let path = self
-            .root
-            .join(metadata_filename(component_id, component_revision));
-
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .context("failed to read old metadata")?;
-
-        let result = serde_json::from_str(&content)?;
-        Ok(result)
+        load_metadata_from(&self.root, component_id, component_revision).await
     }
 
     pub async fn get_or_add_component(
@@ -380,6 +392,10 @@ impl FileSystemComponentWriter {
     }
 
     pub async fn get_latest_revision(&self, component_id: &ComponentId) -> ComponentRevision {
+        if let Some(rev) = self.latest_revisions.lock().unwrap().get(component_id) {
+            return *rev;
+        }
+
         let target_dir = &self.root;
 
         let component_id_str = component_id.to_string();
@@ -400,7 +416,12 @@ impl FileSystemComponentWriter {
             })
             .collect::<Vec<u64>>();
         revisions.sort();
-        ComponentRevision::new(*revisions.last().unwrap_or(&0)).unwrap()
+        let rev = ComponentRevision::new(*revisions.last().unwrap_or(&0)).unwrap();
+        self.latest_revisions
+            .lock()
+            .unwrap()
+            .insert(*component_id, rev);
+        rev
     }
 
     pub async fn get_latest_component_metadata(
@@ -417,9 +438,18 @@ impl FileSystemComponentWriter {
         component_id: &ComponentId,
         revision: ComponentRevision,
     ) -> anyhow::Result<ComponentDto> {
-        let metadata = self.load_metadata(component_id, revision).await?;
-        let component: ComponentDto = metadata.into();
-        Ok(component)
+        let key = (*component_id, revision);
+        let root = self.root.clone();
+        self.component_cache
+            .get_or_insert_simple(&key, async || {
+                let metadata = load_metadata_from(&root, &key.0, key.1)
+                    .await
+                    .map_err(|err| format!("Failed to load component metadata: {err:#}"))?;
+                let component: ComponentDto = metadata.into();
+                Ok(component)
+            })
+            .await
+            .map_err(|err| anyhow!("{err}"))
     }
 }
 
@@ -432,6 +462,21 @@ async fn write_metadata_to_file(
     tokio::fs::write(path, json)
         .await
         .map_err(|_| anyhow!("Failed to write component file properties".to_string()))
+}
+
+async fn load_metadata_from(
+    root: &Path,
+    component_id: &ComponentId,
+    component_revision: ComponentRevision,
+) -> anyhow::Result<LocalFileSystemComponentMetadata> {
+    let path = root.join(metadata_filename(component_id, component_revision));
+
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .context("failed to read old metadata")?;
+
+    let result = serde_json::from_str(&content)?;
+    Ok(result)
 }
 
 fn metadata_filename(component_id: &ComponentId, component_revision: ComponentRevision) -> String {

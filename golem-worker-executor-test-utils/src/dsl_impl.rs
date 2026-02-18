@@ -49,7 +49,7 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{rename_component_if_needed, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::{FromValue, IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tonic::Streaming;
@@ -63,7 +63,7 @@ impl TestWorkerExecutor {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
-        params: Vec<ValueAndType>,
+        params: Vec<Value>,
     ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
         let latest_version = self
             .get_latest_component_revision(&worker_id.component_id)
@@ -77,11 +77,7 @@ impl TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
                 name: function_name.to_string(),
-                input: params
-                    .clone()
-                    .into_iter()
-                    .map(|param| param.value.into())
-                    .collect(),
+                input: params.into_iter().map(|param| param.into()).collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),
@@ -433,9 +429,9 @@ impl TestDsl for TestWorkerExecutor {
                 &key,
                 "golem:agent/guest.{invoke}",
                 vec![
-                    method_name.into_value_and_type(),
-                    params.into_value_and_type(),
-                    golem_common::model::agent::Principal::anonymous().into_value_and_type(),
+                    method_name.into_value(),
+                    params.into_value(),
+                    golem_common::model::agent::Principal::anonymous().into_value(),
                 ],
             )
             .await?;

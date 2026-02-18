@@ -491,4 +491,15 @@ oplog_entry! {
             begin_index: OplogIndex,
         }
     },
+    /// A snapshot of the agent's state
+    Snapshot {
+        hint: true
+        raw {
+            data: payload::OplogPayload<Vec<u8>>,
+            mime_type: String,
+        }
+        public {
+            data: PublicSnapshotData
+        }
+    }
 }

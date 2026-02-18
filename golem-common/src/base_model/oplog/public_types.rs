@@ -251,6 +251,7 @@ pub enum PublicWorkerInvocation {
 #[wit_transparent]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
+    pub mime_type: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
@@ -329,4 +330,69 @@ pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,
     Smart,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct RawSnapshotData {
+    pub data: Vec<u8>,
+    pub mime_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct JsonSnapshotData {
+    pub data: serde_json::Value,
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for JsonSnapshotData {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::Record(vec![golem_wasm::Value::String(self.data.to_string())])
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::record(vec![
+            golem_wasm::analysis::analysed_type::field(
+                "data",
+                golem_wasm::analysis::analysed_type::str(),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicSnapshotData {
+    Raw(RawSnapshotData),
+    Json(JsonSnapshotData),
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for PublicSnapshotData {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            PublicSnapshotData::Raw(raw) => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(raw.into_value())),
+            },
+            PublicSnapshotData::Json(json) => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(json.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::variant(vec![
+            golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
+            golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
+        ])
+    }
 }

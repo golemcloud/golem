@@ -39,9 +39,9 @@ use golem_worker_executor_test_utils::{
 use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;
-use std::env;
+
 use std::io::Write;
-use std::path::Path;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -82,6 +82,12 @@ async fn interruption(
     let agent_id = agent_id!("clocks", "interruption-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Warmup: ensure the agent constructor has completed before we invoke the
+    // long-running function we intend to interrupt.
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep_for", data_value!(0.0f64))
         .await?;
 
     let executor_clone = executor.clone();
@@ -1631,9 +1637,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
         .store()
         .await?;
 
-    let cwd = env::current_dir()?;
-    debug!("Current directory: {cwd:?}");
-    let target_dir = cwd.join(Path::new("data/components"));
+    let target_dir = deps.component_service_directory.clone();
     let component_path = target_dir.join(format!("wasms/{}-0.wasm", component.id));
 
     let span = Span::current();
@@ -1696,13 +1700,13 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     drop(executor);
 
     // corrupting the uploaded WASM
-    let cwd = env::current_dir().expect("Failed to get current directory");
-    debug!("Current directory: {cwd:?}");
-    let component_path = cwd.join(format!("data/components/wasms/{}-0.wasm", component.id));
-    let compiled_component_path = cwd.join(Path::new(&format!(
-        "data/blobs/compilation_cache/{}/{}/0.cwasm",
+    let component_path = deps
+        .component_service_directory
+        .join(format!("wasms/{}-0.wasm", component.id));
+    let compiled_component_path = deps.blob_storage_root().join(format!(
+        "compilation_cache/{}/{}/0.cwasm",
         component.environment_id, component.id
-    )));
+    ));
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -1778,7 +1782,10 @@ async fn long_running_poll_loop_works_as_expected(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1870,6 +1877,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
             multiplier: 1.5,
             max_jitter_factor: None,
         }),
+        None,
     )
     .await?;
 
@@ -1880,7 +1888,10 @@ async fn long_running_poll_loop_http_failures_are_retried(
         start_http_poll_server(response.clone(), poll_count.clone(), None).await;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -1992,7 +2003,10 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2068,7 +2082,10 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2214,7 +2231,10 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2302,7 +2322,10 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2385,7 +2408,10 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2523,7 +2549,10 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -2625,9 +2654,15 @@ async fn reconstruct_interrupted_state(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clocks", "interruption-1");
+    let agent_id = agent_id!("clocks", "interruption-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Warmup: ensure the agent constructor has completed before we invoke the
+    // long-running function we intend to interrupt.
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "sleep_for", data_value!(0.0f64))
         .await?;
 
     let executor_clone = executor.clone();
@@ -2711,7 +2746,10 @@ async fn invocation_queue_is_persistent(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;

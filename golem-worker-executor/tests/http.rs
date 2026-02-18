@@ -65,7 +65,10 @@ async fn http_client(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -135,7 +138,10 @@ async fn http_client_using_reqwest(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -213,7 +219,10 @@ async fn http_client_using_reqwest_async(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -290,7 +299,10 @@ async fn http_client_using_reqwest_async_parallel(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -395,7 +407,10 @@ async fn outgoing_http_contains_idempotency_key(
     );
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
         .name("golem-it:http-tests")
         .store()
         .await?;
@@ -419,7 +434,7 @@ async fn outgoing_http_contains_idempotency_key(
 
     assert_eq!(
         result, data_value!(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"29e89d8e-585f-519d-a57b-fd8650d59edb\") }"
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"15f8d7f6-663b-584d-b597-23d46a929eed\") }"
             )
     );
     Ok(())

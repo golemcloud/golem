@@ -387,6 +387,10 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
+        PublicOplogEntry::Snapshot(params) => {
+            let _ = writeln!(result, "SNAPSHOT");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+        }
     }
 
     result

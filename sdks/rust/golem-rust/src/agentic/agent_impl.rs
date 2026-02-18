@@ -101,7 +101,10 @@ impl Guest for Component {
 impl LoadSnapshotGuest for Component {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn load(bytes: Vec<u8>) -> Result<(), String> {
+    fn load(
+        snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+    ) -> Result<(), String> {
+        let bytes = snapshot.data;
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -169,7 +172,7 @@ impl LoadSnapshotGuest for Component {
 impl SaveSnapshotGuest for Component {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn save() -> Vec<u8> {
+    fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
         with_agent_instance_async(|resolved_agent| async move {
             let agent_snapshot = resolved_agent
                 .agent
@@ -190,7 +193,10 @@ impl SaveSnapshotGuest for Component {
             full_snapshot.extend_from_slice(&principal_bytes);
             full_snapshot.extend_from_slice(&agent_snapshot);
 
-            full_snapshot
+            crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                data: full_snapshot,
+                mime_type: "application/octet-stream".to_string(),
+            }
         })
     }
 }

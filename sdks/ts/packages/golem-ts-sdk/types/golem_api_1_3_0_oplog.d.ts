@@ -24,6 +24,7 @@ declare module 'golem:api/oplog@1.3.0' {
   export type RetryPolicy = golemApi130Host.RetryPolicy;
   export type Uuid = golemApi130Host.Uuid;
   export type AgentId = golemApi130Host.AgentId;
+  export type Snapshot = golemApi130Host.Snapshot;
   export type Attribute = golemApi130Context.Attribute;
   export type AttributeValue = golemApi130Context.AttributeValue;
   export type SpanId = golemApi130Context.SpanId;
@@ -187,7 +188,7 @@ declare module 'golem:api/oplog@1.3.0' {
   /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
-    val: Uint8Array
+    val: Snapshot
   };
   export type PendingUpdateParameters = {
     timestamp: Datetime;
@@ -274,6 +275,11 @@ declare module 'golem:api/oplog@1.3.0' {
   export type RemoteTransactionParameters = {
     timestamp: Datetime;
     beginIndex: OplogIndex;
+  };
+  export type SnapshotParameters = {
+    timestamp: Datetime;
+    data: Uint8Array;
+    mimeType: string;
   };
   export type Timestamp = {
     timestamp: Datetime;
@@ -485,5 +491,10 @@ declare module 'golem:api/oplog@1.3.0' {
   {
     tag: 'rolled-back-remote-transaction'
     val: RemoteTransactionParameters
+  } |
+  /** A snapshot of the worker's state */
+  {
+    tag: 'snapshot'
+    val: SnapshotParameters
   };
 }

@@ -16,8 +16,9 @@ use crate::fs;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-    NamedElementSchemas, TextDescriptor,
+    NamedElementSchemas, Snapshotting, TextDescriptor,
 };
+use golem_common::model::Empty;
 use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{
     case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
@@ -100,6 +101,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
@@ -170,6 +172,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: golem_common::model::agent::AgentTypeName("agent2".to_string()),
@@ -229,6 +232,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
     ];
 
@@ -298,6 +302,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
@@ -337,6 +342,7 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: golem_common::model::agent::AgentTypeName("weather-agent".to_string()),
@@ -390,6 +396,7 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
     ]
 }
@@ -438,6 +445,7 @@ pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
@@ -476,6 +484,7 @@ pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
@@ -530,6 +539,7 @@ pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
@@ -568,6 +578,7 @@ pub fn char_type() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
@@ -606,6 +617,7 @@ pub fn unit_result_type() -> Vec<AgentType> {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     }]
 }
 
