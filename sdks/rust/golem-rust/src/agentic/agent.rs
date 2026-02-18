@@ -17,6 +17,12 @@ use crate::golem_agentic::exports::golem::agent::guest::{
 };
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 
+#[derive(Debug)]
+pub struct SnapshotData {
+    pub data: Vec<u8>,
+    pub mime_type: String,
+}
+
 #[async_trait::async_trait(?Send)]
 pub trait BaseAgent {
     /// Gets the agent ID string of this agent.
@@ -44,5 +50,5 @@ pub trait BaseAgent {
 
     async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String>;
 
-    async fn save_snapshot_base(&self) -> Result<Vec<u8>, String>;
+    async fn save_snapshot_base(&self) -> Result<SnapshotData, String>;
 }

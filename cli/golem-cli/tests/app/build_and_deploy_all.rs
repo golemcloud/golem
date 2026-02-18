@@ -240,71 +240,120 @@ fn agent_metas() -> Vec<AgentMeta> {
             "components-ts/app-ts/src/main.ts",
             "CounterAgent",
             "TsCounterAgent",
-            vec![(
-                "components-ts/app-ts/golem.yaml",
-                "counter-agent",
-                "ts-counter-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts/src/main.ts",
+                    "/counters",
+                    "/ts-counters",
+                ),
+                (
+                    "components-ts/app-ts/golem.yaml",
+                    "counter-agent",
+                    "ts-counter-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-human-in-the-loop/src/main.ts",
-            "ApprovalWorkflow",
-            "TsApprovalWorkflow",
-            vec![(
-                "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                "approval-workflow",
-                "ts-approval-workflow",
-            )],
+            "WorkflowAgent",
+            "TsWorkflowAgent",
+            vec![
+                (
+                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
+                    "/workflows",
+                    "/ts-workflows",
+                ),
+                (
+                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "workflow-agent",
+                    "ts-workflow-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-human-in-the-loop/src/main.ts",
             "HumanAgent",
             "TsHumanAgent",
-            vec![(
-                "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                "human-agent",
-                "ts-human-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
+                    "/humans",
+                    "/ts-humans",
+                ),
+                (
+                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "human-agent",
+                    "ts-human-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-json/src/main.ts",
             "TaskAgent",
             "TsTaskAgent",
-            vec![(
-                "components-ts/app-ts-json/golem.yaml",
-                "task-agent",
-                "ts-task-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-json/src/main.ts",
+                    "/task-agents",
+                    "/ts-task-agents",
+                ),
+                (
+                    "components-ts/app-ts-json/golem.yaml",
+                    "task-agent",
+                    "ts-task-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-llm-session/src/main.ts",
             "ChatAgent",
             "TsChatAgent",
-            vec![(
-                "components-ts/app-ts-llm-session/golem.yaml",
-                "chat-agent",
-                "ts-chat-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-llm-session/src/main.ts",
+                    "/chats",
+                    "/ts-chats",
+                ),
+                (
+                    "components-ts/app-ts-llm-session/golem.yaml",
+                    "chat-agent",
+                    "ts-chat-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-snapshotting/src/main.ts",
             "CounterAgent",
             "TsCounterAgentSnapshotting",
-            vec![(
-                "components-ts/app-ts-snapshotting/golem.yaml",
-                "counter-agent",
-                "ts-counter-agent-snapshotting",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-snapshotting/src/main.ts",
+                    "/counters",
+                    "/ts-agent-snapshotting-counters",
+                ),
+                (
+                    "components-ts/app-ts-snapshotting/golem.yaml",
+                    "counter-agent",
+                    "ts-counter-agent-snapshotting",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-websearch-summary-example/src/main.ts",
             "ResearchAgent",
             "TsResearchAgent",
-            vec![(
-                "components-ts/app-ts-websearch-summary-example/golem.yaml",
-                "research-agent",
-                "ts-research-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-websearch-summary-example/src/main.ts",
+                    "/research",
+                    "/ts-research",
+                ),
+                (
+                    "components-ts/app-ts-websearch-summary-example/golem.yaml",
+                    "research-agent",
+                    "ts-research-agent",
+                ),
+            ],
         ),
     ]
 }

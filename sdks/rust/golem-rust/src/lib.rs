@@ -116,6 +116,7 @@ pub mod golem_agentic {
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
+
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
             "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
@@ -182,6 +183,12 @@ pub use ctor;
 
 #[cfg(feature = "export_golem_agentic")]
 pub use async_trait;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use serde;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use serde_json;
 
 #[cfg(feature = "export_oplog_processor")]
 pub mod oplog_processor {

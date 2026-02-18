@@ -497,6 +497,7 @@ pub struct OplogConfig {
     pub entry_count_limit: u64,
     #[serde(with = "humantime_serde")]
     pub archive_interval: Duration,
+    pub default_snapshotting: SnapshotPolicy,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -525,6 +526,12 @@ impl SafeDisplay for OplogConfig {
         );
         let _ = writeln!(&mut result, "entry count limit: {}", self.entry_count_limit);
         let _ = writeln!(&mut result, "archive interval: {:?}", self.archive_interval);
+        let _ = writeln!(&mut result, "default snapshotting:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.default_snapshotting.to_safe_string_indented()
+        );
         result
     }
 }
@@ -985,6 +992,41 @@ impl SafeDisplay for AgentWebhooksServiceConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+#[derive(Default)]
+pub enum SnapshotPolicy {
+    #[default]
+    Disabled,
+    Periodic {
+        #[serde(with = "humantime_serde")]
+        period: Duration,
+    },
+    EveryNInvocation {
+        count: u16,
+    },
+}
+
+impl SafeDisplay for SnapshotPolicy {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            SnapshotPolicy::Disabled => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+            SnapshotPolicy::Periodic { period } => {
+                let _ = writeln!(&mut result, "periodic:");
+                let _ = writeln!(&mut result, "  period: {period:?}");
+            }
+            SnapshotPolicy::EveryNInvocation { count } => {
+                let _ = writeln!(&mut result, "every n invocation:");
+                let _ = writeln!(&mut result, "  count: {count}");
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct EngineConfig {
     pub enable_fs_cache: bool,
@@ -1064,6 +1106,7 @@ impl Default for OplogConfig {
             blob_storage_layers: 1,
             entry_count_limit: 1024,
             archive_interval: Duration::from_secs(60 * 60 * 24), // 24 hours
+            default_snapshotting: SnapshotPolicy::default(),
         }
     }
 }

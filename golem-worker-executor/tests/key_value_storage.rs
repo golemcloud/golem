@@ -26,6 +26,7 @@ use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueS
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
@@ -624,22 +625,22 @@ async fn sets(
         .await
         .unwrap();
 
-    assert2::check!(s11 == Vec::<Vec<u8>>::new());
-    assert2::check!(s21 == Vec::<Vec<u8>>::new());
-    assert2::check!(s12.len() == 2);
-    assert2::check!(s12.contains(&value1.to_vec().into()));
-    assert2::check!(s12.contains(&value2.to_vec().into()));
-    assert2::check!(s22.len() == 2);
-    assert2::check!(s22.contains(&value2.to_vec().into()));
-    assert2::check!(s22.contains(&value3.to_vec().into()));
-    assert2::check!(s13.len() == 1);
-    assert2::check!(s13.contains(&value1.to_vec().into()));
-    assert2::check!(s23.len() == 1);
-    assert2::check!(s23.contains(&value3.to_vec().into()));
-    assert2::check!(s14.len() == 1);
-    assert2::check!(s14.contains(&value1.to_vec().into()));
-    assert2::check!(s24.len() == 1);
-    assert2::check!(s24.contains(&value3.to_vec().into()));
+    assert_eq!(s11, Vec::<Vec<u8>>::new());
+    assert_eq!(s21, Vec::<Vec<u8>>::new());
+    assert_eq!(s12.len(), 2);
+    assert!(s12.contains(&value1.to_vec().into()));
+    assert!(s12.contains(&value2.to_vec().into()));
+    assert_eq!(s22.len(), 2);
+    assert!(s22.contains(&value2.to_vec().into()));
+    assert!(s22.contains(&value3.to_vec().into()));
+    assert_eq!(s13.len(), 1);
+    assert!(s13.contains(&value1.to_vec().into()));
+    assert_eq!(s23.len(), 1);
+    assert!(s23.contains(&value3.to_vec().into()));
+    assert_eq!(s14.len(), 1);
+    assert!(s14.contains(&value1.to_vec().into()));
+    assert_eq!(s24.len(), 1);
+    assert!(s24.contains(&value3.to_vec().into()));
 }
 
 #[test]

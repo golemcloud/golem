@@ -17,7 +17,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::Bootstrap;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
-use std::path::Path;
+
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -34,7 +34,7 @@ pub async fn start_debug_worker_executor(
         }),
         indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-            root: Path::new("data/blobs").to_path_buf(),
+            root: test_worker_executor.deps.blob_storage_root(),
         }),
         http_port: 0,
         compiled_component_service: CompiledComponentServiceConfig::Enabled(

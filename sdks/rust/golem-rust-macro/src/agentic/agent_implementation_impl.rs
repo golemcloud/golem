@@ -59,6 +59,33 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         }
     };
 
+    let has_load_snapshot = impl_block.items.iter().any(|item| {
+        if let syn::ImplItem::Fn(method) = item {
+            method.sig.ident == "load_snapshot"
+        } else {
+            false
+        }
+    });
+
+    let has_save_snapshot = impl_block.items.iter().any(|item| {
+        if let syn::ImplItem::Fn(method) = item {
+            method.sig.ident == "save_snapshot"
+        } else {
+            false
+        }
+    });
+
+    if has_load_snapshot != has_save_snapshot {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Both load_snapshot and save_snapshot must be implemented together, or neither should be implemented",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let has_custom_snapshot = has_load_snapshot && has_save_snapshot;
+
     let ctor_ident = &constructor_method.sig.ident;
 
     let ctor_param_idents = extract_param_idents(constructor_method);
@@ -70,6 +97,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &impl_generics,
         &ty_generics,
         where_clause,
+        has_custom_snapshot,
     );
 
     let constructor_kind = get_asyncness(&constructor_method.sig);
@@ -180,6 +208,10 @@ fn build_match_arms(
             }
 
             if is_static_method(&method.sig) {
+                continue;
+            }
+
+            if method.sig.ident == "load_snapshot" || method.sig.ident == "save_snapshot" {
                 continue;
             }
 
@@ -353,8 +385,40 @@ fn generate_base_agent_impl(
     impl_generics: &syn::ImplGenerics<'_>,
     ty_generics: &syn::TypeGenerics<'_>,
     where_clause: Option<&syn::WhereClause>,
+    has_custom_snapshot: bool,
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
+
+    let snapshot_impl = if has_custom_snapshot {
+        quote! {
+            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+                self.load_snapshot(bytes).await
+            }
+
+            async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                let data = self.save_snapshot().await?;
+                Ok(golem_rust::agentic::SnapshotData {
+                    data,
+                    mime_type: "application/octet-stream".to_string(),
+                })
+            }
+        }
+    } else {
+        quote! {
+            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+                use golem_rust::agentic::snapshot_auto::SnapshotLoadFallback;
+                let mut helper = golem_rust::agentic::snapshot_auto::LoadHelper(self);
+                helper.snapshot_load(&bytes)
+            }
+
+            async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
+                use golem_rust::agentic::snapshot_auto::SnapshotSaveFallback;
+                let helper = golem_rust::agentic::snapshot_auto::SaveHelper(self);
+                helper.snapshot_save()
+            }
+        }
+    };
+
     quote! {
         #[golem_rust::async_trait::async_trait(?Send)]
         impl #impl_generics golem_rust::agentic::BaseAgent for #self_ty #ty_generics #where_clause {
@@ -376,13 +440,7 @@ fn generate_base_agent_impl(
                     .expect("Agent definition not found")
             }
 
-            async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-                self.load_snapshot(bytes).await
-            }
-
-            async fn save_snapshot_base(&self) -> Result<Vec<u8>, String> {
-                self.save_snapshot().await
-            }
+            #snapshot_impl
         }
     }
 }

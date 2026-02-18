@@ -98,6 +98,22 @@ impl ReplayState {
         result
     }
 
+    pub async fn drop_override_and_restart(&mut self) {
+        {
+            let mut internal = self.internal.write().await;
+            internal.skipped_regions.drop_override();
+            internal.next_skipped_region = internal
+                .skipped_regions
+                .find_next_deleted_region(OplogIndex::NONE);
+            internal.log_hashes.clear();
+            internal.pending_replay_events.clear();
+        }
+        self.last_replayed_index.set(OplogIndex::NONE);
+        self.last_replayed_non_hint_index.set(OplogIndex::NONE);
+        self.move_replay_idx(OplogIndex::INITIAL).await;
+        self.skip_forward().await;
+    }
+
     pub async fn switch_to_live(&mut self) {
         if !self.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished).await;

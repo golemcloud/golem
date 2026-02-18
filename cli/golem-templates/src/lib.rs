@@ -39,7 +39,7 @@ macro_rules! app_manifest_version {
     };
 }
 static GOLEM_RUST_VERSION: &str = "2.0.0-dev.2";
-static GOLEM_TS_VERSION: &str = "0.1.0";
+static GOLEM_TS_VERSION: &str = "0.1.0-dev.1";
 static GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
 static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
 

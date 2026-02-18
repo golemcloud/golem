@@ -80,6 +80,7 @@ impl ToWitNaming for AgentType {
             dependencies: self.dependencies.to_wit_naming(),
             mode: self.mode,
             http_mount: self.http_mount.clone(),
+            snapshotting: self.snapshotting.clone(),
         }
     }
 }

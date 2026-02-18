@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
 };
@@ -23,6 +22,7 @@ use golem_common::model::account::{
 use golem_common::model::auth::AccountRole;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use pretty_assertions::{assert_eq, assert_ne};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -37,10 +37,10 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     {
         let account = client.get_account(&user.account_id.0).await?;
 
-        assert!(account.id == user.account_id);
-        assert!(account.email == user.account_email);
-        assert!(account.revision == AccountRevision::INITIAL);
-        assert!(account.roles == Vec::new());
+        assert_eq!(account.id, user.account_id);
+        assert_eq!(account.email, user.account_email);
+        assert_eq!(account.revision, AccountRevision::INITIAL);
+        assert_eq!(account.roles, Vec::new());
     }
 
     // get account plan
@@ -52,7 +52,7 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     // get account tokens
     {
         let tokens = client.get_account_tokens(&user.account_id.0).await?;
-        assert!(tokens.values.len() == 1)
+        assert_eq!(tokens.values.len(), 1)
     }
 
     Ok(())
@@ -78,14 +78,14 @@ async fn update_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         )
         .await?;
 
-    assert!(updated_account.id == user.account_id);
-    assert!(updated_account.name == new_name);
-    assert!(updated_account.email == new_email);
-    assert!(updated_account.revision == AccountRevision::new(1)?);
+    assert_eq!(updated_account.id, user.account_id);
+    assert_eq!(updated_account.name, new_name);
+    assert_eq!(updated_account.email, new_email);
+    assert_eq!(updated_account.revision, AccountRevision::new(1)?);
 
     {
         let account_from_get = client.get_account(&user.account_id.0).await?;
-        assert!(account_from_get == updated_account);
+        assert_eq!(account_from_get, updated_account);
     }
     Ok(())
 }
@@ -108,8 +108,11 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             .await?;
 
         // We always reorder the roles so they are consistent
-        assert!(account.roles == vec![AccountRole::Admin, AccountRole::MarketingAdmin]);
-        assert!(account.revision == AccountRevision::new(1)?);
+        assert_eq!(
+            account.roles,
+            vec![AccountRole::Admin, AccountRole::MarketingAdmin]
+        );
+        assert_eq!(account.revision, AccountRevision::new(1)?);
     }
 
     {
@@ -123,8 +126,8 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             )
             .await?;
 
-        assert!(account.roles == vec![AccountRole::Admin]);
-        assert!(account.revision == AccountRevision::new(2)?);
+        assert_eq!(account.roles, vec![AccountRole::Admin]);
+        assert_eq!(account.revision, AccountRevision::new(2)?);
     }
     Ok(())
 }
@@ -147,7 +150,7 @@ async fn create_account_with_duplicate_email_fails(
             })
             .await?;
 
-        assert!(account.email == email);
+        assert_eq!(account.email, email);
     }
 
     {
@@ -158,11 +161,12 @@ async fn create_account_with_duplicate_email_fails(
             })
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            failed_account_creation,
+            Err(golem_client::Error::Item(
                 RegistryServiceCreateAccountError::Error409(_)
-            )) = failed_account_creation
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -186,7 +190,7 @@ async fn update_account_with_duplicate_email_fails(
             })
             .await?;
 
-        assert!(account.email == conflicting_email);
+        assert_eq!(account.email, conflicting_email);
     }
 
     {
@@ -208,11 +212,12 @@ async fn update_account_with_duplicate_email_fails(
             )
             .await;
 
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            failed_account_update,
+            Err(golem_client::Error::Item(
                 RegistryServiceUpdateAccountError::Error409(_)
-            )) = failed_account_update
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -262,8 +267,8 @@ async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result
         )
         .await?;
 
-    assert!(account_1.email != conflicting_email);
-    assert!(account_2.email == conflicting_email);
+    assert_ne!(account_1.email, conflicting_email);
+    assert_eq!(account_2.email, conflicting_email);
 
     Ok(())
 }

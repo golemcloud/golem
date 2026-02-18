@@ -11,6 +11,8 @@ app: agent-rpc
 includes:
 - common-*/golem.yaml
 - components-*/*/golem.yaml
+witDeps:
+  - .wit/wit/deps
 
 environments:
   local:

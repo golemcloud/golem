@@ -92,7 +92,7 @@ use golem_common::model::oplog::{
     PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
-use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
@@ -271,6 +271,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 shard_service,
                 pending_update,
                 original_phantom_id,
+                worker_config.last_snapshot_index,
             )
             .await,
             temp_dir,
@@ -986,7 +987,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .get_upload_description_payload(description)
                     .await
                 {
-                    Ok(Some(data)) => {
+                    Ok(Some((data, mime_type))) => {
                         let component_metadata = store
                             .as_context()
                             .data()
@@ -1011,7 +1012,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
                                 let load_result = invoke_observed_and_traced(
                                     load_snapshot.name.to_string(),
-                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                    vec![Value::Record(vec![
+                                        Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
+                                        Value::String(mime_type),
+                                    ])],
                                     store,
                                     instance,
                                     &component_metadata,
@@ -1122,6 +1126,190 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             }
         }
     }
+
+    async fn try_load_snapshot(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        instance: &Instance,
+    ) -> SnapshotRecoveryResult {
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index;
+
+        let snapshot_index = match snapshot_index {
+            Some(idx) => idx,
+            None => return SnapshotRecoveryResult::NotAttempted,
+        };
+
+        debug!("Attempting snapshot-based recovery from oplog index {snapshot_index}");
+
+        let oplog_entry = store
+            .as_context()
+            .data()
+            .get_public_state()
+            .oplog()
+            .read(snapshot_index)
+            .await;
+
+        let (data_payload, mime_type) = match oplog_entry {
+            OplogEntry::Snapshot {
+                data, mime_type, ..
+            } => (data, mime_type),
+            _ => {
+                warn!("Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+        };
+
+        let data = match store
+            .as_context()
+            .data()
+            .get_public_state()
+            .oplog()
+            .download_payload(data_payload)
+            .await
+        {
+            Ok(data) => data,
+            Err(err) => {
+                warn!("Failed to download snapshot payload: {err}; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+        };
+
+        let component_metadata = store
+            .as_context()
+            .data()
+            .component_metadata()
+            .metadata
+            .clone();
+
+        let load_snapshot_fn = match component_metadata.load_snapshot() {
+            Ok(Some(f)) => f,
+            Ok(None) => {
+                warn!("Component does not export load-snapshot; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+            Err(err) => {
+                warn!("Failed to find load-snapshot function: {err}; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+        };
+
+        let idempotency_key = IdempotencyKey::fresh();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .begin_call_snapshotting_function();
+
+        let load_result = invoke_observed_and_traced(
+            load_snapshot_fn.name.to_string(),
+            vec![Value::Record(vec![
+                Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
+                Value::String(mime_type),
+            ])],
+            store,
+            instance,
+            &component_metadata,
+            true,
+        )
+        .await;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .end_call_snapshotting_function();
+
+        let failed = match load_result {
+            Err(error) => Some(format!(
+                "Snapshot recovery failed to load snapshot: {error}"
+            )),
+            Ok(InvokeResult::Failed { error, .. }) => {
+                let stderr = store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .event_service()
+                    .get_last_invocation_errors();
+                let error = error.to_string(&stderr);
+                Some(format!(
+                    "Snapshot recovery failed to load snapshot: {error}"
+                ))
+            }
+            Ok(InvokeResult::Succeeded { output, .. }) => {
+                if let Some(output) = output {
+                    match output {
+                        Value::Result(Err(Some(boxed_error_value))) => match &*boxed_error_value {
+                            Value::String(error) => Some(format!(
+                                "Snapshot recovery load-snapshot returned error: {error}"
+                            )),
+                            _ => Some(
+                                "Unexpected result value from load-snapshot function".to_string(),
+                            ),
+                        },
+                        _ => None,
+                    }
+                } else {
+                    Some("Unexpected empty result from load-snapshot function".to_string())
+                }
+            }
+            Ok(_) => Some("Snapshot recovery interrupted".to_string()),
+        };
+
+        if let Some(error) = failed {
+            warn!("{error}; re-creating instance for full replay");
+            SnapshotRecoveryResult::Failed
+        } else {
+            debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
+            SnapshotRecoveryResult::Success
+        }
+    }
+}
+
+enum SnapshotRecoveryResult {
+    Success,
+    NotAttempted,
+    Failed,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -1536,7 +1724,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
             }
         }
-        debug!("Function {full_function_name} finished with {output:?}");
+        debug!("Function {full_function_name} finished");
 
         Ok(())
     }
@@ -2196,12 +2384,28 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         }
                     }
                 }
-                None => {
-                    let result = Self::resume_replay(store, instance, false).await;
-                    record_resume_worker(start.elapsed());
-
-                    result
-                }
+                None => match Self::try_load_snapshot(store, instance).await {
+                    SnapshotRecoveryResult::Success => {
+                        let result = Self::resume_replay(store, instance, false).await;
+                        record_resume_worker(start.elapsed());
+                        result
+                    }
+                    SnapshotRecoveryResult::NotAttempted => {
+                        let result = Self::resume_replay(store, instance, false).await;
+                        record_resume_worker(start.elapsed());
+                        result
+                    }
+                    SnapshotRecoveryResult::Failed => {
+                        store
+                            .as_context()
+                            .data()
+                            .get_public_state()
+                            .worker()
+                            .snapshot_recovery_disabled
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        Ok(Some(RetryDecision::Immediate))
+                    }
+                },
             }
         };
         match prepare_result {
@@ -2711,6 +2915,7 @@ struct PrivateDurableWorkerState {
 
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
+    last_snapshot_index: Option<OplogIndex>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2746,7 +2951,21 @@ impl PrivateDurableWorkerState {
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        last_snapshot_index: Option<OplogIndex>,
     ) -> Self {
+        let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
+            let mut regions = deleted_regions;
+            let snapshot_skip =
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    OplogIndex::INITIAL.next()..=snapshot_idx,
+                )])
+                .build();
+            regions.set_override(snapshot_skip);
+            regions
+        } else {
+            deleted_regions
+        };
+
         let replay_state =
             ReplayState::new(owned_worker_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
@@ -2798,6 +3017,7 @@ impl PrivateDurableWorkerState {
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
             current_phantom_id: original_phantom_id,
+            last_snapshot_index,
         }
     }
 
