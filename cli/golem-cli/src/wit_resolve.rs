@@ -4,7 +4,7 @@ use crate::fs;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::Application;
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::wasm_rpc_stubgen::naming;
+
 use anyhow::{anyhow, bail, Context, Error};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::component::ComponentName;
@@ -19,6 +19,46 @@ use wit_parser::{
     InterfaceId, Package, PackageId, PackageName, PackageSourceMap, Resolve,
     UnresolvedPackageGroup, WorldItem,
 };
+
+fn client_parser_package_name(package_name: &PackageName) -> PackageName {
+    PackageName {
+        namespace: package_name.namespace.clone(),
+        name: format!("{}-client", package_name.name),
+        version: package_name.version.clone(),
+    }
+}
+
+fn exports_parser_package_name(package_name: &PackageName) -> PackageName {
+    PackageName {
+        namespace: package_name.namespace.clone(),
+        name: format!("{}-exports", package_name.name),
+        version: package_name.version.clone(),
+    }
+}
+
+fn parser_package_name_from_component_name(
+    component_name: &ComponentName,
+) -> anyhow::Result<PackageName> {
+    let component_name = component_name.as_str();
+    let package_name_re =
+        regex::Regex::new(r"^(?P<namespace>[^:]+):(?P<name>[^@]+)(?:@(?P<version>.+))?$")?;
+    let captures = package_name_re
+        .captures(component_name)
+        .ok_or_else(|| anyhow!("Invalid component name format: {}", component_name))?;
+    let namespace = captures.name("namespace").unwrap().as_str().to_string();
+    let name = captures.name("name").unwrap().as_str().to_string();
+    let version = captures
+        .name("version")
+        .map(|m| m.as_str().to_string())
+        .map(|v| semver::Version::parse(&v))
+        .transpose()?;
+
+    Ok(PackageName {
+        namespace,
+        name,
+        version,
+    })
+}
 
 pub struct PackageSource {
     pub dir: PathBuf,
@@ -495,11 +535,11 @@ impl ResolvedWitApplication {
             component_name.clone(),
         );
         self.stub_package_to_component.insert(
-            naming::wit::client_parser_package_name(&resolved_component.main_package_name),
+            client_parser_package_name(&resolved_component.main_package_name),
             component_name.clone(),
         );
         self.interface_package_to_component.insert(
-            naming::wit::exports_parser_package_name(&resolved_component.main_package_name),
+            exports_parser_package_name(&resolved_component.main_package_name),
             component_name.clone(),
         );
         self.components.insert(component_name, resolved_component);
@@ -665,7 +705,7 @@ impl ResolvedWitApplication {
         // The WASM has no root package name (always root:component with world root) so
         // we use the app component name as a main package name
         let main_package_name =
-            naming::wit::parser_package_name_from_component_name(component_name)?;
+            parser_package_name_from_component_name(component_name)?;
 
         // When using a WASM as a "source WIT", we are currently not supporting transforming
         // that into a generated WIT dir, just treat it as a static interface definition for
@@ -1221,7 +1261,7 @@ impl WitDepsResolver {
                 let source_parent = fs::parent_or_err(source)?;
 
                 let target = target_deps_dir
-                    .join(naming::wit::DEPS_DIR)
+                    .join("deps")
                     .join(fs::file_name_to_str(source_parent)?)
                     .join(fs::file_name_to_str(source)?);
 

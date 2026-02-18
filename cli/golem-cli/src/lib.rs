@@ -35,7 +35,8 @@ pub mod log;
 pub mod model;
 pub mod process;
 pub mod validation;
-pub mod wasm_rpc_stubgen;
+pub mod composition;
+pub mod wit_resolve;
 
 #[allow(unused)]
 mod wasm_metadata;

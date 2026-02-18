@@ -33,8 +33,7 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use crate::process::{with_hidden_output_unless_error, CommandExt};
-use crate::wasm_rpc_stubgen::commands;
-use crate::wasm_rpc_stubgen::commands::composition::Plug;
+use crate::composition::{compose, Plug};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
@@ -171,7 +170,7 @@ async fn execute_compose_agent_wrapper(
                 );
                 let _indent = LogIndent::new();
 
-                let unused_plugs = commands::composition::compose(
+                let unused_plugs = compose(
                     wrapper_wasm_path.as_std_path(),
                     vec![Plug {
                         name: user_component.to_string(),
@@ -246,7 +245,7 @@ async fn execute_inject_to_prebuilt_quick_js(
                     )
                 })?;
 
-                commands::composition::compose(
+                compose(
                     base_wasm.as_std_path(),
                     vec![Plug {
                         name: "JS module".to_string(),

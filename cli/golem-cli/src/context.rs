@@ -36,7 +36,7 @@ use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
+use crate::model::app::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;

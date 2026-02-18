@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::fs;
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
@@ -17,10 +31,6 @@ pub async fn compose(
     plugs: Vec<Plug>,
     dest_wasm: &Path,
 ) -> anyhow::Result<Vec<String>> {
-    // Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/src/commands/plug.rs
-    // with allowing missing plugs (through the also customized plug function below)
-    // and using local packages only (for now)
-
     let mut graph = CompositionGraph::new();
 
     let socket = fs::read(source_wasm).context("Failed to read socket component")?;
@@ -45,11 +55,6 @@ pub async fn compose(
     Ok(unused_plugs)
 }
 
-// Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/crates/wac-graph/src/plug.rs#L23,
-// but:
-//   - instead of returning NoPlugError, it returns skipped instantiations
-//   - pre-checks multi plugs for the same export to prevent ArgumentAlreadyPassed errors, and
-//     returns a custom error for it with more context
 fn plug(
     graph: &mut CompositionGraph,
     plugs: Vec<(Plug, PackageId)>,
@@ -79,7 +84,6 @@ fn plug(
         }
     }
 
-    // Instantiate plugs
     let mut plug_instantiations = BTreeMap::<PackageId, Option<NodeId>>::new();
     for (plug_export_name, plugs) in plug_exports_to_plug.iter() {
         if plugs.len() > 1 {
@@ -121,7 +125,6 @@ fn plug(
         offered_plugs
     };
 
-    // Export all exports from the socket component.
     for name in graph.types()[graph[socket].ty()]
         .exports
         .keys()

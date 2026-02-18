@@ -1,5 +1,10 @@
 use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
-use crate::stubgen::test_data_path;
+use crate::crate_path;
+use std::path::PathBuf;
+
+fn test_data_path() -> PathBuf {
+    crate_path().join("test-data")
+}
 use crate::Tracing;
 use anyhow::Context;
 use assert2::assert;

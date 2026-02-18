@@ -29,8 +29,7 @@ use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
+use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
@@ -153,7 +152,6 @@ pub struct ApplicationContext {
     application: Application,
     wit: tokio::sync::RwLock<ResolvedWitApplication>,
     calling_working_dir: PathBuf,
-    // component_stub_defs: HashMap<ComponentName, StubDefinition>, // TODO: WASM RPC cleanup
     common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
     selected_component_names: BTreeSet<ComponentName>,
     remote_components: RemoteComponents,
@@ -295,54 +293,6 @@ impl ApplicationContext {
         )
     }
 
-    // TODO: WASM RPC cleanup
-    /*
-    pub fn component_stub_def(
-        &self,
-        component_name: &ComponentName,
-    ) -> anyhow::Result<&StubDefinition> {
-        if !self.component_stub_defs.contains_key(component_name) {
-            let component = self.application.component(component_name);
-            self.component_stub_defs.insert(
-                component_name.clone(),
-                StubDefinition::new(StubConfig {
-                    source_wit_root: component.generated_base_wit(),
-                    client_root: component.client_temp_build_dir(),
-                    selected_world: None,
-                    stub_crate_version: golem_common::golem_version().to_string(),
-                    golem_rust_override: self.config.golem_rust_override.clone(),
-                    extract_source_exports_package: false,
-                    seal_cargo_workspace: true,
-                    component_name: component_name.clone(),
-                })
-                .context("Failed to gather information for the stub generator")?,
-            );
-        }
-        Ok(self.component_stub_defs.get(component_name).unwrap())
-    }
-
-    pub fn component_stub_interfaces(
-        &mut self,
-        component_name: &ComponentName,
-    ) -> anyhow::Result<ComponentStubInterfaces> {
-        let stub_def = self.component_stub_def(component_name)?;
-        let client_package_name = stub_def.client_parser_package_name();
-        let result = ComponentStubInterfaces {
-            component_name: component_name.clone(),
-            stub_interface_name: client_package_name
-                .interface_id(&stub_def.client_interface_name()),
-            exported_interfaces_per_stub_resource: BTreeMap::from_iter(
-                stub_def.stubbed_entities().iter().filter_map(|entity| {
-                    entity
-                        .owner_interface()
-                        .map(|owner| (entity.name().to_string(), owner.to_string()))
-                }),
-            ),
-        };
-        Ok(result)
-    }
-    */
-
     pub fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
         match self
             .common_wit_deps
@@ -368,7 +318,7 @@ impl ApplicationContext {
             .application
             .component(component_name)
             .generated_base_wit()
-            .join(naming::wit::DEPS_DIR)])
+            .join("deps")])
     }
 
     pub fn select_components(

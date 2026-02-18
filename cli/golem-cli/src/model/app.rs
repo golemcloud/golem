@@ -27,8 +27,7 @@ use crate::model::component::AppComponentType;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
+
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
@@ -104,6 +103,12 @@ impl BuildConfig {
             self.steps_filter.contains(&step)
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RustDependencyOverride {
+    pub path_override: Option<PathBuf>,
+    pub version_override: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1270,11 +1275,12 @@ impl<'a> Component<'a> {
         exports_package_name: &wit_parser::PackageName,
     ) -> PathBuf {
         self.generated_base_wit()
-            .join(naming::wit::DEPS_DIR)
-            .join(naming::wit::package_dep_dir_name_from_parser(
-                exports_package_name,
+            .join("deps")
+            .join(format!(
+                "{}_{}",
+                exports_package_name.namespace, exports_package_name.name
             ))
-            .join(naming::wit::EXPORTS_WIT_FILE_NAME)
+            .join("exports.wit")
     }
 
     pub fn generated_wit(&self) -> PathBuf {
@@ -1365,7 +1371,7 @@ impl<'a> Component<'a> {
     pub fn client_wit(&self) -> PathBuf {
         self.client_base_build_dir()
             .join(self.name_as_safe_path_elem())
-            .join(naming::wit::WIT_DIR)
+            .join("wit")
     }
 
     pub fn is_deployable(&self) -> bool {
