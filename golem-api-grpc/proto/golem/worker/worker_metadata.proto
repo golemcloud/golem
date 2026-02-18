@@ -14,7 +14,7 @@ message WorkerMetadata {
   WorkerId worker_id = 1;
   golem.common.AccountId created_by = 2;
   map<string, string> env = 4;
-  map<string, string> wasi_config_vars = 5;
+  map<string, string> config_vars = 5;
   WorkerStatus status = 6;
   uint64 component_revision = 7;
   uint32 retry_count = 8;

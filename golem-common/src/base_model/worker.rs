@@ -31,7 +31,7 @@ pub struct WorkerCreationRequest {
     pub name: String,
     pub env: HashMap<String, String>,
     #[cfg_attr(feature = "full", oai(default))]
-    pub wasi_config_vars: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
 }
 
 declare_enums! {
@@ -93,7 +93,7 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
-        pub wasi_config_vars: BTreeMap<String, String>,
+        pub config_vars: BTreeMap<String, String>,
         pub status: WorkerStatus,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,

@@ -132,7 +132,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         files: Vec<IFSEntry>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -191,7 +191,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     file_options,
                     dynamic_linking,
                     env,
-                    wasi_config_vars,
+                    config_vars,
                     plugins,
                     agent_types,
                 },
@@ -238,7 +238,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
-        wasi_config_vars: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let client = self.deps.registry_service().client(&self.token).await;
@@ -290,7 +290,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     removed_files,
                     dynamic_linking,
                     env,
-                    wasi_config_vars,
+                    config_vars,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
@@ -314,21 +314,21 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: HashMap<String, String>,
+        config_vars: HashMap<String, String>,
     ) -> WorkerInvocationResult<WorkerId> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
-        let wasi_config_vars: BTreeMap<String, String> = wasi_config_vars.into_iter().collect();
+        let config_vars: BTreeMap<String, String> = config_vars.into_iter().collect();
         let response = client
             .launch_new_worker(
                 &component_id.0,
                 &WorkerCreationRequest {
                     name: id.to_string(),
                     env,
-                    wasi_config_vars,
+                    config_vars,
                 },
             )
             .await?;

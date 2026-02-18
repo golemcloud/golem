@@ -161,8 +161,8 @@ pub struct ComponentRevisionRecord {
     pub metadata: Blob<ComponentMetadata>,
     pub original_env: Json<BTreeMap<String, String>>,
     pub env: Json<BTreeMap<String, String>>,
-    pub original_wasi_config_vars: Json<BTreeMap<String, String>>,
-    pub wasi_config_vars: Json<BTreeMap<String, String>>,
+    pub original_config_vars: Json<BTreeMap<String, String>>,
+    pub config_vars: Json<BTreeMap<String, String>>,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
     pub transformed_object_store_key: String,
@@ -215,8 +215,8 @@ impl ComponentRevisionRecord {
             metadata: Blob::new(ComponentMetadata::default()),
             env: Default::default(),
             original_env: Default::default(),
-            wasi_config_vars: Default::default(),
-            original_wasi_config_vars: Default::default(),
+            config_vars: Default::default(),
+            original_config_vars: Default::default(),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
             transformed_object_store_key: "".to_string(),
@@ -237,8 +237,8 @@ impl ComponentRevisionRecord {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                wasi_config_vars: self
-                    .wasi_config_vars
+                config_vars: self
+                    .config_vars
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
@@ -329,8 +329,8 @@ impl ComponentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             original_env: Json(value.original_env),
             env: Json(value.env),
-            original_wasi_config_vars: Json(value.original_wasi_config_vars),
-            wasi_config_vars: Json(value.wasi_config_vars),
+            original_config_vars: Json(value.original_config_vars),
+            config_vars: Json(value.config_vars),
             audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
@@ -376,7 +376,7 @@ impl ComponentExtRevisionRecord {
                 .map(|p| p.try_into())
                 .collect::<Result<_, _>>()?,
             env: self.revision.env.0,
-            wasi_config_vars: self.revision.wasi_config_vars.0,
+            config_vars: self.revision.config_vars.0,
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
             original_files: self
@@ -386,7 +386,7 @@ impl ComponentExtRevisionRecord {
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
             original_env: self.revision.original_env.0,
-            original_wasi_config_vars: self.revision.original_wasi_config_vars.0,
+            original_config_vars: self.revision.original_config_vars.0,
             transformed_object_store_key: self.revision.transformed_object_store_key,
             hash: self.revision.hash.into(),
         })

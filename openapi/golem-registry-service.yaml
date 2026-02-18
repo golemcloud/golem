@@ -6785,7 +6785,7 @@ components:
           default: {}
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           type: object
           default: {}
           additionalProperties:
@@ -6819,8 +6819,8 @@ components:
       - installedPlugins
       - env
       - originalEnv
-      - wasiConfigVars
-      - originalWasiConfigVars
+      - configVars
+      - originalConfigVars
       - wasmHash
       properties:
         id:
@@ -6871,11 +6871,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           type: object
           additionalProperties:
             type: string
-        originalWasiConfigVars:
+        originalConfigVars:
           type: object
           additionalProperties:
             type: string
@@ -6986,7 +6986,7 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           type: object
           additionalProperties:
             type: string

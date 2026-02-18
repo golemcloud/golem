@@ -125,7 +125,7 @@ impl TestDsl for TestWorkerExecutor {
         files: Vec<IFSEntry>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         if !plugins.is_empty() {
@@ -194,7 +194,7 @@ impl TestDsl for TestWorkerExecutor {
                         dynamic_linking,
                         unverified,
                         env,
-                        wasi_config_vars,
+                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -213,7 +213,7 @@ impl TestDsl for TestWorkerExecutor {
                         dynamic_linking,
                         unverified,
                         env,
-                        wasi_config_vars,
+                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -257,7 +257,7 @@ impl TestDsl for TestWorkerExecutor {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
-        wasi_config_vars: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let latest_revision = self
             .deps
@@ -317,7 +317,7 @@ impl TestDsl for TestWorkerExecutor {
                 removed_files,
                 dynamic_linking,
                 env,
-                wasi_config_vars,
+                config_vars,
                 original_source_hash,
             )
             .await?;
@@ -330,7 +330,7 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: HashMap<String, String>,
+        config_vars: HashMap<String, String>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -347,7 +347,7 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                wasi_config_vars,
+                config_vars,
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
             })

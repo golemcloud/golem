@@ -1096,9 +1096,9 @@ pub mod worker {
             /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
-            /// wasi:config entryies visible for the agent
+            /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
-            wasi_config_vars: Vec<(String, String)>,
+            config_vars: Vec<(String, String)>,
         },
         // TODO: json args
         /// Invoke (or enqueue invocation for) agent

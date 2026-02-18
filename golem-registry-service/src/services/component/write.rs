@@ -161,7 +161,7 @@ impl ComponentWriteService {
             component_creation.component_name.clone(),
             initial_component_files,
             component_creation.env,
-            component_creation.wasi_config_vars,
+            component_creation.config_vars,
             wasm_hash,
             wasm_object_store_key,
             component_creation.dynamic_linking,
@@ -303,8 +303,8 @@ impl ComponentWriteService {
             .await?,
             component_update.env.unwrap_or(component.env),
             component_update
-                .wasi_config_vars
-                .unwrap_or(component.wasi_config_vars),
+                .config_vars
+                .unwrap_or(component.config_vars),
             wasm_hash,
             wasm_object_store_key,
             component_update

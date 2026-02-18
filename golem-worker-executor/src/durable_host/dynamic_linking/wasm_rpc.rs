@@ -1006,7 +1006,7 @@ async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::enviro
     let mut env = store.data_mut().get_environment().await?;
     WorkerConfig::remove_dynamic_vars(&mut env);
 
-    let config = store.data().wasi_config_vars();
+    let config = store.data().config_vars();
     let stack = store.data().clone_as_inherited_stack(span_id);
     let demand = store
         .data()

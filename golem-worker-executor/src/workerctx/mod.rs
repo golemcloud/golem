@@ -76,7 +76,7 @@ pub trait WorkerCtx:
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
-    + HasWasiConfigVars
+    + HasConfigVars
     + Send
     + Sync
     + Sized
@@ -443,8 +443,8 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
     ) -> anyhow::Result<()>;
 }
 
-pub trait HasWasiConfigVars {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String>;
+pub trait HasConfigVars {
+    fn config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

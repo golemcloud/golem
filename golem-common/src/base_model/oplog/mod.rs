@@ -73,7 +73,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginPriority>,
-            wasi_config_vars: BTreeMap<String, String>,
+            config_vars: BTreeMap<String, String>,
             original_phantom_id: Option<Uuid>
         }
         public {
@@ -86,7 +86,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config_vars: BTreeMap<String, String>,
+            config_vars: BTreeMap<String, String>,
             original_phantom_id: Option<Uuid>
         }
     },

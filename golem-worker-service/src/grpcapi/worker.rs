@@ -306,7 +306,7 @@ impl WorkerGrpcApi {
             .create(
                 &worker_id,
                 request.env,
-                request.wasi_config_vars.into_iter().collect(),
+                request.config_vars.into_iter().collect(),
                 request.ignore_already_existing,
                 auth,
             )

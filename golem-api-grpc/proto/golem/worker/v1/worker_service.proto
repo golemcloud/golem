@@ -38,7 +38,7 @@ message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
   string name = 2;
   map<string, string> env = 4;
-  map<string, string> wasi_config_vars = 5;
+  map<string, string> config_vars = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
 }

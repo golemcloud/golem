@@ -1176,12 +1176,12 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.wasi_config_vars.apply_layer(
+            value.config_vars.apply_layer(
                 id,
                 selection,
                 (
-                    properties.wasi_config_vars_merge_mode.unwrap_or_default(),
-                    properties.wasi_config_vars.value().clone(),
+                    properties.config_vars_merge_mode.unwrap_or_default(),
+                    properties.config_vars.value().clone(),
                 ),
             );
 
@@ -1347,8 +1347,8 @@ impl<'a> Component<'a> {
         &self.properties().env
     }
 
-    pub fn wasi_config_vars(&self) -> &BTreeMap<String, String> {
-        &self.properties().wasi_config_vars
+    pub fn config_vars(&self) -> &BTreeMap<String, String> {
+        &self.properties().config_vars
     }
 
     pub fn files(&self) -> &Vec<InitialComponentFile> {
@@ -1427,8 +1427,8 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_config_vars_merge_mode: Option<MapMergeMode>,
-    pub wasi_config_vars: MapProperty<ComponentLayer, String, String>,
+    pub config_vars_merge_mode: Option<MapMergeMode>,
+    pub config_vars: MapProperty<ComponentLayer, String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies_merge_mode: Option<VecMergeMode>,
     pub dependencies: VecProperty<ComponentLayer, app_raw::Dependency>,
@@ -1453,8 +1453,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.plugins.unwrap_or_default().into(),
             env_merge_mode: value.env_merge_mode,
             env: value.env.unwrap_or_default().into(),
-            wasi_config_vars_merge_mode: value.wasi_config_vars_merge_mode,
-            wasi_config_vars: value.wasi_config_vars.unwrap_or_default().into(),
+            config_vars_merge_mode: value.config_vars_merge_mode,
+            config_vars: value.config_vars.unwrap_or_default().into(),
             dependencies_merge_mode: value.dependencies_merge_mode,
             dependencies: value.dependencies.unwrap_or_default().into(),
         }
@@ -1474,7 +1474,7 @@ impl ComponentLayerProperties {
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
-        self.wasi_config_vars.compact_trace();
+        self.config_vars.compact_trace();
         self.dependencies.compact_trace();
     }
 
@@ -1517,7 +1517,7 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
-    pub wasi_config_vars: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     pub dependencies: BTreeSet<DependentComponent>,
 }
 
@@ -1554,8 +1554,8 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
-            wasi_config_vars: merged
-                .wasi_config_vars
+            config_vars: merged
+                .config_vars
                 .value()
                 .into_iter()
                 .map(|(k, v)| (k.clone(), v.clone()))

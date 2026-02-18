@@ -3161,7 +3161,7 @@ async fn wasi_config_component_update(
             "golem_it_host_api_tests_release",
         )
         .name("golem-it:host-api-tests")
-        .with_wasi_config_vars(vec![
+        .with_config_vars(vec![
             ("k1".to_string(), "v0".to_string()),
             ("k3".to_string(), "v3".to_string()),
         ])

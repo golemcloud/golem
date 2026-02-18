@@ -491,7 +491,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -519,7 +519,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -547,7 +547,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                         cr.component_id, cr.revision_id, cr.version, cr.hash,
                         cr.created_at, cr.created_by, cr.deleted,
                         cr.size, cr.metadata, cr.original_env, cr.env,
-                        cr.original_wasi_config_vars, cr.wasi_config_vars,
+                        cr.original_config_vars, cr.config_vars,
                         cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -582,7 +582,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -629,7 +629,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM distinct_revs dr
                     JOIN component_revisions cr
@@ -660,7 +660,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -689,7 +689,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -717,7 +717,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -754,7 +754,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -788,7 +788,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.original_wasi_config_vars, cr.wasi_config_vars,
+                           cr.original_config_vars, cr.config_vars,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -1032,13 +1032,13 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     (component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
                         size, metadata, original_env, env,
-                        original_wasi_config_vars, wasi_config_vars,
+                        original_config_vars, config_vars,
                         object_store_key, binary_hash, transformed_object_store_key)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                     RETURNING component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
                         size, metadata, original_env, env,
-                        original_wasi_config_vars, wasi_config_vars,
+                        original_config_vars, config_vars,
                         object_store_key, binary_hash, transformed_object_store_key
                 "# })
                 .bind(revision.component_id)
@@ -1050,8 +1050,8 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.metadata)
                 .bind(revision.original_env)
                 .bind(revision.env)
-                .bind(revision.original_wasi_config_vars)
-                .bind(revision.wasi_config_vars)
+                .bind(revision.original_config_vars)
+                .bind(revision.config_vars)
                 .bind(revision.object_store_key)
                 .bind(revision.binary_hash)
                 .bind(revision.transformed_object_store_key),

@@ -82,7 +82,7 @@ message CreateParameters {
   WorkerId worker_id = 2;
   uint64 component_revision = 3;
   map<string, string> env = 5;
-  map<string, string> wasi_config_vars = 6;
+  map<string, string> config_vars = 6;
   golem.common.AccountId created_by = 7;
   optional WorkerId parent = 8;
   uint64 component_size = 9;

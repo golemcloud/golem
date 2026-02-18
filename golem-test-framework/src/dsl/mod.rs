@@ -105,7 +105,7 @@ pub trait TestDsl {
         files: Vec<IFSEntry>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -188,7 +188,7 @@ pub trait TestDsl {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
-        wasi_config_vars: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn try_start_agent(
@@ -205,7 +205,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: HashMap<String, String>,
+        config_vars: HashMap<String, String>,
     ) -> WorkerInvocationResult<WorkerId>;
 
     async fn start_agent(
@@ -222,10 +222,10 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: HashMap<String, String>,
+        config_vars: HashMap<String, String>,
     ) -> anyhow::Result<WorkerId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, wasi_config_vars)
+            .try_start_agent_with(component_id, id, env, config_vars)
             .await?;
         Ok(result?)
     }
@@ -676,7 +676,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     files: Vec<IFSEntry>,
     dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     env: BTreeMap<String, String>,
-    wasi_config_vars: BTreeMap<String, String>,
+    config_vars: BTreeMap<String, String>,
     plugins: Vec<PluginInstallation>,
 }
 
@@ -692,7 +692,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             files: Vec::new(),
             dynamic_linking: HashMap::new(),
             env: BTreeMap::new(),
-            wasi_config_vars: BTreeMap::new(),
+            config_vars: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }
@@ -785,9 +785,9 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    pub fn with_wasi_config_vars(mut self, wasi_config_vars: Vec<(String, String)>) -> Self {
-        let map = wasi_config_vars.into_iter().collect::<BTreeMap<_, _>>();
-        self.wasi_config_vars = map;
+    pub fn with_config_vars(mut self, config_vars: Vec<(String, String)>) -> Self {
+        let map = config_vars.into_iter().collect::<BTreeMap<_, _>>();
+        self.config_vars = map;
         self
     }
 
@@ -826,7 +826,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.files,
                 self.dynamic_linking,
                 self.env,
-                self.wasi_config_vars,
+                self.config_vars,
                 self.plugins,
             )
             .await

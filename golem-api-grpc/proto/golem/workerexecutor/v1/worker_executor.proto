@@ -123,7 +123,7 @@ message InterruptWorkerResponse {
 message CreateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   map<string, string> env = 2;
-  map<string, string> wasi_config_vars = 3;
+  map<string, string> config_vars = 3;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 4;
   // Component's owner environment

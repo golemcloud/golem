@@ -491,7 +491,7 @@ pub struct WorkerMetadata {
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
-    pub wasi_config_vars: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
@@ -509,7 +509,7 @@ impl WorkerMetadata {
             env: vec![],
             environment_id,
             created_by,
-            wasi_config_vars: BTreeMap::new(),
+            config_vars: BTreeMap::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
@@ -548,12 +548,12 @@ impl WorkerFilter {
                 }
                 result
             }
-            WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+            WorkerFilter::ConfigVars(WorkerConfigVarsFilter {
                 name,
                 comparator,
                 value,
             }) => {
-                let env_value = metadata.wasi_config_vars.get(&name);
+                let env_value = metadata.config_vars.get(&name);
                 env_value
                     .map(|ev| comparator.matches(ev, &value))
                     .unwrap_or(false)

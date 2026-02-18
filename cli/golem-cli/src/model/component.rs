@@ -222,7 +222,7 @@ pub struct ComponentDeployProperties {
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub plugins: Vec<crate::model::app::PluginInstallation>,
     pub env: BTreeMap<String, String>,
-    pub wasi_config_vars: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
 }
 
 impl TrimDateTime for ComponentView {

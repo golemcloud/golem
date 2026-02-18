@@ -269,13 +269,13 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
-    pub fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.component_deploy_properties.wasi_config_vars.clone()
+    pub fn config_vars(&self) -> BTreeMap<String, String> {
+        self.component_deploy_properties.config_vars.clone()
     }
 
-    pub fn wasi_config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
+    pub fn config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
         if self.diff.metadata_changed() {
-            Some(self.wasi_config_vars())
+            Some(self.config_vars())
         } else {
             None
         }

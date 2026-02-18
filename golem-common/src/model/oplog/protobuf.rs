@@ -211,7 +211,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .try_into()?,
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
-                wasi_config_vars: create.wasi_config_vars.into_iter().collect(),
+                config_vars: create.config_vars.into_iter().collect(),
                 environment_id: create
                     .environment_id
                     .ok_or("Missing environment_id field")?
@@ -623,7 +623,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         worker_id: Some(create.worker_id.into()),
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
-                        wasi_config_vars: create.wasi_config_vars.into_iter().collect(),
+                        config_vars: create.config_vars.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
                         parent: create.parent.map(Into::into),

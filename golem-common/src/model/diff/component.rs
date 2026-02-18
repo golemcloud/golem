@@ -74,7 +74,7 @@ pub struct ComponentMetadata {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub wasi_config_vars: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, ComponentWasmRpcTarget>>,
 }
