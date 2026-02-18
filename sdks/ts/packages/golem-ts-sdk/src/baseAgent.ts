@@ -91,19 +91,44 @@ export class BaseAgent {
   }
 
   /**
-   * Loads the agent's state from a previously saved binary snapshot produced by `saveSnapshot()`.
-   * @param bytes The binary snapshot data.
+   * Loads the agent's state from a previously saved snapshot produced by `saveSnapshot()`.
+   *
+   * Override this method together with `saveSnapshot()` to implement a fully custom binary
+   * snapshot format. If not overridden, the default implementation restores the agent's state
+   * from a JSON snapshot.
+   *
+   * @param bytes The snapshot data.
    * @throws String Can throw a string describing the load error.
    */
-  loadSnapshot(bytes: Uint8Array): Promise<void> {
-    throw new Error(`\`loadSnapshot\` is not implemented for ${this.constructor.name}`);
+  async loadSnapshot(bytes: Uint8Array): Promise<void> {
+    const text = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(text);
+    const state = parsed?.state ?? parsed;
+
+    for (const [k, v] of Object.entries(state)) {
+      if (k === 'cachedAgentType' || k === 'agentClassName') continue;
+      (this as any)[k] = v;
+    }
   }
 
   /**
-   * Saves the agent's current state into a binary snapshot.
+   * Saves the agent's current state into a snapshot.
+   *
+   * Override this method together with `loadSnapshot()` to implement a fully custom binary
+   * snapshot format. If not overridden, the default implementation JSON-serializes the agent's
+   * own state properties.
    */
-  saveSnapshot(): Promise<Uint8Array> {
-    throw new Error(`\`saveSnapshot\` is not implemented for ${this.constructor.name}`);
+  async saveSnapshot(): Promise<Uint8Array> {
+    const state: Record<string, unknown> = {};
+
+    for (const [k, v] of Object.entries(this)) {
+      if (k === 'cachedAgentType' || k === 'agentClassName') continue;
+      if (typeof v === 'function') continue;
+      state[k] = v;
+    }
+
+    const payload = { version: 1, state };
+    return new TextEncoder().encode(JSON.stringify(payload));
   }
 
   /**

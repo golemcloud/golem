@@ -717,7 +717,6 @@ proptest! {
         prop_assert_eq!(normalized, format!("agent-7([{a},{b},{c}])"));
     }
 }
-
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
     let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
