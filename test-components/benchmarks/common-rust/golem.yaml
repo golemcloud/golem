@@ -11,34 +11,34 @@ componentTemplates:
     presets:
       debug:
         build:
-          - command: cargo component build
+          - command: cargo build --target wasm32-wasip2
             sources:
               - src
               - wit-generated
               - ../../common-rust
               - Cargo.toml
             targets:
-              - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+              - ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
-        componentWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
         clean:
           - src/bindings.rs
       release:
         default: true
         build:
-          - command: cargo component build --release
+          - command: cargo build --target wasm32-wasip2 --release
             sources:
               - src
               - wit-generated
               - ../../common-rust
               - Cargo.toml
             targets:
-              - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+              - ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
-        componentWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        componentWasm: ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
         clean:
           - src/bindings.rs
@@ -50,17 +50,17 @@ componentTemplates:
     presets:
       debug:
         build:
-          - command: cargo component build
+          - command: cargo build --target wasm32-wasip2
             sources:
               - src
               - ../../common-rust
               - Cargo.toml
             targets:
-              - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+              - ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
           - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            basedOnCompiledWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+            basedOnCompiledWasm: ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
           - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            withAgent: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+            withAgent: ../../target/wasm32-wasip2/debug/{{ component_name | to_snake_case }}.wasm
             to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
@@ -74,17 +74,17 @@ componentTemplates:
       release:
         default: true
         build:
-          - command: cargo component build --release
+          - command: cargo build --target wasm32-wasip2 --release
             sources:
               - src
               - ../../common-rust
               - Cargo.toml
             targets:
-              - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+              - ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
           - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            basedOnCompiledWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+            basedOnCompiledWasm: ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
           - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            withAgent: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+            withAgent: ../../target/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm
             to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated

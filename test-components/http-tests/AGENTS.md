@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a **Golem Application** — a distributed computing project targeting WebAssembly (WASM). Components are compiled to `wasm32-wasip1` and executed on the Golem platform, which provides durable execution, persistent state, and agent-to-agent communication.
+This is a **Golem Application** — a distributed computing project targeting WebAssembly (WASM). Components are compiled to `wasm32-wasip2` and executed on the Golem platform, which provides durable execution, persistent state, and agent-to-agent communication.
 
 Key concepts:
 - **Component**: A WASM module compiled from Rust, defining one or more agent types
@@ -39,8 +39,7 @@ golem-temp/                      # Build artifacts (gitignored)
 
 ## Prerequisites
 
-- Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
-- `cargo-component` version 0.21.1: `cargo install --force cargo-component@0.21.1`
+- Rust with `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
 ## Building
@@ -412,7 +411,7 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 
 ## Key Constraints
 
-- Target is `wasm32-wasip1` — no native system calls, threads, or platform-specific code
+- Target is `wasm32-wasip2` — no native system calls, threads, or platform-specific code
 - Crate type must be `cdylib` for component crates
 - All agent method parameters passed by value (no references)
 - All custom types need `Schema` derive (plus `IntoValue` and `FromValueAndType`, which `Schema` implies)
@@ -424,7 +423,7 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 
 ```shell
 cargo fmt                        # Format code
-cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
+cargo clippy --target wasm32-wasip2  # Lint (must target wasm32-wasip2)
 ```
 
 ## Updating Test Components

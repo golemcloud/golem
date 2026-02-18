@@ -1,6 +1,0 @@
-package wasi:config@0.2.0-draft;
-
-world imports {
-    /// The interface for wasi:config/store
-    import store;
-}

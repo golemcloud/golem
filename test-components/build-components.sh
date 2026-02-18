@@ -51,12 +51,12 @@ if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
     if [ "$rebuild" = true ]; then
       cargo clean
     fi
-    cargo component build --release
+    cargo build --target wasm32-wasip2 --release
 
     echo "Turning the module into a WebAssembly Component..."
     target="../$subdir.wasm"
     target_wat="../$subdir.wat"
-    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
+    cp -v $(find target/wasm32-wasip2/release -name '*.wasm' -maxdepth 1) "$target"
     wasm-tools print "$target" >"$target_wat"
 
     popd || exit
