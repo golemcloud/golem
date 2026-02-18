@@ -37,8 +37,6 @@ pub mod model;
 pub mod process;
 pub mod validation;
 
-#[allow(unused)]
-mod wasm_metadata;
 
 #[cfg(test)]
 test_r::enable!();

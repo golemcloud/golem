@@ -42,7 +42,6 @@ anyhow = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
-auditable-serde = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
@@ -58,7 +57,6 @@ cli-table = { workspace = true }
 colored = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
-flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
@@ -116,6 +114,7 @@ walkdir = { workspace = true }
 wax = { workspace = true }
 wasmparser = { workspace = true }
 wasm-encoder = { workspace = true }
+wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
@@ -140,8 +139,6 @@ reqwest = { workspace = true }
 serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
-wasm-metadata = { workspace = true }
-
 [build-dependencies]
 lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }

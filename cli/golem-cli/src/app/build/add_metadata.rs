@@ -17,7 +17,7 @@ use crate::app::build::up_to_date_check::is_up_to_date;
 use crate::app::context::BuildContext;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
-use crate::wasm_metadata::{AddMetadata, AddMetadataField};
+use wasm_metadata::{AddMetadata, AddMetadataField, Version as WasmVersion};
 use anyhow::Context;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
@@ -51,7 +51,7 @@ fn add_metadata(
         )),
         version: match &root_package_name.version {
             None => AddMetadataField::Clear,
-            Some(v) => AddMetadataField::Set(crate::wasm_metadata::Version::new(v.to_string())),
+            Some(v) => AddMetadataField::Set(WasmVersion::new(v.to_string())),
         },
         ..Default::default()
     };
