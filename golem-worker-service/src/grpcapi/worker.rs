@@ -424,6 +424,7 @@ impl WorkerGrpcApi {
 
     async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcWorkerError> {
         let worker_update_mode: WorkerUpdateMode = request.mode().into();
+        let disable_wakeup = request.disable_wakeup;
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
@@ -436,7 +437,13 @@ impl WorkerGrpcApi {
             .map_err(|e| bad_request_error(format!("failed converting target_revision: {e}")))?;
 
         self.worker_service
-            .update(&worker_id, worker_update_mode, target_revision, auth)
+            .update(
+                &worker_id,
+                worker_update_mode,
+                target_revision,
+                disable_wakeup,
+                auth,
+            )
             .await?;
 
         Ok(())

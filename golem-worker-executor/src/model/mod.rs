@@ -14,6 +14,7 @@
 
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
+use futures::future::ready;
 use futures::Stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
@@ -223,7 +224,9 @@ impl ExecutionStatus {
                 })
             }
             ExecutionStatus::Suspended { .. } => Box::pin(pending()),
-            ExecutionStatus::Interrupting { .. } => Box::pin(pending()),
+            ExecutionStatus::Interrupting { interrupt_kind, .. } => {
+                Box::pin(ready(*interrupt_kind))
+            }
         }
     }
 }

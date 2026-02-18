@@ -15,6 +15,7 @@
 import { env } from 'node:process';
 import fs from 'node:fs';
 import util from 'node:util';
+import * as base from './base';
 
 export type Config = {
   binary: string;
@@ -24,10 +25,12 @@ export type Config = {
   cliCommandsMetadataJsonPath: string;
 };
 
-export type ProcessArgs = {
+export type ReplCliFlags = {
   script?: string;
   scriptPath?: string;
   disableAutoImports: boolean;
+  showTypeInfo: boolean;
+  streamLogs: boolean;
 };
 
 export type AgentConfig = {
@@ -36,26 +39,12 @@ export type AgentConfig = {
   package: any;
 };
 
-export type GolemServer =
-  | { type: 'local' }
-  | { type: 'cloud'; token: string }
-  | { type: 'custom'; url: string; token: string };
-
-export type ClientConfig = {
-  server: GolemServer;
-  application: ApplicationName;
-  environment: EnvironmentName;
-};
-
-export type ApplicationName = string;
-export type EnvironmentName = string;
-
-export type ConfigureClient = (config: ClientConfig) => void;
+export type ConfigureClient = (config: base.Configuration) => void;
 
 export type CliCommandsConfig = {
   binary: string;
   appMainDir: string;
-  clientConfig: ClientConfig;
+  clientConfig: base.Configuration;
   commandMetadata: CliCommandMetadata;
 };
 
@@ -98,7 +87,7 @@ export type CliPossibleValueMetadata = {
   aliases: string[];
 };
 
-export function clientConfigFromEnv(): ClientConfig {
+export function clientConfigFromEnv(): base.Configuration {
   return {
     server: clientServerConfigFromEnv(),
     application: requiredEnvVar('GOLEM_REPL_APPLICATION'),
@@ -108,7 +97,7 @@ export function clientConfigFromEnv(): ClientConfig {
 
 export function cliCommandsConfigFromBaseConfig(
   config: Config,
-  clientConfig: ClientConfig,
+  clientConfig: base.Configuration,
 ): CliCommandsConfig {
   const commandMetadataContents = fs.readFileSync(config.cliCommandsMetadataJsonPath, 'utf8');
   const commandMetadata = JSON.parse(commandMetadataContents) as CliCommandMetadata;
@@ -121,7 +110,7 @@ export function cliCommandsConfigFromBaseConfig(
   };
 }
 
-function clientServerConfigFromEnv(): GolemServer {
+function clientServerConfigFromEnv(): base.GolemServer {
   const server_kind = requiredEnvVar('GOLEM_REPL_SERVER_KIND');
   switch (server_kind) {
     case 'local':
@@ -150,7 +139,7 @@ function requiredEnvVar(name: string): string {
   return value;
 }
 
-export function loadProcessArgs(): ProcessArgs {
+export function loadReplCliFlags(): ReplCliFlags {
   const normalizedArgs = process.argv
     .slice(2)
     .map((arg) => (arg === '-script-file' ? '--script-file' : arg));
@@ -161,29 +150,32 @@ export function loadProcessArgs(): ProcessArgs {
       script: { type: 'string' },
       'script-file': { type: 'string' },
       'disable-auto-imports': { type: 'boolean' },
+      'disable-type-info': { type: 'boolean' },
+      'disable-stream': { type: 'boolean' },
     },
     allowPositionals: true,
   });
 
-  if (values.script !== undefined) {
-    return {
-      script: values.script,
-      scriptPath: undefined,
-      disableAutoImports: values['disable-auto-imports'] ?? false,
-    };
-  }
+  const streamLogs = !(values['disable-stream'] ?? false);
+  const disableAutoImports = values['disable-auto-imports'] ?? false;
+  const showTypeInfo = !(values['disable-type-info'] ?? false);
+  const scriptPath = values['script-file'];
 
-  if (values['script-file'] !== undefined) {
-    return {
-      script: fs.readFileSync(values['script-file'], 'utf8'),
-      scriptPath: values['script-file'],
-      disableAutoImports: values['disable-auto-imports'] ?? false,
-    };
-  }
+  const script = (() => {
+    if (values.script !== undefined) {
+      return values.script;
+    }
+    if (scriptPath !== undefined) {
+      fs.readFileSync(scriptPath, 'utf8');
+    }
+    return undefined;
+  })();
 
   return {
-    script: undefined,
-    scriptPath: undefined,
-    disableAutoImports: values['disable-auto-imports'] ?? false,
+    script,
+    scriptPath,
+    disableAutoImports,
+    showTypeInfo,
+    streamLogs,
   };
 }

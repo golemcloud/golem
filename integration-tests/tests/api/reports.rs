@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceGetAccountCountReportError,
     RegistryServiceGetAccountSummariesReportError,
@@ -31,20 +30,22 @@ async fn normal_user_cannot_see_reports(deps: &EnvBasedTestDependencies) -> anyh
 
     {
         let result = client.get_account_summaries_report().await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetAccountSummariesReportError::Error403(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     {
         let result = client.get_account_count_report().await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetAccountCountReportError::Error403(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())

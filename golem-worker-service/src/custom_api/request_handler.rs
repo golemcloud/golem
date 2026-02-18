@@ -16,15 +16,19 @@ use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
+use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
-use super::security::handler::OidcHandler;
+use super::session_from_header_security::apply_session_from_header_security_middleware;
 use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_service_base::custom_api::CorsPreflightBehaviour;
+use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
+use http::StatusCode;
 use poem::{Request, Response};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{Instrument, debug};
 
@@ -86,6 +90,12 @@ impl RequestHandler {
             return Ok(short_circuit);
         }
 
+        if let Some(short_circuit) =
+            apply_session_from_header_security_middleware(request, resolved_route)?
+        {
+            return Ok(short_circuit);
+        }
+
         let mut result = self.execute_route(request, resolved_route).await?;
 
         apply_cors_outgoing_middleware(&mut result, request, resolved_route).await?;
@@ -114,6 +124,19 @@ impl RequestHandler {
                 self.oidc_handler
                     .handle_oidc_callback_behaviour(request, security_scheme)
                     .await
+            }
+
+            RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}) => {
+                let spec = resolved_route
+                    .openapi_spec
+                    .clone()
+                    .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
+
+                Ok(RouteExecutionResult {
+                    status: StatusCode::OK,
+                    headers: HashMap::new(),
+                    body: ResponseBody::OpenApiSchema { spec },
+                })
             }
 
             RichRouteBehaviour::WebhookCallback(behaviour) => {
@@ -150,5 +173,14 @@ fn route_execution_result_to_response(
         ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
+
+        ResponseBody::OpenApiSchema { spec: body } => {
+            let body_json = serde_json::to_value(&body.0)
+                .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
+
+            let body = poem::Body::from_json(body_json).map_err(anyhow::Error::from)?;
+
+            Ok(response_builder.body(body))
+        }
     }
 }

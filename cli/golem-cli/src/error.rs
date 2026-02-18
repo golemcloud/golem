@@ -417,6 +417,10 @@ pub mod service {
                     status_code: 409,
                     message: error.error,
                 },
+                WorkerError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
                 WorkerError::Error500(error) => {
                     let message = match error.worker_error {
                         Some(worker_error) => {

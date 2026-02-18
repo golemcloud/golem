@@ -53,6 +53,7 @@ export type AgentDecoratorOptions = {
   auth?: boolean;
   webhookSuffix?: string;
   snapshotting?: SnapshottingOption;
+  phantom?: boolean;
 };
 
 function parseDurationToNanoseconds(duration: string): bigint {

@@ -495,6 +495,21 @@ impl DataValue {
             _ => Err("Data value does not match schema".to_string()),
         }
     }
+
+    /// Returns the DataValue as a single ComponentModel Value if possible
+    ///
+    /// Note that this conversion does not support unstructured binary/text and multimodal return values
+    pub fn into_return_value(self) -> Option<Value> {
+        match self {
+            DataValue::Tuple(mut elements) if elements.elements.len() == 1 => {
+                match elements.elements.remove(0) {
+                    ElementValue::ComponentModel(value) => Some(value.value),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

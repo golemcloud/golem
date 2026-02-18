@@ -124,16 +124,18 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
 
   const { data: agentSnapshot, isCustom } = await resolvedAgent.saveSnapshot();
 
-  if (isCustom) {
-    const totalLength = 1 + agentSnapshot.length;
-    const fullSnapshot = new Uint8Array(totalLength);
-    const view = new DataView(fullSnapshot.buffer);
-    view.setUint8(0, 1); // version
-    fullSnapshot.set(agentSnapshot, 1);
-    return { data: fullSnapshot, mimeType: 'application/octet-stream' };
-  } else {
-    return { data: agentSnapshot, mimeType: 'application/json' };
-  }
+  const principalJson = JSON.stringify(initializationPrincipal ?? { tag: 'anonymous' });
+  const principalBytes = new TextEncoder().encode(principalJson);
+
+  const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
+  const fullSnapshot = new Uint8Array(totalLength);
+  const view = new DataView(fullSnapshot.buffer);
+  view.setUint8(0, 2); // version
+  view.setUint32(1, principalBytes.length, false); // big-endian
+  fullSnapshot.set(principalBytes, 5);
+  fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
+
+  return { data: fullSnapshot, mimeType: 'application/octet-stream' };
 }
 
 async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
@@ -143,17 +145,25 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
     throw `Agent is already initialized in this container`;
   }
 
+  const view = new DataView(bytes.buffer);
+  const version = view.getUint8(0);
+
   let agentSnapshot: Uint8Array;
-  if (snapshot.mimeType === 'application/json') {
-    agentSnapshot = bytes;
-  } else {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const version = view.getUint8(0);
-    if (version !== 1) {
-      throw `Unsupported snapshot version ${version}`;
-    }
+  let principal: Principal;
+
+  if (version === 1) {
     agentSnapshot = bytes.slice(1);
+    principal = initializationPrincipal ?? { tag: 'anonymous' };
+  } else if (version === 2) {
+    const principalLen = view.getUint32(1, false); // big-endian
+    const principalBytes = bytes.slice(5, 5 + principalLen);
+    principal = JSON.parse(new TextDecoder().decode(principalBytes)) as Principal;
+    agentSnapshot = bytes.slice(5 + principalLen);
+  } else {
+    throw `Unsupported snapshot version ${version}`;
   }
+
+  initializationPrincipal = principal;
 
   const [agentTypeName, agentParameters, _phantomId] = getRawSelfAgentId().parsed();
 
@@ -163,11 +173,7 @@ async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<v
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  if (!initializationPrincipal) {
-    throw `Failed to get agent definition: initializationPrincipal is not initialized`;
-  }
-
-  const initiateResult = initiator.initiate(agentParameters, initializationPrincipal);
+  const initiateResult = initiator.initiate(agentParameters, principal);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

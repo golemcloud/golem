@@ -17,6 +17,7 @@ world golem-rust {
   import wasi:keyvalue/eventual-batch@0.1.0;
   import wasi:keyvalue/eventual@0.1.0;
   import wasi:logging/logging;
+  import wasi:config/store@0.2.0-draft;
 }
 
 world golem-rust-load-snapshot {

@@ -733,9 +733,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     FROM deployment_compiled_routes r
 
                     -- active deployment
-                    JOIN current_deployment_revisions cdr
-                      ON cdr.environment_id = r.environment_id
-                      AND cdr.deployment_revision_id = r.deployment_revision_id
+                    JOIN current_deployments cd
+                      ON cd.environment_id = r.environment_id
+                      AND cd.current_revision_id = r.deployment_revision_id
 
                     -- parent objects not deleted
                     JOIN environments e

@@ -9,7 +9,7 @@ use golem_common::base_model::http_api_deployment::{
 };
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -30,14 +30,21 @@ impl Debug for HttpTestContext {
     }
 }
 
-pub async fn test_context_internal(
+pub async fn make_test_context(
     deps: &EnvBasedTestDependencies,
+    agent_and_http_options: Vec<(AgentTypeName, HttpApiDeploymentAgentOptions)>,
     component_name: &str,
     package_name: &str,
 ) -> anyhow::Result<HttpTestContext> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
-    let (_, env) = user.app_and_env().await?;
+    let (_, env) = user
+        .app_and_env_custom(&EnvironmentOptions {
+            security_overrides: true,
+            version_check: false,
+            compatibility_check: false,
+        })
+        .await?;
 
     let domain = Domain(format!("{}.golem.cloud", env.id));
 
@@ -57,20 +64,7 @@ pub async fn test_context_internal(
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
-        agents: BTreeMap::from_iter([
-            (
-                AgentTypeName("http-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("cors-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-            (
-                AgentTypeName("webhook-agent".to_string()),
-                HttpApiDeploymentAgentOptions::default(),
-            ),
-        ]),
+        agents: BTreeMap::from_iter(agent_and_http_options),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
     };
 

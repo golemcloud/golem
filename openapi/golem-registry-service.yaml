@@ -7642,12 +7642,49 @@ components:
       type: object
       title: HttpApiDeploymentAgentOptions
       properties:
-        securityScheme:
-          type: string
+        security:
           description: |-
-            Security scheme to use for all agent methods that require auth.
-            Failure to provide a security scheme for an agent that requires one will lead to a deployment failure.
-            If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
+            Security option to use for all agent methods that require auth.
+            Failure to provide a security option for an agent that requires one will lead to a deployment failure.
+          allOf:
+          - $ref: '#/components/schemas/HttpApiDeploymentAgentSecurity'
+          - description: |-
+              Security option to use for all agent methods that require auth.
+              Failure to provide a security option for an agent that requires one will lead to a deployment failure.
+    HttpApiDeploymentAgentSecurity:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/HttpApiDeploymentAgentSecurity_TestSessionHeaderAgentSecurity'
+      - $ref: '#/components/schemas/HttpApiDeploymentAgentSecurity_SecuritySchemeAgentSecurity'
+      discriminator:
+        propertyName: type
+        mapping:
+          TestSessionHeader: '#/components/schemas/HttpApiDeploymentAgentSecurity_TestSessionHeaderAgentSecurity'
+          SecurityScheme: '#/components/schemas/HttpApiDeploymentAgentSecurity_SecuritySchemeAgentSecurity'
+    HttpApiDeploymentAgentSecurity_SecuritySchemeAgentSecurity:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SecurityScheme
+            example: SecurityScheme
+      - $ref: '#/components/schemas/SecuritySchemeAgentSecurity'
+    HttpApiDeploymentAgentSecurity_TestSessionHeaderAgentSecurity:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - TestSessionHeader
+            example: TestSessionHeader
+      - $ref: '#/components/schemas/TestSessionHeaderAgentSecurity'
     HttpApiDeploymentCreation:
       type: object
       title: HttpApiDeploymentCreation
@@ -8461,6 +8498,17 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    SecuritySchemeAgentSecurity:
+      type: object
+      title: SecuritySchemeAgentSecurity
+      description: |-
+        OIDC security scheme in the environment that should be used for the agent.
+        If the requested security scheme does not exist in the environment, the route will be disabled at runtime.
+      required:
+      - securityScheme
+      properties:
+        securityScheme:
+          type: string
     SecuritySchemeCreation:
       type: object
       title: SecuritySchemeCreation
@@ -8654,6 +8702,17 @@ components:
       properties:
         value:
           $ref: '#/components/schemas/SystemVariable'
+    TestSessionHeaderAgentSecurity:
+      type: object
+      title: TestSessionHeaderAgentSecurity
+      description: |-
+        Header that can be used to provide the oidc session directly to the agent through http apis.
+        Failure to provide the header will result in a 401 response.
+      required:
+      - headerName
+      properties:
+        headerName:
+          type: string
     TextDescriptor:
       type: object
       title: TextDescriptor

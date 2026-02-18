@@ -509,6 +509,7 @@ class SimpleHttpAgent extends BaseAgent {
   cors: ['https://app.acme.com', 'https://staging.acme.com'],
   auth: true,
   webhookSuffix: '/{agent-type}/events/{foo}/{bar}',
+  phantom: true,
 })
 class ComplexHttpAgent extends BaseAgent {
   constructor(
@@ -552,6 +553,10 @@ class ComplexHttpAgent extends BaseAgent {
   async catchAllFun(name: string, filePath: string): Promise<string> {
     return Promise.resolve(`Hello, ${name}!`);
   }
+
+  // Endpoint with just root path
+  @endpoint({ get: '/' })
+  async rootPathFun() {}
 }
 
 @agent()

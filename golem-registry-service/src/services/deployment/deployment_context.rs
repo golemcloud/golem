@@ -18,8 +18,9 @@ use crate::model::api_definition::UnboundCompiledRoute;
 use crate::model::component::Component;
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::route_compilation::{
-    add_agent_method_http_routes, add_cors_preflight_http_routes, add_webhook_callback_routes,
-    build_agent_http_api_deployment_details, make_invalid_agent_mount_error_maker,
+    add_agent_method_http_routes, add_cors_preflight_http_routes, add_openapi_spec_routes,
+    add_webhook_callback_routes, build_agent_http_api_deployment_details,
+    make_invalid_agent_mount_error_maker,
 };
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -28,6 +29,7 @@ use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeIm
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -51,13 +53,19 @@ impl From<InProgressDeployedRegisteredAgentType> for DeployedRegisteredAgentType
 
 #[derive(Debug)]
 pub struct DeploymentContext {
+    pub environment: Environment,
     pub components: BTreeMap<ComponentName, Component>,
     pub http_api_deployments: BTreeMap<Domain, HttpApiDeployment>,
 }
 
 impl DeploymentContext {
-    pub fn new(components: Vec<Component>, http_api_deployments: Vec<HttpApiDeployment>) -> Self {
+    pub fn new(
+        environment: Environment,
+        components: Vec<Component>,
+        http_api_deployments: Vec<HttpApiDeployment>,
+    ) -> Self {
         Self {
+            environment,
             components: components
                 .into_iter()
                 .map(|c| (c.component_name.clone(), c))
@@ -143,11 +151,13 @@ impl DeploymentContext {
         registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
     ) -> Result<Vec<UnboundCompiledRoute>, DeploymentWriteError> {
         let mut current_route_id: i32 = 0;
-        let mut compiled_routes = HashMap::new();
+        let mut all_routes = Vec::new();
         let mut seen_agent_types = HashSet::new();
         let mut errors = Vec::new();
 
         for deployment in self.http_api_deployments.values() {
+            let mut deployment_routes = Vec::new();
+
             for (agent_type, agent_options) in &deployment.agents {
                 let registered_agent_type = ok_or_continue!(
                     registered_agent_types.get(agent_type).ok_or(
@@ -201,6 +211,7 @@ impl DeploymentContext {
                 );
 
                 add_agent_method_http_routes(
+                    &self.environment,
                     deployment,
                     &registered_agent_type.agent_type,
                     &registered_agent_type.implemented_by,
@@ -209,7 +220,7 @@ impl DeploymentContext {
                     constructor_parameters,
                     agent_options,
                     &mut current_route_id,
-                    &mut compiled_routes,
+                    &mut deployment_routes,
                     &mut errors,
                 );
 
@@ -217,25 +228,61 @@ impl DeploymentContext {
                     deployment,
                     registered_agent_type,
                     &mut current_route_id,
-                    &mut compiled_routes,
-                );
-
-                add_cors_preflight_http_routes(
-                    deployment,
-                    &mut current_route_id,
-                    &mut compiled_routes,
+                    &mut deployment_routes,
                 );
             }
+
+            add_openapi_spec_routes(
+                &deployment.domain,
+                &mut current_route_id,
+                &mut deployment_routes,
+            );
+
+            add_cors_preflight_http_routes(
+                deployment,
+                &mut current_route_id,
+                &mut deployment_routes,
+            );
+
+            validate_final_router(&deployment.domain, &deployment_routes, &mut errors);
+
+            all_routes.append(&mut deployment_routes);
         }
 
         // Fixme: code-first routes
         // * SwaggerUi routes
-        // * Validation of final router
 
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         };
 
-        Ok(compiled_routes.into_values().collect())
+        Ok(all_routes)
+    }
+}
+
+fn validate_final_router(
+    domain: &Domain,
+    compiled_routes: &[UnboundCompiledRoute],
+    errors: &mut Vec<DeployValidationError>,
+) {
+    let mut router = golem_service_base::custom_api::router::Router::new();
+
+    for compiled_route in compiled_routes {
+        let method: http::Method = ok_or_continue!(
+            compiled_route.method.clone().try_into().map_err(|_| {
+                DeployValidationError::InvalidHttpMethod {
+                    method: compiled_route.method.clone(),
+                }
+            }),
+            errors
+        );
+
+        if !router.add_route(method, compiled_route.path.clone(), ()) {
+            errors.push(DeployValidationError::RouteIsAmbiguous {
+                domain: domain.clone(),
+                method: compiled_route.method.clone(),
+                path: compiled_route.path.clone(),
+            })
+        }
     }
 }

@@ -33,6 +33,10 @@ impl CliMetadataFilter {
         })
     }
 
+    fn exclude_command(&self, metadata: &CliCommandMetadata) -> bool {
+        self.exclude_hidden && metadata.hidden
+    }
+
     fn exclude_arg(&self, arg: &Arg) -> bool {
         self.arg_id_exclude.iter().any(|id| arg.get_id() == id)
             || self.exclude_hidden && arg.is_hide_set()
@@ -83,7 +87,15 @@ impl CliCommandMetadata {
                     .as_ref()
                     .map(|f| f.exclude_path(path))
                     .unwrap_or(false))
-                .then(|| Self::collect_command_metadata(path, subcommand, filter));
+                .then(|| {
+                    let metadata = Self::collect_command_metadata(path, subcommand, filter);
+                    (!filter
+                        .as_ref()
+                        .map(|f| f.exclude_command(&metadata))
+                        .unwrap_or(false))
+                    .then_some(metadata)
+                })
+                .flatten();
                 path.pop();
                 subcommand_metadata
             })

@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::model::component::ComponentId;
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::Value;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request};
 use std::str::FromStr;
@@ -77,11 +79,12 @@ impl InvokeResult {
     }
 }
 
-pub async fn invoke_and_await(
+pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    worker_id: &WorkerId,
-    function_name: &str,
-    params: Vec<ValueAndType>,
+    component_id: &ComponentId,
+    agent_id: &AgentId,
+    method_name: &str,
+    params: DataValue,
 ) -> InvokeResult {
     const TIMEOUT: Duration = Duration::from_secs(180);
     const RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -96,16 +99,26 @@ pub async fn invoke_and_await(
         let start = SystemTime::now();
         let result = tokio::time::timeout(
             TIMEOUT,
-            user.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
+            user.invoke_and_await_agent_with_key(
+                component_id,
+                agent_id,
+                &key,
+                method_name,
+                params.clone(),
+            ),
         )
         .await;
         let duration = start.elapsed().expect("SystemTime elapsed failed");
 
         match result {
-            Ok(Ok(r)) => {
+            Ok(Ok(data_value)) => {
                 accumulated_time += duration;
+                let value = data_value
+                    .into_return_value()
+                    .map(|v| vec![v])
+                    .unwrap_or_default();
                 break InvokeResult {
-                    value: r,
+                    value,
                     retries,
                     timeouts,
                     accumulated_time,

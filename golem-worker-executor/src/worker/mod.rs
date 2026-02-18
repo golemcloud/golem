@@ -586,7 +586,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Invokes the worker and awaits for a result.
     ///
-    /// Successful result is a `TypeAnnotatedValue` encoding either a tuple or a record.
+    /// The successful result is an `Option<ValueAndType>` encoding the result value.
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
@@ -612,7 +612,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .wait_for_invocation_result(&idempotency_key, subscription)
                     .await;
 
-                debug!("Idempotency key lookup result: {:?}", result);
                 match result {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),
                     Ok(LookupResult::Complete(Err(err))) => Err(err),

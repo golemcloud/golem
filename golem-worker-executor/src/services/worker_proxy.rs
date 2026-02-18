@@ -85,6 +85,7 @@ pub trait WorkerProxy: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         target_revision: ComponentRevision,
         mode: UpdateMode,
+        disable_wakeup: bool,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
@@ -407,6 +408,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         owned_worker_id: &OwnedWorkerId,
         target_revision: ComponentRevision,
         mode: UpdateMode,
+        disable_wakeup: bool,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
@@ -421,6 +423,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     target_revision: target_revision.into(),
                     mode: mode as i32,
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    disable_wakeup,
                 }))
             })
             .await?
