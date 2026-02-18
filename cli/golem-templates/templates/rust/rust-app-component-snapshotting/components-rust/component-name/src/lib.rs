@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, endpoint};
 
 #[agent_definition]
 pub trait CounterAgent {
@@ -12,7 +12,9 @@ struct CounterImpl {
     _name: String,
     count: u32,                                                                                                                                                                                                        }
 
-#[agent_implementation]
+#[agent_implementation(
+    mount = "/counters/{name}"
+)]
 impl CounterAgent for CounterImpl {
     fn new(name: String) -> Self {
         Self {
@@ -21,6 +23,7 @@ impl CounterAgent for CounterImpl {
         }
     }
 
+    #[endpoint(post = "/increment")]
     fn increment(&mut self) -> u32 {
         self.count += 1;
         log::info!("The new value is {}", self.count);

@@ -2,14 +2,18 @@ use golem_rust::golem_ai::golem::llm::llm;
 use golem_rust::golem_ai::golem::llm::llm::{
     Config, ContentPart, Event, Message, Response, Role, ToolResult,
 };
-use golem_rust::{agent_definition, agent_implementation, description};
+use golem_rust::{agent_definition, agent_implementation, description, endpoint};
 
-#[agent_definition]
+#[agent_definition(
+    mount = "/chats/{chat_name}"
+)]
 pub trait ChatAgent {
     fn new(chat_name: String) -> Self;
 
     #[description("Ask questions")]
+    #[endpoint(post = "/ask")]
     async fn ask(&mut self, question: String) -> String;
+    #[endpoint(get = "/history")]
     async fn history(&self) -> Vec<Event>;
 }
 

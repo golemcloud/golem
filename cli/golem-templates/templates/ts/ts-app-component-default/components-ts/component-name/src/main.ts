@@ -1,12 +1,14 @@
 import {
     BaseAgent,
-    Result,
     agent,
     prompt,
     description,
+    endpoint
 } from '@golemcloud/golem-ts-sdk';
 
-@agent()
+@agent({
+  mount: "/counters/{name}"
+})
 class CounterAgent extends BaseAgent {
     private readonly name: string;
     private value: number = 0;
@@ -18,6 +20,7 @@ class CounterAgent extends BaseAgent {
 
     @prompt("Increase the count by one")
     @description("Increases the count by one and returns the new value")
+    @endpoint({ post: "/increment" })
     async increment(): Promise<number> {
         this.value += 1;
         return this.value;

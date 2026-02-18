@@ -102,8 +102,7 @@ export class BaseAgent {
    */
   async loadSnapshot(bytes: Uint8Array): Promise<void> {
     const text = new TextDecoder().decode(bytes);
-    const parsed = JSON.parse(text);
-    const state = parsed?.state ?? parsed;
+    const state = JSON.parse(text);
 
     for (const [k, v] of Object.entries(state)) {
       if (k === 'cachedAgentType' || k === 'agentClassName') continue;
@@ -114,11 +113,16 @@ export class BaseAgent {
   /**
    * Saves the agent's current state into a snapshot.
    *
-   * Override this method together with `loadSnapshot()` to implement a fully custom binary
-   * snapshot format. If not overridden, the default implementation JSON-serializes the agent's
-   * own state properties.
+   * Override this method together with `loadSnapshot()` to implement a custom
+   * snapshot format. If not overridden, the default implementation JSON-serializes
+   * the agent's own state properties.
+   *
+   * Custom overrides can return either:
+   * - `Uint8Array` — treated as a binary snapshot (`application/octet-stream`)
+   * - `{ data: Uint8Array; mimeType: string }` — to specify the mime type explicitly.
+   *   Use `application/json` for JSON snapshots or `application/octet-stream` for binary.
    */
-  async saveSnapshot(): Promise<Uint8Array> {
+  async saveSnapshot(): Promise<Uint8Array | { data: Uint8Array; mimeType: string }> {
     const state: Record<string, unknown> = {};
 
     for (const [k, v] of Object.entries(this)) {
@@ -127,8 +131,10 @@ export class BaseAgent {
       state[k] = v;
     }
 
-    const payload = { version: 1, state };
-    return new TextEncoder().encode(JSON.stringify(payload));
+    return {
+      data: new TextEncoder().encode(JSON.stringify(state)),
+      mimeType: 'application/json',
+    };
   }
 
   /**

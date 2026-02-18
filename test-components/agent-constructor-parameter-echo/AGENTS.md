@@ -6,6 +6,7 @@ This is a Golem Application test component used by worker executor tests.
 
 - Node.js and npm
 - The `golem` CLI built from the repo (at `target/debug/golem`)
+- If the TS SDK source was modified, rebuild the SDK **including the agent template wasm** first: run `npx pnpm run build && npx pnpm run build-agent-template` in `sdks/ts/`
 
 ## Building
 

@@ -1,9 +1,9 @@
 import {
   BaseAgent,
-  Result,
   agent,
   prompt,
   description,
+  endpoint
 } from '@golemcloud/golem-ts-sdk';
 import * as llm from 'golem:llm/llm@1.0.0';
 import * as webSearch from 'golem:web-search/web-search@1.0.0';
@@ -15,7 +15,10 @@ type SearchResult = {
   snippet: string
 }
 
-@agent()
+@agent({
+  mount: "/research",
+  phantom: true
+})
 class ResearchAgent extends BaseAgent {
   private readonly model: string;
 
@@ -47,6 +50,7 @@ class ResearchAgent extends BaseAgent {
 
   @prompt("What topic do you want to research?")
   @description("This method allows the agent to research and summarize a topic for you")
+  @endpoint({ get: "/?topic={topic}" })
   async research(topic: string): Promise<string> {
     const searchResult = searchWebForTopic(topic)
 

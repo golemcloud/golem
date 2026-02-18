@@ -120,142 +120,240 @@ fn agent_metas() -> Vec<AgentMeta> {
             "components-rust/app-rust/src/lib.rs",
             "CounterAgent",
             "RustCounterAgent",
-            vec![(
-                "components-rust/app-rust/golem.yaml",
-                "counter-agent",
-                "rust-counter-agent",
-            )],
+            vec![
+                (
+                    "components-rust/app-rust/src/lib.rs",
+                    "/counters",
+                    "/rust-counters",
+                ),
+                (
+                    "components-rust/app-rust/golem.yaml",
+                    "counter-agent",
+                    "rust-counter-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-rust/app-rust-human-in-the-loop/src/lib.rs",
-            "ApprovalWorkflow",
-            "RustApprovalWorkflow",
-            vec![(
-                "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                "approval-workflow",
-                "rust-approval-workflow",
-            )],
+            "WorkflowAgent",
+            "RustWorkflowAgent",
+            vec![
+                (
+                    "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+                    "/workflows",
+                    "/rust-workflows",
+                ),
+                (
+                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "workflow-agent",
+                    "rust-workflow-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-rust/app-rust-human-in-the-loop/src/lib.rs",
             "HumanAgent",
             "RustHumanAgent",
-            vec![(
-                "components-rust/app-rust-human-in-the-loop/golem.yaml",
-                "human-agent",
-                "rust-human-agent",
-            )],
+            vec![
+                (
+                    "components-rust/app-rust-human-in-the-loop/src/lib.rs",
+                    "/humans",
+                    "/rust-humans",
+                ),
+                (
+                    "components-rust/app-rust-human-in-the-loop/golem.yaml",
+                    "human-agent",
+                    "rust-human-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-rust/app-rust-json/src/lib.rs",
             "Tasks",
             "RustTasks",
-            vec![(
-                "components-rust/app-rust-json/golem.yaml",
-                "tasks(name)",
-                "rust-tasks(name)",
-            )],
+            vec![
+                (
+                    "components-rust/app-rust-json/src/lib.rs",
+                    "/task-agents",
+                    "/rust-task-agents",
+                ),
+                (
+                    "components-rust/app-rust-json/golem.yaml",
+                    "tasks(name)",
+                    "rust-tasks(name)",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-rust/app-rust-llm-session/src/lib.rs",
             "ChatAgent",
             "RustChatAgent",
-            vec![(
-                "components-rust/app-rust-llm-session/golem.yaml",
-                "chat-agent",
-                "rust-chat-agent",
-            )],
+            vec![
+                (
+                    "components-rust/app-rust-llm-session/src/lib.rs",
+                    "/chats",
+                    "/rust-chats",
+                ),
+                (
+                    "components-rust/app-rust-llm-session/golem.yaml",
+                    "chat-agent",
+                    "rust-chat-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
             "ResearchAgent",
             "RustResearchAgent",
-            vec![(
-                "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
-                "research-agent",
-                "rust-research-agent",
-            )],
+            vec![
+                (
+                    "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+                    "/research",
+                    "/rust-research",
+                ),
+                (
+                    "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
+                    "research-agent",
+                    "rust-research-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-rust/app-rust-snapshotting/src/lib.rs",
             "CounterAgent",
             "RustCounterAgentSnapshotting",
-            vec![(
-                "components-rust/app-rust-snapshotting/golem.yaml",
-                "counter-agent",
-                "rust-counter-agent-snapshotting",
-            )],
+            vec![
+                (
+                    "components-rust/app-rust-snapshotting/src/lib.rs",
+                    "/counters",
+                    "/rust-agent-snapshotting-counters",
+                ),
+                (
+                    "components-rust/app-rust-snapshotting/golem.yaml",
+                    "counter-agent",
+                    "rust-counter-agent-snapshotting",
+                ),
+            ],
         ),
         // TypeScript agents: prefix with Ts
         AgentMeta::new(
             "components-ts/app-ts/src/main.ts",
             "CounterAgent",
             "TsCounterAgent",
-            vec![(
-                "components-ts/app-ts/golem.yaml",
-                "counter-agent",
-                "ts-counter-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts/src/main.ts",
+                    "/counters",
+                    "/ts-counters",
+                ),
+                (
+                    "components-ts/app-ts/golem.yaml",
+                    "counter-agent",
+                    "ts-counter-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-human-in-the-loop/src/main.ts",
-            "ApprovalWorkflow",
-            "TsApprovalWorkflow",
-            vec![(
-                "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                "approval-workflow",
-                "ts-approval-workflow",
-            )],
+            "WorkflowAgent",
+            "TsWorkflowAgent",
+            vec![
+                (
+                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
+                    "/workflows",
+                    "/ts-workflows",
+                ),
+                (
+                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "workflow-agent",
+                    "ts-workflow-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-human-in-the-loop/src/main.ts",
             "HumanAgent",
             "TsHumanAgent",
-            vec![(
-                "components-ts/app-ts-human-in-the-loop/golem.yaml",
-                "human-agent",
-                "ts-human-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-human-in-the-loop/src/main.ts",
+                    "/humans",
+                    "/ts-humans",
+                ),
+                (
+                    "components-ts/app-ts-human-in-the-loop/golem.yaml",
+                    "human-agent",
+                    "ts-human-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-json/src/main.ts",
             "TaskAgent",
             "TsTaskAgent",
-            vec![(
-                "components-ts/app-ts-json/golem.yaml",
-                "task-agent",
-                "ts-task-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-json/src/main.ts",
+                    "/task-agents",
+                    "/ts-task-agents",
+                ),
+                (
+                    "components-ts/app-ts-json/golem.yaml",
+                    "task-agent",
+                    "ts-task-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-llm-session/src/main.ts",
             "ChatAgent",
             "TsChatAgent",
-            vec![(
-                "components-ts/app-ts-llm-session/golem.yaml",
-                "chat-agent",
-                "ts-chat-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-llm-session/src/main.ts",
+                    "/chats",
+                    "/ts-chats",
+                ),
+                (
+                    "components-ts/app-ts-llm-session/golem.yaml",
+                    "chat-agent",
+                    "ts-chat-agent",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-snapshotting/src/main.ts",
             "CounterAgent",
             "TsCounterAgentSnapshotting",
-            vec![(
-                "components-ts/app-ts-snapshotting/golem.yaml",
-                "counter-agent",
-                "ts-counter-agent-snapshotting",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-snapshotting/src/main.ts",
+                    "/counters",
+                    "/ts-agent-snapshotting-counters",
+                ),
+                (
+                    "components-ts/app-ts-snapshotting/golem.yaml",
+                    "counter-agent",
+                    "ts-counter-agent-snapshotting",
+                ),
+            ],
         ),
         AgentMeta::new(
             "components-ts/app-ts-websearch-summary-example/src/main.ts",
             "ResearchAgent",
             "TsResearchAgent",
-            vec![(
-                "components-ts/app-ts-websearch-summary-example/golem.yaml",
-                "research-agent",
-                "ts-research-agent",
-            )],
+            vec![
+                (
+                    "components-ts/app-ts-websearch-summary-example/src/main.ts",
+                    "/research",
+                    "/ts-research",
+                ),
+                (
+                    "components-ts/app-ts-websearch-summary-example/golem.yaml",
+                    "research-agent",
+                    "ts-research-agent",
+                ),
+            ],
         ),
     ]
 }
