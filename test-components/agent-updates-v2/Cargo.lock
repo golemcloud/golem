@@ -298,7 +298,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
- "wasip2",
+ "wasip1",
 ]
 
 [[package]]
@@ -948,7 +948,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasip2"
+name = "wasip1"
 version = "1.0.1+wasi-0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0562428422c63773dad2c345a1882263bbf4d65cf3f42e90921f787ef5ad58e7"

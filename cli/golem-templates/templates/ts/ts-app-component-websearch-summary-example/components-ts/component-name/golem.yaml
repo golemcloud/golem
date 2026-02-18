@@ -37,9 +37,4 @@ components:
 
     # golem-app-manifest-dep-env-vars-doc
 
-    dependencies:
-    - type: wasm
-      url: https://github.com/golemcloud/golem-ai/releases/download/v0.5.0-dev.1/golem_llm_ollama-dev.wasm
-    # golem-app-manifest-deps-doc
-
     # golem-app-manifest-env-presets

@@ -20,9 +20,9 @@ use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
-    ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode,
-    BuildConfig, CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget,
-    DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
+    ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
+    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, WithSource,
+    DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;

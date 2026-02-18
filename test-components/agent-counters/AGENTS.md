@@ -4,7 +4,7 @@ This is a Golem Application test component used by worker executor tests.
 
 ## Prerequisites
 
-- Rust with `wasm32-wasip2` target
+- Rust with `wasm32-wasip1` target
 - The `golem` CLI built from the repo (at `target/debug/golem`)
 
 ## Building

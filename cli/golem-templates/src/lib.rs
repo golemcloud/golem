@@ -370,7 +370,6 @@ fn transform(
                      ),
             )
             .replace("    # golem-app-manifest-dep-env-vars-doc", &DEP_ENV_VARS_DOC)
-            .replace("    # golem-app-manifest-deps-doc", &DEPS_DOC)
             .replace("    # golem-app-manifest-env-presets",
                      "", // "    # TODO: atomic\n"
             )
@@ -974,37 +973,6 @@ static DEP_ENV_VARS_DOC: LazyLock<String> = LazyLock::new(|| {
                 out.push_str(&line);
             }
 
-            out.push('\n');
-        }
-
-        out.push('\n');
-    }
-
-    out.trim_end().to_string()
-});
-
-static DEPS_DOC: LazyLock<String> = LazyLock::new(|| {
-    let indent = "    ";
-    let mut out = String::new();
-
-    out.push_str(&formatdoc! {"
-        {indent}# The following block contains commented-out dependencies for various Golem AI libraries.
-        {indent}# For each area (such as LLM, Search, etc) only one of the providers can be commented out.
-        {indent}# If no provider dependency is commented out, then using that AI API will be a runtime failure.
-        ",
-        });
-
-    for group in DOC_DEPENDENCIES.iter() {
-        out.push_str(&doc_group_header(indent, group));
-
-        for dep in &group.dependencies {
-            if dep.url.is_empty() {
-                continue;
-            }
-
-            out.push_str(&doc_dep_header(indent, dep));
-            out.push_str(&format!("{indent}# - type: wasm\n", indent = indent));
-            out.push_str(&format!("{indent}#   url: {}\n", dep.url, indent = indent));
             out.push('\n');
         }
 

@@ -1,7 +1,7 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -43,7 +43,7 @@ componentTemplates:
     sourceWit: ../../node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
     generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
     componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
-    linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
+    outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
     customCommands:
       copy:
         - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm ../../../{{ component_name | to_snake_case }}.wasm

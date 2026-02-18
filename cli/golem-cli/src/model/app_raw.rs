@@ -37,10 +37,23 @@ use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use url::Url;
 
+struct NoopRetriever;
+
+impl jsonschema::Retrieve for NoopRetriever {
+    fn retrieve(
+        &self,
+        uri: &jsonschema::Uri<String>,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        Err(format!("External schema retrieval is disabled: {uri}").into())
+    }
+}
+
 static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
     let schema = serde_json::from_str::<serde_json::Value>(APP_MANIFEST_JSON_SCHEMA)
         .expect("Invalid Application manifest JSON schema: cannot parse as JSON");
-    jsonschema::validator_for(&schema)
+    jsonschema::options()
+        .with_retriever(NoopRetriever)
+        .build(&schema)
         .expect("Invalid Application manifest JSON schema: cannot create validator")
 });
 
