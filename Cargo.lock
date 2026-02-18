@@ -4691,8 +4691,6 @@ dependencies = [
  "anyhow",
  "assert2",
  "cargo_metadata 0.21.0",
- "clap",
- "colored",
  "dir-diff",
  "fancy-regex 0.14.0",
  "fs_extra",
@@ -4700,14 +4698,11 @@ dependencies = [
  "include_dir",
  "indoc",
  "itertools 0.14.0",
- "nanoid",
- "regex",
  "serde",
  "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "test-r",
- "toml_edit 0.23.7",
 ]
 
 [[package]]

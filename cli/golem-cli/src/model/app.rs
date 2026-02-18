@@ -263,8 +263,7 @@ pub struct ComponentStubInterfaces {
 #[clap(rename_all = "kebab_case")]
 pub enum AppBuildStep {
     GenWit,
-    Componentize,
-    Link,
+    Build,
     AddMetadata,
     GenBridge,
     GenBridgeRepl,
@@ -572,7 +571,6 @@ pub struct Application {
     #[allow(unused)]
     temp_dir: Option<WithSource<String>>,
     resolved_temp_dir: PathBuf,
-    wit_deps: WithSource<Vec<String>>,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
@@ -638,15 +636,6 @@ impl Application {
 
     pub fn common_clean(&self) -> &Vec<WithSource<String>> {
         &self.clean
-    }
-
-    pub fn wit_deps(&self) -> Vec<PathBuf> {
-        self.wit_deps
-            .value
-            .iter()
-            .cloned()
-            .map(|path| self.wit_deps.source.join(path))
-            .collect()
     }
 
     pub fn all_custom_commands(&self) -> BTreeSet<String> {
@@ -1101,14 +1090,14 @@ impl Layer for ComponentLayer {
                     .map_err(|err| format!("Failed to render componentWasm: {}", err))?,
             );
 
-            value.linked_wasm.apply_layer(
+            value.output_wasm.apply_layer(
                 id,
                 selection,
                 properties
-                    .linked_wasm
+                    .output_wasm
                     .value()
                     .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render linkedWasm: {}", err))?,
+                    .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
             );
 
             value.build.apply_layer(
@@ -1293,22 +1282,15 @@ impl<'a> Component<'a> {
             .join(self.properties().component_wasm.clone())
     }
 
-    /// Temporary target of the component composition (linking) step
-    pub fn temp_linked_wasm(&self) -> PathBuf {
-        self.temp_dir
-            .join("temp-linked-wasm")
-            .join(format!("{}.wasm", self.component_name.as_str()))
-    }
-
-    /// The final linked component WASM
-    pub fn final_linked_wasm(&self) -> PathBuf {
+    /// The final output component WASM
+    pub fn final_wasm(&self) -> PathBuf {
         self.properties()
-            .linked_wasm
+            .output_wasm
             .as_ref()
-            .map(|linked_wasm| self.source_dir().join(linked_wasm))
+            .map(|output_wasm| self.source_dir().join(output_wasm))
             .unwrap_or_else(|| {
                 self.temp_dir
-                    .join("final-linked-wasm")
+                    .join("final-wasm")
                     .join(format!("{}.wasm", self.component_name.as_str()))
             })
     }
@@ -1328,7 +1310,7 @@ impl<'a> Component<'a> {
 
         custom_source
             .map(|path| self.source_dir().join(path))
-            .unwrap_or_else(|| self.final_linked_wasm())
+            .unwrap_or_else(|| self.final_wasm())
     }
 
     /// File for storing extracted agent types
@@ -1403,7 +1385,7 @@ pub struct ComponentLayerProperties {
     pub source_wit: OptionalProperty<ComponentLayer, String>,
     pub generated_wit: OptionalProperty<ComponentLayer, String>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
-    pub linked_wasm: OptionalProperty<ComponentLayer, String>,
+    pub output_wasm: OptionalProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
@@ -1431,7 +1413,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             source_wit: value.source_wit.into(),
             generated_wit: value.generated_wit.into(),
             component_wasm: value.component_wasm.into(),
-            linked_wasm: value.linked_wasm.into(),
+            output_wasm: value.output_wasm.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
@@ -1454,7 +1436,7 @@ impl ComponentLayerProperties {
         self.source_wit.compact_trace();
         self.generated_wit.compact_trace();
         self.component_wasm.compact_trace();
-        self.linked_wasm.compact_trace();
+        self.output_wasm.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
@@ -1496,7 +1478,7 @@ pub struct ComponentProperties {
     pub source_wit: String,
     pub generated_wit: String,
     pub component_wasm: String,
-    pub linked_wasm: Option<String>,
+    pub output_wasm: Option<String>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
@@ -1527,7 +1509,7 @@ impl ComponentProperties {
             source_wit: merged.source_wit.value().clone().unwrap_or_default(),
             generated_wit: merged.generated_wit.value().clone().unwrap_or_default(),
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
-            linked_wasm: merged.linked_wasm.value().clone(),
+            output_wasm: merged.output_wasm.value().clone(),
             build: merged.build.value().clone(),
             custom_commands: merged
                 .custom_commands
@@ -1783,7 +1765,6 @@ mod app_builder {
         App,
         Include,
         TempDir,
-        WitDeps,
         CustomCommand(String),
         Template(TemplateName),
         Component(ComponentName),
@@ -1798,7 +1779,6 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::App => property,
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
-                UniqueSourceCheckedEntityKey::WitDeps => property,
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -1815,9 +1795,6 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::TempDir => {
                     "tempDir".log_color_highlight().to_string()
-                }
-                UniqueSourceCheckedEntityKey::WitDeps => {
-                    "witDeps".log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::CustomCommand(command_name) => {
                     command_name.log_color_highlight().to_string()
@@ -1846,7 +1823,6 @@ mod app_builder {
         // For app build
         include: Vec<String>,
         temp_dir: Option<WithSource<String>>,
-        wit_deps: WithSource<Vec<String>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
 
@@ -1907,7 +1883,6 @@ mod app_builder {
                 all_sources: builder.all_sources,
                 temp_dir: builder.temp_dir,
                 resolved_temp_dir,
-                wit_deps: builder.wit_deps,
                 components: builder.components,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
@@ -2004,14 +1979,6 @@ mod app_builder {
                         .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
                     {
                         self.include = app.application.includes;
-                    }
-
-                    if !app.application.wit_deps.is_empty()
-                        && self
-                        .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
-                    {
-                        self.wit_deps =
-                            WithSource::new(app_source_dir.to_path_buf(), app.application.wit_deps);
                     }
 
                     for (template_name, template) in app.application.component_templates {

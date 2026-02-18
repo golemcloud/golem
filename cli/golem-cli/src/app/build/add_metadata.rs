@@ -42,7 +42,7 @@ fn add_metadata(
     root_package_name: PackageName,
     target: &impl AsRef<Path>,
 ) -> anyhow::Result<()> {
-    let wasm = fs::read(source).context("Failed reading linked WASM")?;
+    let wasm = fs::read(source).context("Failed reading component WASM")?;
 
     let mut metadata = AddMetadata::default();
     metadata.name = AddMetadataField::Set(format!(
@@ -56,11 +56,11 @@ fn add_metadata(
 
     let updated_wasm = metadata
         .to_wasm(&wasm)
-        .context("Adding name and version metadata to the linked WASM")?;
+        .context("Adding name and version metadata to the component WASM")?;
 
     fs::create_dir_all(fs::parent_or_err(target.as_ref())?)?;
 
-    fs::write(target, &updated_wasm).context("Failed writing final linked WASM")?;
+    fs::write(target, &updated_wasm).context("Failed writing output WASM")?;
     Ok(())
 }
 
@@ -70,8 +70,8 @@ pub async fn add_metadata_to_selected_components(ctx: &BuildContext<'_>) -> anyh
 
     for component_name in ctx.application_context().selected_component_names() {
         let component = ctx.application().component(component_name);
-        let temp_linked_wasm = component.temp_linked_wasm();
-        let final_linked_wasm = component.final_linked_wasm();
+        let source_wasm = component.wasm();
+        let final_wasm = component.final_wasm();
 
         let root_package_name = component_name_to_package_name(component_name);
 
@@ -85,8 +85,8 @@ pub async fn add_metadata_to_selected_components(ctx: &BuildContext<'_>) -> anyh
 
         if is_up_to_date(
             ctx.skip_up_to_date_checks() || !task_result_marker.is_up_to_date(),
-            || [&temp_linked_wasm],
-            || [&final_linked_wasm],
+            || [&source_wasm],
+            || [&final_wasm],
         ) {
             log_skipping_up_to_date(format!(
                 "adding metadata to {}",
@@ -104,7 +104,7 @@ pub async fn add_metadata_to_selected_components(ctx: &BuildContext<'_>) -> anyh
                         component_name.as_str().log_color_highlight()
                     ),
                 );
-                add_metadata(&temp_linked_wasm, root_package_name, &final_linked_wasm)
+                add_metadata(&source_wasm, root_package_name, &final_wasm)
             }
             .await,
         )?;

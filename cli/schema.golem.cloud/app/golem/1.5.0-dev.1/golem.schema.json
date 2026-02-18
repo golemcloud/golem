@@ -20,13 +20,6 @@
       "type": "string",
       "description": "Temporary directory used for generating and building WIT and WASM artifacts. Default location is golem-temp."
     },
-    "witDeps": {
-      "type": "array",
-      "description": "List of source directories for common wit dependency packages",
-      "items": {
-        "type": "string"
-      }
-    },
     "componentTemplates": {
       "type": "object",
       "description": "Component templates by template names",
@@ -255,9 +248,9 @@
           "type": "string",
           "description": "File path for the built WASM component."
         },
-        "linkedWasm": {
+        "outputWasm": {
           "type": "string",
-          "description": "File path for the linked WASM component which is ready to be uploaded to Golem."
+          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"

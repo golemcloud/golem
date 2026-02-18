@@ -117,14 +117,14 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
-    pub async fn open_linked_wasm(&self) -> anyhow::Result<File> {
-        File::open(&self.component_deploy_properties.linked_wasm_path)
+    pub async fn open_wasm(&self) -> anyhow::Result<File> {
+        File::open(&self.component_deploy_properties.wasm_path)
             .await
             .with_context(|| {
                 anyhow!(
-                    "Failed to open component linked WASM at {}",
+                    "Failed to open component output WASM at {}",
                     self.component_deploy_properties
-                        .linked_wasm_path
+                        .wasm_path
                         .display()
                         .to_string()
                         .log_color_error_highlight()
@@ -132,9 +132,9 @@ impl<'a> ComponentStager<'a> {
             })
     }
 
-    pub async fn open_linked_wasm_if_changed(&self) -> anyhow::Result<Option<File>> {
+    pub async fn open_wasm_if_changed(&self) -> anyhow::Result<Option<File>> {
         if self.diff.wasm_changed() {
-            Ok(Some(self.open_linked_wasm().await?))
+            Ok(Some(self.open_wasm().await?))
         } else {
             Ok(None)
         }

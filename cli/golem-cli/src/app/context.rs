@@ -29,8 +29,7 @@ use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -39,9 +38,6 @@ use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use tokio::sync::RwLockReadGuard;
-
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
@@ -67,8 +63,8 @@ impl<'a> BuildContext<'a> {
         &self.application_context.config
     }
 
-    pub async fn wit(&self) -> RwLockReadGuard<'_, ResolvedWitApplication> {
-        self.application_context.wit.read().await
+    pub fn agent_types(&self) -> &crate::app::agent_types::AgentTypeRegistry {
+        self.application_context.agent_types()
     }
 
     pub fn build_config(&self) -> &BuildConfig {
@@ -150,9 +146,8 @@ pub struct ApplicationContext {
     loaded_with_warnings: bool,
     config: ApplicationConfig,
     application: Application,
-    wit: tokio::sync::RwLock<ResolvedWitApplication>,
+    agent_types: crate::app::agent_types::AgentTypeRegistry,
     calling_working_dir: PathBuf,
-    common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
     selected_component_names: BTreeSet<ComponentName>,
     remote_components: RemoteComponents,
     tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
@@ -222,8 +217,8 @@ impl ApplicationContext {
         &self.application
     }
 
-    pub async fn wit(&self) -> RwLockReadGuard<'_, ResolvedWitApplication> {
-        self.wit.read().await
+    pub fn agent_types(&self) -> &crate::app::agent_types::AgentTypeRegistry {
+        &self.agent_types
     }
 
     pub fn new_repl_bridge_sdk_target(&self, language: GuestLanguage) -> CustomBridgeSdkTarget {
@@ -241,84 +236,22 @@ impl ApplicationContext {
         file_download_client: reqwest::Client,
     ) -> ValidatedResult<ApplicationContext> {
         let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
-        app_and_calling_working_dir
-            .and_then_async(async |(application, calling_working_dir)| {
-                ResolvedWitApplication::new(
-                    &application,
-                    &tools_with_ensured_common_deps,
-                    config.enable_wasmtime_fs_cache,
-                )
-                .await
-                .map(|wit| {
-                    let temp_dir = application.temp_dir().to_path_buf();
-                    let offline = config.offline;
-                    ApplicationContext {
-                        loaded_with_warnings: false,
-                        config,
-                        application,
-                        wit: tokio::sync::RwLock::new(wit),
-                        calling_working_dir,
-                        common_wit_deps: OnceLock::new(),
-                        selected_component_names: BTreeSet::new(),
-                        remote_components: RemoteComponents::new(
-                            file_download_client,
-                            temp_dir.to_path_buf(),
-                            offline,
-                        ),
-                        tools_with_ensured_common_deps,
-                    }
-                })
-            })
-            .await
-    }
-
-    pub async fn update_wit_context(&self) -> anyhow::Result<()> {
-        let mut wit = self.wit.write().await;
-        let (result, new_wit) = ResolvedWitApplication::new(
-            &self.application,
-            &self.tools_with_ensured_common_deps,
-            self.config.enable_wasmtime_fs_cache,
-        )
-        .await
-        .take();
-
-        if let Some(new_wit) = new_wit {
-            *wit = new_wit;
-        }
-
-        to_anyhow(
-            "Failed to update application wit context, see problems above",
-            result,
-            None,
-        )
-    }
-
-    pub fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
-        match self
-            .common_wit_deps
-            .get_or_init(|| {
-                let sources = self.application.wit_deps();
-                if sources.is_empty() {
-                    bail!("No common witDeps were defined in the application manifest")
-                }
-                WitDepsResolver::new(sources)
-            })
-            .as_ref()
-        {
-            Ok(wit_deps) => Ok(wit_deps),
-            Err(err) => Err(anyhow!("Failed to init wit dependency resolver: {:#}", err)),
-        }
-    }
-
-    pub fn component_base_output_wit_deps(
-        &self,
-        component_name: &ComponentName,
-    ) -> anyhow::Result<WitDepsResolver> {
-        WitDepsResolver::new(vec![self
-            .application
-            .component(component_name)
-            .generated_base_wit()
-            .join("deps")])
+        app_and_calling_working_dir.map(|(application, calling_working_dir)| {
+            let temp_dir = application.temp_dir().to_path_buf();
+            let offline = config.offline;
+            let agent_types =
+                crate::app::agent_types::AgentTypeRegistry::new(config.enable_wasmtime_fs_cache);
+            ApplicationContext {
+                loaded_with_warnings: false,
+                config,
+                application,
+                agent_types,
+                calling_working_dir,
+                selected_component_names: BTreeSet::new(),
+                remote_components: RemoteComponents::new(file_download_client, temp_dir, offline),
+                tools_with_ensured_common_deps,
+            }
+        })
     }
 
     pub fn select_components(

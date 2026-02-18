@@ -25,6 +25,7 @@ pub mod bridge_gen;
 pub mod client;
 pub mod command;
 pub mod command_handler;
+pub mod composition;
 pub mod config;
 pub mod context;
 pub mod diagnose;
@@ -35,8 +36,6 @@ pub mod log;
 pub mod model;
 pub mod process;
 pub mod validation;
-pub mod composition;
-pub mod wit_resolve;
 
 #[allow(unused)]
 mod wasm_metadata;

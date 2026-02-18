@@ -43,8 +43,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
                 paths.insert(("generated wit", component.generated_wit()));
                 paths.insert(("component wasm", component.wasm()));
-                paths.insert(("temp wasm", component.temp_linked_wasm()));
-                paths.insert(("linked wasm", component.final_linked_wasm()));
+                paths.insert(("output wasm", component.final_wasm()));
 
                 for build_step in component.build_commands() {
                     let build_dir = build_step

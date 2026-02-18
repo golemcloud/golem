@@ -21,6 +21,7 @@ use crate::app::build::task_result_marker::{
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
+use crate::composition::{compose, Plug};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::log_error;
@@ -33,7 +34,6 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use crate::process::{with_hidden_output_unless_error, CommandExt};
-use crate::composition::{compose, Plug};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;

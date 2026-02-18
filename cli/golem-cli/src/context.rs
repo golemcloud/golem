@@ -24,6 +24,7 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
+use crate::model::app::RustDependencyOverride;
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app::{
     ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
@@ -36,7 +37,6 @@ use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::model::app::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;

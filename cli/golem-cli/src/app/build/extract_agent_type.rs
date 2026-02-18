@@ -45,8 +45,7 @@ pub async fn extract_and_store_agent_types(
                 );
 
                 let agent_types = ctx
-                    .wit()
-                    .await
+                    .agent_types()
                     .get_or_extract_component_agent_types(component_name, &wasm)
                     .await?;
 
@@ -72,8 +71,7 @@ pub async fn extract_and_store_agent_types(
         None => {
             let agent_types = serde_json::from_str(&fs::read_to_string(&extracted_agent_types)?)
                 .context("Failed to deserialize agent types")?;
-            ctx.wit()
-                .await
+            ctx.agent_types()
                 .add_cached_component_agent_types(component_name, agent_types)
                 .await
         }

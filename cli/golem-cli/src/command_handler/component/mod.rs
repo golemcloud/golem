@@ -901,19 +901,13 @@ impl ComponentCommandHandler {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
 
-        let agent_types = {
-            if app_ctx.wit().await.is_agent(component_name) {
-                extract_and_store_agent_types(
-                    &BuildContext::new(app_ctx, &BuildConfig::new()),
-                    component_name,
-                )
-                .await?
-            } else {
-                vec![]
-            }
-        };
+        let agent_types = extract_and_store_agent_types(
+            &BuildContext::new(app_ctx, &BuildConfig::new()),
+            component_name,
+        )
+        .await?;
         let component = app_ctx.application().component(component_name);
-        let linked_wasm_path = component.final_linked_wasm();
+        let wasm_path = component.final_wasm();
 
         if !component.component_type().is_deployable() {
             bail!("Component {component_name} is not deployable");
@@ -924,7 +918,7 @@ impl ComponentCommandHandler {
         let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
         Ok(ComponentDeployProperties {
-            linked_wasm_path,
+            wasm_path,
             agent_types,
             files,
             dynamic_linking,
@@ -948,7 +942,7 @@ impl ComponentCommandHandler {
                     component_name.as_str().log_color_highlight()
                 ),
             );
-            let file = std::fs::File::open(&properties.linked_wasm_path)?;
+            let file = std::fs::File::open(&properties.wasm_path)?;
             let mut component_hasher = blake3::Hasher::new();
             component_hasher
                 .update_reader(&file)
@@ -1058,7 +1052,7 @@ impl ComponentCommandHandler {
             None,
         );
 
-        let linked_wasm = component_stager.open_linked_wasm().await?;
+        let wasm = component_stager.open_wasm().await?;
         let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
@@ -1082,7 +1076,7 @@ impl ComponentCommandHandler {
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
-                linked_wasm,
+                wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
                     .await
                     .transpose()?,
@@ -1155,7 +1149,7 @@ impl ComponentCommandHandler {
             Some(diff),
         );
 
-        let linked_wasm = component_stager.open_linked_wasm_if_changed().await?;
+        let wasm = component_stager.open_wasm_if_changed().await?;
         let agent_types = component_stager.agent_types_if_changed().cloned();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
@@ -1177,7 +1171,7 @@ impl ComponentCommandHandler {
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),
                 },
-                linked_wasm,
+                wasm,
                 changed_files.open_archive().await?,
             )
             .await

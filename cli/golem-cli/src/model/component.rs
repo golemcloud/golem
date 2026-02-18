@@ -216,7 +216,7 @@ impl ComponentView {
 
 #[derive(Clone, Debug)]
 pub struct ComponentDeployProperties {
-    pub linked_wasm_path: PathBuf,
+    pub wasm_path: PathBuf,
     pub agent_types: Vec<AgentType>,
     pub files: Vec<crate::model::app::InitialComponentFile>,
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
