@@ -55,7 +55,7 @@ jobs:
         working-directory: sdks/ts
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          for pkg in packages/golem-ts-types-core packages/golem-ts-typegen packages/golem-ts-sdk; do
+          for pkg in packages/golem-ts-types-core packages/golem-ts-typegen packages/golem-ts-sdk packages/golem-ts-repl; do
             cd $pkg
             npm version $VERSION --no-git-tag-version
             cd ../../
