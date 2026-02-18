@@ -30,9 +30,15 @@ use rustyline::validate::Validator;
 use rustyline::{CompletionType, Editor, ExternalPrinter, Helper};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fmt::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
+use std::time::Duration;
 
 pub struct Repl {
     config: ReplResolvedConfig,
@@ -97,16 +103,20 @@ impl Repl {
                 .split('\n')
                 .filter_map(|line| line.trim().split_once(' '))
                 .filter_map(|(name, desc)| {
-                    (name
-                        .strip_prefix(':')
-                        .map(|name| (name.to_string(), desc.trim_start().to_string())))
+                    name.strip_prefix(':')
+                        .map(|name| (name.to_string(), desc.trim_start().to_string()))
                 })
                 .collect::<HashMap<String, String>>()
         };
 
         println!("Building common dependencies...");
         command_context.set_opt_level("0")?;
-        command_context.execute(":load_config --quiet")?;
+        if !config.script_mode() {
+            let _spinner = SpinnerGuard::start_stdout("Loading config...");
+            command_context.execute(":load_config --quiet")?;
+        } else {
+            command_context.execute(":load_config --quiet")?;
+        }
 
         let command_context = Rc::new(RefCell::new(command_context));
 
@@ -173,7 +183,18 @@ impl Repl {
                         continue;
                     }
 
-                    match self.command_context.borrow_mut().execute(&line) {
+                    let spinner = if self.config.script_mode() {
+                        None
+                    } else {
+                        Some(SpinnerGuard::start_printer(
+                            self.editor.create_external_printer()?,
+                            "Working...",
+                        ))
+                    };
+                    let result = self.command_context.borrow_mut().execute(&line);
+                    drop(spinner);
+
+                    match result {
                         Ok(output) => {
                             if let Some(text) = output.get("text/plain") {
                                 println!("{text}");
@@ -222,13 +243,92 @@ impl Repl {
     }
 }
 
+struct SpinnerGuard {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl SpinnerGuard {
+    fn start_printer<T>(printer: T, label: &str) -> Self
+    where
+        T: ExternalPrinter + Send + 'static,
+    {
+        let mut printer = printer;
+        Self::start_with_writer(move |text| {
+            let _ = printer.print(text);
+        }, label)
+    }
+
+    fn start_stdout(label: &str) -> Self {
+        Self::start_with_writer(
+            |text| {
+                let mut out = io::stdout();
+                let _ = out.write_all(text.as_bytes());
+                let _ = out.flush();
+            },
+            label,
+        )
+    }
+
+    fn start_with_writer<F>(mut write: F, label: &str) -> Self
+    where
+        F: FnMut(String) + Send + 'static,
+    {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let label = label.to_string();
+        let handle = thread::spawn(move || {
+            let frames = ["|", "/", "-", "\\"];
+            let mut index = 0usize;
+            let mut shown = false;
+            let mut last_len = 0usize;
+            let start = std::time::Instant::now();
+            while !stop_clone.load(Ordering::Relaxed) {
+                if !shown {
+                    if start.elapsed() < Duration::from_millis(300) {
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                    shown = true;
+                }
+
+                let frame = frames[index % frames.len()];
+                let text = format!("{frame} {label}");
+                last_len = text.len();
+                write(format!("\r{text}"));
+                index = index.wrapping_add(1);
+                thread::sleep(Duration::from_millis(120));
+            }
+            if shown && last_len > 0 {
+                write(format!("\r{:width$}\r", "", width = last_len));
+            }
+        });
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for SpinnerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 struct ReplRustyLineEditorHelper {
     context: Rc<RefCell<CommandContext>>,
     cli_repl: Rc<CliReplInterop>,
 }
 
 impl ReplRustyLineEditorHelper {
-    fn new(context: Rc<RefCell<CommandContext>>, cli_repl: Rc<CliReplInterop>) -> Self {
+    fn new(
+        context: Rc<RefCell<CommandContext>>,
+        cli_repl: Rc<CliReplInterop>,
+    ) -> Self {
         Self { context, cli_repl }
     }
 }
