@@ -15,6 +15,7 @@
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
 use crate::evcxr_repl::log::{logln, set_output, OutputMode};
+use crate::evcxr_repl::ReplConfig;
 use crate::fs;
 use crate::process::{with_hidden_output_unless_error, HiddenOutput};
 use anyhow::{anyhow, bail};
@@ -59,6 +60,8 @@ impl Repl {
         if config.script_mode() {
             set_output(OutputMode::Stderr);
         }
+
+        Self::write_evcxr_toml(&config)?;
 
         let (mut command_context, outputs) = {
             let _spinner: Option<SpinnerGuard> = (!config.script_mode())
@@ -123,22 +126,22 @@ impl Repl {
         Ok(editor)
     }
 
-    fn write_evcxr_toml(&self) -> anyhow::Result<()> {
+    fn write_evcxr_toml(config: &ReplResolvedConfig) -> anyhow::Result<()> {
         let mut dependencies = String::new();
         let mut prelude = String::new();
 
-        for (agent_type_name, agent) in &self.config.repl_metadata.agents {
+        for (agent_type_name, agent) in &config.repl_metadata.agents {
             // TODO: from meta?
             let agent_package_name = format!("{}-client", agent_type_name.0.to_kebab_case());
             let agent_client_mod_name = format!("{}_client", agent_type_name.0.to_snake_case());
             let agent_client_name = &agent_type_name;
 
             let path = toml_string_literal(fs::path_to_str(
-                &PathBuf::from(&self.config.base_config.app_main_dir).join(&agent.client_dir),
+                &PathBuf::from(&config.base_config.app_main_dir).join(&agent.client_dir),
             )?)?;
 
             dependencies.push_str(&format!("{agent_package_name} = {{ path = {path} }}\n"));
-            if !self.config.cli_args.disable_auto_imports {
+            if !config.cli_args.disable_auto_imports {
                 prelude.push_str(&format!("use {agent_client_mod_name};\n"));
                 prelude.push_str(&format!(
                     "use {agent_client_mod_name}::{agent_client_name};\n"
@@ -164,25 +167,16 @@ impl Repl {
     }
 
     fn setup_command_context(&self) -> anyhow::Result<()> {
-        self.write_evcxr_toml()?;
-
         let mut command_context = self.command_context.borrow_mut();
 
         command_context.set_opt_level("0")?;
 
-        if !self.config.script_mode() {
-            let _spinner = SpinnerGuard::start_stdout("Building dependencies...", false);
-            command_context.execute(":load_config --quiet")?;
-            Ok(())
-        } else {
-            let _spinner = SpinnerGuard::start_tty("Building dependencies...", false);
-            with_hidden_output_unless_error(HiddenOutput::All, || {
-                command_context
-                    .execute(":load_config --quiet")
-                    .map_err(|err| anyhow!(err))
-            })?;
-            Ok(())
-        }
+        let _spinner: Option<SpinnerGuard> = (!self.config.script_mode())
+            .then(|| SpinnerGuard::start_tty("Building dependencies...", false))
+            .flatten();
+        command_context.execute(":load_config --quiet")?;
+
+        Ok(())
     }
 
     fn run_interactive(&self, outputs: EvalContextOutputs) -> anyhow::Result<()> {
