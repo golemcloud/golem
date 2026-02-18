@@ -31,7 +31,6 @@ use golem_client::model::{AccountSetRoles, TokenCreation};
 use golem_common::model::account::{AccountCreation, AccountEmail};
 use golem_common::model::auth::AccountRole;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
@@ -54,7 +53,6 @@ pub trait TestDependencies: Send + Sync + Clone {
     fn worker_service(&self) -> Arc<dyn WorkerService>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster>;
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
     fn registry_service(&self) -> Arc<dyn RegistryService>;
 
     async fn admin(&self) -> TestUserContext<Self>

@@ -32,9 +32,6 @@ use tokio::io::BufReader;
 use tokio_stream::Stream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
-use tracing::info;
-use wac_graph::types::Package;
-use wac_graph::{CompositionGraph, EncodeOptions, PlugError};
 
 pub async fn prepare_component_files_for_upload(
     archive: NamedTempFile,
@@ -208,27 +205,5 @@ pub fn _find_component_metadata_conflicts(
     ConflictReport {
         missing_functions,
         conflicting_functions,
-    }
-}
-
-pub fn compose_components(socket_bytes: &[u8], plug_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let mut graph = CompositionGraph::new();
-
-    let socket = Package::from_bytes("socket", None, socket_bytes, graph.types_mut())?;
-    let socket = graph.register_package(socket)?;
-
-    let plug_package = Package::from_bytes("plug", None, plug_bytes, graph.types_mut())?;
-    let plub_package_id = graph.register_package(plug_package)?;
-
-    match wac_graph::plug(&mut graph, vec![plub_package_id], socket) {
-        Ok(()) => {
-            let bytes = graph.encode(EncodeOptions::default())?;
-            Ok(bytes)
-        }
-        Err(PlugError::NoPlugHappened) => {
-            info!("No plugs where executed when composing components");
-            Ok(socket_bytes.to_vec())
-        }
-        Err(error) => Err(error.into()),
     }
 }

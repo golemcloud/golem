@@ -4519,7 +4519,6 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
- "wac-graph",
 ]
 
 [[package]]

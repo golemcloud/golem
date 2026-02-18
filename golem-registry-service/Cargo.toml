@@ -109,7 +109,6 @@ tracing-subscriber = { workspace = true }
 tryhard = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wac-graph = { workspace = true }
 
 [dev-dependencies]
 futures = { workspace = true }

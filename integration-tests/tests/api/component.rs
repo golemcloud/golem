@@ -29,7 +29,9 @@ use golem_common::model::component::{
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
-use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginSpecDto};
+use golem_common::model::plugin_registration::{
+    OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
+};
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -212,32 +214,31 @@ async fn create_component_with_plugins_and_update_installations(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let library_plugin = client
+    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+
+    let oplog_plugin = client
         .create_plugin(
             &user.account_id.0,
             &PluginRegistrationCreation {
-                name: "test-library-plugin".to_string(),
+                name: "test-oplog-plugin".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::File::open(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
-    let library_plugin_grant = client
+    let oplog_plugin_grant = client
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: library_plugin.id,
+                plugin_registration_id: oplog_plugin.id,
             },
         )
         .await?;
@@ -246,7 +247,7 @@ async fn create_component_with_plugins_and_update_installations(
 
     let component = user
         .component(&env.id, "it_agent_counters_release")
-        .with_parametrized_plugin(&library_plugin_grant.id, 0, plugin_parameters.clone())
+        .with_parametrized_plugin(&oplog_plugin_grant.id, 0, plugin_parameters.clone())
         .store()
         .await?;
 
@@ -284,7 +285,7 @@ async fn create_component_with_plugins_and_update_installations(
     assert_eq!(installed_plugin.priority.0, 1);
     assert_eq!(installed_plugin.parameters, plugin_parameters);
 
-    // update priority of plugin
+    // uninstall plugin
     let component_v3 = client
         .update_component(
             &component.id.0,
@@ -316,32 +317,31 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    let library_plugin = client
+    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+
+    let oplog_plugin = client
         .create_plugin(
             &user.account_id.0,
             &PluginRegistrationCreation {
-                name: "test-library-plugin".to_string(),
+                name: "test-oplog-plugin".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::File::open(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
-    let library_plugin_grant = client
+    let oplog_plugin_grant = client
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: library_plugin.id,
+                plugin_registration_id: oplog_plugin.id,
             },
         )
         .await?;
@@ -364,7 +364,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
-                    environment_plugin_grant_id: library_plugin_grant.id,
+                    environment_plugin_grant_id: oplog_plugin_grant.id,
                     priority: PluginPriority(0),
                     parameters: plugin_parameters.clone(),
                 })],
@@ -567,6 +567,8 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
+    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+
     let plugin_1 = client
         .create_plugin(
             &user.account_id.0,
@@ -576,15 +578,12 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 description: "".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::read(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
@@ -597,15 +596,12 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 description: "".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::read(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
@@ -677,6 +673,8 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
+    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+
     let plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -686,15 +684,12 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 description: "".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::read(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
@@ -757,6 +752,8 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
+    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+
     let plugin_1 = client
         .create_plugin(
             &user.account_id.0,
@@ -766,15 +763,12 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                 description: "".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::read(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
@@ -787,15 +781,12 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                 description: "".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::read(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
@@ -869,6 +860,8 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
+    let oplog_component = user.component(&env.id, "oplog-processor").store().await?;
+
     let plugin = client
         .create_plugin(
             &user.account_id.0,
@@ -878,15 +871,12 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                 description: "".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: oplog_component.id,
+                    component_revision: oplog_component.revision,
+                }),
             },
-            Some(
-                tokio::fs::read(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 

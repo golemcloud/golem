@@ -24,28 +24,10 @@ declare_transparent_newtypes! {
 }
 
 impl PluginRegistrationDto {
-    fn component_transformer(&self) -> Option<&ComponentTransformerPluginSpec> {
-        match &self.spec {
-            PluginSpecDto::ComponentTransformer(inner) => Some(inner),
-            _ => None,
-        }
-    }
-
     fn oplog_processor(&self) -> Option<&OplogProcessorPluginSpec> {
         match &self.spec {
             PluginSpecDto::OplogProcessor(inner) => Some(inner),
-            _ => None,
         }
-    }
-
-    pub fn component_transformer_validate_url(&self) -> Option<&str> {
-        self.component_transformer()
-            .map(|inner| inner.validate_url.as_str())
-    }
-
-    pub fn component_transformer_transform_url(&self) -> Option<&str> {
-        self.component_transformer()
-            .map(|inner| inner.transform_url.as_str())
     }
 
     pub fn oplog_processor_component_id(&self) -> Option<ComponentId> {
@@ -58,10 +40,7 @@ impl PluginRegistrationDto {
 
     pub fn typ_as_str(&self) -> &'static str {
         match &self.spec {
-            PluginSpecDto::ComponentTransformer(_) => "component transformer",
             PluginSpecDto::OplogProcessor(_) => "oplog processor",
-            PluginSpecDto::App(_) => "app",
-            PluginSpecDto::Library(_) => "library",
         }
     }
 }

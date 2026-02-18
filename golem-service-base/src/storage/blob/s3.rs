@@ -97,7 +97,6 @@ impl S3BlobStorage {
                 &self.config.initial_component_files_bucket
             }
             BlobStorageNamespace::Components { .. } => &self.config.components_bucket,
-            BlobStorageNamespace::PluginWasmFiles { .. } => &self.config.plugin_wasm_files_bucket,
         }
     }
 
@@ -148,16 +147,6 @@ impl S3BlobStorage {
                     Path::new(&self.config.object_prefix)
                         .join(environment_id_string)
                         .join(component_id_string)
-                        .to_path_buf()
-                }
-            }
-            BlobStorageNamespace::PluginWasmFiles { account_id } => {
-                let account_id_string = account_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    PathBuf::from(&account_id_string)
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(account_id_string)
                         .to_path_buf()
                 }
             }

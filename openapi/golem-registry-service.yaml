@@ -743,17 +743,9 @@ paths:
         explode: true
       requestBody:
         content:
-          multipart/form-data:
+          application/json; charset=utf-8:
             schema:
-              type: object
-              required:
-              - metadata
-              properties:
-                metadata:
-                  $ref: '#/components/schemas/PluginRegistrationCreation'
-                pluginWasm:
-                  type: string
-                  format: binary
+              $ref: '#/components/schemas/PluginRegistrationCreation'
         required: true
       responses:
         '200':
@@ -6929,20 +6921,6 @@ components:
       properties:
         elementType:
           $ref: '#/components/schemas/AnalysedType'
-    ComponentTransformerPluginSpec:
-      type: object
-      title: ComponentTransformerPluginSpec
-      required:
-      - validateUrl
-      - transformUrl
-      properties:
-        providedWitPackage:
-          type: string
-        jsonSchema: {}
-        validateUrl:
-          type: string
-        transformUrl:
-          type: string
     ComponentUpdate:
       type: object
       title: ComponentUpdate
@@ -8387,41 +8365,11 @@ components:
     PluginSpecDto:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
       - $ref: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
-      - $ref: '#/components/schemas/PluginSpecDto_Empty'
-      - $ref: '#/components/schemas/PluginSpecDto_Empty'
       discriminator:
         propertyName: type
         mapping:
-          ComponentTransformer: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
           OplogProcessor: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
-          App: '#/components/schemas/PluginSpecDto_Empty'
-          Library: '#/components/schemas/PluginSpecDto_Empty'
-    PluginSpecDto_ComponentTransformerPluginSpec:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentTransformer
-            example: ComponentTransformer
-      - $ref: '#/components/schemas/ComponentTransformerPluginSpec'
-    PluginSpecDto_Empty:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Library
-            example: Library
-      - $ref: '#/components/schemas/Empty'
     PluginSpecDto_OplogProcessorPluginSpec:
       allOf:
       - type: object

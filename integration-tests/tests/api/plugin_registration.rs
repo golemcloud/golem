@@ -20,7 +20,6 @@ use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -97,46 +96,43 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
 async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
 
-    let app_plugin = client
+    let component = user.component(&env.id, "oplog-processor").store().await?;
+
+    let plugin1 = client
         .create_plugin(
             &user.account_id.0,
             &PluginRegistrationCreation {
-                name: "test-app-plugin".to_string(),
+                name: "test-oplog-processor-1".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::App(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                }),
             },
-            Some(
-                tokio::fs::File::open(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
-    let library_plugin = client
+    let plugin2 = client
         .create_plugin(
             &user.account_id.0,
             &PluginRegistrationCreation {
-                name: "test-library-plugin".to_string(),
+                name: "test-oplog-processor-2".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                }),
             },
-            Some(
-                tokio::fs::File::open(
-                    deps.component_directory()
-                        .join("it_agent_counters_release.wasm"),
-                )
-                .await?,
-            ),
+            None::<Vec<u8>>,
         )
         .await?;
 
@@ -147,10 +143,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             .into_iter()
             .map(|p| p.id)
             .collect::<HashSet<_>>();
-        assert_eq!(
-            plugin_ids,
-            HashSet::from_iter(vec![app_plugin.id, library_plugin.id])
-        );
+        assert_eq!(plugin_ids, HashSet::from_iter(vec![plugin1.id, plugin2.id]));
     }
 
     Ok(())

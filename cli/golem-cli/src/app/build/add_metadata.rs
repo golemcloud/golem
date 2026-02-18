@@ -44,14 +44,16 @@ fn add_metadata(
 ) -> anyhow::Result<()> {
     let wasm = fs::read(source).context("Failed reading component WASM")?;
 
-    let mut metadata = AddMetadata::default();
-    metadata.name = AddMetadataField::Set(format!(
-        "{}:{}",
-        root_package_name.namespace, root_package_name.name
-    ));
-    metadata.version = match &root_package_name.version {
-        None => AddMetadataField::Clear,
-        Some(v) => AddMetadataField::Set(crate::wasm_metadata::Version::new(v.to_string())),
+    let metadata = AddMetadata {
+        name: AddMetadataField::Set(format!(
+            "{}:{}",
+            root_package_name.namespace, root_package_name.name
+        )),
+        version: match &root_package_name.version {
+            None => AddMetadataField::Clear,
+            Some(v) => AddMetadataField::Set(crate::wasm_metadata::Version::new(v.to_string())),
+        },
+        ..Default::default()
     };
 
     let updated_wasm = metadata

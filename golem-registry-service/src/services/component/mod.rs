@@ -19,7 +19,6 @@ mod write;
 pub use self::error::ComponentError;
 pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
-use super::component_transformer_plugin_caller::{self};
 use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
 use crate::model::component::Component;

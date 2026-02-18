@@ -47,7 +47,6 @@ use golem_common::model::plan::PlanId;
 use golem_common::tracing::directive::warn;
 use golem_common::tracing::{init_tracing, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use std::collections::HashMap;
@@ -73,7 +72,6 @@ pub struct BenchmarkTestDependencies {
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
     blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
@@ -280,8 +278,6 @@ impl BenchmarkTestDependencies {
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
         let rdb: Arc<dyn Rdb> = {
             let unique_network_id = Uuid::new_v4().to_string();
             Arc::new(DockerPostgresRdb::new(&unique_network_id, true).await)
@@ -395,7 +391,6 @@ impl BenchmarkTestDependencies {
             worker_executor_cluster,
             component_directory: Path::new(component_directory).to_path_buf(),
             blob_storage,
-            plugin_wasm_files_service,
             initial_component_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
             registry_service,
@@ -444,9 +439,6 @@ impl BenchmarkTestDependencies {
                 );
                 let initial_component_files_service =
                     Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-                let plugin_wasm_files_service =
-                    Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
                 let rdb: Arc<dyn Rdb> = Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
 
@@ -513,7 +505,6 @@ impl BenchmarkTestDependencies {
                     worker_executor_cluster,
                     component_directory: Path::new(component_directory).to_path_buf(),
                     blob_storage,
-                    plugin_wasm_files_service,
                     initial_component_files_service,
                     component_temp_directory: Arc::new(TempDir::new().unwrap()),
                     registry_service,
@@ -620,10 +611,6 @@ impl TestDependencies for BenchmarkTestDependencies {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
-    }
-
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.plugin_wasm_files_service.clone()
     }
 
     fn registry_service(&self) -> Arc<dyn RegistryService> {

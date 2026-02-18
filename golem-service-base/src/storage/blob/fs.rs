@@ -96,10 +96,6 @@ impl FileSystemBlobStorage {
                 result.push("component_store");
                 result.push(environment_id.to_string());
             }
-            BlobStorageNamespace::PluginWasmFiles { account_id } => {
-                result.push("plugin_wasm_files");
-                result.push(account_id.to_string());
-            }
         }
 
         result.push(path);
