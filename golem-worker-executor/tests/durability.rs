@@ -490,7 +490,7 @@ async fn snapshot_based_recovery(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "wasRecoveredFromSnapshot",
+            "was_recovered_from_snapshot",
             data_value!(),
         )
         .await?;
@@ -583,7 +583,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         .invoke_and_await_agent(
             &component.id,
             &agent_id,
-            "wasRecoveredFromSnapshot",
+            "was_recovered_from_snapshot",
             data_value!(),
         )
         .await?;
