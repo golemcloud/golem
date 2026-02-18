@@ -16,7 +16,7 @@ use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
 use crate::evcxr_repl::log::{logln, set_output, OutputMode};
 use crate::fs;
-use crate::process::with_hidden_output_unless_error;
+use crate::process::{with_hidden_output_unless_error, HiddenOutput};
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
@@ -33,6 +33,7 @@ use rustyline::validate::Validator;
 use rustyline::{CompletionType, Editor, ExternalPrinter, Helper};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -174,7 +175,8 @@ impl Repl {
             command_context.execute(":load_config --quiet")?;
             Ok(())
         } else {
-            with_hidden_output_unless_error(|| {
+            let _spinner = SpinnerGuard::start_tty("Building dependencies...", false);
+            with_hidden_output_unless_error(HiddenOutput::All, || {
                 command_context
                     .execute(":load_config --quiet")
                     .map_err(|err| anyhow!(err))
@@ -330,6 +332,17 @@ impl SpinnerGuard {
         )
     }
 
+    fn start_tty(label: &str, with_initial_delay: bool) -> Option<Self> {
+        let mut tty = open_tty_writer()?;
+        Some(Self::start_with_writer(
+            move |text| {
+                tty(text);
+            },
+            label,
+            with_initial_delay,
+        ))
+    }
+
     fn start_with_writer<F>(mut write: F, label: &str, with_initial_delay: bool) -> Self
     where
         F: FnMut(String) + Send + 'static,
@@ -393,6 +406,23 @@ impl Drop for SpinnerGuard {
             let _ = handle.join();
         }
     }
+}
+
+fn open_tty_writer() -> Option<Box<dyn FnMut(String) + Send + 'static>> {
+    #[cfg(unix)]
+    let file = OpenOptions::new().write(true).open("/dev/tty").ok()?;
+    #[cfg(windows)]
+    let file = OpenOptions::new().write(true).open("CONOUT$").ok()?;
+    #[cfg(not(any(unix, windows)))]
+    {
+        return None;
+    }
+
+    let mut file = file;
+    Some(Box::new(move |text: String| {
+        let _ = file.write_all(text.as_bytes());
+        let _ = file.flush();
+    }))
 }
 
 struct ReplRustyLineEditorHelper {

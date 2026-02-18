@@ -32,7 +32,7 @@ use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
-use crate::process::{with_hidden_output_unless_error, CommandExt};
+use crate::process::{with_hidden_output_unless_error, CommandExt, HiddenOutput};
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -40,6 +40,7 @@ use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
 use tokio::process::Command;
+use tracing::{enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
@@ -125,12 +126,15 @@ async fn execute_agent_wrapper(
                     ),
                 );
 
-                with_hidden_output_unless_error(|| {
-                    crate::model::agent::moonbit::generate_moonbit_wrapper(
-                        wrapper_context,
-                        wrapper_wasm_path.as_std_path(),
-                    )
-                })
+                with_hidden_output_unless_error(
+                    HiddenOutput::hide_stderr_if(!enabled!(Level::INFO)),
+                    || {
+                        crate::model::agent::moonbit::generate_moonbit_wrapper(
+                            wrapper_context,
+                            wrapper_wasm_path.as_std_path(),
+                        )
+                    },
+                )
             },
             || {
                 log_skipping_up_to_date(format!(
@@ -239,12 +243,15 @@ async fn execute_inject_to_prebuilt_quick_js(
                 );
                 let _indent = LogIndent::new();
 
-                with_hidden_output_unless_error(|| {
-                    moonbit_component_generator::get_script::generate_get_script_component(
-                        &js_module_contents,
-                        &js_module_wasm,
-                    )
-                })?;
+                with_hidden_output_unless_error(
+                    HiddenOutput::hide_stderr_if(!enabled!(Level::INFO)),
+                    || {
+                        moonbit_component_generator::get_script::generate_get_script_component(
+                            &js_module_contents,
+                            &js_module_wasm,
+                        )
+                    },
+                )?;
 
                 commands::composition::compose(
                     base_wasm.as_std_path(),
