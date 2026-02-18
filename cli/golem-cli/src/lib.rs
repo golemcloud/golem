@@ -37,7 +37,6 @@ pub mod model;
 pub mod process;
 pub mod validation;
 
-
 #[cfg(test)]
 test_r::enable!();
 

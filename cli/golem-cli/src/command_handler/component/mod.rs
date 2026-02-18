@@ -50,7 +50,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
-use golem_common::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
+
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
@@ -915,13 +915,10 @@ impl ComponentCommandHandler {
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
-        let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
-
         Ok(ComponentDeployProperties {
             wasm_path,
             agent_types,
             files,
-            dynamic_linking,
             plugins,
             env,
         })
@@ -1021,7 +1018,6 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(&properties.dynamic_linking),
             }
             .into(),
             wasm_hash: component_binary_hash.into(),
@@ -1071,7 +1067,6 @@ impl ComponentCommandHandler {
                         .as_ref()
                         .map(|files| files.file_options.clone())
                         .unwrap_or_default(),
-                    dynamic_linking: component_stager.dynamic_linking(),
                     env: component_stager.env(),
                     agent_types,
                     plugins: component_stager.plugins(),
@@ -1166,7 +1161,6 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
-                    dynamic_linking: component_stager.dynamic_linking_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),
@@ -1236,13 +1230,6 @@ impl ComponentCommandHandler {
             .await
             .map_err(|err| anyhow!(err))
     }
-}
-
-fn app_component_dynamic_linking(
-    _app_ctx: &mut ApplicationContext,
-    _component_name: &ComponentName,
-) -> anyhow::Result<HashMap<String, DynamicLinkedInstance>> {
-    Ok(HashMap::new())
 }
 
 fn resolve_env_vars(

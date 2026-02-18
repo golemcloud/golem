@@ -11541,11 +11541,6 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          default: {}
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         env:
           default: {}
           type: object
@@ -11669,10 +11664,6 @@ components:
           type: string
         rootPackageVersion:
           type: string
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         agentTypes:
           type: array
           items:
@@ -11682,7 +11673,6 @@ components:
       - producers
       - memories
       - binaryWit
-      - dynamicLinking
       - agentTypes
     ComponentModelElementSchema:
       title: ComponentModelElementSchema
@@ -11710,10 +11700,6 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         env:
           type: object
           additionalProperties:
@@ -11968,37 +11954,6 @@ components:
           type: string
       required:
       - domain
-    DynamicLinkedInstance:
-      discriminator:
-        propertyName: type
-        mapping:
-          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-    DynamicLinkedInstance_DynamicLinkedWasmRpc:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WasmRpc
-            type: string
-            enum:
-            - WasmRpc
-        required:
-        - type
-      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
-    DynamicLinkedWasmRpc:
-      title: DynamicLinkedWasmRpc
-      type: object
-      properties:
-        targets:
-          description: Maps resource names within the dynamic linked interface to target information
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/WasmRpcTarget'
-      required:
-      - targets
     ElementSchema:
       discriminator:
         propertyName: type
@@ -13468,17 +13423,6 @@ components:
       required:
       - name
       - version
-    WasmRpcTarget:
-      title: WasmRpcTarget
-      type: object
-      properties:
-        interfaceName:
-          type: string
-        componentName:
-          type: string
-      required:
-      - interfaceName
-      - componentName
   securitySchemes:
     Cookie:
       type: apiKey

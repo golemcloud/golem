@@ -37,7 +37,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 use pretty_assertions::{assert_eq, assert_ne};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
 
@@ -141,7 +141,6 @@ async fn component_update_with_wrong_revision_is_rejected(
                 current_revision: component.revision.next()?,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
-                dynamic_linking: None,
                 env: None,
                 agent_types: None,
                 plugin_updates: Vec::new(),
@@ -265,7 +264,6 @@ async fn create_component_with_plugins_and_update_installations(
                 current_revision: component.revision,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
-                dynamic_linking: None,
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
@@ -293,7 +291,6 @@ async fn create_component_with_plugins_and_update_installations(
                 current_revision: component_v2.revision,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
-                dynamic_linking: None,
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
@@ -360,7 +357,6 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 current_revision: component.revision,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
-                dynamic_linking: None,
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
@@ -403,7 +399,6 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
                         permissions: ComponentFilePermissions::ReadWrite,
                     },
                 )]),
-                dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
                 agent_types: Vec::new(),
                 plugins: Vec::new(),
@@ -518,7 +513,6 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &ComponentCreation {
                 component_name: ComponentName("golem:it".to_string()),
                 file_options: BTreeMap::new(),
-                dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
                 agent_types: vec![agent_type.clone()],
                 plugins: Vec::new(),
@@ -629,7 +623,6 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             &ComponentCreation {
                 component_name: ComponentName("duplicate-priority".to_string()),
                 file_options: BTreeMap::new(),
-                dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
@@ -708,7 +701,6 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
             &ComponentCreation {
                 component_name: ComponentName("duplicate-grant".to_string()),
                 file_options: BTreeMap::new(),
-                dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
@@ -820,7 +812,6 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                 current_revision: component.revision,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
-                dynamic_linking: None,
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![
@@ -901,7 +892,6 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                 current_revision: component.revision,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
-                dynamic_linking: None,
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![

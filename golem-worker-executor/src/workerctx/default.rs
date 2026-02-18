@@ -38,9 +38,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -481,20 +480,6 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
 
     fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
-    }
-}
-
-#[async_trait]
-impl DynamicLinking<Context> for Context {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<Context>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()> {
-        self.durable_ctx
-            .link(engine, linker, component, component_metadata)
     }
 }
 

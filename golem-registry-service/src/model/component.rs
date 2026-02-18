@@ -18,14 +18,12 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::component::InitialComponentFile;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
-use golem_common::model::component_metadata::{
-    ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
-};
+use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::diff::{self, Hash};
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
@@ -42,7 +40,6 @@ pub struct NewComponentRevision {
     pub object_store_key: String,
     pub installed_plugins: Vec<InstalledPlugin>,
 
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub agent_types: Vec<AgentType>,
 }
 
@@ -56,7 +53,6 @@ impl NewComponentRevision {
         env: BTreeMap<String, String>,
         wasm_hash: Hash,
         object_store_key: String,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         installed_plugins: Vec<InstalledPlugin>,
         agent_types: Vec<AgentType>,
     ) -> Self {
@@ -72,7 +68,6 @@ impl NewComponentRevision {
             wasm_hash,
             object_store_key,
             installed_plugins,
-            dynamic_linking,
             agent_types,
         }
     }
@@ -82,11 +77,7 @@ impl NewComponentRevision {
         transformed_object_store_key: String,
         transformed_data: &[u8],
     ) -> Result<FinalizedComponentRevision, ComponentProcessingError> {
-        let metadata = ComponentMetadata::analyse_component(
-            transformed_data,
-            self.dynamic_linking,
-            self.agent_types,
-        )?;
+        let metadata = ComponentMetadata::analyse_component(transformed_data, self.agent_types)?;
 
         Ok(FinalizedComponentRevision {
             component_id: self.component_id,
@@ -168,7 +159,6 @@ impl Component {
             installed_plugins: self.installed_plugins,
 
             agent_types: self.metadata.agent_types().to_vec(),
-            dynamic_linking: self.metadata.dynamic_linking().clone(),
         })
     }
 }

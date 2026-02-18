@@ -74,7 +74,6 @@ pub trait WorkerCtx:
     + ResourceStore
     + UpdateManagement
     + FileSystemReading
-    + DynamicLinking<Self>
     + InvocationContextManagement
     + HasWasiConfigVars
     + Send
@@ -430,17 +429,6 @@ pub trait InvocationContextManagement {
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
-}
-
-#[async_trait]
-pub trait DynamicLinking<Ctx: WorkerCtx> {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<Ctx>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()>;
 }
 
 pub trait HasWasiConfigVars {

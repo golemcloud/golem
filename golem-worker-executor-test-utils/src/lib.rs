@@ -115,7 +115,7 @@ use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
@@ -956,20 +956,6 @@ impl HostFutureInvokeResult for TestWorkerCtx {
 
     async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
-    }
-}
-
-#[async_trait]
-impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<TestWorkerCtx>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()> {
-        self.durable_ctx
-            .link(engine, linker, component, component_metadata)
     }
 }
 

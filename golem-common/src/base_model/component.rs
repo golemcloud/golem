@@ -15,7 +15,7 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentType;
 use crate::base_model::application::ApplicationId;
-use crate::base_model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use crate::base_model::component_metadata::ComponentMetadata;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::plugin_registration::PluginRegistrationId;
@@ -27,7 +27,7 @@ use crate::{
 use derive_more::Display;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use typed_path::Utf8UnixPathBuf;
 
@@ -136,9 +136,6 @@ declare_structs! {
         pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -156,7 +153,6 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
-        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         pub env: Option<BTreeMap<String, String>>,
         pub agent_types: Option<Vec<AgentType>>,
         #[serde(default)]

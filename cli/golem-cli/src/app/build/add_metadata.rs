@@ -17,10 +17,10 @@ use crate::app::build::up_to_date_check::is_up_to_date;
 use crate::app::context::BuildContext;
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
-use wasm_metadata::{AddMetadata, AddMetadataField, Version as WasmVersion};
 use anyhow::Context;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
+use wasm_metadata::{AddMetadata, AddMetadataField, Version as WasmVersion};
 use wit_parser::PackageName;
 
 fn component_name_to_package_name(component_name: &ComponentName) -> PackageName {

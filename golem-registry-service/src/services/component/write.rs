@@ -26,13 +26,13 @@ use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
 use anyhow::Context;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileContentHash, ComponentFileOptions, ComponentFilePath,
     ComponentFilePermissions, ComponentUpdate, InitialComponentFile, InstalledPlugin,
     PluginInstallationAction,
 };
 use golem_common::model::component::{ComponentId, PluginInstallation};
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
@@ -144,7 +144,6 @@ impl ComponentWriteService {
             component_creation.env,
             wasm_hash,
             wasm_object_store_key,
-            component_creation.dynamic_linking,
             self.plugin_installations_for_new_component(
                 &environment,
                 component_creation.plugins,
@@ -284,9 +283,6 @@ impl ComponentWriteService {
             component_update.env.unwrap_or(component.env),
             wasm_hash,
             wasm_object_store_key,
-            component_update
-                .dynamic_linking
-                .unwrap_or(component.metadata.dynamic_linking().clone()),
             self.update_plugin_installations(
                 &environment,
                 component.installed_plugins,
@@ -672,8 +668,8 @@ impl ComponentWriteService {
             .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;
 
-        let finalized_revision = new_revision
-            .with_transformed_component(transformed_object_store_key, &wasm)?;
+        let finalized_revision =
+            new_revision.with_transformed_component(transformed_object_store_key, &wasm)?;
 
         if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name()
             && finalized_revision.component_name.0 != *known_root_package_name
@@ -687,7 +683,6 @@ impl ComponentWriteService {
         debug!(
             environment_id = %environment_id,
             exports = ?finalized_revision.metadata.exports(),
-            dynamic_linking = ?finalized_revision.metadata.dynamic_linking(),
             "Finalized component",
         );
 

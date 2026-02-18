@@ -25,7 +25,7 @@ use golem_common::model::component::{
     ComponentFileOptions, ComponentFilePath, PluginInstallation, PluginInstallationAction,
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+
 use golem_common::model::diff;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -240,18 +240,6 @@ impl<'a> ComponentStager<'a> {
     pub fn agent_types_if_changed(&self) -> Option<&Vec<AgentType>> {
         if self.diff.agent_types_changed() {
             Some(self.agent_types())
-        } else {
-            None
-        }
-    }
-
-    pub fn dynamic_linking(&self) -> HashMap<String, DynamicLinkedInstance> {
-        self.component_deploy_properties.dynamic_linking.clone()
-    }
-
-    pub fn dynamic_linking_if_changed(&self) -> Option<HashMap<String, DynamicLinkedInstance>> {
-        if self.diff.metadata_changed() {
-            Some(self.dynamic_linking())
         } else {
             None
         }
