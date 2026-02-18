@@ -332,6 +332,9 @@ impl PublicOplogEntry {
                 Self::string_match("rolledbackremotetransaction", &[], query_path, query)
                     || Self::string_match("rolled-back-remote-transaction", &[], query_path, query)
             }
+            PublicOplogEntry::Snapshot(_params) => {
+                Self::string_match("snapshot", &[], query_path, query)
+            }
         }
     }
 

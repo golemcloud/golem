@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::agent::{
+    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
+};
+use crate::base_model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
@@ -432,6 +436,46 @@ fn untyped_data_value_serde_poem_roundtrip() {
     assert_eq!(original, serde_deserialized);
 }
 
+fn snapshotting_serde_poem_roundtrip(original: Snapshotting) {
+    let poem_serialized = original.to_json_string();
+    let serde_serialized = serde_json::to_string(&original).unwrap();
+
+    let poem_json: serde_json::Value = serde_json::from_str(&poem_serialized).unwrap();
+    let serde_json: serde_json::Value = serde_json::from_str(&serde_serialized).unwrap();
+    assert_eq!(poem_json, serde_json);
+
+    let from_poem: Snapshotting = serde_json::from_str(&poem_serialized).unwrap();
+    let from_serde: Snapshotting = serde_json::from_str(&serde_serialized).unwrap();
+    assert_eq!(original, from_poem);
+    assert_eq!(original, from_serde);
+}
+
+#[test]
+fn snapshotting_disabled_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Disabled(Empty {}));
+}
+
+#[test]
+fn snapshotting_enabled_default_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::Default(Empty {})));
+}
+
+#[test]
+fn snapshotting_enabled_periodic_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::Periodic(
+        SnapshottingPeriodic {
+            duration_nanos: 2_000_000_000,
+        },
+    )));
+}
+
+#[test]
+fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
+    snapshotting_serde_poem_roundtrip(Snapshotting::Enabled(SnapshottingConfig::EveryNInvocation(
+        SnapshottingEveryNInvocation { count: 5 },
+    )));
+}
+
 // Tests for AgentId::normalize_text
 
 #[test]
@@ -749,6 +793,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-2".to_string()),
@@ -770,6 +815,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-3".to_string()),
@@ -803,6 +849,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-4".to_string()),
@@ -832,6 +879,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-5".to_string()),
@@ -861,6 +909,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-6".to_string()),
@@ -896,6 +945,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("agent-7".to_string()),
@@ -917,6 +967,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
         AgentType {
             type_name: AgentTypeName("non-kebab-agent".to_string()),
@@ -956,6 +1007,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
             dependencies: vec![],
             mode: AgentMode::Durable,
             http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
         },
     ];
 

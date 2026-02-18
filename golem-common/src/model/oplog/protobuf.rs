@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use super::{
-    ExportedFunctionParameters, LogLevel, ManualUpdateParameters, OplogCursor,
+    ExportedFunctionParameters, JsonSnapshotData, LogLevel, ManualUpdateParameters, OplogCursor,
     PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
     PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicOplogEntryWithIndex, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
-    PublicWorkerInvocation, SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError,
-    WorkerResourceId, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicOplogEntryWithIndex, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
+    PublicUpdateDescription, PublicWorkerInvocation, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError, WorkerResourceId,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::model::component::PluginPriority;
@@ -33,7 +34,7 @@ use crate::model::oplog::public_oplog_entry::{
     InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
     PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
     SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
@@ -589,6 +590,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     begin_index: OplogIndex::from_u64(value.begin_index),
                 }),
             ),
+
+            oplog_entry::Entry::Snapshot(snapshot) => {
+                let data = match snapshot.data.ok_or("Missing data field")? {
+                    golem_api_grpc::proto::golem::worker::snapshot_data_parameters::Data::Raw(
+                        raw,
+                    ) => PublicSnapshotData::Raw(RawSnapshotData {
+                        data: raw.data,
+                        mime_type: raw.mime_type,
+                    }),
+                    golem_api_grpc::proto::golem::worker::snapshot_data_parameters::Data::Json(
+                        json,
+                    ) => PublicSnapshotData::Json(JsonSnapshotData {
+                        data: serde_json::from_str(&json.data).map_err(|e| e.to_string())?,
+                    }),
+                };
+                Ok(PublicOplogEntry::Snapshot(SnapshotParams {
+                    timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
+                    data,
+                }))
+            }
         }
     }
 }
@@ -1020,6 +1041,34 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::Snapshot(snapshot) => {
+                let data = match snapshot.data {
+                    PublicSnapshotData::Raw(raw) => {
+                        golem_api_grpc::proto::golem::worker::snapshot_data_parameters::Data::Raw(
+                            golem_api_grpc::proto::golem::worker::RawSnapshotData {
+                                data: raw.data,
+                                mime_type: raw.mime_type,
+                            },
+                        )
+                    }
+                    PublicSnapshotData::Json(json) => {
+                        golem_api_grpc::proto::golem::worker::snapshot_data_parameters::Data::Json(
+                            golem_api_grpc::proto::golem::worker::JsonSnapshotData {
+                                data: serde_json::to_string(&json.data)
+                                    .map_err(|e| e.to_string())?,
+                            },
+                        )
+                    }
+                };
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::Snapshot(
+                        golem_api_grpc::proto::golem::worker::SnapshotDataParameters {
+                            timestamp: Some(snapshot.timestamp.into()),
+                            data: Some(data),
+                        },
+                    )),
+                }
+            }
         })
     }
 }
@@ -1256,6 +1305,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
                 snapshot_based,
             ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: snapshot_based.payload,
+                mime_type: snapshot_based.mime_type,
             })),
         }
     }
@@ -1276,7 +1326,8 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                     description: Some(
                         golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
                             golem_api_grpc::proto::golem::worker::SnapshotBasedUpdateParameters {
-                                payload: snapshot_based.payload
+                                payload: snapshot_based.payload,
+                                mime_type: snapshot_based.mime_type,
                             }
                         ),
                     ),

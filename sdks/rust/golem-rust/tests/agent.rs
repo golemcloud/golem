@@ -22,7 +22,9 @@ mod tests {
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
+    use golem_rust::golem_agentic::golem::agent::common::{
+        AgentMode, AgentType, Snapshotting, SnapshottingConfig,
+    };
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
@@ -938,6 +940,161 @@ mod tests {
             let request = webhook.await;
 
             request.json().unwrap()
+        }
+    }
+
+    #[agent_definition]
+    trait AgentSnapshottingDefault {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingDefaultImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingDefault for AgentSnapshottingDefaultImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "disabled")]
+    trait AgentSnapshottingDisabled {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingDisabledImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingDisabled for AgentSnapshottingDisabledImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "enabled")]
+    trait AgentSnapshottingEnabled {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingEnabledImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingEnabled for AgentSnapshottingEnabledImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "periodic(5s)")]
+    trait AgentSnapshottingPeriodic {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingPeriodicImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingPeriodic for AgentSnapshottingPeriodicImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "every(10)")]
+    trait AgentSnapshottingEveryN {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingEveryNImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingEveryN for AgentSnapshottingEveryNImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[test]
+    fn test_agent_snapshotting() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        let find_agent = |name: &str| -> Option<AgentType> {
+            agent_types.iter().find(|a| a.type_name == name).cloned()
+        };
+
+        if let Some(agent) = find_agent("AgentSnapshottingDefault") {
+            assert!(
+                matches!(agent.snapshotting, Snapshotting::Disabled),
+                "Default should be Disabled"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingDisabled") {
+            assert!(
+                matches!(agent.snapshotting, Snapshotting::Disabled),
+                "Explicit disabled should be Disabled"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingEnabled") {
+            assert!(
+                matches!(
+                    agent.snapshotting,
+                    Snapshotting::Enabled(SnapshottingConfig::Default)
+                ),
+                "Enabled should use Default config"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingPeriodic") {
+            assert!(
+                matches!(
+                    agent.snapshotting,
+                    Snapshotting::Enabled(SnapshottingConfig::Periodic(5000000000))
+                ),
+                "Periodic should have correct duration"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingEveryN") {
+            assert!(
+                matches!(
+                    agent.snapshotting,
+                    Snapshotting::Enabled(SnapshottingConfig::EveryNInvocation(10))
+                ),
+                "EveryNInvocation should have correct count"
+            );
         }
     }
 }

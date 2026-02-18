@@ -341,22 +341,26 @@ pub trait OplogOps: Oplog {
         &self,
         target_revision: ComponentRevision,
         payload: Vec<u8>,
+        mime_type: String,
     ) -> Result<UpdateDescription, String> {
         let payload = self.upload_payload(&payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_revision,
             payload,
+            mime_type,
         })
     }
 
     async fn get_upload_description_payload(
         &self,
         description: UpdateDescription,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<(Vec<u8>, String)>, String> {
         match description {
-            UpdateDescription::SnapshotBased { payload, .. } => {
+            UpdateDescription::SnapshotBased {
+                payload, mime_type, ..
+            } => {
                 let bytes = self.download_payload(payload).await?;
-                Ok(Some(bytes))
+                Ok(Some((bytes, mime_type)))
             }
             UpdateDescription::Automatic { .. } => Ok(None),
         }

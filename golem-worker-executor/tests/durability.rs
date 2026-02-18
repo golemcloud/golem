@@ -19,17 +19,20 @@ use axum::routing::get;
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::{stream, StreamExt};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
+use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, start_with_snapshot_policy, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::sync::Mutex;
 use tracing::Instrument;
@@ -271,6 +274,151 @@ async fn lazy_pollable(
     assert_eq!(
         s4.into_return_value(),
         Some(Value::String("chunk-3-0\n".to_string()))
+    );
+    Ok(())
+}
+
+const SNAPSHOT_TEST_INVOCATIONS: usize = 10;
+
+#[test]
+#[tracing::instrument]
+async fn automatic_snapshot_disabled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(deps, &context, SnapshotPolicy::Disabled).await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let agent_id = agent_id!("snapshot-counter", "disabled");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_count = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+
+    drop(executor);
+
+    assert_eq!(
+        snapshot_count, 0,
+        "Expected no snapshots with disabled policy"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn automatic_snapshot_every_2nd_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let agent_id = agent_id!("snapshot-counter", "every-2nd");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_count = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+
+    drop(executor);
+
+    assert_eq!(
+        snapshot_count,
+        SNAPSHOT_TEST_INVOCATIONS / 2,
+        "Expected a snapshot every 2 invocations"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn automatic_snapshot_periodic(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::Periodic {
+            period: Duration::from_secs(2),
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let agent_id = agent_id!("snapshot-counter", "periodic");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
+        executor
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_count = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+
+    drop(executor);
+
+    assert!(
+        snapshot_count >= 1,
+        "Expected at least 1 snapshot with periodic policy (every 2s over ~5s of invocations), got {snapshot_count}"
+    );
+    assert!(
+        snapshot_count <= SNAPSHOT_TEST_INVOCATIONS,
+        "Expected at most {SNAPSHOT_TEST_INVOCATIONS} snapshots, got {snapshot_count}"
     );
     Ok(())
 }

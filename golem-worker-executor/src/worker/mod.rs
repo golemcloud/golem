@@ -22,6 +22,7 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::model::{ExecutionStatus, LookupResult, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::events::{Event, EventsSubscription};
+use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
@@ -39,7 +40,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode, Snapshotting, SnapshottingConfig};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -109,6 +110,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
+    snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
 }
@@ -228,6 +230,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             current_status,
             execution_status,
             agent_id,
+            snapshot_policy,
             oplog,
         } = Self::get_or_create_worker_metadata(
             deps,
@@ -287,6 +290,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
+            snapshot_policy,
             update_state_lock: Mutex::new(()),
             last_known_status_detached: AtomicBool::new(false),
             last_resume_request: Mutex::new(Timestamp::now_utc()),
@@ -326,6 +330,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
         &self.oom_retry_config
+    }
+
+    pub(crate) fn snapshot_policy(&self) -> &SnapshotPolicy {
+        &self.snapshot_policy
     }
 
     pub async fn start_if_needed(this: Arc<Worker<Ctx>>) -> Result<bool, WorkerExecutorError> {
@@ -576,7 +584,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Invokes the worker and awaits for a result.
     ///
-    /// Successful result is a `TypeAnnotatedValue` encoding either a tuple or a record.
+    /// The successful result is an `Option<ValueAndType>` encoding the result value.
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
@@ -602,7 +610,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .wait_for_invocation_result(&idempotency_key, subscription)
                     .await;
 
-                debug!("Idempotency key lookup result: {:?}", result);
                 match result {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),
                     Ok(LookupResult::Complete(Err(err))) => Err(err),
@@ -1370,6 +1377,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                     let _ = sender.send(Err(error.clone()));
                 }
+                QueuedWorkerInvocation::SaveSnapshot => {}
             }
         }
 
@@ -1486,18 +1494,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None
                 };
 
-                let agent_mode = if let Some(agent_id) = &agent_id {
-                    if let Ok(Some(agent_type)) = initial_component
-                        .metadata
-                        .find_agent_type_by_name(&agent_id.agent_type)
-                    {
-                        agent_type.mode
-                    } else {
-                        AgentMode::Durable
-                    }
-                } else {
-                    AgentMode::Durable
-                };
+                let ResolvedAgentProperties {
+                    agent_mode,
+                    snapshot_policy,
+                } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
 
                 let execution_status =
                     Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
@@ -1521,6 +1521,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     current_status,
                     execution_status,
                     agent_id,
+                    snapshot_policy,
                     oplog,
                 })
             }
@@ -1545,18 +1546,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None
                 };
 
-                let agent_mode = if let Some(agent_id) = &agent_id {
-                    if let Ok(Some(agent_type)) = component
-                        .metadata
-                        .find_agent_type_by_name(&agent_id.agent_type)
-                    {
-                        agent_type.mode
-                    } else {
-                        AgentMode::Durable
-                    }
-                } else {
-                    AgentMode::Durable
-                };
+                let ResolvedAgentProperties {
+                    agent_mode,
+                    snapshot_policy,
+                } = resolve_agent_properties(this, agent_id.as_ref(), &component.metadata);
 
                 let execution_status = ExecutionStatus::Suspended {
                     agent_mode,
@@ -1648,6 +1641,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     current_status: initial_status,
                     execution_status,
                     agent_id,
+                    snapshot_policy,
                     oplog,
                 })
             }
@@ -1847,6 +1841,14 @@ impl Drop for WaitingWorker {
     }
 }
 
+impl Drop for RunningWorker {
+    fn drop(&mut self) {
+        if let Some(task) = self.snapshot_task.take() {
+            task.abort();
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
@@ -1855,6 +1857,7 @@ struct RunningWorker {
     permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
+    snapshot_task: Option<JoinHandle<()>>,
 }
 
 impl RunningWorker {
@@ -1886,6 +1889,10 @@ impl RunningWorker {
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
+        let snapshot_policy = parent.snapshot_policy().clone();
+        let snapshot_queue = queue.clone();
+        let snapshot_sender = sender.clone();
+
         let handle = tokio::task::spawn(
             async move {
                 RunningWorker::invocation_loop(
@@ -1903,6 +1910,28 @@ impl RunningWorker {
             .in_current_span(),
         );
 
+        let snapshot_task = if let SnapshotPolicy::Periodic { period } = snapshot_policy {
+            let snapshot_pending = Arc::new(AtomicBool::new(false));
+            Some(tokio::task::spawn(async move {
+                let mut interval = tokio::time::interval(period);
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    if !snapshot_pending.swap(true, Ordering::AcqRel) {
+                        snapshot_queue
+                            .write()
+                            .await
+                            .push_back(QueuedWorkerInvocation::SaveSnapshot);
+                        if snapshot_sender.send(WorkerCommand::Unblock).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
         RunningWorker {
             handle: Some(handle),
             sender,
@@ -1910,6 +1939,7 @@ impl RunningWorker {
             permit,
             waiting_for_command,
             interrupt_signal,
+            snapshot_task,
         }
     }
 
@@ -1918,6 +1948,9 @@ impl RunningWorker {
     }
 
     pub fn stop(mut self) -> JoinHandle<()> {
+        if let Some(task) = self.snapshot_task.take() {
+            task.abort();
+        }
         self.handle.take().unwrap()
     }
 
@@ -2188,6 +2221,67 @@ pub enum RetryDecision {
     ReacquirePermits,
 }
 
+struct ResolvedAgentProperties {
+    agent_mode: AgentMode,
+    snapshot_policy: SnapshotPolicy,
+}
+
+fn resolve_agent_properties<T: HasConfig>(
+    deps: &T,
+    agent_id: Option<&AgentId>,
+    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+) -> ResolvedAgentProperties {
+    let resolved_agent_type = agent_id.and_then(|id| {
+        metadata
+            .find_agent_type_by_name(&id.agent_type)
+            .ok()
+            .flatten()
+    });
+
+    let agent_mode = resolved_agent_type
+        .as_ref()
+        .map_or(AgentMode::Durable, |at| at.mode);
+
+    let snapshot_policy = resolve_snapshot_policy(
+        &deps.config().oplog.default_snapshotting,
+        resolved_agent_type.as_ref().map(|at| &at.snapshotting),
+    );
+
+    ResolvedAgentProperties {
+        agent_mode,
+        snapshot_policy,
+    }
+}
+
+fn resolve_snapshot_policy(
+    default_config: &SnapshotPolicy,
+    agent_snapshotting: Option<&Snapshotting>,
+) -> SnapshotPolicy {
+    match agent_snapshotting {
+        None | Some(Snapshotting::Enabled(SnapshottingConfig::Default(_))) => {
+            default_config.clone()
+        }
+        Some(Snapshotting::Disabled(_)) => SnapshotPolicy::Disabled,
+        Some(Snapshotting::Enabled(SnapshottingConfig::Periodic(p))) => {
+            let period = Duration::from_nanos(p.duration_nanos);
+            if period.is_zero() {
+                warn!("Agent snapshot periodic duration is zero, disabling");
+                SnapshotPolicy::Disabled
+            } else {
+                SnapshotPolicy::Periodic { period }
+            }
+        }
+        Some(Snapshotting::Enabled(SnapshottingConfig::EveryNInvocation(n))) => {
+            if n.count == 0 {
+                warn!("Agent snapshot every-n-invocation count is zero, disabling");
+                SnapshotPolicy::Disabled
+            } else {
+                SnapshotPolicy::EveryNInvocation { count: n.count }
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 enum WorkerCommand {
     Unblock,
@@ -2215,6 +2309,8 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
+    // Triggers a periodic snapshot save for the worker
+    SaveSnapshot,
 }
 
 pub enum ResultOrSubscription {
@@ -2243,6 +2339,7 @@ struct GetOrCreateWorkerResult {
     current_status: Arc<tokio::sync::RwLock<WorkerStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     agent_id: Option<AgentId>,
+    snapshot_policy: SnapshotPolicy,
     oplog: Arc<dyn Oplog>,
 }
 

@@ -324,6 +324,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
         target_revision: ComponentRevision::new(1).unwrap(),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
+            mime_type: "application/octet-stream".to_string(),
         }),
     });
     let serialized = entry.to_json_string();

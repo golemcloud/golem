@@ -1344,13 +1344,13 @@ async fn agent_promise_await(
     let promise_id_value = result
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    let promise_id = ValueAndType::new(promise_id_value, PromiseId::get_type());
+    let promise_id = PromiseId::from_value(promise_id_value.clone()).map_err(|e| anyhow!("{e}"))?;
+    let promise_id_vat = ValueAndType::new(promise_id_value, PromiseId::get_type());
 
     let task = {
         let executor_clone = user.clone();
         let agent_id_clone = promise_agent_id.clone();
         let component_id_clone = component.id;
-        let promise_id_clone = promise_id.clone();
         tokio::spawn(
             async move {
                 executor_clone
@@ -1358,7 +1358,7 @@ async fn agent_promise_await(
                         &component_id_clone,
                         &agent_id_clone,
                         "awaitPromise",
-                        data_value!(promise_id_clone),
+                        data_value!(promise_id_vat),
                     )
                     .await
             }
@@ -1368,11 +1368,6 @@ async fn agent_promise_await(
 
     user.wait_for_status(&worker, WorkerStatus::Suspended, Duration::from_secs(10))
         .await?;
-
-    let promise_id = PromiseId {
-        worker_id: worker.clone(),
-        oplog_idx: OplogIndex::from_u64(40),
-    };
 
     user.complete_promise(&promise_id, b"hello".to_vec())
         .await?;

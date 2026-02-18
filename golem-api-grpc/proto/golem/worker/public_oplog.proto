@@ -53,6 +53,7 @@ message OplogEntry {
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
     RemoteTransactionParameters CommittedRemoteTransaction = 37;
     RemoteTransactionParameters RolledBackRemoteTransaction = 38;
+    SnapshotDataParameters Snapshot = 39;
   }
 }
 
@@ -185,6 +186,7 @@ message PendingWorkerInvocationParameters {
 
 message SnapshotBasedUpdateParameters {
   bytes payload = 1;
+  string mime_type = 2;
 }
 
 message UpdateDescription {
@@ -298,6 +300,23 @@ message LogParameters {
   OplogLogLevel level = 2;
   string context = 3;
   string message = 4;
+}
+
+message SnapshotDataParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  oneof data {
+    RawSnapshotData raw = 2;
+    JsonSnapshotData json = 3;
+  }
+}
+
+message RawSnapshotData {
+  bytes data = 1;
+  string mime_type = 2;
+}
+
+message JsonSnapshotData {
+  string data = 1;
 }
 
 message OplogEntryWithIndex {
