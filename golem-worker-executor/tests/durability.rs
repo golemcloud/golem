@@ -598,358 +598,6 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
     Ok(())
 }
 
-const SNAPSHOT_TEST_INVOCATIONS: usize = 10;
-
-#[test]
-#[tracing::instrument]
-async fn snapshot_based_recovery(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .store()
-        .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"recovery\")".to_string(),
-    };
-
-    for _ in 0..5 {
-        executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
-    }
-
-    let result_before = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/snapshot-counter.{get}",
-            vec![],
-        )
-        .await??;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let snapshot_count = oplog
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-    assert!(
-        snapshot_count >= 1,
-        "Expected at least one snapshot before restart, got {snapshot_count}"
-    );
-
-    drop(executor);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let result_after = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/snapshot-counter.{get}",
-            vec![],
-        )
-        .await??;
-
-    assert_eq!(
-        result_before, result_after,
-        "Worker state should be preserved across restart via snapshot recovery"
-    );
-
-    let was_recovered = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/snapshot-counter.{was-recovered-from-snapshot}",
-            vec![],
-        )
-        .await??;
-
-    assert_eq!(
-        was_recovered,
-        vec![Value::Bool(true)],
-        "Worker should have been recovered from snapshot, not replayed from scratch"
-    );
-
-    let increment_after = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/snapshot-counter.{increment}",
-            vec![],
-        )
-        .await??;
-
-    assert_eq!(
-        increment_after,
-        vec![Value::U32(6)],
-        "Counter should continue from 6 after snapshot recovery"
-    );
-
-    drop(executor);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .store()
-        .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"multi-restart\")".to_string(),
-    };
-
-    for _ in 0..3 {
-        executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
-    }
-
-    drop(executor);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    for _ in 0..3 {
-        executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
-    }
-
-    drop(executor);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/snapshot-counter.{get}",
-            vec![],
-        )
-        .await??;
-
-    assert_eq!(
-        result,
-        vec![Value::U32(6)],
-        "Counter should be 6 after two rounds of 3 increments across restarts"
-    );
-
-    let was_recovered = executor
-        .invoke_and_await(
-            &worker_id,
-            "it:agent-counters/snapshot-counter.{was-recovered-from-snapshot}",
-            vec![],
-        )
-        .await??;
-
-    assert_eq!(
-        was_recovered,
-        vec![Value::Bool(true)],
-        "Worker should have been recovered from snapshot after multiple restarts"
-    );
-
-    drop(executor);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn automatic_snapshot_disabled(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(deps, &context, SnapshotPolicy::Disabled).await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .store()
-        .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"disabled\")".to_string(),
-    };
-
-    for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
-        executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
-    }
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let snapshot_count = oplog
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-
-    drop(executor);
-
-    assert_eq!(
-        snapshot_count, 0,
-        "Expected no snapshots with disabled policy"
-    );
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn automatic_snapshot_every_2nd_invocation(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 2 },
-    )
-    .await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .store()
-        .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"every-2nd\")".to_string(),
-    };
-
-    for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
-        executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
-    }
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let snapshot_count = oplog
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-
-    drop(executor);
-
-    assert_eq!(
-        snapshot_count,
-        SNAPSHOT_TEST_INVOCATIONS / 2,
-        "Expected a snapshot every 2 invocations"
-    );
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn automatic_snapshot_periodic(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::Periodic {
-            period: Duration::from_secs(2),
-        },
-    )
-    .await?;
-
-    let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .store()
-        .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter(\"periodic\")".to_string(),
-    };
-
-    for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
-        executor
-            .invoke_and_await(
-                &worker_id,
-                "it:agent-counters/snapshot-counter.{increment}",
-                vec![],
-            )
-            .await??;
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let snapshot_count = oplog
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-
-    drop(executor);
-
-    assert!(
-        snapshot_count >= 1,
-        "Expected at least 1 snapshot with periodic policy (every 2s over ~5s of invocations), got {snapshot_count}"
-    );
-    assert!(
-        snapshot_count <= SNAPSHOT_TEST_INVOCATIONS,
-        "Expected at most {SNAPSHOT_TEST_INVOCATIONS} snapshots, got {snapshot_count}"
-    );
-    Ok(())
-}
-
 #[test]
 #[tracing::instrument]
 async fn ts_default_json_snapshot_recovery(
@@ -965,34 +613,27 @@ async fn ts_default_json_snapshot_recovery(
             &context.default_environment_id,
             "golem_it_constructor_parameter_echo",
         )
+        .name("golem-it:constructor-parameter-echo")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter-agent(\"ts-recovery\")".to_string(),
-    };
+    let agent_id = agent_id!("snapshot-counter-agent", "ts-recovery");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     for _ in 0..5 {
         executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
     }
 
     let result_before = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
 
     assert_eq!(
-        result_before,
-        vec![Value::F64(5.0)],
+        result_before.clone().into_return_value(),
+        Some(Value::F64(5.0)),
         "Counter should be 5 after 5 increments"
     );
 
@@ -1041,12 +682,8 @@ async fn ts_default_json_snapshot_recovery(
     let executor = start(deps, &context).await?;
 
     let result_after = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
 
     assert_eq!(
         result_before, result_after,
@@ -1054,16 +691,12 @@ async fn ts_default_json_snapshot_recovery(
     );
 
     let increment_after = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .await?;
 
     assert_eq!(
-        increment_after,
-        vec![Value::F64(6.0)],
+        increment_after.into_return_value(),
+        Some(Value::F64(6.0)),
         "Counter should continue from 6 after snapshot recovery"
     );
 
@@ -1089,21 +722,18 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
             &context.default_environment_id,
             "golem_it_constructor_parameter_echo",
         )
+        .name("golem-it:constructor-parameter-echo")
         .store()
         .await?;
-    let worker_id = WorkerId {
-        component_id: component.id,
-        worker_name: "snapshot-counter-agent(\"ts-multi-restart\")".to_string(),
-    };
+    let agent_id = agent_id!("snapshot-counter-agent", "ts-multi-restart");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     for _ in 0..3 {
         executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
     }
 
     let oplog1 = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -1124,12 +754,8 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await(
-                &worker_id,
-                "golem-it:constructor-parameter-echo/snapshot-counter-agent.{increment}",
-                vec![],
-            )
-            .await??;
+            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .await?;
     }
 
     let oplog2 = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -1177,16 +803,12 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
     let executor = start(deps, &context).await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:constructor-parameter-echo/snapshot-counter-agent.{get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
 
     assert_eq!(
-        result,
-        vec![Value::F64(6.0)],
+        result.into_return_value(),
+        Some(Value::F64(6.0)),
         "Counter should be 6 after two rounds of 3 increments across restarts"
     );
 
