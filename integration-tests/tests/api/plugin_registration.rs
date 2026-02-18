@@ -51,7 +51,6 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -114,7 +113,6 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -132,7 +130,6 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -177,7 +174,6 @@ async fn fails_with_bad_request_if_user_creates_oplog_processor_from_invalid_com
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await;
 
@@ -216,7 +212,6 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -234,7 +229,6 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await;
 
@@ -275,7 +269,6 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await;
 
@@ -319,7 +312,6 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 

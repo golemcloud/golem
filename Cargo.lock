@@ -1942,15 +1942,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clipboard-win"
-version = "5.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
-dependencies = [
- "error-code",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2042,7 +2033,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68578f196d2a33ff61b27fae256c3164f65e36382648e30666dde05b8cc9dfdf"
 dependencies = [
  "async-trait",
- "convert_case 0.6.0",
+ "convert_case",
  "json5",
  "nom 7.1.3",
  "pathdiff",
@@ -2163,15 +2154,6 @@ name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
-name = "convert_case"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -2506,22 +2488,6 @@ dependencies = [
  "libc",
  "mio 0.8.11",
  "parking_lot",
- "signal-hook",
- "signal-hook-mio",
- "winapi",
-]
-
-[[package]]
-name = "crossterm"
-version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
-dependencies = [
- "bitflags 2.10.0",
- "crossterm_winapi",
- "mio 1.1.0",
- "parking_lot",
- "rustix 0.38.44",
  "signal-hook",
  "signal-hook-mio",
  "winapi",
@@ -3299,12 +3265,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
-name = "endian-type"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c34f04666d835ff5d62e058c3995147c06f42fe86ff053337632bca83e42702d"
-
-[[package]]
 name = "enum-ordinalize"
 version = "4.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3384,12 +3344,6 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "error-code"
-version = "3.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "escape8259"
@@ -4127,7 +4081,6 @@ version = "0.0.0"
 dependencies = [
  "cargo_metadata 0.21.0",
  "desert_rust",
- "golem-rib",
  "golem-wasm",
  "miette",
  "prost 0.14.1",
@@ -4171,8 +4124,6 @@ dependencies = [
  "goldenfile",
  "golem-client",
  "golem-common",
- "golem-rib",
- "golem-rib-repl",
  "golem-templates",
  "golem-wasm",
  "golem-wasm-derive",
@@ -4291,7 +4242,6 @@ dependencies = [
  "figment",
  "fred",
  "golem-api-grpc",
- "golem-rib",
  "golem-wasm",
  "golem-wasm-derive",
  "heck 0.5.0",
@@ -4319,6 +4269,7 @@ dependencies = [
  "range-set-blaze",
  "regex",
  "scc",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4424,7 +4375,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c785e553a020bed4efa518268635b34f8f75e7fe5905195e931e628164135e7e"
 dependencies = [
  "clap",
- "convert_case 0.6.0",
+ "convert_case",
  "fmt",
  "indexmap 2.13.0",
  "indoc",
@@ -4458,7 +4409,6 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-service-base",
  "golem-wasm",
  "http 1.3.1",
@@ -4520,57 +4470,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-rib"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "bigdecimal",
- "cargo_metadata 0.21.0",
- "combine",
- "desert_rust",
- "golem-wasm",
- "lazy_static 1.5.0",
- "miette",
- "poem-openapi",
- "prost 0.14.1",
- "prost-types 0.14.1",
- "protox 0.9.0",
- "semver",
- "serde",
- "serde_json",
- "test-r",
- "tonic 0.14.2",
- "tonic-prost",
- "tonic-prost-build",
- "uuid",
-]
-
-[[package]]
-name = "golem-rib-repl"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "colored",
- "convert_case 0.8.0",
- "crossterm 0.28.1",
- "dirs 4.0.0",
- "golem-rib",
- "golem-wasm",
- "prometheus",
- "rustyline",
- "serde_json",
- "shell-words",
- "test-r",
- "tokio",
- "tonic 0.14.2",
- "tracing",
- "uuid",
- "wasm-wave",
-]
-
-[[package]]
 name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
@@ -4596,7 +4495,6 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-wasm",
  "golem-wasm-derive",
  "headers 0.4.1",
@@ -4829,7 +4727,6 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm",
@@ -4941,7 +4838,6 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm",
@@ -5703,7 +5599,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea561fea97e1734bd1572acfc8e5baf19ca3d3934e7de2932fc7a1c4e3b909f6"
 dependencies = [
- "convert_case 0.6.0",
+ "convert_case",
  "proc-macro2",
  "quote",
  "syn 2.0.110",
@@ -5830,7 +5726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fddf93031af70e75410a2511ec04d49e758ed2f26dad3404a934e0fb45cc12a"
 dependencies = [
  "bitflags 2.10.0",
- "crossterm 0.25.0",
+ "crossterm",
  "dyn-clone",
  "fuzzy-matcher",
  "fxhash",
@@ -5865,7 +5761,6 @@ dependencies = [
  "golem-api-grpc",
  "golem-client",
  "golem-common",
- "golem-rib",
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",
@@ -6877,7 +6772,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69d83b0086dc8ecf3ce9ae2874b2d1290252e2a30720bea58a5c6639b0092873"
 dependencies = [
  "libc",
- "log",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
 ]
@@ -6992,15 +6886,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b6b097ecb1cbfed438542d16e84fd7ad9b0c76c8a65b7f9039212a3d14dc7f"
 dependencies = [
  "unicode-segmentation",
-]
-
-[[package]]
-name = "nibble_vec"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
-dependencies = [
- "smallvec",
 ]
 
 [[package]]
@@ -8892,16 +8777,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
-name = "radix_trie"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c069c179fcdc6a2fe24d8d18305cf085fdbd4f922c041943e203685d6a1c58fd"
-dependencies = [
- "endian-type",
- "nibble_vec",
-]
-
-[[package]]
 name = "rand"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9730,28 +9605,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustyline"
-version = "15.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee1e066dc922e513bda599c6ccb5f3bb2b0ea5870a579448f2622993f0a9a2f"
-dependencies = [
- "bitflags 2.10.0",
- "cfg-if",
- "clipboard-win",
- "fd-lock",
- "home",
- "libc",
- "log",
- "memchr",
- "nix 0.29.0",
- "radix_trie",
- "unicode-segmentation",
- "unicode-width 0.2.2",
- "utf8parse",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10331,7 +10184,6 @@ checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
 dependencies = [
  "libc",
  "mio 0.8.11",
- "mio 1.1.0",
  "signal-hook",
 ]
 

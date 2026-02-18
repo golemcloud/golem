@@ -23,12 +23,14 @@ use golem_wasm::analysis::{
     AnalysedType, TypeHandle,
 };
 use golem_wasm::metadata::Producers as WasmAstProducers;
-use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
+pub use super::parsed_function_name::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
+};
 pub use crate::base_model::component_metadata::*;
 
 /// Describes an exported function that can be invoked on a worker

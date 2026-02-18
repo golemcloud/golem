@@ -43,7 +43,7 @@ use golem_registry_service::repo::model::http_api_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_service_base::repo::blob::Blob;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::default::Default;
 use strum::IntoEnumIterator;
 // Common test cases -------------------------------------------------------------------------------
@@ -592,7 +592,6 @@ pub async fn test_component_stage(deps: &Deps) {
         metadata: Blob::new(ComponentMetadata::from_parts(
             vec![],
             vec![],
-            HashMap::new(),
             Some("test".to_string()),
             Some("1.0".to_string()),
             vec![],
@@ -1108,7 +1107,6 @@ pub async fn test_account_usage(deps: &Deps) {
                     metadata: Blob::new(ComponentMetadata::from_parts(
                         vec![],
                         vec![],
-                        HashMap::new(),
                         None,
                         None,
                         vec![],

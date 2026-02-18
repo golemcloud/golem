@@ -135,7 +135,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use uuid::Uuid;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
+use wasmtime::component::{Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;

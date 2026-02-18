@@ -26,6 +26,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component::{ComponentName, InitialComponentFile};
 
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
@@ -34,7 +35,6 @@ use golem_wasm::analysis::{
     NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use itertools::Itertools;
-use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Display;

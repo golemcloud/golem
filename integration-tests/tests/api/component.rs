@@ -95,7 +95,6 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             vec![],
             vec![],
             None,
-            None,
         )
         .await?;
 
@@ -229,7 +228,6 @@ async fn create_component_with_plugins_and_update_installations(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -330,7 +328,6 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -577,7 +574,6 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -595,7 +591,6 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -682,7 +677,6 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -760,7 +754,6 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -778,7 +771,6 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -867,7 +859,6 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                     component_revision: oplog_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 

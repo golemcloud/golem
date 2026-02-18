@@ -1972,7 +1972,7 @@ impl RunningWorker {
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
-        let (pending_update, component, component_metadata) = {
+        let (pending_update, component, _component_metadata) = {
             let pending_update = worker_metadata
                 .last_known_status
                 .pending_updates

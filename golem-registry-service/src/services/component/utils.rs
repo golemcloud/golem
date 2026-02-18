@@ -13,18 +13,12 @@
 // limitations under the License.
 
 use super::ComponentError;
-use crate::model::component::{
-    ConflictReport, ConflictingFunction, ParameterTypeConflict, ReturnTypeConflict,
-};
 use anyhow::anyhow;
 use async_zip::ZipEntry;
 use async_zip::tokio::read::seek::ZipFileReader;
 use futures::TryStreamExt;
 use golem_common::model::component::ComponentFilePath;
-use golem_common::model::component_constraint::FunctionConstraints;
 use golem_service_base::replayable_stream::ReplayableStream;
-use golem_wasm::analysis::AnalysedType;
-use rib::FunctionDictionary;
 use std::sync::Arc;
 use std::vec;
 use tempfile::NamedTempFile;
@@ -142,68 +136,4 @@ fn initial_component_file_path_from_zip_entry(
             message: format!("Failed to convert path to InitialComponentFilePath: {e}"),
         }
     })
-}
-
-pub fn _find_component_metadata_conflicts(
-    function_constraints: &FunctionConstraints,
-    new_type_registry: &FunctionDictionary,
-) -> ConflictReport {
-    let mut missing_functions = vec![];
-    let mut conflicting_functions = vec![];
-
-    for existing_function_call in &function_constraints.constraints {
-        if let Some(new_registry_value) =
-            new_type_registry.get(existing_function_call.function_key())
-        {
-            let mut parameter_conflict = false;
-            let mut return_conflict = false;
-
-            if existing_function_call.parameter_types() != &new_registry_value.parameter_types() {
-                parameter_conflict = true;
-            }
-
-            let new_return_type = new_registry_value
-                .return_type
-                .as_ref()
-                .map(|x| AnalysedType::try_from(x).unwrap());
-
-            // AnalysedType conversion from function `FunctionType` should never fail
-            if existing_function_call.return_type() != &new_return_type {
-                return_conflict = true;
-            }
-
-            let parameter_conflict = if parameter_conflict {
-                Some(ParameterTypeConflict {
-                    existing: existing_function_call.parameter_types().clone(),
-                    new: new_registry_value.clone().parameter_types().clone(),
-                })
-            } else {
-                None
-            };
-
-            let return_conflict = if return_conflict {
-                Some(ReturnTypeConflict {
-                    existing: existing_function_call.return_type().clone(),
-                    new: new_return_type,
-                })
-            } else {
-                None
-            };
-
-            if parameter_conflict.is_some() || return_conflict.is_some() {
-                conflicting_functions.push(ConflictingFunction {
-                    function: existing_function_call.function_key().clone(),
-                    parameter_type_conflict: parameter_conflict,
-                    return_type_conflict: return_conflict,
-                });
-            }
-        } else {
-            missing_functions.push(existing_function_call.function_key().clone());
-        }
-    }
-
-    ConflictReport {
-        missing_functions,
-        conflicting_functions,
-    }
 }

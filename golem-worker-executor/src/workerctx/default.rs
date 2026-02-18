@@ -70,8 +70,8 @@ use std::future::Future;
 use std::sync::{Arc, Weak};
 use tracing::debug;
 use uuid::Uuid;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime::component::{Instance, Resource, ResourceAny};
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 

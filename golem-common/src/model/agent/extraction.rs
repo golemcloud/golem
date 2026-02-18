@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::agent::{AgentError, AgentType};
+use crate::model::parsed_function_name::ParsedFunctionName;
 use anyhow::anyhow;
-use rib::ParsedFunctionName;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};

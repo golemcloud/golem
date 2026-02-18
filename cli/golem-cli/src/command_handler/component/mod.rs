@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{to_anyhow, ApplicationContext, BuildContext};
+use crate::app::context::{to_anyhow, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;

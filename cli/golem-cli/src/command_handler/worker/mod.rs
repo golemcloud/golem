@@ -62,6 +62,7 @@ use golem_common::model::agent::{AgentId, DataValue, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::ParsedFunctionSite;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
@@ -73,7 +74,6 @@ use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{parse_value_and_type, ValueAndType};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use rib::ParsedFunctionSite;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;

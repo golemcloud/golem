@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::parsed_function_name::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
+};
 use bytes::Bytes;
 use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, str, tuple, u16, u8, unit_case, variant,
@@ -67,15 +70,15 @@ use std::sync::LazyLock;
 // handle: func(request: request) -> response;
 //
 
-pub static PARSED_FUNCTION_NAME: LazyLock<rib::ParsedFunctionName> =
-    LazyLock::new(|| rib::ParsedFunctionName {
-        site: rib::ParsedFunctionSite::PackagedInterface {
+pub static PARSED_FUNCTION_NAME: LazyLock<ParsedFunctionName> =
+    LazyLock::new(|| ParsedFunctionName {
+        site: ParsedFunctionSite::PackagedInterface {
             namespace: "golem".to_string(),
             package: "http".to_string(),
             interface: "incoming-handler".to_string(),
             version: None,
         },
-        function: rib::ParsedFunctionReference::Function {
+        function: ParsedFunctionReference::Function {
             function: "handle".to_string(),
         },
     });
