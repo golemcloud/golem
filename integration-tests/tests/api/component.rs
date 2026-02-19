@@ -508,7 +508,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         .create_component(
             &env.id.0,
             &ComponentCreation {
-                component_name: ComponentName("golem:it".to_string()),
+                component_name: ComponentName("it:agent-counters".to_string()),
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 agent_types: vec![agent_type.clone()],
