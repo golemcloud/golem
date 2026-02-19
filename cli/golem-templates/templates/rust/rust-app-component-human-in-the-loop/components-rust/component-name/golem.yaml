@@ -1,53 +1,12 @@
 # golem-app-manifest-header
 
-# httpApi:
-#   definitions:
-#     component-name-api:
-#       version: '0.0.1'
-#       routes:
-#         # --- ApprovalWorkflow routes ---
-#         - method: POST
-#           path: /component-name-api/workflow
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let id: string = request.request_id.value;
-#               let wf = approval-workflow(id);
-#               let result = wf.start();
-#               { status: 200, body: { message: result } }
-
-#         # --- HumanAgent routes ---
-#         - method: GET
-#           path: /component-name-api/human/{username}/pending
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let username: string = request.path.username;
-#               let human = human-agent(username);
-#               let list = human.list-pending-approvals();
-#               { status: 200, body: { pending: list } }
-
-#         - method: POST
-#           path: /component-name-api/human/{username}/decide
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let username: string = request.path.username;
-#               let workflowId: string = request.body.workflowId;
-#               let decision = request.body.decision;
-#               let human = human-agent(username);
-#               let result = human.decide-approval(workflowId, decision);
-#               { status: 200, body: { message: result } }
-
-
-#   deployments:
-#     local:
-#       - domain: app-name.localhost:9006
-#         definitions:
-#           - component-name-api
+httpApi:
+  deployments:
+    local:
+    - domain: app-name.localhost:9006
+      agents:
+        workflow-agent: {}
+        human-agent: {}
 
 components:
   componentname:
