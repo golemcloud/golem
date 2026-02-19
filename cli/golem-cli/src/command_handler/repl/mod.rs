@@ -397,7 +397,3 @@ async fn load_repl_metadata(
     )?)?;
     Ok(metadata)
 }
-
-fn js_string_literal(s: impl AsRef<str>) -> anyhow::Result<String> {
-    Ok(serde_json::to_string(s.as_ref())?)
-}

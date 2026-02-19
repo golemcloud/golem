@@ -274,7 +274,7 @@ impl TypeScriptRepl {
 
         command
             .current_dir(&args.repl_root_dir)
-            .args(&["tsx", "repl.ts"])
+            .args(["tsx", "repl.ts"])
             .envs(self.ctx.repl_handler().repl_server_env_vars().await?)
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
@@ -294,7 +294,7 @@ impl TypeScriptRepl {
                 }
                 ReplScriptSource::FromFile(path) => {
                     command.arg("--script-file");
-                    command.arg(fs::path_to_str(&path)?);
+                    command.arg(fs::path_to_str(path)?);
                 }
             }
         }

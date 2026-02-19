@@ -250,7 +250,6 @@ struct ReplCliCommand {
     repl_command: String,
     command_path: Vec<String>,
     about: String,
-    args: Vec<CliArgMetadata>,
     flag_args: HashMap<String, CliArgMetadata>,
     positional_args: Vec<CliArgMetadata>,
 }
@@ -393,12 +392,12 @@ impl GolemCli {
                 let status = command
                     .status()
                     .with_context(|| "Failed to execute golem cli")?;
-                return Ok(RunResult {
+                Ok(RunResult {
                     ok: status.success(),
                     code: status.code(),
                     stdout: String::new(),
                     stderr: String::new(),
-                });
+                })
             }
             RunMode::Collect => {
                 let output = command
@@ -406,12 +405,12 @@ impl GolemCli {
                     .with_context(|| "Failed to spawn golem cli")?;
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                return Ok(RunResult {
+                Ok(RunResult {
                     ok: output.status.success(),
                     code: output.status.code(),
                     stdout,
                     stderr,
-                });
+                })
             }
         }
     }
@@ -446,12 +445,15 @@ struct RunOptions {
 struct RunResult {
     ok: bool,
     code: Option<i32>,
+    #[allow(unused)]
     stdout: String,
+    #[allow(unused)]
     stderr: String,
 }
 
 struct RunJsonResult {
     ok: bool,
+    #[allow(unused)]
     code: Option<i32>,
     json: Value,
 }
@@ -516,7 +518,6 @@ fn collect(
             repl_command,
             command_path: command.path.clone(),
             about,
-            args: command.args.clone(),
             flag_args,
             positional_args,
         });

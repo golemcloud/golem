@@ -103,7 +103,7 @@ impl RustRepl {
                 }
                 ReplScriptSource::FromFile(path) => {
                     command.arg("--script-file");
-                    command.arg(fs::path_to_str(&path)?);
+                    command.arg(fs::path_to_str(path)?);
                 }
             }
         }

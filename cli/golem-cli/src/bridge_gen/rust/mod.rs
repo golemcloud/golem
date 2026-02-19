@@ -179,7 +179,7 @@ impl RustBridgeGenerator {
     fn generate_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
         let agent_type_name = &self.agent_type.type_name.0;
         let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
-        let client_struct_name = Ident::new(&agent_type_name, Span::call_site());
+        let client_struct_name = Ident::new(agent_type_name, Span::call_site());
 
         let input_schema = self.agent_type.constructor.input_schema.clone();
         let constructor_params = self.parameter_list(&input_schema)?;

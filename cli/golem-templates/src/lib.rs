@@ -445,15 +445,11 @@ fn transform(
     let transform_ts_sdk = |str: &str| -> String {
         str.replace(
             "GOLEM_TS_SDK_VERSION_OR_PATH",
-            &parameters
-                .sdk_overrides
-                .ts_package_dep("golem-ts-sdk"),
+            &parameters.sdk_overrides.ts_package_dep("golem-ts-sdk"),
         )
         .replace(
             "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-            &parameters
-                .sdk_overrides
-                .ts_package_dep("golem-ts-typegen"),
+            &parameters.sdk_overrides.ts_package_dep("golem-ts-typegen"),
         )
     };
 

@@ -90,7 +90,7 @@ impl Repl {
     fn collect_builtin_commands(
         command_context: &mut CommandContext,
     ) -> anyhow::Result<HashMap<String, String>> {
-        let mut help_output = command_context.execute(":help")?;
+        let help_output = command_context.execute(":help")?;
         let help_output = help_output
             .get("text/plain")
             .ok_or_else(|| anyhow!("Missing help output"))?;
@@ -345,7 +345,7 @@ impl Repl {
 
         let script = format!("golem_repl_configure_clients();\n{}", script);
 
-        let mut output = self.command_context.borrow_mut().execute(&script)?;
+        let output = self.command_context.borrow_mut().execute(&script)?;
         if let Some(output) = output.get("text/plain") {
             println!("{}", output);
         }
@@ -511,11 +511,9 @@ impl SpinnerGuard {
             let start = std::time::Instant::now();
             while !stop_clone.load(Ordering::Relaxed) {
                 if !shown {
-                    if with_initial_delay {
-                        if start.elapsed() < Duration::from_millis(300) {
-                            std::thread::sleep(Duration::from_millis(50));
-                            continue;
-                        }
+                    if with_initial_delay && start.elapsed() < Duration::from_millis(300) {
+                        std::thread::sleep(Duration::from_millis(50));
+                        continue;
                     }
                     shown = true;
                 }

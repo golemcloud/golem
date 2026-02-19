@@ -12,28 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rustyline::ExternalPrinter;
 use std::fmt::Display;
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{OnceLock, RwLock};
 
 pub enum OutputMode {
     Stdout,
     Stderr,
-    ExternalPrinter(Arc<Mutex<Box<dyn ExternalPrinter + Send>>>),
-    None,
 }
 
 static OUTPUT_MODE: OnceLock<RwLock<OutputMode>> = OnceLock::new();
 
 pub fn set_output(mode: OutputMode) {
     *output_mode().write().unwrap() = mode;
-}
-
-pub fn set_external_printer(printer: impl ExternalPrinter + Send + 'static) {
-    set_output(OutputMode::ExternalPrinter(Arc::new(Mutex::new(Box::new(
-        printer,
-    )))));
 }
 
 pub fn log(message: impl Display) {
@@ -68,11 +59,5 @@ fn write_message(mut message: String, newline: bool) {
             let _ = out.write_all(message.as_bytes());
             let _ = out.flush();
         }
-        OutputMode::ExternalPrinter(printer) => {
-            if let Ok(mut printer) = printer.lock() {
-                let _ = printer.print(message);
-            }
-        }
-        OutputMode::None => {}
     }
 }
