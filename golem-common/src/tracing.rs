@@ -400,6 +400,7 @@ pub mod directive {
             warn("wac_graph"),
             warn("wasmtime_environ"),
             warn("wit_parser"),
+            warn("golem_client"),
         ]
     }
 }

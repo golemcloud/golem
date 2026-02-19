@@ -389,7 +389,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
         .create_component(
             &env.id.0,
             &ComponentCreation {
-                component_name: ComponentName("golem:it".to_string()),
+                component_name: ComponentName("it:initial-file-system".to_string()),
                 file_options: BTreeMap::from_iter(vec![(
                     ComponentFilePath::from_abs_str("/bar/baz.txt").map_err(|e| anyhow!(e))?,
                     ComponentFileOptions {
