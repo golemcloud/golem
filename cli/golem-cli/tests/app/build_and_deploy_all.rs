@@ -304,23 +304,6 @@ fn agent_metas() -> Vec<AgentMeta> {
             ],
         ),
         AgentMeta::new(
-            "components-ts/app-ts-llm-session/src/main.ts",
-            "ChatAgent",
-            "TsChatAgent",
-            vec![
-                (
-                    "components-ts/app-ts-llm-session/src/main.ts",
-                    "/chats",
-                    "/ts-chats",
-                ),
-                (
-                    "components-ts/app-ts-llm-session/golem.yaml",
-                    "chat-agent",
-                    "ts-chat-agent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
             "components-ts/app-ts-snapshotting/src/main.ts",
             "CounterAgent",
             "TsCounterAgentSnapshotting",
@@ -334,23 +317,6 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-ts/app-ts-snapshotting/golem.yaml",
                     "counter-agent",
                     "ts-counter-agent-snapshotting",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-ts/app-ts-websearch-summary-example/src/main.ts",
-            "ResearchAgent",
-            "TsResearchAgent",
-            vec![
-                (
-                    "components-ts/app-ts-websearch-summary-example/src/main.ts",
-                    "/research",
-                    "/ts-research",
-                ),
-                (
-                    "components-ts/app-ts-websearch-summary-example/golem.yaml",
-                    "research-agent",
-                    "ts-research-agent",
                 ),
             ],
         ),
