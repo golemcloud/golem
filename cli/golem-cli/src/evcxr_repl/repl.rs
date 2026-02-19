@@ -14,7 +14,7 @@
 
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
-use crate::evcxr_repl::log::{logln, set_output, OutputMode};
+use crate::evcxr_repl::log::{log, logln, set_output, OutputMode};
 use crate::fs;
 use crate::process::{with_hidden_output_unless_error, HiddenOutput};
 use anyhow::{anyhow, bail};
@@ -351,40 +351,40 @@ impl Repl {
                             // for multi line source code, print the lines
                             if last_span_lines != &spanned_message.lines {
                                 for line in &spanned_message.lines {
-                                    println!("{line}");
+                                    logln(line);
                                 }
                             }
                             last_span_lines = &spanned_message.lines;
                         } else {
-                            print!("{}", " ".repeat(prompt_len));
+                            log(" ".repeat(prompt_len));
                         }
-                        print!("{}", " ".repeat(start_column));
+                        log(" ".repeat(start_column));
 
                         // Guaranteed not to underflow since if they were out-of-order, we swapped
                         // them above.
                         let span_diff = end_column - start_column;
                         let carrots = "^".repeat(span_diff);
-                        print!("{}", carrots.bright_red());
-                        println!(" {}", spanned_message.label.bright_blue());
+                        log(carrots.bright_red());
+                        logln(format!(" {}", spanned_message.label.bright_blue()));
                     } else {
                         // Our error originates from both user-code and generated
                         // code.
-                        println!("{}", spanned_message.label.bright_blue());
+                        logln(spanned_message.label.bright_blue());
                     }
                 }
-                println!("{}", error.message().bright_red());
+                logln(error.message().bright_red());
                 for help in error.help() {
-                    println!("{} {help}", "help:".bold());
+                    logln(format!("{} {help}", "help:".bold()));
                 }
                 if let Some(extra_hint) = error.evcxr_extra_hint() {
-                    println!("{extra_hint}");
+                    logln(extra_hint);
                 }
             } else {
-                println!(
+                logln(format!(
                     "A compilation error was found in code we generated.\n\
                      Ideally this shouldn't happen. Type :last_error_json to see details.\n{}",
                     error.rendered()
-                );
+                ));
             }
         }
     }
