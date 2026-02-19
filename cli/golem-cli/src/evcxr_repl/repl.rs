@@ -174,7 +174,11 @@ impl Repl {
         let _spinner: Option<SpinnerGuard> = (!self.config.script_mode())
             .then(|| SpinnerGuard::start_tty("Building dependencies...", false))
             .flatten();
-        command_context.execute(":load_config --quiet")?;
+        with_hidden_output_unless_error(HiddenOutput::All, || {
+            command_context
+                .execute(":load_config --quiet")
+                .map_err(|err| anyhow!(err))
+        })?;
 
         Ok(())
     }
@@ -345,7 +349,6 @@ impl SpinnerGuard {
         let label = label.dimmed();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
-        let label = label.to_string();
         let handle = thread::spawn(move || {
             let frames: Vec<String> = {
                 if SHOULD_COLORIZE.should_colorize() {
@@ -465,9 +468,12 @@ impl Completer for ReplRustyLineEditorHelper {
             return Ok((result.start, pairs));
         }
 
-        let completions = match self.context.borrow_mut().completions(line, pos) {
-            Ok(completions) => completions,
-            Err(_) => return Ok((pos, Vec::new())),
+        let completions = {
+            let _spinner = SpinnerGuard::start_stdout("Completing...", true);
+            match self.context.borrow_mut().completions(line, pos) {
+                Ok(completions) => completions,
+                Err(_) => return Ok((pos, Vec::new())),
+            }
         };
 
         let mut candidates = Vec::with_capacity(completions.completions.len());
