@@ -1,69 +1,190 @@
-# Golem Source License v1.0
-*last updated 19 May 2025*
+Business Source License 1.1
 
-> **Notice:** This License is **not** an Open-Source license. Each version of Golem automatically becomes Open Source under the Change License on its Change Date.
+Parameters
+----------
 
-## 1 Definitions
+Licensor:
+  Golem Cloud, Inc.
 
-* **Licensor** - Golem Cloud, Inc., a Delaware corporation.
-* **Licensed Work ("Golem")** - the source-available project published by the Licensor, copyright 2023-2025 Golem Cloud, Inc.
-* **Change License** - Apache License, Version 2.0.
-* **Change Date** - four (4) years after the first public release of each version of Golem under this License.
-* **Affiliate** - any entity that, directly or indirectly, controls, is controlled by, or is under common control with a party, where "control" means ownership of more than fifty percent (50 %) of the voting interests or the power to direct management and policies.
-* **You / Your** - any individual or entity exercising rights in the Licensed Work.
-* **Third-Party Code-Execution Service** - any product or service (single-tenant *or* multi-tenant, branded or white-label) that enables an unaffiliated third party to deploy, upload, register, supply, or execute its own code, agents, workflows, or services on infrastructure You **own, operate, manage, or otherwise make available** and where that execution is powered, directly or indirectly, by the Licensed Work. Employees and contract staff acting on Your behalf are not third parties; **Affiliates are**.
+Licensed Work:
+  Golem (the durable computing runtime/server software made available in this
+  repository, including any modified versions and derivative works of that
+  software)
 
-## 2 Grant of Rights & Use Restriction
+The Licensed Work is (c) 2023-2026 Golem Cloud, Inc.
 
-Subject to Sections 3-7 and 11, the Licensor grants You a worldwide, royalty-free right to copy, modify, create derivative works of, distribute, and make use of the Licensed Work **except** that, *before the Change Date*, You **may not** provide, sell, or resell the Licensed Work (or any work that incorporates it) as a Third-Party Code-Execution Service.
+Additional Use Grant
+--------------------
 
-It is irrelevant whether Golem's own APIs are exposed, wrapped, hidden, or embedded: if third-party code ultimately runs on Golem's execution engine, this prohibition applies.
-For clarity, it is **permitted** to integrate Golem into applications where end users submit data or content that is processed by Golem, provided those users cannot upload or execute their own code.
+You may make use of the Licensed Work, including in production, provided that
+you may not use the Licensed Work for a Golem Developer Platform Service.
 
-Any scheme, technical or contractual, intended to evade this Section 2 while retaining effective use of the Licensed Work is deemed a breach of this License.
+1) Prohibited Use — Golem Developer Platform Service
 
-## 3 Automatic Conversion on Change Date
+A "Golem Developer Platform Service" is a commercial hosted or managed
+service that:
 
-On the applicable Change Date each version of Golem is simultaneously relicensed to You under the Change License, and the rights granted in Section 2 for that version terminate.
+  (a) is offered to third parties outside your organization (other than your
+      employees and contractors acting on your behalf); and
 
-## 4 Commercial License Option
+  (b) makes the Licensed Work (or the material functionality of the Licensed
+      Work) available as a platform or runtime so that those third parties can
+      develop, deploy, host, or run their own applications, agents, workflows,
+      or services on infrastructure that you operate or manage (including
+      infrastructure operated or managed by a third party on your behalf); and
 
-If Your use is outside the scope permitted in Section 2 prior to the Change Date, You must obtain a separate commercial license from the Licensor or cease all use of the Licensed Work.
+  (c) is reasonably understood by a reasonable person familiar with the software
+      industry (based on the service's functionality, documentation, onboarding,
+      pricing, packaging, or positioning) to be an application platform /
+      runtime / infrastructure service (for example, a PaaS, serverless
+      offering, durable execution platform, workflow runtime, agent runtime,
+      or similar), rather than a domain-specific application.
 
-## 5 Distribution Requirements
+A service may be a Golem Developer Platform Service regardless of whether
+it exposes the Licensed Work's native APIs. Using a proxy, wrapper, proprietary
+API, SDK, CLI, GUI, DSL, or any other interface does not avoid this limitation
+if the service otherwise meets the definition above.
 
-Every copy of the Licensed Work or any derivative You distribute must include (a) this License in its entirety *or* a URL pointing unmodified to this License, and (b) a conspicuous copyright notice for the Licensor.
+2) Explicit safe harbors (non-exhaustive)
 
-## 6 Version Scope
+For the avoidance of doubt, the following scenarios are explicitly permitted
+under this license and do NOT constitute a Golem Developer Platform Service:
 
-This License applies independently to each version of Golem. Parameters such as the Change Date may differ for later versions.
+  • Applications and SaaS products built on Golem.
+    Any product or service in which the Licensed Work is used as an internal
+    implementation component — whether the product targets developers, business
+    users, or any other audience, and including agentic applications — is
+    permitted, even if users can configure, customize, or extend the product
+    (including by defining agents or workflows, supplying rules, writing scripts,
+    uploading plugins, or generating code), provided that the product or service
+    does not offer the Licensed Work (or the material functionality of the
+    Licensed Work) as a hosted or managed application platform, runtime, or
+    infrastructure service for third parties to develop, deploy, host, or run
+    their own applications, agents, workflows, or services.
 
-## 7 Termination
+  • Internal use.
+    Any internal deployment (including an internal managed platform) where only
+    the licensee (or its organization, employees, and contractors) uses the
+    Licensed Work.
 
-Any breach of this License immediately terminates Your rights for the current and all prior versions of the Licensed Work.
+  • On-prem / downloadable distribution.
+    Delivering the Licensed Work (modified or unmodified) to a specific customer
+    for that customer's own use in its own environments (including self-hosted
+    production use) is permitted, subject to that customer's compliance with
+    this License.
 
-## 8 Trademarks
+  • Professional services.
+    Providing consulting, integration, training, support, or other professional
+    services related to the Licensed Work is permitted, provided that you do not
+    provide the Licensed Work as a hosted or managed service to third parties
+    (for example, you do not operate the Licensed Work on behalf of a customer
+    as a managed service).
 
-No trademark, service mark, or logo of the Licensor or its Affiliates is licensed under this document.
+  • Frameworks, libraries, and tools.
+    Building and distributing frameworks, libraries, tools, and other software
+    that incorporate or are built using the Licensed Work is permitted, including
+    under open-source licenses. Any use of the Licensed Work as incorporated in
+    such software remains subject to this License and this Additional Use Grant.
+    Distributors must comply with the notice requirements of this License set
+    forth in the Terms below.
 
-## 9 Patents
+3) Explicitly not permitted (illustrative)
 
-No patent license is granted until the Licensed Work converts to the Change License, after which the patent terms (if any) of the Change License govern.
+For the avoidance of doubt, the following scenarios are NOT permitted under this
+license:
 
-## 10 Disclaimer of Warranty & Limitation of Liability
+  • A commercial hosted or managed service that offers Golem-powered durable
+    execution, workflow, or agent runtime capabilities as a platform for third-
+    party developers or engineering teams (including through dedicated or
+    single-tenant deployments) to deploy, host, and run their own applications
+    or services — whether or not the service is branded as "Golem," and whether
+    or not it exposes the Licensed Work's native APIs.
 
-THE LICENSED WORK IS PROVIDED "AS IS" AND WITHOUT WARRANTY OF ANY KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE LICENSOR DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, AND SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR RELATING TO THE LICENSED WORK OR THIS LICENSE.
+  • A commercial hosted or managed service that embeds or wraps the Licensed
+    Work (under any interface) and offers it to third parties as a competing
+    application platform, runtime, or infrastructure service.
 
-## 11 Contributor Assignment
+Change Date:
+  4 years after release
 
-1. **Assignment.** By submitting a **Contribution** (an original work you own) for inclusion in the Licensed Work, you assign to the Licensor all right, title, and interest - including copyright and, to the extent permitted, moral rights - in that Contribution.
-2. **License-back.** The Licensor grants you a perpetual, worldwide, royalty-free license to use, modify, and distribute your Contribution under this License.
-3. **Patent Grant.** You grant the Licensor a perpetual, worldwide, royalty-free, irrevocable license - with rights to sublicense - to make, use, sell, offer for sale, import, and otherwise exploit (i) the Contribution and (ii) the Contribution in combination with the Licensed Work.
-4. **Outbound Licensing.** The Licensor may distribute the Contribution under this License, the Change License, or any other license, provided the Contribution remains available under this License.
-5. **No Obligation to Use.** The Licensor may accept, modify, or decline any Contribution at its sole discretion.
-6. **Representations.** You represent that you have the legal authority to make the assignment and patent grant and that, to your knowledge, the Contribution does not infringe any third-party rights.
-7. **Disclaimer.** Contributions are provided by you **"AS IS."** The disclaimer and limitation of liability in Section 10 apply equally to you and your Contributions.
+Change License:
+  Apache License, Version 2.0
 
-## 12 Governing Law & Miscellaneous
+Notice
+------
 
-This License is governed by the laws of the State of Delaware, USA, excluding its conflict-of-laws principles. The United Nations Convention on Contracts for the International Sale of Goods does not apply. If any provision is held unenforceable, it will be reformed to the minimum extent necessary; the remaining provisions will remain in full force. Failure to enforce any provision is not a waiver. This License constitutes the entire agreement between the parties concerning the Licensed Work and may be modified only by the Licensor in writing.
+The Business Source License (this document, or the "License") is not an Open
+Source license. However, the Licensed Work will eventually be made available
+under an Open Source License, as stated in this License.
+
+License text copyright © 2017 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+-------------------------------------------------------------------------------
+Business Source License 1.1
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under the
+terms of the Change License, and the rights granted in the paragraph above
+terminate.
+
+If your use of the Licensed Work does not comply with the requirements currently
+in effect as described in this License, you must purchase a commercial license
+from the Licensor, its affiliated entities, or authorized resellers, or you must
+refrain from using the Licensed Work.
+
+All copies of the original and modified Licensed Work, and derivative works of
+the Licensed Work, are subject to this License. This License applies separately
+for each version of the Licensed Work and the Change Date may vary for each
+version of the Licensed Work released by Licensor.
+
+You must conspicuously display this License on each original or modified copy of
+the Licensed Work. If you receive the Licensed Work in original or modified form
+from a third party, the terms and conditions set forth in this License apply to
+your use of that work.
+
+Any use of the Licensed Work in violation of this License will automatically
+terminate your rights under this License for the current and all other versions
+of the Licensed Work.
+
+This License does not grant you any right in any trademark or logo of Licensor
+or its affiliates (provided that you may use a trademark or logo of Licensor as
+expressly required by this License).
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON AN
+"AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS, EXPRESS
+OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND TITLE.
+
+MariaDB hereby grants you permission to use this License's text to license your
+works, and to refer to it using the trademark "Business Source License", as long
+as you comply with the Covenants of Licensor below.
+
+Covenants of Licensor
+
+In consideration of the right to use this License's text and the "Business
+Source License" name and trademark, Licensor covenants to MariaDB, and to all
+other recipients of the licensed work to be provided by Licensor:
+
+  1. To specify as the Change License the GPL Version 2.0 or any later version,
+     or a license that is compatible with GPL Version 2.0 or a later version,
+     where "compatible" means that software provided under the Change License
+     can be included in a program with software provided under GPL Version 2.0
+     or a later version. Licensor may specify additional Change Licenses without
+     limitation.
+
+  2. To either: (a) specify an additional grant of rights to use that does not
+     impose any additional restriction on the right granted in this License, as
+     the Additional Use Grant; or (b) insert the text "None".
+
+  3. To specify a Change Date.
+
+  4. Not to modify this License in any other way.
