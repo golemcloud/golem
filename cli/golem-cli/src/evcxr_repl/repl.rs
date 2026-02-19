@@ -179,23 +179,6 @@ impl Repl {
 
         prelude.push_str(
             r#"
-                use std::sync::OnceLock;
-
-                static GOLEM_REPL_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-                fn golem_rt() -> &'static tokio::runtime::Runtime {
-                    GOLEM_REPL_RUNTIME.get_or_init(|| {
-                        tokio::runtime::Builder::new_multi_thread()
-                            .enable_all()
-                            .build()
-                            .expect("Failed to build Tokio runtime")
-                    })
-                }
-
-                fn golem_block_on<F: std::future::Future>(future: F) -> F::Output {
-                    golem_rt().block_on(future)
-                }
-
                 fn golem_repl_configure_clients() {
             "#,
         );
@@ -241,9 +224,6 @@ impl Repl {
         with_hidden_output_unless_error(HiddenOutput::All, || {
             command_context
                 .execute(":load_config --quiet")
-                .map_err(|err| anyhow!(err))?;
-            command_context
-                .execute("golem_repl_configure_clients();")
                 .map_err(|err| anyhow!(err))
         })?;
 
@@ -296,7 +276,13 @@ impl Repl {
                             "Waiting for result...",
                             true,
                         );
-                        self.command_context.borrow_mut().execute(&line)
+                        let command = if !line.trim_start().starts_with(':') {
+                            format!("golem_repl_configure_clients();\n{}", line)
+                        } else {
+                            line.clone()
+                        };
+
+                        self.command_context.borrow_mut().execute(&command)
                     };
 
                     match result {
