@@ -42,7 +42,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::thread;
 use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -82,7 +81,7 @@ impl Repl {
         repl.setup_command_context()?;
 
         if repl.config.script_mode() {
-            repl.run_script()
+            repl.run_script(outputs)
         } else {
             repl.run_interactive(outputs)
         }
@@ -230,8 +229,8 @@ impl Repl {
         let history_path = PathBuf::from(&self.config.base_config.history_file);
         editor.load_history(&history_path)?;
 
-        spawn_output_task(outputs.stdout, editor.create_external_printer()?);
-        spawn_output_task(outputs.stderr, editor.create_external_printer()?);
+        spawn_printer_output_task(outputs.stdout, editor.create_external_printer()?);
+        spawn_printer_output_task(outputs.stderr, editor.create_external_printer()?);
         let mut printer = editor.create_external_printer()?;
 
         let prompt = {
@@ -332,7 +331,10 @@ impl Repl {
         Ok(())
     }
 
-    pub fn run_script(&self) -> anyhow::Result<()> {
+    pub fn run_script(&self, outputs: EvalContextOutputs) -> anyhow::Result<()> {
+        let _stdout_task = spawn_logger_output_task(outputs.stdout);
+        let _stderr_task = spawn_logger_output_task(outputs.stderr);
+
         let script = if let Some(script_file) = &self.config.cli_args.script_file {
             fs::read_to_string(script_file)?
         } else if let Some(script) = &self.config.cli_args.script {
@@ -341,9 +343,9 @@ impl Repl {
             bail!("Missing script source");
         };
 
-        println!("Running script:\n{}", script);
+        let script = format!("golem_repl_configure_clients();\n{}", script);
+
         let mut output = self.command_context.borrow_mut().execute(&script)?;
-        println!("Script result:\n{:?}", output);
         if let Some(output) = output.get("text/plain") {
             println!("{}", output);
         }
@@ -440,7 +442,7 @@ impl Repl {
 
 struct SpinnerGuard {
     stop: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SpinnerGuard {
@@ -489,7 +491,7 @@ impl SpinnerGuard {
         let label = label.dimmed();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
-        let handle = thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             let frames: Vec<String> = {
                 if SHOULD_COLORIZE.should_colorize() {
                     vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
@@ -511,7 +513,7 @@ impl SpinnerGuard {
                 if !shown {
                     if with_initial_delay {
                         if start.elapsed() < Duration::from_millis(300) {
-                            thread::sleep(Duration::from_millis(50));
+                            std::thread::sleep(Duration::from_millis(50));
                             continue;
                         }
                     }
@@ -523,7 +525,7 @@ impl SpinnerGuard {
                 last_len = text.len();
                 write(format!("\r{text}"));
                 index = index.wrapping_add(1);
-                thread::sleep(Duration::from_millis(120));
+                std::thread::sleep(Duration::from_millis(120));
             }
             if shown && last_len > 0 {
                 write(format!("\r{:width$}\r", "", width = last_len));
@@ -629,7 +631,7 @@ impl Completer for ReplRustyLineEditorHelper {
 }
 
 // TODO: handle fallbacks + decide output based on scrip mode
-fn spawn_output_task(
+fn spawn_printer_output_task(
     receiver: crossbeam_channel::Receiver<String>,
     mut printer: impl ExternalPrinter + Send + 'static,
 ) -> std::thread::JoinHandle<()> {
@@ -638,6 +640,16 @@ fn spawn_output_task(
             if printer.print(format!("{line}\n")).is_err() {
                 break;
             };
+        }
+    })
+}
+
+fn spawn_logger_output_task(
+    receiver: crossbeam_channel::Receiver<String>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in receiver.iter() {
+            logln(line);
         }
     })
 }
