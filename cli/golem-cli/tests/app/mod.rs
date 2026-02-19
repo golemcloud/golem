@@ -380,7 +380,6 @@ impl TestContext {
             let mut all_args = vec![
                 "--config-dir".to_string(),
                 self.config_dir.path().to_str().unwrap().to_string(),
-                flag::DEV_MODE.to_string(),
             ];
             if let Some(template_group) = &self.template_group {
                 all_args.push(flag::TEMPLATE_GROUP.to_string());
