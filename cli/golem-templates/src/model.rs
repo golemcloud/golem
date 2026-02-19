@@ -434,8 +434,6 @@ pub struct Template {
     pub description: String,
     pub template_path: PathBuf,
     pub instructions: String,
-    pub wit_deps: Vec<PathBuf>,
-    pub wit_deps_targets: Option<Vec<PathBuf>>,
     pub dev_only: bool,
 }
 
@@ -462,8 +460,6 @@ pub(crate) struct TemplateMetadata {
     pub requires_golem_host_wit: Option<bool>,
     #[serde(rename = "requiresWASI")]
     pub requires_wasi: Option<bool>,
-    #[serde(rename = "witDepsPaths")]
-    pub wit_deps_paths: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,
     pub instructions: Option<String>,
     #[serde(rename = "devOnly")]

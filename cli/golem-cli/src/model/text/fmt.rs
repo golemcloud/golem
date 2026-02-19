@@ -291,27 +291,6 @@ pub fn format_exports(exports: &[String]) -> String {
     exports.iter().map(|e| format_export(e.as_str())).join("\n")
 }
 
-pub fn format_dynamic_links(links: &BTreeMap<String, BTreeMap<String, String>>) -> String {
-    links
-        .iter()
-        .map(|(name, link)| {
-            let padding = link.keys().map(|name| name.len()).max().unwrap_or_default() + 1;
-
-            format!(
-                "{}:\n{}",
-                name,
-                link.iter()
-                    .map(|(resource, interface)| format!(
-                        "  {:<padding$} {}",
-                        format!("{}:", resource),
-                        format_export(interface)
-                    ))
-                    .join("\n")
-            )
-        })
-        .join("\n")
-}
-
 pub fn format_files(files: &[InitialComponentFile]) -> String {
     files
         .iter()

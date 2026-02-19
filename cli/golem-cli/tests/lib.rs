@@ -15,14 +15,11 @@
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use test_r::{tag_suite, test_dep};
+use test_r::test_dep;
 
 test_r::enable!();
 
 mod app;
-mod stubgen;
-
-tag_suite!(stubgen, group1);
 
 #[derive(Debug)]
 pub struct Tracing;

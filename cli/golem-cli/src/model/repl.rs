@@ -27,7 +27,6 @@ use strum_macros::EnumIter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum ReplLanguage {
-    Rib,
     Rust,
     TypeScript,
 }
@@ -35,28 +34,21 @@ pub enum ReplLanguage {
 impl ReplLanguage {
     pub fn from_string(s: impl AsRef<str>) -> Option<ReplLanguage> {
         match s.as_ref().to_lowercase().as_str() {
-            "rib" => Some(ReplLanguage::Rib),
             "rust" => Some(ReplLanguage::Rust),
             "ts" | "typescript" => Some(ReplLanguage::TypeScript),
             _ => None,
         }
     }
 
-    pub fn is_rib(&self) -> bool {
-        matches!(self, ReplLanguage::Rib)
-    }
-
-    pub fn to_guest_language(&self) -> Option<GuestLanguage> {
+    pub fn to_guest_language(&self) -> GuestLanguage {
         match self {
-            ReplLanguage::Rib => None,
-            ReplLanguage::Rust => Some(GuestLanguage::Rust),
-            ReplLanguage::TypeScript => Some(GuestLanguage::TypeScript),
+            ReplLanguage::Rust => GuestLanguage::Rust,
+            ReplLanguage::TypeScript => GuestLanguage::TypeScript,
         }
     }
 
     pub fn id(&self) -> &'static str {
         match self {
-            ReplLanguage::Rib => "rib",
             ReplLanguage::Rust => "rust",
             ReplLanguage::TypeScript => "ts",
         }
@@ -66,7 +58,6 @@ impl ReplLanguage {
 impl Display for ReplLanguage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReplLanguage::Rib => write!(f, "Rib"),
             ReplLanguage::Rust => write!(f, "Rust"),
             ReplLanguage::TypeScript => write!(f, "TypeScript"),
         }

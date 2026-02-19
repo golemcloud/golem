@@ -14,13 +14,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 import { useEffect, useState } from "react";
 
@@ -62,30 +55,13 @@ const formSchema = z.object({
   }),
   specs: z
     .object({
-      type: z.enum([
-        "ComponentTransformer",
-        "OplogProcessor",
-        "App",
-        "Library",
-      ]),
-      // ComponentTransformer specific fields
-      validateUrl: z.string().url().optional(),
-      transformUrl: z.string().url().optional(),
-      providedWitPackage: z.string().optional(),
-      jsonSchema: z.string().optional(),
-      // OplogProcessor, App, Library specific field
+      type: z.enum(["OplogProcessor"]),
+      // OplogProcessor specific field
       component: z.string().optional(),
     })
     .refine(
       data => {
-        if (data.type === "ComponentTransformer") {
-          return data.validateUrl && data.transformUrl;
-        }
-        if (
-          data.type === "OplogProcessor" ||
-          data.type === "App" ||
-          data.type === "Library"
-        ) {
+        if (data.type === "OplogProcessor") {
           return data.component;
         }
         return true;
@@ -104,9 +80,6 @@ export default function CreatePlugin() {
   const [_componentApiList, setComponentApiList] = useState<{
     [key: string]: ComponentList;
   }>({});
-  const [activeSpecTab, setActiveSpecTab] = useState<
-    "ComponentTransformer" | "OplogProcessor" | "App" | "Library"
-  >("ComponentTransformer");
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -116,7 +89,7 @@ export default function CreatePlugin() {
       homepage: "",
       icon: "",
       specs: {
-        type: "ComponentTransformer",
+        type: "OplogProcessor",
         component: "",
       },
     },
@@ -127,10 +100,6 @@ export default function CreatePlugin() {
       setComponentApiList(response);
     });
   }, []);
-
-  useEffect(() => {
-    form.setValue("specs.type", activeSpecTab);
-  }, [activeSpecTab, form]);
 
   return (
     <div className="container mx-auto py-10">
@@ -338,216 +307,70 @@ export default function CreatePlugin() {
                 />
               </div>
 
-              {/* Plugin Type Selection */}
+              {/* Plugin Type */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold">Plugin Type</h3>
+                <p className="text-sm text-muted-foreground">Oplog Processor</p>
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">
+                  Oplog Processor Configuration
+                </h3>
                 <FormField
                   control={form.control}
-                  name="specs.type"
+                  name="specs.component"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>
-                        Type<span className="text-red-500">*</span>
+                        Component Path<span className="text-red-500">*</span>
                       </FormLabel>
-                      <Select
-                        value={field.value}
-                        onValueChange={value => {
-                          field.onChange(value);
-                          setActiveSpecTab(value as typeof activeSpecTab);
-                        }}
-                      >
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select plugin type" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="ComponentTransformer">
-                            Component Transformer
-                          </SelectItem>
-                          <SelectItem value="OplogProcessor">
-                            Oplog Processor
-                          </SelectItem>
-                          <SelectItem value="App">App</SelectItem>
-                          <SelectItem value="Library">Library</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="path/to/oplog-processor.wasm"
+                            {...field}
+                            readOnly
+                            className={cn(
+                              form.formState.errors.specs?.component &&
+                                "border-red-500 focus-visible:ring-red-500",
+                            )}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            onClick={async () => {
+                              try {
+                                const selected = await open({
+                                  multiple: false,
+                                  filters: [
+                                    {
+                                      name: "WASM Component",
+                                      extensions: ["wasm"],
+                                    },
+                                  ],
+                                });
+                                if (selected) {
+                                  field.onChange(selected);
+                                }
+                              } catch (error) {
+                                console.error("Error selecting file:", error);
+                              }
+                            }}
+                          >
+                            <FileIcon className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </FormControl>
                       <FormDescription>
-                        Choose the type of plugin you want to create.
+                        Select the WASM component file
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
               </div>
-
-              {/* Type-specific fields */}
-              {form.watch("specs.type") === "ComponentTransformer" && (
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">
-                    Component Transformer Configuration
-                  </h3>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField
-                      control={form.control}
-                      name="specs.validateUrl"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            Validate URL<span className="text-red-500">*</span>
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="https://api.example.com/validate"
-                              {...field}
-                              className={cn(
-                                form.formState.errors.specs?.validateUrl &&
-                                  "border-red-500 focus-visible:ring-red-500",
-                              )}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="specs.transformUrl"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>
-                            Transform URL<span className="text-red-500">*</span>
-                          </FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="https://api.example.com/transform"
-                              {...field}
-                              className={cn(
-                                form.formState.errors.specs?.transformUrl &&
-                                  "border-red-500 focus-visible:ring-red-500",
-                              )}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField
-                      control={form.control}
-                      name="specs.providedWitPackage"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>WIT Package Path</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="path/to/wit/file.wit"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            Optional WIT file path
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="specs.jsonSchema"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>JSON Schema Path</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="path/to/schema.json"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            Optional JSON schema file path
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {(form.watch("specs.type") === "OplogProcessor" ||
-                form.watch("specs.type") === "App" ||
-                form.watch("specs.type") === "Library") && (
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">
-                    {form.watch("specs.type") === "OplogProcessor" &&
-                      "Oplog Processor Configuration"}
-                    {form.watch("specs.type") === "App" && "App Configuration"}
-                    {form.watch("specs.type") === "Library" &&
-                      "Library Configuration"}
-                  </h3>
-                  <FormField
-                    control={form.control}
-                    name="specs.component"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          Component Path<span className="text-red-500">*</span>
-                        </FormLabel>
-                        <FormControl>
-                          <div className="flex gap-2">
-                            <Input
-                              placeholder={
-                                form.watch("specs.type") === "OplogProcessor"
-                                  ? "path/to/oplog-processor.wasm"
-                                  : form.watch("specs.type") === "App"
-                                    ? "path/to/app.wasm"
-                                    : "path/to/library.wasm"
-                              }
-                              {...field}
-                              readOnly
-                              className={cn(
-                                form.formState.errors.specs?.component &&
-                                  "border-red-500 focus-visible:ring-red-500",
-                              )}
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={async () => {
-                                try {
-                                  const selected = await open({
-                                    multiple: false,
-                                    filters: [
-                                      {
-                                        name: "WASM Component",
-                                        extensions: ["wasm"],
-                                      },
-                                    ],
-                                  });
-                                  if (selected) {
-                                    field.onChange(selected);
-                                  }
-                                } catch (error) {
-                                  console.error("Error selecting file:", error);
-                                }
-                              }}
-                            >
-                              <FileIcon className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </FormControl>
-                        <FormDescription>
-                          Select the WASM component file
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
-              )}
 
               <div className="flex justify-between pt-6">
                 <Button

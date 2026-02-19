@@ -11,21 +11,14 @@ autotests = false
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true }
-colored = { workspace = true }
 fancy-regex = { workspace = true }
-fs_extra = { workspace = true }
 heck = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
-nanoid = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-toml_edit = { workspace = true }
-test-r = { workspace = true }
 indoc = { workspace = true }
 
 [build-dependencies]
@@ -35,6 +28,7 @@ fs_extra = { workspace = true }
 
 [dev-dependencies]
 assert2 = { workspace = true }
+test-r = { workspace = true }
 
 [lib]
 path = "src/lib.rs"

@@ -1,7 +1,6 @@
 use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
-use assert2::assert;
-use assert2::let_assert;
+
 use golem_templates::model::GuestLanguage;
 use heck::ToKebabCase;
 use strum::IntoEnumIterator;
@@ -32,13 +31,13 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         .filter(|line| line.starts_with(template_prefix) && line.contains(':'))
         .map(|line| {
             let template_with_desc = line.strip_prefix(template_prefix);
-            let_assert!(Some(template_with_desc) = template_with_desc, "{}", line);
+            let Some(template_with_desc) = template_with_desc else {
+                panic!("{}", line)
+            };
             let separator_index = template_with_desc.find(":");
-            let_assert!(
-                Some(separator_index) = separator_index,
-                "{}",
-                template_with_desc
-            );
+            let Some(separator_index) = separator_index else {
+                panic!("{}", template_with_desc)
+            };
 
             template_with_desc[..separator_index].to_string()
         })
@@ -184,40 +183,41 @@ fn agent_metas() -> Vec<AgentMeta> {
                 ),
             ],
         ),
-        AgentMeta::new(
-            "components-rust/app-rust-llm-session/src/lib.rs",
-            "ChatAgent",
-            "RustChatAgent",
-            vec![
-                (
-                    "components-rust/app-rust-llm-session/src/lib.rs",
-                    "/chats",
-                    "/rust-chats",
-                ),
-                (
-                    "components-rust/app-rust-llm-session/golem.yaml",
-                    "chat-agent",
-                    "rust-chat-agent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-            "ResearchAgent",
-            "RustResearchAgent",
-            vec![
-                (
-                    "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-                    "/research",
-                    "/rust-research",
-                ),
-                (
-                    "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
-                    "research-agent",
-                    "rust-research-agent",
-                ),
-            ],
-        ),
+        // NOTE: These are temporarily disabled because of golem-ai depending on an older golem-rust
+        // AgentMeta::new(
+        //     "components-rust/app-rust-llm-session/src/lib.rs",
+        //     "ChatAgent",
+        //     "RustChatAgent",
+        //     vec![
+        //         (
+        //             "components-rust/app-rust-llm-session/src/lib.rs",
+        //             "/chats",
+        //             "/rust-chats",
+        //         ),
+        //         (
+        //             "components-rust/app-rust-llm-session/golem.yaml",
+        //             "chat-agent",
+        //             "rust-chat-agent",
+        //         ),
+        //     ],
+        // ),
+        // AgentMeta::new(
+        //     "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+        //     "ResearchAgent",
+        //     "RustResearchAgent",
+        //     vec![
+        //         (
+        //             "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+        //             "/research",
+        //             "/rust-research",
+        //         ),
+        //         (
+        //             "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
+        //             "research-agent",
+        //             "rust-research-agent",
+        //         ),
+        //     ],
+        // ),
         AgentMeta::new(
             "components-rust/app-rust-snapshotting/src/lib.rs",
             "CounterAgent",
@@ -305,23 +305,6 @@ fn agent_metas() -> Vec<AgentMeta> {
             ],
         ),
         AgentMeta::new(
-            "components-ts/app-ts-llm-session/src/main.ts",
-            "ChatAgent",
-            "TsChatAgent",
-            vec![
-                (
-                    "components-ts/app-ts-llm-session/src/main.ts",
-                    "/chats",
-                    "/ts-chats",
-                ),
-                (
-                    "components-ts/app-ts-llm-session/golem.yaml",
-                    "chat-agent",
-                    "ts-chat-agent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
             "components-ts/app-ts-snapshotting/src/main.ts",
             "CounterAgent",
             "TsCounterAgentSnapshotting",
@@ -335,23 +318,6 @@ fn agent_metas() -> Vec<AgentMeta> {
                     "components-ts/app-ts-snapshotting/golem.yaml",
                     "counter-agent",
                     "ts-counter-agent-snapshotting",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-ts/app-ts-websearch-summary-example/src/main.ts",
-            "ResearchAgent",
-            "TsResearchAgent",
-            vec![
-                (
-                    "components-ts/app-ts-websearch-summary-example/src/main.ts",
-                    "/research",
-                    "/ts-research",
-                ),
-                (
-                    "components-ts/app-ts-websearch-summary-example/golem.yaml",
-                    "research-agent",
-                    "ts-research-agent",
                 ),
             ],
         ),

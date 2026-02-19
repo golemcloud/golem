@@ -21,14 +21,12 @@ worker-executor = [ "dep:wasmtime", "dep:wasmtime-wasi" ]
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true }
 golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
 async-fs = { workspace = true }
-async-hash = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 aws-config = { workspace = true }
@@ -39,7 +37,6 @@ bitflags = { workspace = true }
 blake3.workspace = true
 bytes = { workspace = true }
 chrono = { workspace = true }
-conditional-trait-gen = { workspace = true }
 derive_more.workspace = true
 desert_rust = { workspace = true }
 figment = { workspace = true }
@@ -55,7 +52,6 @@ include_dir = { workspace = true }
 indexmap.workspace = true
 lazy_static = { workspace = true }
 nom.workspace = true
-openapiv3.workspace = true
 openidconnect.workspace = true
 pin-project = { workspace = true }
 poem = { workspace = true }

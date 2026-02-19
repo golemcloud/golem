@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::assert;
-use assert2::check;
 use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
@@ -132,7 +130,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
         drop(contexts);
 
         if start.elapsed().as_secs() > 30 {
-            check!(false, "Timeout waiting for contexts");
+            panic!("Timeout waiting for contexts");
         }
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }

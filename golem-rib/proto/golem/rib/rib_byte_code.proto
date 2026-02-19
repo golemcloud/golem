@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-package golem.rib;
-
-import "golem/rib/ir.proto";
-
-message RibByteCode {
-    repeated RibIR instructions = 1;
-}

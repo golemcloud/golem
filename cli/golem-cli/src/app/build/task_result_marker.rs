@@ -15,7 +15,6 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app::DependentComponent;
 use crate::model::app_raw;
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
@@ -27,7 +26,6 @@ use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use wit_parser::PackageName;
 
@@ -217,52 +215,6 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
             "{}-{}",
             self.component_name, self.generator_kind
         )))
-    }
-}
-
-pub struct LinkRpcMarkerHash<'a> {
-    pub component_name: &'a ComponentName,
-    pub static_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
-    pub dynamic_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
-    pub library_dependencies: &'a BTreeSet<&'a DependentComponent>,
-}
-
-impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "RpcLinkMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(Some(self.component_name.to_string()))
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        #[derive(Serialize)]
-        struct SerializedMarker<'a> {
-            component_name: &'a str,
-            static_wasm_rpc_deps: Vec<String>,
-            dynamic_wasm_rpc_deps: Vec<String>,
-            library_deps: Vec<String>,
-        }
-
-        Ok(HashFromString(serde_json::to_string(&SerializedMarker {
-            component_name: self.component_name.as_str(),
-            static_wasm_rpc_deps: self
-                .static_wasm_rpc_dependencies
-                .iter()
-                .map(|dep| dep.source.to_string())
-                .collect(),
-            dynamic_wasm_rpc_deps: self
-                .dynamic_wasm_rpc_dependencies
-                .iter()
-                .map(|dep| dep.source.to_string())
-                .collect(),
-            library_deps: self
-                .library_dependencies
-                .iter()
-                .map(|dep| dep.source.to_string())
-                .collect(),
-        })?))
     }
 }
 

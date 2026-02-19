@@ -53,7 +53,6 @@ export_golem_agentic = ["export_load_snapshot", "export_save_snapshot", "dep:cto
 export_load_snapshot = []
 export_oplog_processor = []
 export_save_snapshot = []
-golem_ai = []
 json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
 mac_address = ["dep:mac_address"]

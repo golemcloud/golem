@@ -29,10 +29,8 @@ use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
-use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
-use poem_openapi::types::multipart::JsonField;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -321,19 +319,19 @@ impl AccountsApi {
     async fn create_plugin(
         &self,
         account_id: Path<AccountId>,
-        payload: CreatePluginRequest,
+        payload: Json<PluginRegistrationCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<PluginRegistrationDto>> {
         let record = recorded_http_api_request!(
             "create_plugin",
-            plugin_name = payload.metadata.0.name,
-            plugin_version = payload.metadata.0.version
+            plugin_name = payload.0.name,
+            plugin_version = payload.0.version
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .create_plugin_internal(account_id.0, payload.metadata.0, payload.plugin_wasm, auth)
+            .create_plugin_internal(account_id.0, payload.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -344,17 +342,11 @@ impl AccountsApi {
         &self,
         account_id: AccountId,
         metadata: PluginRegistrationCreation,
-        plugin_wasm: Option<TempFileUpload>,
         auth: AuthCtx,
     ) -> ApiResult<Json<PluginRegistrationDto>> {
         let plugin_registration = self
             .plugin_registration_service
-            .register_plugin(
-                account_id,
-                metadata,
-                plugin_wasm.map(|pw| pw.into_file()),
-                &auth,
-            )
+            .register_plugin(account_id, metadata, &auth)
             .await?;
         Ok(Json(plugin_registration.into()))
     }
@@ -402,11 +394,4 @@ impl AccountsApi {
                 .collect(),
         }))
     }
-}
-
-#[derive(Debug, poem_openapi::Multipart)]
-#[oai(rename_all = "camelCase")]
-struct CreatePluginRequest {
-    metadata: JsonField<PluginRegistrationCreation>,
-    plugin_wasm: Option<TempFileUpload>,
 }

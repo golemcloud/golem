@@ -43,7 +43,6 @@ use crate::services::component::{ComponentService, ComponentWriteService};
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
-use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
 use crate::services::deployment::{
     DeployedRoutesService, DeploymentService, DeploymentWriteService,
 };
@@ -66,7 +65,6 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
@@ -128,7 +126,6 @@ impl Services {
 
         let initial_component_files =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-        let plugin_wasm_files = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
 
         let component_compilation_service =
@@ -207,7 +204,6 @@ impl Services {
             repos.plugin_repo.clone(),
             account_service.clone(),
             component_service.clone(),
-            plugin_wasm_files.clone(),
         ));
 
         let environment_plugin_grant_service = Arc::new(EnvironmentPluginGrantService::new(
@@ -216,22 +212,14 @@ impl Services {
             plugin_registration_service.clone(),
         ));
 
-        let component_transformer_plugin_caller =
-            Arc::new(ComponentTransformerPluginCallerDefault::new(
-                &config.component_transformer_plugin_caller,
-            ));
-
         let component_write_service = Arc::new(ComponentWriteService::new(
             repos.component_repo,
             component_object_store,
             component_compilation_service.clone(),
             initial_component_files,
-            plugin_wasm_files.clone(),
             account_usage_service.clone(),
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
-            plugin_registration_service.clone(),
-            component_transformer_plugin_caller.clone(),
         ));
 
         let login_system = LoginSystem::new(

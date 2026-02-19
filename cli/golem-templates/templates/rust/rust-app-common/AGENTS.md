@@ -40,7 +40,6 @@ golem-temp/                      # Build artifacts (gitignored)
 ## Prerequisites
 
 - Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
-- `cargo-component` version 0.21.1: `cargo install --force cargo-component@0.21.1`
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
 ## Building
@@ -398,7 +397,7 @@ From workspace `Cargo.toml`:
 - `serde` / `serde_json` — serialization
 - Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, uncomment `golem_ai` feature in workspace `Cargo.toml` and uncomment the relevant provider dependency in the component's `golem.yaml`.
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
 ## Debugging
 

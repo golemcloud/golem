@@ -9,8 +9,6 @@ members = [
     "golem-service-base",
     "golem-component-compilation-service",
     "golem-registry-service",
-    "golem-rib",
-    "golem-rib-repl",
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor",
@@ -43,8 +41,6 @@ golem-common = { version = "=0.0.0", path = "golem-common", default-features = f
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-openapi-client-generator = { version = "=0.0.17" }
 golem-registry-service = { path = "golem-registry-service" }
-golem-rib = { version = "=0.0.0", path = "golem-rib" }
-golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
@@ -102,7 +98,7 @@ criterion = "0.5"
 crossterm = "0.28.1"
 darling = "0.20.11"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
-desert_rust = { version = "0.1.6", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
+desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "4.0.0"
 drop-stream = "0.3.2"

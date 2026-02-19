@@ -143,41 +143,6 @@ pub mod golem_agentic {
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
 
-#[cfg(feature = "golem_ai")]
-pub mod golem_ai {
-    use wit_bindgen::generate;
-    generate!({
-        path: "wit",
-        world: "golem-ai",
-        generate_all,
-        generate_unused_types: true,
-        additional_derives: [crate::Schema],
-        pub_export_macro: true,
-        with: {
-            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
-            "wasi:io/error@0.2.3": wstd::wasi::io::error,
-            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
-
-            "golem:api/host@1.3.0": crate::bindings::golem::api::host,
-            "golem:api/oplog@1.3.0": crate::bindings::golem::api::oplog,
-            "golem:api/context@1.3.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.3.0": crate::bindings::golem::durability::durability,
-            "golem:rdbms/mysql@0.0.2": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@0.0.2": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@0.0.2": crate::bindings::golem::rdbms::types,
-            "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
-            "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
-            "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
-            "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
-            "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
-            "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
-            "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-        }
-    });
-}
-
 #[cfg(feature = "export_golem_agentic")]
 pub use ctor;
 

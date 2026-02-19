@@ -67,12 +67,6 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         })
         .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()))
         .fmt_field_optional(
-            "Dynamic WASM RPC links",
-            &view.dynamic_linking,
-            !view.dynamic_linking.is_empty(),
-            format_dynamic_links,
-        )
-        .fmt_field_optional(
             "Initial file system",
             view.files.as_slice(),
             !view.files.is_empty(),
