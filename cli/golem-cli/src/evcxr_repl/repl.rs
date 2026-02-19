@@ -93,8 +93,7 @@ impl Repl {
     ) -> anyhow::Result<HashMap<String, String>> {
         let mut help_output = command_context.execute(":help")?;
         let help_output = help_output
-            .content_by_mime_type
-            .remove("text/plain")
+            .get("text/plain")
             .ok_or_else(|| anyhow!("Missing help output"))?;
         let commands = help_output
             .split('\n')
@@ -184,15 +183,10 @@ impl Repl {
         );
         prelude.push_str("    let app_name = ");
         prelude.push_str(&toml_string_literal(&config.client_config.application)?);
-        prelude.push_str(
-            r#";
-    let env_name = "#,
-        );
+        prelude.push_str(";\n");
+        prelude.push_str("    let env_name = ");
         prelude.push_str(&toml_string_literal(&config.client_config.environment)?);
-        prelude.push_str(
-            r#";
-"#,
-        );
+        prelude.push_str(";\n");
         prelude.push_str(&configure_calls);
         prelude.push_str("}\n");
 
@@ -271,17 +265,19 @@ impl Repl {
                     }
 
                     let result = {
+                        let is_builtin = line.trim_start().starts_with(':');
+
+                        let command = if is_builtin {
+                            line.clone()
+                        } else {
+                            format!("golem_repl_configure_clients();\n{}", line)
+                        };
+
                         let _spinner = SpinnerGuard::start_printer(
                             editor.create_external_printer()?,
                             "Waiting for result...",
                             true,
                         );
-                        let command = if !line.trim_start().starts_with(':') {
-                            format!("golem_repl_configure_clients();\n{}", line)
-                        } else {
-                            line.clone()
-                        };
-
                         self.command_context.borrow_mut().execute(&command)
                     };
 
@@ -345,9 +341,11 @@ impl Repl {
             bail!("Missing script source");
         };
 
+        println!("Running script:\n{}", script);
         let mut output = self.command_context.borrow_mut().execute(&script)?;
-        if let Some(output) = output.content_by_mime_type.remove("text/plain") {
-            logln(output);
+        println!("Script result:\n{:?}", output);
+        if let Some(output) = output.get("text/plain") {
+            println!("{}", output);
         }
 
         Ok(())
