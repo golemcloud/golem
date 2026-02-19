@@ -107,10 +107,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common-lib"
-version = "0.1.0"
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,6 +346,7 @@ name = "golem-rust-macro"
 version = "0.0.0"
 dependencies = [
  "heck 0.5.0",
+ "humantime",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -377,9 +374,7 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm"
-version = "1.5.0-rc1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f87f1952d3d47ddaf6e22f2ac46ca44dd96ac3456640a545acf334625dc73b14"
+version = "0.0.0"
 dependencies = [
  "chrono",
  "itertools",
@@ -429,6 +424,12 @@ dependencies = [
  "fnv",
  "itoa",
 ]
+
+[[package]]
+name = "humantime"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
 name = "iana-time-zone"

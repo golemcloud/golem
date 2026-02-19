@@ -8610,6 +8610,13 @@ components:
         value: {}
       required:
       - value
+    JsonSnapshotData:
+      title: JsonSnapshotData
+      type: object
+      properties:
+        data: {}
+      required:
+      - data
     LogLevel:
       description: Worker log levels including the special stdout and stderr channels
       type: string
@@ -8879,6 +8886,7 @@ components:
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
           CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
+          Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -8918,6 +8926,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -9338,6 +9347,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+    PublicOplogEntry_r#SnapshotParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Snapshot
+            type: string
+            enum:
+            - Snapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/r#SnapshotParams'
     PublicOplogEntry_r#StartSpanParams:
       allOf:
       - type: object
@@ -9398,6 +9419,40 @@ components:
       - minDelay
       - maxDelay
       - multiplier
+    PublicSnapshotData:
+      discriminator:
+        propertyName: type
+        mapping:
+          Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
+          Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+    PublicSnapshotData_JsonSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Json
+            type: string
+            enum:
+            - Json
+        required:
+        - type
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_RawSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Raw
+            type: string
+            enum:
+            - Raw
+        required:
+        - type
+      - $ref: '#/components/schemas/RawSnapshotData'
     PublicSpanData:
       discriminator:
         propertyName: type
@@ -9500,6 +9555,20 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ManualUpdateParameters'
+    RawSnapshotData:
+      title: RawSnapshotData
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+      required:
+      - data
+      - mimeType
     ResumeResponse:
       title: ResumeResponse
       type: object
@@ -9580,8 +9649,11 @@ components:
           items:
             type: integer
             format: uint8
+        mimeType:
+          type: string
       required:
       - payload
+      - mimeType
     StringAttributeValue:
       title: StringAttributeValue
       type: object
@@ -11017,6 +11089,18 @@ components:
       - spanId
       - key
       - value
+    r#SnapshotParams:
+      title: r#SnapshotParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/PublicSnapshotData'
+      required:
+      - timestamp
+      - data
     r#StartSpanParams:
       title: r#StartSpanParams
       type: object
@@ -11304,6 +11388,8 @@ components:
           $ref: '#/components/schemas/AgentMode'
         httpMount:
           $ref: '#/components/schemas/HttpMountDetails'
+        snapshotting:
+          $ref: '#/components/schemas/Snapshotting'
       required:
       - typeName
       - description
@@ -11311,6 +11397,7 @@ components:
       - methods
       - dependencies
       - mode
+      - snapshotting
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -13231,6 +13318,106 @@ components:
             type: string
       required:
       - currentRevision
+    Snapshotting:
+      discriminator:
+        propertyName: type
+        mapping:
+          Disabled: '#/components/schemas/Snapshotting_Empty'
+          Enabled: '#/components/schemas/Snapshotting_SnapshottingConfig'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Snapshotting_Empty'
+      - $ref: '#/components/schemas/Snapshotting_SnapshottingConfig'
+    SnapshottingConfig:
+      discriminator:
+        propertyName: configType
+        mapping:
+          Default: '#/components/schemas/SnapshottingConfig_Empty'
+          Periodic: '#/components/schemas/SnapshottingConfig_SnapshottingPeriodic'
+          EveryNInvocation: '#/components/schemas/SnapshottingConfig_SnapshottingEveryNInvocation'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SnapshottingConfig_Empty'
+      - $ref: '#/components/schemas/SnapshottingConfig_SnapshottingPeriodic'
+      - $ref: '#/components/schemas/SnapshottingConfig_SnapshottingEveryNInvocation'
+    SnapshottingConfig_Empty:
+      allOf:
+      - type: object
+        properties:
+          configType:
+            example: Default
+            type: string
+            enum:
+            - Default
+        required:
+        - configType
+      - $ref: '#/components/schemas/Empty'
+    SnapshottingConfig_SnapshottingEveryNInvocation:
+      allOf:
+      - type: object
+        properties:
+          configType:
+            example: EveryNInvocation
+            type: string
+            enum:
+            - EveryNInvocation
+        required:
+        - configType
+      - $ref: '#/components/schemas/SnapshottingEveryNInvocation'
+    SnapshottingConfig_SnapshottingPeriodic:
+      allOf:
+      - type: object
+        properties:
+          configType:
+            example: Periodic
+            type: string
+            enum:
+            - Periodic
+        required:
+        - configType
+      - $ref: '#/components/schemas/SnapshottingPeriodic'
+    SnapshottingEveryNInvocation:
+      title: SnapshottingEveryNInvocation
+      type: object
+      properties:
+        count:
+          type: integer
+          format: uint16
+      required:
+      - count
+    SnapshottingPeriodic:
+      title: SnapshottingPeriodic
+      type: object
+      properties:
+        durationNanos:
+          type: integer
+          format: uint64
+      required:
+      - durationNanos
+    Snapshotting_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Disabled
+            type: string
+            enum:
+            - Disabled
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    Snapshotting_SnapshottingConfig:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Enabled
+            type: string
+            enum:
+            - Enabled
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshottingConfig'
     SystemVariable:
       type: string
       enum:

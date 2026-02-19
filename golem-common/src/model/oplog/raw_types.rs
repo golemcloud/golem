@@ -200,6 +200,7 @@ pub enum UpdateDescription {
     SnapshotBased {
         target_revision: ComponentRevision,
         payload: OplogPayload<Vec<u8>>,
+        mime_type: String,
     },
 }
 

@@ -46,3 +46,22 @@ class EphemeralEchoAgent extends BaseAgent {
       return this.name;
   }
 }
+
+@agent({ snapshotting: { every: 1 } })
+class SnapshotCounterAgent extends BaseAgent {
+    private count: number;
+
+    constructor(id: string) {
+        super();
+        this.count = 0;
+    }
+
+    async increment(): Promise<number> {
+        this.count += 1;
+        return this.count;
+    }
+
+    async get(): Promise<number> {
+        return this.count;
+    }
+}

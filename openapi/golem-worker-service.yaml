@@ -2530,6 +2530,13 @@ components:
       - value
       properties:
         value: {}
+    JsonSnapshotData:
+      type: object
+      title: JsonSnapshotData
+      required:
+      - data
+      properties:
+        data: {}
     LogLevel:
       type: string
       description: Worker log levels including the special stdout and stderr channels
@@ -2798,6 +2805,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
       discriminator:
         propertyName: type
         mapping:
@@ -2838,6 +2846,7 @@ components:
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
           CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
+          Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -3258,6 +3267,18 @@ components:
             - SetSpanAttribute
             example: SetSpanAttribute
       - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+    PublicOplogEntry_r#SnapshotParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Snapshot
+            example: Snapshot
+      - $ref: '#/components/schemas/r#SnapshotParams'
     PublicOplogEntry_r#StartSpanParams:
       allOf:
       - type: object
@@ -3318,6 +3339,40 @@ components:
         maxJitterFactor:
           type: number
           format: double
+    PublicSnapshotData:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      discriminator:
+        propertyName: type
+        mapping:
+          Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
+          Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+    PublicSnapshotData_JsonSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Json
+            example: Json
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_RawSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Raw
+            example: Raw
+      - $ref: '#/components/schemas/RawSnapshotData'
     PublicSpanData:
       type: object
       oneOf:
@@ -3420,6 +3475,20 @@ components:
             - ManualUpdate
             example: ManualUpdate
       - $ref: '#/components/schemas/ManualUpdateParameters'
+    RawSnapshotData:
+      type: object
+      title: RawSnapshotData
+      required:
+      - data
+      - mimeType
+      properties:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
     ResumeResponse:
       type: object
       title: ResumeResponse
@@ -3496,12 +3565,15 @@ components:
       title: SnapshotBasedUpdateParameters
       required:
       - payload
+      - mimeType
       properties:
         payload:
           type: array
           items:
             type: integer
             format: uint8
+        mimeType:
+          type: string
     StringAttributeValue:
       type: object
       title: StringAttributeValue
@@ -4937,6 +5009,18 @@ components:
           type: string
         value:
           $ref: '#/components/schemas/PublicAttributeValue'
+    r#SnapshotParams:
+      type: object
+      title: r#SnapshotParams
+      required:
+      - timestamp
+      - data
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/PublicSnapshotData'
     r#StartSpanParams:
       type: object
       title: r#StartSpanParams

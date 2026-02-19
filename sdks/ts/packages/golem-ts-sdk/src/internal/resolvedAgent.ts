@@ -76,12 +76,29 @@ export class ResolvedAgent {
     return this.agentInstance.getAgentType();
   }
 
+  hasCustomSnapshot(): boolean {
+    const proto = Object.getPrototypeOf(this.agentInstance);
+    const customSave = proto.saveSnapshot !== BaseAgent.prototype.saveSnapshot;
+    const customLoad = proto.loadSnapshot !== BaseAgent.prototype.loadSnapshot;
+    if (customSave !== customLoad) {
+      throw new Error(
+        `${this.agentInstance.constructor.name} overrides only one of saveSnapshot/loadSnapshot; ` +
+          `override both or neither.`,
+      );
+    }
+    return customSave;
+  }
+
   loadSnapshot(bytes: Uint8Array): Promise<void> {
     return this.agentInstance.loadSnapshot(bytes);
   }
 
-  async saveSnapshot(): Promise<Uint8Array> {
-    return await this.agentInstance.saveSnapshot();
+  async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
+    const result = await this.agentInstance.saveSnapshot();
+    if (result instanceof Uint8Array) {
+      return { data: result, mimeType: 'application/octet-stream' };
+    }
+    return result;
   }
 
   async invoke(

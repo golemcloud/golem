@@ -6096,7 +6096,6 @@ name = "integration-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert2",
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
@@ -6109,7 +6108,6 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-rib",
- "golem-rib-repl",
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",

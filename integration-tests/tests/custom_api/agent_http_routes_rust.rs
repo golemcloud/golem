@@ -42,7 +42,7 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ],
-        "http_rust",
+        "http_rust_release",
         "http:rust",
     )
     .await
@@ -833,7 +833,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
                     url.set_port(Some(agent_port)).unwrap();
 
                     let client = Client::new();
-                    let payload = vec![1u8, 2, 3, 4, 5];
+                    let payload = serde_json::to_vec(&"hello").unwrap();
                     client
                         .post(url)
                         .header("Host", host_header.clone())

@@ -28,6 +28,7 @@ use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOu
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{PromiseId, WorkerId};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentId, DataValue};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -51,7 +52,6 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{IdempotencyKey, OplogIndex, ScanCursor, WorkerFilter, WorkerStatus};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,11 +70,21 @@ pub struct EnvironmentOptions {
     pub security_overrides: bool,
 }
 
+pub type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
+
+pub trait WorkerInvocationResultOps<T> {
+    fn collapse(self) -> anyhow::Result<T>;
+}
+
+impl<T> WorkerInvocationResultOps<T> for WorkerInvocationResult<T> {
+    fn collapse(self) -> anyhow::Result<T> {
+        self?.map_err(|err| err.into())
+    }
+}
+
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
-    type WorkerInvocationResult<T>;
-
     fn redis(&self) -> Arc<dyn Redis>;
 
     fn component(
@@ -101,6 +111,12 @@ pub trait TestDsl {
     async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
+    ) -> anyhow::Result<ComponentDto>;
+
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn update_component(
@@ -170,121 +186,108 @@ pub trait TestDsl {
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
-    async fn try_start_worker(
+    async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        name: &str,
-    ) -> Self::WorkerInvocationResult<WorkerId> {
-        self.try_start_worker_with(component_id, name, HashMap::new(), vec![])
+        id: AgentId,
+    ) -> WorkerInvocationResult<WorkerId> {
+        self.try_start_agent_with(component_id, id, HashMap::new(), vec![])
             .await
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
-    ) -> Self::WorkerInvocationResult<WorkerId>;
+    ) -> WorkerInvocationResult<WorkerId>;
 
-    async fn start_worker(
+    async fn start_agent(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
     ) -> anyhow::Result<WorkerId> {
-        self.start_worker_with(component_id, name, HashMap::new(), vec![])
+        self.start_agent_with(component_id, id, HashMap::new(), vec![])
             .await
     }
 
-    async fn start_worker_with(
+    async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId>;
-
-    async fn invoke(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<()> {
-        self.invoke_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
-            .await
+    ) -> anyhow::Result<WorkerId> {
+        let result = self
+            .try_start_agent_with(component_id, id, env, wasi_config_vars)
+            .await?;
+        Ok(result?)
     }
 
-    async fn invoke_with_key(
+    async fn invoke_agent(
         &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<()>;
-
-    async fn invoke_and_await(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Vec<Value>> {
-        self.invoke_and_await_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
-            .await
-    }
-
-    async fn invoke_and_await_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Vec<Value>>;
-
-    async fn invoke_and_await_typed(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>> {
-        self.invoke_and_await_typed_with_key(
-            worker_id,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()> {
+        self.invoke_agent_with_key(
+            component_id,
+            agent_id,
             &IdempotencyKey::fresh(),
-            function_name,
+            method_name,
             params,
         )
         .await
     }
 
-    async fn invoke_and_await_typed_with_key(
+    async fn invoke_agent_with_key(
         &self,
-        worker_id: &WorkerId,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>>;
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()>;
 
-    async fn invoke_and_await_json(
+    async fn invoke_and_await_agent(
         &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>> {
-        self.invoke_and_await_json_with_key(
-            worker_id,
-            &IdempotencyKey::fresh(),
-            function_name,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(component_id, agent_id, None, method_name, params)
+            .await
+    }
+
+    async fn invoke_and_await_agent_with_key(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(
+            component_id,
+            agent_id,
+            Some(idempotency_key),
+            method_name,
             params,
         )
         .await
     }
 
-    async fn invoke_and_await_json_with_key(
+    async fn invoke_and_await_agent_impl(
         &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>>;
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: Option<&IdempotencyKey>,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue>;
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
@@ -304,7 +307,11 @@ pub trait TestDsl {
         let entries = self.get_oplog(worker_id, OplogIndex::INITIAL).await?;
 
         for entry in entries {
-            debug_render_oplog_entry(&entry.entry);
+            debug!(
+                "#{}:\n{}",
+                entry.oplog_index,
+                debug_render_oplog_entry(&entry.entry)
+            );
         }
 
         Ok(())
@@ -690,6 +697,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     }
 
     /// Always create as a new component - otherwise, if the same component was already uploaded, it will be reused
+    // TODO: CHECK IF WE CAN GET RID OF THIS FEATURE COMPLETELY IN THE FIRST CLASS AGENTS EPIC
     pub fn unique(mut self) -> Self {
         self.unique = true;
         self

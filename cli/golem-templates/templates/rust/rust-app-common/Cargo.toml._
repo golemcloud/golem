@@ -19,4 +19,5 @@ golem-rust = { GOLEM_RUST_VERSION_OR_PATH, features = [
 log = { version = "0.4.29", features = ["kv"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+uuid = { version = "1.15.1", features = ["v4"] }
 wstd = {version = "=0.5.4", features = ["default", "json"] }

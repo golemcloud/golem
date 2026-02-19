@@ -354,6 +354,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .create_snapshot_based_update_description(
             ComponentRevision::new(11).unwrap(),
             vec![1, 2, 3],
+            "application/octet-stream".to_string(),
         )
         .await
         .unwrap();
@@ -437,7 +438,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         }
         _ => panic!("unexpected entry"),
     };
-    let p4 = oplog
+    let (p4, p4_mime) = oplog
         .get_upload_description_payload(desc)
         .await
         .unwrap()
@@ -447,6 +448,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     assert_eq!(p2, "request");
     assert_eq!(p3, "response");
     assert_eq!(p4, vec![1, 2, 3]);
+    assert_eq!(p4_mime, "application/octet-stream");
 }
 
 #[test]
@@ -508,6 +510,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .create_snapshot_based_update_description(
             ComponentRevision::new(11).unwrap(),
             large_payload4.clone(),
+            "application/octet-stream".to_string(),
         )
         .await
         .unwrap();
@@ -591,7 +594,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         }
         _ => panic!("unexpected entry"),
     };
-    let p4 = oplog
+    let (p4, p4_mime) = oplog
         .get_upload_description_payload(desc)
         .await
         .unwrap()
@@ -601,6 +604,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     assert_eq!(p2, large_payload2);
     assert_eq!(p3, large_payload3);
     assert_eq!(p4, large_payload4);
+    assert_eq!(p4_mime, "application/octet-stream");
 }
 
 #[test]

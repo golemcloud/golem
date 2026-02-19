@@ -1,5 +1,6 @@
 declare module 'agent-guest' {
   import * as golemAgentCommon from 'golem:agent/common';
+  import * as golemApi130Host from 'golem:api/host@1.3.0';
   /**
    * Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
    * when the new component incompatible with the old one.
@@ -8,7 +9,8 @@ declare module 'agent-guest' {
     /**
      * Saves the component's state into a user-defined snapshot
      */
-    export function save(): Promise<Uint8Array>;
+    export function save(): Promise<Snapshot>;
+    export type Snapshot = golemApi130Host.Snapshot;
   }
   /**
    * Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
@@ -20,7 +22,8 @@ declare module 'agent-guest' {
      * The function can return with a failure to indicate that the update is not possible.
      * @throws string
      */
-    export function load(bytes: Uint8Array): Promise<void>;
+    export function load(snapshot: Snapshot): Promise<void>;
+    export type Snapshot = golemApi130Host.Snapshot;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
   export namespace guest {

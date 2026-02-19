@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::oplog::PublicSnapshotData;
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
@@ -386,6 +387,20 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "ROLLED BACK REMOTE TRANSACTION");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::Snapshot(params) => {
+            let _ = writeln!(result, "SNAPSHOT");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            match &params.data {
+                PublicSnapshotData::Raw(data) => {
+                    let _ = writeln!(result, "{pad}MIME type:         {}", data.mime_type);
+                    let _ = writeln!(result, "{pad}length:            {}", data.data.len());
+                }
+                PublicSnapshotData::Json(data) => {
+                    let _ = writeln!(result, "{pad}MIME type:         application/json");
+                    let _ = writeln!(result, "{pad}JSON:              {}", data.data);
+                }
+            }
         }
     }
 

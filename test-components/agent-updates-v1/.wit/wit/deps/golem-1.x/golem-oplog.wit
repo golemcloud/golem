@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:rpc/types@0.2.2.{value-and-type, account-id};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id};
+    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
@@ -151,7 +151,7 @@ interface oplog {
         /// Automatic update by replaying the oplog on the new version
         auto-update,
         /// Custom update by loading a given snapshot on the new version
-        snapshot-based(list<u8>)
+        snapshot-based(snapshot)
     }
 
     record pending-update-parameters {
@@ -268,6 +268,12 @@ interface oplog {
         begin-index: oplog-index
     }
 
+    record snapshot-parameters {
+        timestamp: datetime,
+        data: list<u8>,
+        mime-type: string
+    }
+
     record timestamp {
         timestamp: datetime
     }
@@ -356,7 +362,9 @@ interface oplog {
         /// Committed transaction operation, indicating that the transaction was committed
         committed-remote-transaction(remote-transaction-parameters),
         /// Rolled back transaction operation, indicating that the transaction was rolled back
-        rolled-back-remote-transaction(remote-transaction-parameters)
+        rolled-back-remote-transaction(remote-transaction-parameters),
+        /// A snapshot of the worker's state
+        snapshot(snapshot-parameters)
     }
 
     resource get-oplog {
