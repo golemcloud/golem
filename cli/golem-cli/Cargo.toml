@@ -39,6 +39,7 @@ golem-wasm-derive = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
+ariadne = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
@@ -111,6 +112,7 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
+unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }

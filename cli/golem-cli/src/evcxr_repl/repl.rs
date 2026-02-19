@@ -15,13 +15,13 @@
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
 use crate::evcxr_repl::log::{logln, set_output, OutputMode};
-use crate::evcxr_repl::ReplConfig;
 use crate::fs;
 use crate::process::{with_hidden_output_unless_error, HiddenOutput};
 use anyhow::{anyhow, bail};
+use ariadne::sources;
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
-use evcxr::{CommandContext, EvalContextOutputs};
+use evcxr::{CommandContext, CompilationError, EvalContextOutputs, Theme};
 use heck::{ToKebabCase, ToSnakeCase};
 use indoc::formatdoc;
 use rustyline::completion::{Completer, Pair};
@@ -44,6 +44,7 @@ use std::sync::{
 };
 use std::thread;
 use std::time::Duration;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub struct Repl {
     config: ReplResolvedConfig,
@@ -129,6 +130,8 @@ impl Repl {
     fn write_evcxr_toml(config: &ReplResolvedConfig) -> anyhow::Result<()> {
         let mut dependencies = String::new();
         let mut prelude = String::new();
+
+        dependencies.push_str("tokio = { version = \"1.45.0\" }\n");
 
         for (agent_type_name, agent) in &config.repl_metadata.agents {
             // TODO: from meta?
@@ -252,8 +255,11 @@ impl Repl {
                                 }
                             }
                         }
+                        Err(evcxr::Error::CompilationErrors(errors)) => {
+                            Self::log_errors(prompt.len(), &line, errors);
+                        }
                         Err(err) => {
-                            logln(err);
+                            logln(err.to_string().bright_red());
                         }
                     }
                 }
@@ -295,6 +301,92 @@ impl Repl {
         }
 
         Ok(())
+    }
+
+    // From https://github.com/evcxr/evcxr/blob/94d18a5cc9c5351123f2d428da7074ee42fc32e0/evcxr_repl/src/bin/evcxr.rs#L133
+    // with printing changed to use our logging
+    fn log_errors(prompt_len: usize, source: &str, errors: Vec<CompilationError>) {
+        /// Returns a 0-based grapheme index corresponding to the supplied 0-based character column.
+        fn character_column_to_grapheme_number(character_column: usize, line: &str) -> usize {
+            let mut characters_remaining = character_column;
+            let mut grapheme_index = 0;
+            for (_byte_offset, chars) in UnicodeSegmentation::grapheme_indices(line, true) {
+                let num_chars = chars.chars().count();
+                if characters_remaining < num_chars {
+                    break;
+                }
+                characters_remaining -= num_chars;
+                grapheme_index += 1;
+            }
+            grapheme_index
+        }
+
+        let mut last_span_lines: &Vec<String> = &vec![];
+        for error in &errors {
+            if error.is_from_user_code() {
+                if let Some(report) =
+                    error.build_report("command".to_string(), source.to_string(), Theme::Dark)
+                {
+                    report
+                        .print(sources([("command".to_string(), source.to_string())]))
+                        .unwrap();
+                    continue;
+                }
+                for spanned_message in error.spanned_messages() {
+                    if let Some(span) = &spanned_message.span {
+                        let mut start_column = character_column_to_grapheme_number(
+                            span.start_column - 1,
+                            &spanned_message.lines[0],
+                        );
+                        let mut end_column = character_column_to_grapheme_number(
+                            span.end_column - 1,
+                            spanned_message.lines.last().unwrap(),
+                        );
+                        // Considering spans can cover multiple lines, it could be that end_column
+                        // is less than start_column.
+                        if end_column < start_column {
+                            std::mem::swap(&mut start_column, &mut end_column);
+                        }
+                        if source.lines().count() > 1 {
+                            // for multi line source code, print the lines
+                            if last_span_lines != &spanned_message.lines {
+                                for line in &spanned_message.lines {
+                                    println!("{line}");
+                                }
+                            }
+                            last_span_lines = &spanned_message.lines;
+                        } else {
+                            print!("{}", " ".repeat(prompt_len));
+                        }
+                        print!("{}", " ".repeat(start_column));
+
+                        // Guaranteed not to underflow since if they were out-of-order, we swapped
+                        // them above.
+                        let span_diff = end_column - start_column;
+                        let carrots = "^".repeat(span_diff);
+                        print!("{}", carrots.bright_red());
+                        println!(" {}", spanned_message.label.bright_blue());
+                    } else {
+                        // Our error originates from both user-code and generated
+                        // code.
+                        println!("{}", spanned_message.label.bright_blue());
+                    }
+                }
+                println!("{}", error.message().bright_red());
+                for help in error.help() {
+                    println!("{} {help}", "help:".bold());
+                }
+                if let Some(extra_hint) = error.evcxr_extra_hint() {
+                    println!("{extra_hint}");
+                }
+            } else {
+                println!(
+                    "A compilation error was found in code we generated.\n\
+                     Ideally this shouldn't happen. Type :last_error_json to see details.\n{}",
+                    error.rendered()
+                );
+            }
+        }
     }
 }
 

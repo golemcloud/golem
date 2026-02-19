@@ -4354,6 +4354,7 @@ name = "golem-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "ariadne",
  "assert2",
  "async-trait",
  "async_zip",
@@ -4443,6 +4444,7 @@ dependencies = [
  "tracing",
  "tracing-log",
  "tracing-subscriber",
+ "unicode-segmentation",
  "url",
  "uuid",
  "version-compare",
