@@ -25,7 +25,6 @@ mod tests {
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentMode, AgentType, Snapshotting, SnapshottingConfig,
     };
-    use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
@@ -33,6 +32,11 @@ mod tests {
     use std::fmt::Debug;
 
     use test_r::test;
+
+    #[derive(Clone, Debug, Schema)]
+    struct Config {
+        model: String,
+    }
 
     #[agent_definition]
     trait SampleAgent: BaseAgent {

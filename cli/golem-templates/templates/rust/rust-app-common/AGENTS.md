@@ -397,7 +397,7 @@ From workspace `Cargo.toml`:
 - `serde` / `serde_json` — serialization
 - Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, uncomment `golem_ai` feature in workspace `Cargo.toml` and uncomment the relevant provider dependency in the component's `golem.yaml`.
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
 ## Debugging
 
