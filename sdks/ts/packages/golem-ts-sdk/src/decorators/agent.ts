@@ -290,6 +290,7 @@ export function agent(options?: AgentDecoratorOptions) {
       mode: options?.mode ?? 'durable',
       httpMount,
       snapshotting: resolveSnapshotting(options?.snapshotting),
+      config: []
     };
 
     AgentTypeRegistry.register(agentClassName, agentType);

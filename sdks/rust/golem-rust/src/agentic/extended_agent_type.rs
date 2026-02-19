@@ -61,6 +61,7 @@ impl ExtendedAgentType {
             mode: self.mode,
             http_mount: self.http_mount.clone(),
             snapshotting: self.snapshotting.clone(),
+            config: Vec::new()
         }
     }
 }

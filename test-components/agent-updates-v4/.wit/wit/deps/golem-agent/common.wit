@@ -2,6 +2,7 @@ package golem:agent;
 
 interface common {
   use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value, agent-id, account-id, component-id};
+  use wasi:clocks/monotonic-clock@0.2.3.{duration};
 
   type url = string;
 
@@ -18,6 +19,8 @@ interface common {
     dependencies: list<agent-dependency>,
     mode:         agent-mode,
     http-mount:   option<http-mount-details>,
+    snapshotting: snapshotting,
+    config:       list<config-key-value-type>,
   }
 
   /// Associates an agent type with a component that implements it
@@ -213,5 +216,26 @@ interface common {
     invalid-type(string),
     invalid-agent-id(string),
     custom-error(value-and-type),
+  }
+
+  variant snapshotting {
+    disabled,
+    enabled(snapshotting-config)
+  }
+
+  variant snapshotting-config {
+    default, // current default in the server
+    periodic(duration),
+    every-n-invocation(u16)
+  }
+
+  record config-key-value-type {
+    key:   list<string>,
+    value: config-value-type,
+  }
+
+  variant config-value-type {
+    local(wit-type),
+    shared(wit-type),
   }
 }
