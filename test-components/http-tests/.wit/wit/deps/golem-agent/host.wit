@@ -33,5 +33,5 @@ interface host {
     /// Getting a local key will get values defined as part of the current
     /// component revision + overrides declared during agent creation.
     /// Getting a shared key will get the current value of the key in the environment.
-    get-config-value: func(key: list<string>) -> result<wit-value>;
+    get-config-value: func(key: list<string>) -> wit-value;
 }
