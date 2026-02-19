@@ -30,7 +30,7 @@ pub struct ReplResolvedConfig {
 
 impl ReplResolvedConfig {
     pub fn load() -> anyhow::Result<Self> {
-        let cli_args = CliArgs::try_parse_from(std::env::args().skip(1))?;
+        let cli_args = CliArgs::try_parse_from(std::env::args())?;
 
         let base_config =
             serde_json::from_str::<ReplConfig>(&fs::read_to_string("repl-config.json")?)
@@ -115,13 +115,13 @@ impl GolemServer {
 #[derive(Clone, Debug, Parser)]
 #[command(disable_help_flag = true, disable_help_subcommand = true)]
 pub struct CliArgs {
-    #[arg(long)]
+    #[clap(long)]
     pub script: Option<String>,
-    #[arg(long = "script-file")]
+    #[clap(long)]
     pub script_file: Option<String>,
-    #[arg(long = "disable-auto-imports")]
+    #[clap(long)]
     pub disable_auto_imports: bool,
-    #[arg(long = "disable-stream")]
+    #[clap(long)]
     pub disable_stream: bool,
 }
 
