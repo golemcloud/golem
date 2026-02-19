@@ -3660,7 +3660,6 @@ name = "golem-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert2",
  "async-trait",
  "async_zip",
  "axum 0.7.9",

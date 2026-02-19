@@ -689,7 +689,6 @@ fn json_value_without_null_fields(value: serde_json::Value) -> serde_json::Value
 mod test {
     mod app_manifest_json_schema_validation {
         use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
-        use assert2::assert;
         use test_r::test;
 
         #[test]

@@ -2275,9 +2275,8 @@ mod app_builder {
 mod test {
     use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
     use crate::model::app_raw;
-    use assert2::assert;
-    use assert2::let_assert;
     use indoc::indoc;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use test_r::test;
 
@@ -2322,7 +2321,7 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert!(component.source_wit() == PathBuf::from("./a.wit"),);
+        assert_eq!(component.source_wit(), PathBuf::from("./a.wit"));
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
@@ -2335,12 +2334,13 @@ mod test {
             Application::environments_from_raw_apps(&raw_apps).into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        let_assert!(
-            Some(ApplicationNameAndEnvironments {
-                application_name,
-                environments
-            }) = app_name_and_envs
-        );
+        let Some(ApplicationNameAndEnvironments {
+            application_name,
+            environments,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationNameAndEnvironments)")
+        };
 
         let (app, warns, errors) =
             Application::from_raw_apps(application_name, environments, selector.clone(), raw_apps)

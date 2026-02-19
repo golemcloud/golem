@@ -34,7 +34,6 @@ sequential_suite!(agents);
 inherit_test_dep!(Tracing);
 
 use crate::{crate_path, workspace_path, Tracing};
-use assert2::assert;
 use colored::Colorize;
 use golem_cli::fs::{read_to_string, write_str};
 use golem_client::api::HealthCheckClient;

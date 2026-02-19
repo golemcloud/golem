@@ -2332,21 +2332,21 @@ fn split_worker_name(worker_name: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use crate::command_handler::worker::split_worker_name;
-    use assert2::assert;
+    use pretty_assertions::assert_eq;
     use test_r::test;
 
     #[test]
     fn test_split_worker_name() {
-        assert!(split_worker_name("a") == vec!["a"]);
-        assert!(split_worker_name("a()") == vec!["a()"]);
-        assert!(split_worker_name("a(\"///\")") == vec!["a(\"///\")"]);
-        assert!(split_worker_name("a/b") == vec!["a", "b"]);
-        assert!(split_worker_name("a/b()") == vec!["a", "b()"]);
-        assert!(split_worker_name("a/b(\"///\")") == vec!["a", "b(\"///\")"]);
-        assert!(split_worker_name("a/b/c") == vec!["a", "b", "c"]);
-        assert!(split_worker_name("a/b/c()") == vec!["a", "b", "c()"]);
-        assert!(split_worker_name("a/b/c(\"/\")") == vec!["a", "b", "c(\"/\")"]);
-        assert!(split_worker_name("/") == vec!["", ""]);
-        assert!(split_worker_name("a(/") == vec!["a(/"]);
+        assert_eq!(split_worker_name("a"), vec!["a"]);
+        assert_eq!(split_worker_name("a()"), vec!["a()"]);
+        assert_eq!(split_worker_name("a(\"///\")"), vec!["a(\"///\")"]);
+        assert_eq!(split_worker_name("a/b"), vec!["a", "b"]);
+        assert_eq!(split_worker_name("a/b()"), vec!["a", "b()"]);
+        assert_eq!(split_worker_name("a/b(\"///\")"), vec!["a", "b(\"///\")"]);
+        assert_eq!(split_worker_name("a/b/c"), vec!["a", "b", "c"]);
+        assert_eq!(split_worker_name("a/b/c()"), vec!["a", "b", "c()"]);
+        assert_eq!(split_worker_name("a/b/c(\"/\")"), vec!["a", "b", "c(\"/\")"]);
+        assert_eq!(split_worker_name("/"), vec!["", ""]);
+        assert_eq!(split_worker_name("a(/"), vec!["a(/"]);
     }
 }

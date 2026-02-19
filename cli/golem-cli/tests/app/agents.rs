@@ -7,7 +7,7 @@ fn test_data_path() -> PathBuf {
 }
 use crate::Tracing;
 use anyhow::Context;
-use assert2::assert;
+
 use goldenfile::Mint;
 use golem_cli::fs;
 use golem_templates::model::GuestLanguage;
