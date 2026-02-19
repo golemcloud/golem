@@ -77,7 +77,6 @@ mod cmd {
 
 mod flag {
     pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
-    pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
