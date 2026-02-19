@@ -33,7 +33,6 @@ full = [
     "dep:lazy_static",
     "dep:mac_address",
     "dep:nonempty-collections",
-    "dep:openapiv3",
     "dep:openidconnect",
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
@@ -91,7 +90,6 @@ itertools = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
-openapiv3 = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }

@@ -42,9 +42,7 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-conditional-trait-gen = { workspace = true }
 cookie = { workspace = true }
-darling = { workspace = true }
 derive_more = { workspace = true }
 desert_rust = { workspace = true }
 figment = { workspace = true }
@@ -74,12 +72,6 @@ prost-types = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
-rusoto_acm = { workspace = true }
-rusoto_core = { workspace = true }
-rusoto_credential = { workspace = true }
-rusoto_elbv2 = { workspace = true }
-rusoto_route53 = { workspace = true }
-rusoto_sts = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -87,7 +79,6 @@ indexmap = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
-tap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -101,7 +92,6 @@ tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
-x509-certificate = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework.workspace = true
