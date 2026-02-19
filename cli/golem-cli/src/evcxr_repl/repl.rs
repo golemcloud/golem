@@ -130,8 +130,30 @@ impl Repl {
     fn write_evcxr_toml(config: &ReplResolvedConfig) -> anyhow::Result<()> {
         let mut dependencies = String::new();
         let mut prelude = String::new();
+        let mut configure_calls = String::new();
 
-        dependencies.push_str("tokio = { version = \"1.45.0\" }\n");
+        dependencies.push_str(
+            "tokio = { version = \"1.44\", features = [\"macros\", \"rt-multi-thread\", \"sync\", \"io-std\", \"net\", \"tracing\", \"process\"] }\n",
+        );
+        dependencies.push_str(&format!(
+            "golem-client = {{ {} }}\n",
+            config.base_config.golem_client_dependency
+        ));
+
+        let server_config = match &config.client_config.server {
+            crate::evcxr_repl::config::GolemServer::Local => {
+                "golem_client::bridge::GolemServer::Local".to_string()
+            }
+            crate::evcxr_repl::config::GolemServer::Cloud { .. } => {
+                "golem_client::bridge::GolemServer::Cloud { token: std::env::var(\"GOLEM_REPL_SERVER_TOKEN\").expect(\"Missing GOLEM_REPL_SERVER_TOKEN\") }".to_string()
+            }
+            crate::evcxr_repl::config::GolemServer::Custom { url, .. } => {
+                let url = toml_string_literal(url)?;
+                format!(
+                    "golem_client::bridge::GolemServer::Custom {{ url: {url}.parse().expect(\"Invalid GOLEM_REPL_SERVER_CUSTOM_URL\"), token: std::env::var(\"GOLEM_REPL_SERVER_TOKEN\").expect(\"Missing GOLEM_REPL_SERVER_TOKEN\") }}"
+                )
+            }
+        };
 
         for (agent_type_name, agent) in &config.repl_metadata.agents {
             // TODO: from meta?
@@ -150,7 +172,46 @@ impl Repl {
                     "use {agent_client_mod_name}::{agent_client_name};\n"
                 ));
             }
+            configure_calls.push_str(&format!(
+                "    {{ {agent_client_mod_name}::configure({server_config}, &app_name, &env_name); }}\n"
+            ));
         }
+
+        prelude.push_str(
+            r#"
+                use std::sync::OnceLock;
+
+                static GOLEM_REPL_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+                fn golem_rt() -> &'static tokio::runtime::Runtime {
+                    GOLEM_REPL_RUNTIME.get_or_init(|| {
+                        tokio::runtime::Builder::new_multi_thread()
+                            .enable_all()
+                            .build()
+                            .expect("Failed to build Tokio runtime")
+                    })
+                }
+
+                fn golem_block_on<F: std::future::Future>(future: F) -> F::Output {
+                    golem_rt().block_on(future)
+                }
+
+                fn golem_repl_configure_clients() {
+            "#,
+        );
+        prelude.push_str("    let app_name = ");
+        prelude.push_str(&toml_string_literal(&config.client_config.application)?);
+        prelude.push_str(
+            r#";
+    let env_name = "#,
+        );
+        prelude.push_str(&toml_string_literal(&config.client_config.environment)?);
+        prelude.push_str(
+            r#";
+"#,
+        );
+        prelude.push_str(&configure_calls);
+        prelude.push_str("}\n");
 
         fs::write_str(
             "evcxr.toml",
@@ -180,6 +241,9 @@ impl Repl {
         with_hidden_output_unless_error(HiddenOutput::All, || {
             command_context
                 .execute(":load_config --quiet")
+                .map_err(|err| anyhow!(err))?;
+            command_context
+                .execute("golem_repl_configure_clients();")
                 .map_err(|err| anyhow!(err))
         })?;
 

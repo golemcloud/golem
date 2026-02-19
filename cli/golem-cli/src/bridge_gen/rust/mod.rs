@@ -21,6 +21,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
     AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
+use golem_templates::model::SdkOverrides;
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -88,10 +89,11 @@ impl BridgeGenerator for RustBridgeGenerator {
 impl RustBridgeGenerator {
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let golem_path = std::env::var("GOLEM_RUST_PATH").ok().and_then(|p| {
-            p.strip_suffix("/sdks/rust/golem-rust")
-                .map(|p| p.to_string())
-        });
+        // TODO: get version through sdk overrides once golem-client is published
+        let golem_path = std::env::var("GOLEM_RUST_PATH")
+            .ok()
+            .map(|p| SdkOverrides::golem_repo_path_from_golem_rust_path(&p))
+            .transpose()?;
 
         let _package_name = self.package_name();
 

@@ -438,7 +438,7 @@ fn transform(
     let transform_rust_sdk = |str: &str| -> String {
         str.replace(
             "GOLEM_RUST_VERSION_OR_PATH",
-            &parameters.sdk_overrides.golem_rust_version_or_path(),
+            &parameters.sdk_overrides.golem_rust_dep(),
         )
     };
 
@@ -447,13 +447,13 @@ fn transform(
             "GOLEM_TS_SDK_VERSION_OR_PATH",
             &parameters
                 .sdk_overrides
-                .ts_package_version_or_path("golem-ts-sdk"),
+                .ts_package_dep("golem-ts-sdk"),
         )
         .replace(
             "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
             &parameters
                 .sdk_overrides
-                .ts_package_version_or_path("golem-ts-typegen"),
+                .ts_package_dep("golem-ts-typegen"),
         )
     };
 

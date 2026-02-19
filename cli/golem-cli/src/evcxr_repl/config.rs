@@ -135,6 +135,7 @@ pub struct ReplConfig {
     pub history_file: String,
     pub cli_commands_metadata_json_path: String,
     pub repl_metadata_json_path: String,
+    pub golem_client_dependency: String,
 }
 
 fn required_env_var(name: &str) -> anyhow::Result<String> {
