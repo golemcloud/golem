@@ -31,9 +31,13 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
         .filter(|line| line.starts_with(template_prefix) && line.contains(':'))
         .map(|line| {
             let template_with_desc = line.strip_prefix(template_prefix);
-            let Some(template_with_desc) = template_with_desc else { panic!("{}", line) };
+            let Some(template_with_desc) = template_with_desc else {
+                panic!("{}", line)
+            };
             let separator_index = template_with_desc.find(":");
-            let Some(separator_index) = separator_index else { panic!("{}", template_with_desc) };
+            let Some(separator_index) = separator_index else {
+                panic!("{}", template_with_desc)
+            };
 
             template_with_desc[..separator_index].to_string()
         })

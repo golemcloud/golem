@@ -2345,7 +2345,10 @@ mod tests {
         assert_eq!(split_worker_name("a/b(\"///\")"), vec!["a", "b(\"///\")"]);
         assert_eq!(split_worker_name("a/b/c"), vec!["a", "b", "c"]);
         assert_eq!(split_worker_name("a/b/c()"), vec!["a", "b", "c()"]);
-        assert_eq!(split_worker_name("a/b/c(\"/\")"), vec!["a", "b", "c(\"/\")"]);
+        assert_eq!(
+            split_worker_name("a/b/c(\"/\")"),
+            vec!["a", "b", "c(\"/\")"]
+        );
         assert_eq!(split_worker_name("/"), vec!["", ""]);
         assert_eq!(split_worker_name("a(/"), vec!["a(/"]);
     }
