@@ -17,6 +17,10 @@ impl UpdateTest for UpdateTestImpl {
     async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
         Err("Invalid snapshot - simulating failure".to_string())
     }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        unimplemented!()
+    }
 }
 
 #[agent_definition]

@@ -111,6 +111,10 @@ impl UpdateTest for UpdateTestImpl {
         11
     }
 
+    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
+        unimplemented!()
+    }
+
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         let mut result = Vec::new();
         result.extend_from_slice(&self.last.to_be_bytes());
