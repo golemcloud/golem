@@ -1,8 +1,8 @@
-use golem_llm_openai::golem::llm::llm;
-use golem_llm_openai::golem::llm::llm::{
-    Config, ContentPart, Event, Message, Response, Role, ToolResult,
-};
+use golem_ai_llm::model::*;
+use golem_ai_llm::LlmProvider;
 use golem_rust::{agent_definition, agent_implementation, description, endpoint};
+
+type Provider = golem_ai_llm_openai::DurableOpenAI;
 
 #[agent_definition(
     mount = "/chats/{chat_name}"
@@ -98,7 +98,7 @@ impl LlmSession {
 
     pub fn send(&mut self) -> Response {
         let response =
-            llm::send(&self.events, &self.config).expect("Failed to send message to LLM");
+            Provider::send(&self.events, &self.config).expect("Failed to send message to LLM");
         self.events.push(Event::Response(response.clone()));
         response
     }
