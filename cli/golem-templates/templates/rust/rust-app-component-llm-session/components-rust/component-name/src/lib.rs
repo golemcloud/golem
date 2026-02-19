@@ -4,9 +4,7 @@ use golem_rust::{agent_definition, agent_implementation, description, endpoint};
 
 type Provider = golem_ai_llm_openai::DurableOpenAI;
 
-#[agent_definition(
-    mount = "/chats/{chat_name}"
-)]
+#[agent_definition(mount = "/chats/{chat_name}")]
 pub trait ChatAgent {
     fn new(chat_name: String) -> Self;
 
@@ -97,8 +95,8 @@ impl LlmSession {
     }
 
     pub fn send(&mut self) -> Response {
-        let response =
-            Provider::send(&self.events, &self.config).expect("Failed to send message to LLM");
+        let response = Provider::send(self.events.clone(), self.config.clone())
+            .expect("Failed to send message to LLM");
         self.events.push(Event::Response(response.clone()));
         response
     }

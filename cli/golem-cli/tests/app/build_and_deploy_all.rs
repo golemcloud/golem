@@ -183,40 +183,41 @@ fn agent_metas() -> Vec<AgentMeta> {
                 ),
             ],
         ),
-        AgentMeta::new(
-            "components-rust/app-rust-llm-session/src/lib.rs",
-            "ChatAgent",
-            "RustChatAgent",
-            vec![
-                (
-                    "components-rust/app-rust-llm-session/src/lib.rs",
-                    "/chats",
-                    "/rust-chats",
-                ),
-                (
-                    "components-rust/app-rust-llm-session/golem.yaml",
-                    "chat-agent",
-                    "rust-chat-agent",
-                ),
-            ],
-        ),
-        AgentMeta::new(
-            "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-            "ResearchAgent",
-            "RustResearchAgent",
-            vec![
-                (
-                    "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
-                    "/research",
-                    "/rust-research",
-                ),
-                (
-                    "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
-                    "research-agent",
-                    "rust-research-agent",
-                ),
-            ],
-        ),
+        // NOTE: These are temporarily disabled because of golem-ai depending on an older golem-rust
+        // AgentMeta::new(
+        //     "components-rust/app-rust-llm-session/src/lib.rs",
+        //     "ChatAgent",
+        //     "RustChatAgent",
+        //     vec![
+        //         (
+        //             "components-rust/app-rust-llm-session/src/lib.rs",
+        //             "/chats",
+        //             "/rust-chats",
+        //         ),
+        //         (
+        //             "components-rust/app-rust-llm-session/golem.yaml",
+        //             "chat-agent",
+        //             "rust-chat-agent",
+        //         ),
+        //     ],
+        // ),
+        // AgentMeta::new(
+        //     "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+        //     "ResearchAgent",
+        //     "RustResearchAgent",
+        //     vec![
+        //         (
+        //             "components-rust/app-rust-llm-websearch-summary-example/src/lib.rs",
+        //             "/research",
+        //             "/rust-research",
+        //         ),
+        //         (
+        //             "components-rust/app-rust-llm-websearch-summary-example/golem.yaml",
+        //             "research-agent",
+        //             "rust-research-agent",
+        //         ),
+        //     ],
+        // ),
         AgentMeta::new(
             "components-rust/app-rust-snapshotting/src/lib.rs",
             "CounterAgent",

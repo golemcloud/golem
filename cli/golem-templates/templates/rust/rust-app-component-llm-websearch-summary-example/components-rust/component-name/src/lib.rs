@@ -82,7 +82,7 @@ impl ResearchAgent for ResearchAgentImpl {
             content: vec![ContentPart::Text(prompt)],
         })];
 
-        let response = Provider::send(&events, &config).expect("Failed to send message to LLM");
+        let response = Provider::send(events, config).expect("Failed to send message to LLM");
 
         let text_result = response
             .content
