@@ -1,40 +1,6 @@
-package golem:rpc@0.2.2;
+package golem:core@1.5.0;
 
 interface types {
-  use wasi:clocks/wall-clock@0.2.3.{datetime};
-  use wasi:io/poll@0.2.3.{pollable};
-
-  /// Represents a Golem agent
-  record agent-id {
-    /// Identifies the component the agent belongs to
-    component-id: component-id,
-    /// String representation of the agent ID (agent type and constructor parameters)
-    agent-id: string
-  }
-
-  /// Represents a Golem component
-  record component-id {
-    uuid: uuid,
-  }
-
-  /// Represents a Golem account
-  /// FIXME: move into golem:api/host
-  record account-id {
-      uuid: uuid
-  }
-
-  /// An index into the persistent log storing all performed operations of an agent
-  /// FIXME: move into golem:api/host
-  type oplog-index = u64;
-
-  /// A promise ID is a value that can be passed to an external Golem API to complete that promise
-  /// from an arbitrary external source, while Golem agents can await for this completion.
-  /// FIXME: move into golem:api/host
-  record promise-id {
-      agent-id: agent-id,
-      oplog-idx: oplog-index,
-  }
-
   /// UUID
   record uuid {
     high-bits: u64,
@@ -46,6 +12,34 @@ interface types {
 
   /// Converts a UUID to a string
   uuid-to-string: func(uuid: uuid) -> string;
+
+  /// Represents a Golem component
+  record component-id {
+    uuid: uuid,
+  }
+
+  /// Represents a Golem agent
+  record agent-id {
+    /// Identifies the component the agent belongs to
+    component-id: component-id,
+    /// String representation of the agent ID (agent type and constructor parameters)
+    agent-id: string
+  }
+
+  /// Represents a Golem account
+  record account-id {
+      uuid: uuid
+  }
+
+  /// An index into the persistent log storing all performed operations of an agent
+  type oplog-index = u64;
+
+  /// A promise ID is a value that can be passed to an external Golem API to complete that promise
+  /// from an arbitrary external source, while Golem agents can await for this completion.
+  record promise-id {
+      agent-id: agent-id,
+      oplog-idx: oplog-index,
+  }
 
   /// The index type used in `wit-value` and `wit-type` to identify nodes
   type node-index = s32;
@@ -199,57 +193,59 @@ interface types {
     value: string,
   }
 
-  /// Possible failures of an RPC call
-  variant rpc-error {
-    /// Protocol level error
-    protocol-error(string),
-    /// Access denied
-    denied(string),
-    /// Target agent or function not found
-    not-found(string),
-    /// Internal error on the remote side
-    remote-internal-error(string)
+  /// URL alias
+  type url = string;
+
+  /// Text type descriptor
+  record text-type {
+    language-code: string,
   }
 
-  /// An RPC client
-  resource wasm-rpc {
-    /// Constructs the RPC client connecting to the given target agent
-    constructor(agent-id: agent-id);
-
-    /// Invokes a remote function with the given parameters, and awaits the result
-    invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> result<wit-value, rpc-error>;
-
-    /// Triggers the invocation of a remote function with the given parameters, and returns immediately.
-    invoke: func(function-name: string, function-params: list<wit-value>) -> result<_, rpc-error>;
-
-    /// Invokes a remote function with the given parameters, and returns a `future-invoke-result` value which can
-    /// be polled for the result.
-    ///
-    /// With this function it is possible to call multiple (different) agents simultaneously.
-    async-invoke-and-await: func(function-name: string, function-params: list<wit-value>) -> future-invoke-result;
-
-    /// Schedule invocation for later
-    schedule-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>);
-
-    /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
-    schedule-cancelable-invocation: func(scheduled-time: datetime, function-name: string, function-params: list<wit-value>) -> cancellation-token;
+  /// Inline text source
+  record text-source {
+    data: string,
+    text-type: option<text-type>,
   }
 
-  /// Represents a pollable invocation result
-  resource future-invoke-result {
-    /// Subscribes to the result of the invocation
-    subscribe: func() -> pollable;
-    /// Poll for the invocation. If the invocation has not completed yet, returns `none`.
-    get: func() -> option<result<wit-value, rpc-error>>;
+  /// Reference to a text value
+  variant text-reference {
+    url(string),
+    inline(text-source),
   }
 
-  /// Cancellation token for scheduled invocations
-  resource cancellation-token {
-    /// Cancel the scheduled invocation
-    cancel: func();
+  /// Binary type descriptor
+  record binary-type {
+    mime-type: string,
   }
-}
 
-world wit-value {
-    import types;
+  /// Inline binary source
+  record binary-source {
+    data: list<u8>,
+    binary-type: binary-type,
+  }
+
+  /// Reference to a binary value
+  variant binary-reference {
+    url(url),
+    inline(binary-source),
+  }
+
+  /// An untyped element value, representing one element of an untyped data value
+  variant untyped-element-value {
+    component-model(wit-value),
+    unstructured-text(text-reference),
+    unstructured-binary(binary-reference),
+  }
+
+  /// A named untyped element value, used in multimodal data values
+  record untyped-named-element-value {
+    name: string,
+    value: untyped-element-value,
+  }
+
+  /// An untyped data value, representing either a tuple of elements or a multimodal set of named elements
+  variant untyped-data-value {
+    %tuple(list<untyped-element-value>),
+    multimodal(list<untyped-named-element-value>),
+  }
 }
