@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::golem_agentic::golem::agent::common::{DataValue, ElementValue};
 use crate::golem_wasm::{WitNode, WitValue};
+use golem_wasm::golem_core_1_5_x::types::{UntypedDataValue, UntypedElementValue};
 use golem_wasm::NodeIndex;
 
 // Allows unwrapping a wit-value which is a tuple with a single element
@@ -69,6 +71,32 @@ fn rebase_indices(nodes: &mut [WitNode], base_index: usize) {
             | WitNode::PrimString(_)
             | WitNode::Handle(_) => {}
         }
+    }
+}
+
+
+fn untyped_element_value_to_element_value(uev: UntypedElementValue) -> ElementValue {
+    match uev {
+        UntypedElementValue::ComponentModel(wv) => ElementValue::ComponentModel(wv),
+        UntypedElementValue::UnstructuredText(tr) => ElementValue::UnstructuredText(tr),
+        UntypedElementValue::UnstructuredBinary(br) => ElementValue::UnstructuredBinary(br),
+    }
+}
+
+pub fn untyped_data_value_to_data_value(udv: UntypedDataValue) -> DataValue {
+    match udv {
+        UntypedDataValue::Tuple(elements) => DataValue::Tuple(
+            elements
+                .into_iter()
+                .map(untyped_element_value_to_element_value)
+                .collect(),
+        ),
+        UntypedDataValue::Multimodal(named) => DataValue::Multimodal(
+            named
+                .into_iter()
+                .map(|n| (n.name, untyped_element_value_to_element_value(n.value)))
+                .collect(),
+        ),
     }
 }
 

@@ -19,7 +19,7 @@ use crate::bindings::golem::durability::durability::{
     OplogEntryVersion, OplogIndex, PersistedDurableFunctionInvocation, PersistenceLevel,
 };
 use crate::value_and_type::{FromValueAndType, IntoValueAndType};
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 

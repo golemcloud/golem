@@ -25,7 +25,7 @@ mod tests {
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentMode, AgentType, Snapshotting, SnapshottingConfig,
     };
-    use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
+    use wstd::wasi::clocks::wall_clock::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
     use golem_rust_macro::{description, endpoint, prompt};

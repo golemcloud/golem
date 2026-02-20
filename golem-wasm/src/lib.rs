@@ -89,7 +89,7 @@ pub use wstd::wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::core1_5_0 as golem_core_1_5_x;
+pub use bindings::golem::core as golem_core_1_5_x;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]

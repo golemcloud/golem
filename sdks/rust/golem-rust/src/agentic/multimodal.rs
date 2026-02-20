@@ -17,7 +17,9 @@ use crate::agentic::{
     UnstructuredText,
 };
 use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
-use golem_wasm::{Value, WitValue};
+use golem_wasm::golem_core_1_5_x::types::{
+    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+};
 
 /// Represents Multimodal input data for agent functions.
 /// Note that you cannot mix a multimodal input with other input types
@@ -142,71 +144,33 @@ impl<T: MultimodalSchema> MultimodalAdvanced<T> {
         Ok(MultimodalAdvanced { items })
     }
 
-    pub fn convert_to_wit_value(self) -> Result<WitValue, String> {
-        let schema = Self::get_schema();
-        let mut variants: Vec<Value> = vec![];
-
-        for v in self.items {
-            let variant_name = <T as MultimodalSchema>::get_name(&v);
-            let wit_value = <T as MultimodalSchema>::to_wit_value(v)?;
-            let value = Value::from(wit_value);
-            let variant_index = schema
-                .iter()
-                .position(|(name, _)| name == &variant_name)
-                .ok_or_else(|| format!("Unknown modality name: {}", variant_name))?;
-
-            variants.push(Value::Variant {
-                case_idx: variant_index as u32,
-                case_value: Some(Box::new(value)),
+    pub fn convert_to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
+        let mut named_elements = Vec::new();
+        for item in self.items {
+            let name = <T as MultimodalSchema>::get_name(&item);
+            let element = <T as MultimodalSchema>::to_untyped_element_value(item)?;
+            named_elements.push(UntypedNamedElementValue {
+                name,
+                value: element,
             });
         }
-
-        let value = Value::List(variants);
-
-        Ok(WitValue::from(value))
+        Ok(UntypedDataValue::Multimodal(named_elements))
     }
 
-    // Mainly exists because the rpc invoke result is a wit value and it's a list of variants
-    pub fn from_wit_value(wit_value: WitValue) -> Result<Self, String> {
-        let value = Value::from(wit_value);
-
+    pub fn convert_from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
         match value {
-            Value::List(variants) => {
+            UntypedDataValue::Multimodal(named_elements) => {
                 let mut items = Vec::new();
-                let schema = Self::get_schema();
-
-                for variant in variants {
-                    if let Value::Variant {
-                        case_idx,
-                        case_value,
-                    } = variant
-                    {
-                        let modality_schema = schema
-                            .get(case_idx as usize)
-                            .ok_or_else(|| format!("Invalid modality index: {}", case_idx))?;
-
-                        let modality_name = &modality_schema.0;
-
-                        let case_value = case_value.ok_or_else(|| {
-                            format!("Missing value for modality: {}", modality_name)
-                        })?;
-
-                        let wit_value = WitValue::from(*case_value);
-
-                        let item = <T as MultimodalSchema>::from_wit_value((
-                            modality_name.to_string(),
-                            wit_value,
-                        ))?;
-
-                        items.push(item);
-                    } else {
-                        return Err("Expected Variant value in Multimodal list".to_string());
-                    }
+                for named in named_elements {
+                    let item = <T as MultimodalSchema>::from_untyped_element_value(
+                        named.name,
+                        named.value,
+                    )?;
+                    items.push(item);
                 }
-
                 Ok(MultimodalAdvanced { items })
             }
-            _ => Err("Expected List value for Multimodal".to_string()),
+            _ => Err("Expected Multimodal UntypedDataValue".to_string()),
         }
     }
 }
@@ -234,21 +198,20 @@ impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        match schema {
-            StructuredSchema::Multimodal(_) => Self::from_wit_value(wit_value),
-            _ => Err("Expected Multimodal StructuredSchema".to_string()),
-        }
+    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String>
-    where
-        Self: Sized,
-    {
-        self.convert_to_wit_value()
+    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
+        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    }
+
+    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
+        self.convert_to_untyped_data_value()
+    }
+
+    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
+        MultimodalAdvanced::convert_from_untyped_data_value(value)
     }
 }
 
@@ -317,20 +280,21 @@ impl Schema for Multimodal {
         Ok(Multimodal { value: advanced })
     }
 
-    fn from_wit_value(wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let advanced = MultimodalAdvanced::<BasicModality>::from_wit_value(wit_value)?;
-
-        Ok(Multimodal { value: advanced })
+    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String>
-    where
-        Self: Sized,
-    {
-        self.value.to_wit_value()
+    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
+        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    }
+
+    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
+        self.value.convert_to_untyped_data_value()
+    }
+
+    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
+        MultimodalAdvanced::<BasicModality>::convert_from_untyped_data_value(value)
+            .map(|v| Multimodal { value: v })
     }
 }
 
@@ -427,32 +391,28 @@ impl MultimodalSchema for BasicModality {
         }
     }
 
-    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let (name, value) = wit_value;
-
-        match name.as_str() {
-            "Text" => {
-                let text = UnstructuredText::from_wit_value(value)?;
-                Ok(BasicModality::Text(text))
-            }
-            "Binary" => {
-                let binary = UnstructuredBinary::<String>::from_wit_value(value)?;
-                Ok(BasicModality::Binary(binary))
-            }
-            _ => Err(format!("Unknown modality name: {}", name)),
+    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+        match self {
+            BasicModality::Text(text) => Schema::to_untyped_element_value(text),
+            BasicModality::Binary(binary) => Schema::to_untyped_element_value(binary),
         }
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String>
+    fn from_untyped_element_value(name: String, value: UntypedElementValue) -> Result<Self, String>
     where
         Self: Sized,
     {
-        match self {
-            BasicModality::Text(text) => text.to_wit_value(),
-            BasicModality::Binary(binary) => binary.to_wit_value(),
+        match name.as_str() {
+            "Text" => {
+                let text = UnstructuredText::from_untyped_element_value(value)?;
+                Ok(BasicModality::Text(text))
+            }
+            "Binary" => {
+                let binary =
+                    UnstructuredBinary::<String>::from_untyped_element_value(value)?;
+                Ok(BasicModality::Binary(binary))
+            }
+            _ => Err(format!("Unknown modality name: {}", name)),
         }
     }
 }
@@ -528,20 +488,21 @@ impl<T: Schema> Schema for MultimodalCustom<T> {
         Ok(MultimodalCustom { value: advanced })
     }
 
-    fn from_wit_value(wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let advanced = MultimodalAdvanced::<CustomModality<T>>::from_wit_value(wit_value)?;
-
-        Ok(MultimodalCustom { value: advanced })
+    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String>
-    where
-        Self: Sized,
-    {
-        self.value.to_wit_value()
+    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
+        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    }
+
+    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
+        self.value.convert_to_untyped_data_value()
+    }
+
+    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
+        MultimodalAdvanced::<CustomModality<T>>::convert_from_untyped_data_value(value)
+            .map(|v| MultimodalCustom { value: v })
     }
 }
 
@@ -622,33 +583,29 @@ impl<T: Schema> MultimodalSchema for CustomModality<T> {
         }
     }
 
-    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let (name, value) = wit_value;
-
-        match name.as_str() {
-            "Text" | "Binary" => {
-                let basic = BasicModality::from_wit_value((name, value))?;
-                Ok(CustomModality::Basic(basic))
+    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+        match self {
+            CustomModality::Basic(basic) => {
+                <BasicModality as MultimodalSchema>::to_untyped_element_value(basic)
             }
-            "Custom" => {
-                let schema = T::get_type();
-                let custom = T::from_wit_value(value, schema)?;
-                Ok(CustomModality::Custom(custom))
-            }
-            _ => Err(format!("Unknown modality name: {}", name)),
+            CustomModality::Custom(custom) => Schema::to_untyped_element_value(custom),
         }
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String>
+    fn from_untyped_element_value(name: String, value: UntypedElementValue) -> Result<Self, String>
     where
         Self: Sized,
     {
-        match self {
-            CustomModality::Basic(basic) => basic.to_wit_value(),
-            CustomModality::Custom(custom) => custom.to_wit_value(),
+        match name.as_str() {
+            "Text" | "Binary" => {
+                let basic = BasicModality::from_untyped_element_value(name, value)?;
+                Ok(CustomModality::Basic(basic))
+            }
+            "Custom" => {
+                let custom = T::from_untyped_element_value(value)?;
+                Ok(CustomModality::Custom(custom))
+            }
+            _ => Err(format!("Unknown modality name: {}", name)),
         }
     }
 }
