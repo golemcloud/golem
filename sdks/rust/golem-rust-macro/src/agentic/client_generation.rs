@@ -14,7 +14,6 @@
 
 use crate::agentic::helpers::{is_static_method, FunctionOutputInfo};
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
-use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{FnArg, ItemTrait, Type};
@@ -24,18 +23,18 @@ fn generate_constructor_encoding(
 ) -> proc_macro2::TokenStream {
     match constructor_param_idents.len() {
         0 => quote! {
-            let untyped_data_value = golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedDataValue::Tuple(vec![]);
+            let data_value = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]);
         },
         1 => {
             let single_ident = &constructor_param_idents[0];
             quote! {
-                let untyped_data_value = golem_rust::agentic::Schema::to_untyped_data_value(#single_ident)
+                let data_value = golem_rust::agentic::Schema::to_data_value(#single_ident)
                     .expect("Failed to convert constructor parameter");
             }
         }
         _ => quote! {
-            let untyped_data_value = golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedDataValue::Tuple(vec![
-                #(golem_rust::agentic::Schema::to_untyped_element_value(#constructor_param_idents)
+            let data_value = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![
+                #(golem_rust::agentic::Schema::to_element_value(#constructor_param_idents)
                     .expect("Failed to convert constructor parameter")),*
             ]);
         },
@@ -54,7 +53,6 @@ pub fn get_remote_client(
 
     let remote_agent_methods_info = get_remote_agent_methods_info(
         item_trait,
-        type_name.to_string(),
         agent_type_parameter_names,
     );
 
@@ -83,7 +81,6 @@ pub fn get_remote_client(
 
                  #encode_constructor
 
-                 let data_value = golem_rust::agentic::untyped_data_value_to_data_value(untyped_data_value.clone());
                  let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                       #type_name,
@@ -93,7 +90,7 @@ pub fn get_remote_client(
 
                  let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(#type_name, &untyped_data_value, None);
+                 let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(#type_name, &data_value, None);
 
                  #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
@@ -107,7 +104,6 @@ pub fn get_remote_client(
 
                 let phantom_uuid = golem_rust::Uuid::new_v4();
 
-                let data_value = golem_rust::agentic::untyped_data_value_to_data_value(untyped_data_value.clone());
                 let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                         #type_name,
@@ -117,7 +113,7 @@ pub fn get_remote_client(
 
                  let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                 let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(#type_name, &untyped_data_value, Some(phantom_uuid.into()));
+                 let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(#type_name, &data_value, Some(phantom_uuid.into()));
 
                  #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
@@ -129,7 +125,6 @@ pub fn get_remote_client(
 
                 #encode_constructor
 
-                let data_value = golem_rust::agentic::untyped_data_value_to_data_value(untyped_data_value.clone());
                 let agent_id_string =
                    golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                         #type_name,
@@ -139,7 +134,7 @@ pub fn get_remote_client(
 
                 let agent_id = golem_rust::golem_wasm::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(#type_name, &untyped_data_value, Some(phantom_id.into()));
+                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(#type_name, &data_value, Some(phantom_id.into()));
 
                 #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
             }
@@ -161,7 +156,6 @@ pub fn get_remote_client(
 
 fn get_remote_agent_methods_info(
     tr: &ItemTrait,
-    agent_type_name: String,
     type_parameter_names: &[String],
 ) -> RemoteAgentMethodsInfo {
     let mut agent_method_names = AgentClientMethodNames::new();
@@ -204,7 +198,6 @@ fn get_remote_agent_methods_info(
                 &trigger_name,
                 &schedule_name,
                 &schedule_cancelable_name,
-                &agent_type_name,
                 &input_defs,
                 &input_idents,
                 &method.sig,
@@ -304,18 +297,18 @@ fn collect_input_idents_without_principal(sig: &syn::Signature) -> Vec<syn::Iden
 fn generate_input_encoding(input_idents: &[syn::Ident]) -> proc_macro2::TokenStream {
     match input_idents.len() {
         0 => quote! {
-            let input = golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedDataValue::Tuple(vec![]);
+            let input = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]);
         },
         1 => {
             let ident = &input_idents[0];
             quote! {
-                let input = golem_rust::agentic::Schema::to_untyped_data_value(#ident)
+                let input = golem_rust::agentic::Schema::to_data_value(#ident)
                     .expect("Failed to encode parameter");
             }
         }
         _ => quote! {
-            let input = golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedDataValue::Tuple(vec![
-                #(golem_rust::agentic::Schema::to_untyped_element_value(#input_idents)
+            let input = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![
+                #(golem_rust::agentic::Schema::to_element_value(#input_idents)
                     .expect("Failed to encode parameter")),*
             ]);
         },
@@ -327,12 +320,11 @@ fn generate_method_code(
     trigger_name: &syn::Ident,
     schedule_name: &syn::Ident,
     schedule_cancelable_name: &syn::Ident,
-    agent_type_name: &str,
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
     sig: &syn::Signature,
 ) -> proc_macro2::TokenStream {
-    let remote_method_name = rpc_invoke_method_name(agent_type_name, &method_name.to_string());
+    let remote_method_name = method_name.to_string();
     let remote_token = quote! { #remote_method_name };
     let fn_output_info = FunctionOutputInfo::from_signature(sig);
     let return_type = match &sig.output {
@@ -342,7 +334,7 @@ fn generate_method_code(
     let process_invoke_result = match &sig.output {
         syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => {
             quote! {
-                <#ty as golem_rust::agentic::Schema>::from_untyped_data_value(rpc_result_ok)
+                <#ty as golem_rust::agentic::Schema>::from_data_value(rpc_result_ok)
                     .expect("Failed to deserialize rpc result to return type")
             }
         }
@@ -360,7 +352,7 @@ fn generate_method_code(
                 &input
             );
 
-            let rpc_result: Result<golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedDataValue, golem_rust::golem_agentic::golem::agent::host::RpcError> =
+            let rpc_result: Result<golem_rust::golem_agentic::golem::agent::common::DataValue, golem_rust::golem_agentic::golem::agent::host::RpcError> =
                 golem_rust::agentic::await_invoke_result(rpc_result_future).await;
 
             let rpc_result_ok =
@@ -398,13 +390,6 @@ fn generate_method_code(
             )
         }
     }
-}
-
-fn rpc_invoke_method_name(agent_type_name: &str, method_name: &str) -> String {
-    let agent_type_name_kebab = agent_type_name.to_kebab_case();
-    let method_name_kebab = method_name.to_kebab_case();
-
-    format!("{}.{{{}}}", agent_type_name_kebab, method_name_kebab)
 }
 
 struct RemoteAgentMethodsInfo {

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{ElementSchema, ElementValue, Principal};
+use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue, Principal};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
-use golem_wasm::golem_core_1_5_x::types::{UntypedDataValue, UntypedElementValue, ValueAndType};
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 
 pub trait Schema {
     fn get_type() -> StructuredSchema;
@@ -27,33 +27,33 @@ pub trait Schema {
     where
         Self: Sized;
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String>
+    fn to_element_value(self) -> Result<ElementValue, String>
     where
         Self: Sized;
 
-    fn from_untyped_element_value(value: UntypedElementValue) -> Result<Self, String>
+    fn from_element_value(value: ElementValue) -> Result<Self, String>
     where
         Self: Sized;
 
-    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String>
+    fn to_data_value(self) -> Result<DataValue, String>
     where
         Self: Sized,
     {
-        Ok(UntypedDataValue::Tuple(vec![
-            self.to_untyped_element_value()?,
+        Ok(DataValue::Tuple(vec![
+            self.to_element_value()?,
         ]))
     }
 
-    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String>
+    fn from_data_value(value: DataValue) -> Result<Self, String>
     where
         Self: Sized,
     {
         match value {
-            UntypedDataValue::Tuple(mut elements) if elements.len() == 1 => {
-                Self::from_untyped_element_value(elements.remove(0))
+            DataValue::Tuple(mut elements) if elements.len() == 1 => {
+                Self::from_element_value(elements.remove(0))
             }
             other => Err(format!(
-                "Expected single-element Tuple UntypedDataValue, got: {:?}",
+                "Expected single-element Tuple DataValue, got: {:?}",
                 other
             )),
         }
@@ -148,12 +148,12 @@ impl Schema for Principal {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
-        Err("Principal is not expected to be converted to UntypedElementValue".to_string())
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Err("Principal is not expected to be converted to ElementValue".to_string())
     }
 
-    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
-        Err("Principal is not expected to be converted from UntypedElementValue".to_string())
+    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
+        Err("Principal is not expected to be converted from ElementValue".to_string())
     }
 }
 
@@ -197,13 +197,13 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
-        Ok(UntypedElementValue::ComponentModel(self.into_value()))
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Ok(ElementValue::ComponentModel(self.into_value()))
     }
 
-    fn from_untyped_element_value(value: UntypedElementValue) -> Result<Self, String> {
+    fn from_element_value(value: ElementValue) -> Result<Self, String> {
         match value {
-            UntypedElementValue::ComponentModel(wv) => {
+            ElementValue::ComponentModel(wv) => {
                 let value_and_type = ValueAndType {
                     value: wv,
                     typ: T::get_type(),
@@ -211,7 +211,7 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
                 T::from_value_and_type(value_and_type)
             }
             other => Err(format!(
-                "Expected ComponentModel UntypedElementValue, got: {:?}",
+                "Expected ComponentModel ElementValue, got: {:?}",
                 other
             )),
         }
@@ -231,11 +231,11 @@ pub trait MultimodalSchema {
     where
         Self: Sized;
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String>
+    fn to_raw_element_value(self) -> Result<ElementValue, String>
     where
         Self: Sized;
 
-    fn from_untyped_element_value(name: String, value: UntypedElementValue) -> Result<Self, String>
+    fn from_raw_element_value(name: String, value: ElementValue) -> Result<Self, String>
     where
         Self: Sized;
 }

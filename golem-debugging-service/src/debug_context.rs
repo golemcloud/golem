@@ -329,7 +329,7 @@ impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
         agent_type_name: String,
-        constructor: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
@@ -341,8 +341,8 @@ impl HostWasmRpc for DebugContext {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
-    ) -> anyhow::Result<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+    ) -> anyhow::Result<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>
     {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
@@ -353,7 +353,7 @@ impl HostWasmRpc for DebugContext {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
         self.durable_ctx
             .invoke(self_, method_name, input)
@@ -364,7 +364,7 @@ impl HostWasmRpc for DebugContext {
         &mut self,
         self_: Resource<WasmRpc>,
         method_name: String,
-        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
             .async_invoke_and_await(self_, method_name, input)
@@ -376,7 +376,7 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input)
@@ -388,7 +388,7 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         method_name: String,
-        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
@@ -412,7 +412,7 @@ impl HostFutureInvokeResult for DebugContext {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>,
+        Option<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }

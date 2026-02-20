@@ -1,7 +1,7 @@
 package golem:agent@1.5.0;
 
 interface host {
-    use golem:core/types@1.5.0.{component-id, uuid, promise-id, untyped-data-value};
+    use golem:core/types@1.5.0.{component-id, uuid, promise-id};
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use wasi:io/poll@0.2.3.{pollable};
     use common.{agent-error, agent-type, data-value, registered-agent-type};
@@ -46,25 +46,25 @@ interface host {
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
       /// Constructs the RPC client connecting to the given target agent
-      constructor(agent-type-name: string, %constructor: untyped-data-value, phantom-id: option<uuid>);
+      constructor(agent-type-name: string, %constructor: data-value, phantom-id: option<uuid>);
 
       /// Invokes a remote method with the given parameters, and awaits the result
-      invoke-and-await: func(method-name: string, input: untyped-data-value) -> result<untyped-data-value, rpc-error>;
+      invoke-and-await: func(method-name: string, input: data-value) -> result<data-value, rpc-error>;
 
       /// Triggers the invocation of a remote method with the given parameters, and returns immediately.
-      invoke: func(method-name: string, input: untyped-data-value) -> result<_, rpc-error>;
+      invoke: func(method-name: string, input: data-value) -> result<_, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
       /// be polled for the result.
       ///
       /// With this function it is possible to call multiple (different) agents simultaneously.
-      async-invoke-and-await: func(method-name: string, input: untyped-data-value) -> future-invoke-result;
+      async-invoke-and-await: func(method-name: string, input: data-value) -> future-invoke-result;
 
       /// Schedule invocation for later
-      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: untyped-data-value);
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: data-value);
 
       /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
-      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: untyped-data-value) -> cancellation-token;
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: data-value) -> cancellation-token;
     }
 
     /// Represents a pollable invocation result
@@ -72,7 +72,7 @@ interface host {
       /// Subscribes to the result of the invocation
       subscribe: func() -> pollable;
       /// Poll for the invocation. If the invocation has not completed yet, returns `none`.
-      get: func() -> option<result<untyped-data-value, rpc-error>>;
+      get: func() -> option<result<data-value, rpc-error>>;
     }
 
     /// Cancellation token for scheduled invocations

@@ -14,7 +14,7 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common';
+import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
 import { validateHttpEndpoint } from '../http/validation';

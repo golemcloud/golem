@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataSchema, ElementSchema } from 'golem:agent/common';
+import { DataSchema, ElementSchema } from 'golem:agent/common@1.5.0';
 
 // Collection of parameter schemas for agent constructor or method.
 // It can contain both principal and component model parameters.

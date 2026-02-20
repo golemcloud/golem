@@ -19,7 +19,7 @@ import {
   AgentMode,
   Principal,
   Snapshotting,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import { ResolvedAgent } from '../internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {

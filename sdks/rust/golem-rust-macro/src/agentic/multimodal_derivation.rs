@@ -59,7 +59,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 to_untyped_element_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        <#field_type as golem_rust::agentic::Schema>::to_untyped_element_value(inner)
+                        <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)
                     }
                 });
 
@@ -76,7 +76,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 from_untyped_element_match_arms.push(quote! {
                     #variant_name => {
-                        let val = <#field_type as golem_rust::agentic::Schema>::from_untyped_element_value(value.clone())?;
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(value.clone())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });
@@ -113,7 +113,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn to_untyped_element_value(self) -> Result<golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedElementValue, String> {
+            fn to_raw_element_value(self) -> Result<golem_rust::golem_agentic::golem::agent::common::ElementValue, String> {
                 match self {
                     #(#to_untyped_element_match_arms),*
                 }
@@ -128,7 +128,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                  }
             }
 
-            fn from_untyped_element_value(name: String, value: golem_rust::golem_wasm::golem_core_1_5_x::types::UntypedElementValue) -> Result<Self, String> {
+            fn from_raw_element_value(name: String, value: golem_rust::golem_agentic::golem::agent::common::ElementValue) -> Result<Self, String> {
                  match name.as_str() {
                     #(#from_untyped_element_match_arms),*,
                     _ => return Err(format!("Unknown modality: {}", name))

@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
         _agent_type_name: String,
-        _constructor: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        _constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         _phantom_id: Option<golem_wasm::Uuid>,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         // TODO: Implement new wasm-rpc constructor
@@ -50,8 +50,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<WasmRpcEntry>,
         _method_name: String,
-        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
-    ) -> anyhow::Result<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>
+        _input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+    ) -> anyhow::Result<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>
     {
         // TODO: Implement invoke_and_await for the new interface
         Err(anyhow::anyhow!(
@@ -63,7 +63,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         _self_: Resource<WasmRpcEntry>,
         _method_name: String,
-        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        _input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
         // TODO: Implement invoke for the new interface
         Err(anyhow::anyhow!(
@@ -75,7 +75,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         &mut self,
         _this: Resource<WasmRpcEntry>,
         _method_name: String,
-        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        _input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         // TODO: Implement async_invoke_and_await for the new interface
         Err(anyhow::anyhow!(
@@ -88,7 +88,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         _this: Resource<WasmRpcEntry>,
         _scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         _method_name: String,
-        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        _input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<()> {
         // TODO: Implement schedule_invocation for the new interface
         Err(anyhow::anyhow!(
@@ -101,7 +101,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         _this: Resource<WasmRpcEntry>,
         _scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
         _method_name: String,
-        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        _input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         // TODO: Implement schedule_cancelable_invocation for the new interface
         Err(anyhow::anyhow!(
@@ -137,7 +137,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>,
+        Option<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>,
     > {
         // TODO: Implement get for the new interface
         Err(anyhow::anyhow!(

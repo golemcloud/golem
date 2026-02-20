@@ -15,7 +15,7 @@
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{BinaryDescriptor, ElementSchema, ElementValue};
 use golem_wasm::golem_core_1_5_x::types::{
-    BinaryReference, BinarySource, BinaryType, UntypedElementValue,
+    BinaryReference, BinarySource, BinaryType,
 };
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
 
@@ -113,26 +113,26 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+    fn to_element_value(self) -> Result<ElementValue, String> {
         match self {
             UnstructuredBinary::Inline { data, mime_type } => {
                 let mime_type = mime_type.to_string();
-                Ok(UntypedElementValue::UnstructuredBinary(
+                Ok(ElementValue::UnstructuredBinary(
                     BinaryReference::Inline(BinarySource {
                         data,
                         binary_type: BinaryType { mime_type },
                     }),
                 ))
             }
-            UnstructuredBinary::Url(url) => Ok(UntypedElementValue::UnstructuredBinary(
+            UnstructuredBinary::Url(url) => Ok(ElementValue::UnstructuredBinary(
                 BinaryReference::Url(url),
             )),
         }
     }
 
-    fn from_untyped_element_value(value: UntypedElementValue) -> Result<Self, String> {
+    fn from_element_value(value: ElementValue) -> Result<Self, String> {
         match value {
-            UntypedElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
+            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
                 BinaryReference::Url(url) => Ok(UnstructuredBinary::Url(url)),
                 BinaryReference::Inline(binary_source) => {
                     let allowed = T::all().iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -161,7 +161,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
                 }
             },
             other => Err(format!(
-                "Expected UnstructuredBinary UntypedElementValue, got: {:?}",
+                "Expected UnstructuredBinary ElementValue, got: {:?}",
                 other
             )),
         }

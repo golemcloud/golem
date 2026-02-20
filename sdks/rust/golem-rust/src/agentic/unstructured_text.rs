@@ -15,7 +15,7 @@
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{ElementSchema, ElementValue, TextDescriptor};
 use golem_wasm::golem_core_1_5_x::types::{
-    TextReference, TextSource, TextType, UntypedElementValue,
+    TextReference, TextSource, TextType,
 };
 use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
 
@@ -116,7 +116,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+    fn to_element_value(self) -> Result<ElementValue, String> {
         match self {
             UnstructuredText::Text {
                 text,
@@ -125,7 +125,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                 let text_type = language_code.map(|code| TextType {
                     language_code: code.to_language_code().to_string(),
                 });
-                Ok(UntypedElementValue::UnstructuredText(
+                Ok(ElementValue::UnstructuredText(
                     TextReference::Inline(TextSource {
                         data: text,
                         text_type,
@@ -133,16 +133,16 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                 ))
             }
             UnstructuredText::Url(url) => {
-                Ok(UntypedElementValue::UnstructuredText(TextReference::Url(
+                Ok(ElementValue::UnstructuredText(TextReference::Url(
                     url,
                 )))
             }
         }
     }
 
-    fn from_untyped_element_value(value: UntypedElementValue) -> Result<Self, String> {
+    fn from_element_value(value: ElementValue) -> Result<Self, String> {
         match value {
-            UntypedElementValue::UnstructuredText(text_reference) => match text_reference {
+            ElementValue::UnstructuredText(text_reference) => match text_reference {
                 TextReference::Url(url) => Ok(UnstructuredText::Url(url)),
                 TextReference::Inline(text_source) => {
                     let allowed = T::all().iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -169,7 +169,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                 }
             },
             other => Err(format!(
-                "Expected UnstructuredText UntypedElementValue, got: {:?}",
+                "Expected UnstructuredText ElementValue, got: {:?}",
                 other
             )),
         }

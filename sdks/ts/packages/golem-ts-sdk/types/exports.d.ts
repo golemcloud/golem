@@ -1,6 +1,6 @@
 declare module 'agent-guest' {
-  import * as golemAgentCommon from 'golem:agent/common';
-  import * as golemApi130Host from 'golem:api/host@1.3.0';
+  import * as golemAgent150Common from 'golem:agent/common@1.5.0';
+  import * as golemApi150Host from 'golem:api/host@1.5.0';
   /**
    * Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
    * when the new component incompatible with the old one.
@@ -10,7 +10,7 @@ declare module 'agent-guest' {
      * Saves the component's state into a user-defined snapshot
      */
     export function save(): Promise<Snapshot>;
-    export type Snapshot = golemApi130Host.Snapshot;
+    export type Snapshot = golemApi150Host.Snapshot;
   }
   /**
    * Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
@@ -23,7 +23,7 @@ declare module 'agent-guest' {
      * @throws string
      */
     export function load(snapshot: Snapshot): Promise<void>;
-    export type Snapshot = golemApi130Host.Snapshot;
+    export type Snapshot = golemApi150Host.Snapshot;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
   export namespace guest {
@@ -47,10 +47,10 @@ declare module 'agent-guest' {
      * @throws AgentError
      */
     export function discoverAgentTypes(): Promise<AgentType[]>;
-    export type AgentError = golemAgentCommon.AgentError;
-    export type AgentType = golemAgentCommon.AgentType;
-    export type DataValue = golemAgentCommon.DataValue;
-    export type Principal = golemAgentCommon.Principal;
+    export type AgentError = golemAgent150Common.AgentError;
+    export type AgentType = golemAgent150Common.AgentType;
+    export type DataValue = golemAgent150Common.DataValue;
+    export type Principal = golemAgent150Common.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }
 }

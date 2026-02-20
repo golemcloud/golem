@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { WitValue } from 'golem:rpc/types@0.2.2';
+import { WitValue } from 'golem:core/types@1.5.0';
 import * as Either from '../../../newTypes/either';
 import * as Value from './Value';
 import {
@@ -23,7 +23,7 @@ import {
 import { deserialize } from './deserializer';
 import { AnalysedType } from '../types/analysedType';
 
-export { WitValue } from 'golem:rpc/types@0.2.2';
+export { WitValue } from 'golem:core/types@1.5.0';
 
 export const fromTsValueDefault = (
   tsValue: any,

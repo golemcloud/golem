@@ -17,9 +17,6 @@ use crate::agentic::{
     UnstructuredText,
 };
 use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
-use golem_wasm::golem_core_1_5_x::types::{
-    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
-};
 
 /// Represents Multimodal input data for agent functions.
 /// Note that you cannot mix a multimodal input with other input types
@@ -144,33 +141,27 @@ impl<T: MultimodalSchema> MultimodalAdvanced<T> {
         Ok(MultimodalAdvanced { items })
     }
 
-    pub fn convert_to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
+    pub fn convert_to_data_value(self) -> Result<DataValue, String> {
         let mut named_elements = Vec::new();
         for item in self.items {
             let name = <T as MultimodalSchema>::get_name(&item);
-            let element = <T as MultimodalSchema>::to_untyped_element_value(item)?;
-            named_elements.push(UntypedNamedElementValue {
-                name,
-                value: element,
-            });
+            let element = <T as MultimodalSchema>::to_raw_element_value(item)?;
+            named_elements.push((name, element));
         }
-        Ok(UntypedDataValue::Multimodal(named_elements))
+        Ok(DataValue::Multimodal(named_elements))
     }
 
-    pub fn convert_from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
+    pub fn convert_from_data_value(value: DataValue) -> Result<Self, String> {
         match value {
-            UntypedDataValue::Multimodal(named_elements) => {
+            DataValue::Multimodal(named_elements) => {
                 let mut items = Vec::new();
-                for named in named_elements {
-                    let item = <T as MultimodalSchema>::from_untyped_element_value(
-                        named.name,
-                        named.value,
-                    )?;
+                for (name, value) in named_elements {
+                    let item = <T as MultimodalSchema>::from_raw_element_value(name, value)?;
                     items.push(item);
                 }
                 Ok(MultimodalAdvanced { items })
             }
-            _ => Err("Expected Multimodal UntypedDataValue".to_string()),
+            _ => Err("Expected Multimodal DataValue".to_string()),
         }
     }
 }
@@ -198,20 +189,20 @@ impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
-        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
     }
 
-    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
-        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
+        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
     }
 
-    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
-        self.convert_to_untyped_data_value()
+    fn to_data_value(self) -> Result<DataValue, String> {
+        self.convert_to_data_value()
     }
 
-    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
-        MultimodalAdvanced::convert_from_untyped_data_value(value)
+    fn from_data_value(value: DataValue) -> Result<Self, String> {
+        MultimodalAdvanced::convert_from_data_value(value)
     }
 }
 
@@ -280,20 +271,20 @@ impl Schema for Multimodal {
         Ok(Multimodal { value: advanced })
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
-        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
     }
 
-    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
-        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
+        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
     }
 
-    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
-        self.value.convert_to_untyped_data_value()
+    fn to_data_value(self) -> Result<DataValue, String> {
+        self.value.convert_to_data_value()
     }
 
-    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
-        MultimodalAdvanced::<BasicModality>::convert_from_untyped_data_value(value)
+    fn from_data_value(value: DataValue) -> Result<Self, String> {
+        MultimodalAdvanced::<BasicModality>::convert_from_data_value(value)
             .map(|v| Multimodal { value: v })
     }
 }
@@ -391,25 +382,25 @@ impl MultimodalSchema for BasicModality {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+    fn to_raw_element_value(self) -> Result<ElementValue, String> {
         match self {
-            BasicModality::Text(text) => Schema::to_untyped_element_value(text),
-            BasicModality::Binary(binary) => Schema::to_untyped_element_value(binary),
+            BasicModality::Text(text) => Schema::to_element_value(text),
+            BasicModality::Binary(binary) => Schema::to_element_value(binary),
         }
     }
 
-    fn from_untyped_element_value(name: String, value: UntypedElementValue) -> Result<Self, String>
+    fn from_raw_element_value(name: String, value: ElementValue) -> Result<Self, String>
     where
         Self: Sized,
     {
         match name.as_str() {
             "Text" => {
-                let text = UnstructuredText::from_untyped_element_value(value)?;
+                let text = UnstructuredText::from_element_value(value)?;
                 Ok(BasicModality::Text(text))
             }
             "Binary" => {
                 let binary =
-                    UnstructuredBinary::<String>::from_untyped_element_value(value)?;
+                    UnstructuredBinary::<String>::from_element_value(value)?;
                 Ok(BasicModality::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),
@@ -488,20 +479,20 @@ impl<T: Schema> Schema for MultimodalCustom<T> {
         Ok(MultimodalCustom { value: advanced })
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
-        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
     }
 
-    fn from_untyped_element_value(_value: UntypedElementValue) -> Result<Self, String> {
-        Err("Multimodal cannot be encoded as a single UntypedElementValue; it must be the sole parameter".to_string())
+    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
+        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
     }
 
-    fn to_untyped_data_value(self) -> Result<UntypedDataValue, String> {
-        self.value.convert_to_untyped_data_value()
+    fn to_data_value(self) -> Result<DataValue, String> {
+        self.value.convert_to_data_value()
     }
 
-    fn from_untyped_data_value(value: UntypedDataValue) -> Result<Self, String> {
-        MultimodalAdvanced::<CustomModality<T>>::convert_from_untyped_data_value(value)
+    fn from_data_value(value: DataValue) -> Result<Self, String> {
+        MultimodalAdvanced::<CustomModality<T>>::convert_from_data_value(value)
             .map(|v| MultimodalCustom { value: v })
     }
 }
@@ -583,26 +574,26 @@ impl<T: Schema> MultimodalSchema for CustomModality<T> {
         }
     }
 
-    fn to_untyped_element_value(self) -> Result<UntypedElementValue, String> {
+    fn to_raw_element_value(self) -> Result<ElementValue, String> {
         match self {
             CustomModality::Basic(basic) => {
-                <BasicModality as MultimodalSchema>::to_untyped_element_value(basic)
+                <BasicModality as MultimodalSchema>::to_raw_element_value(basic)
             }
-            CustomModality::Custom(custom) => Schema::to_untyped_element_value(custom),
+            CustomModality::Custom(custom) => Schema::to_element_value(custom),
         }
     }
 
-    fn from_untyped_element_value(name: String, value: UntypedElementValue) -> Result<Self, String>
+    fn from_raw_element_value(name: String, value: ElementValue) -> Result<Self, String>
     where
         Self: Sized,
     {
         match name.as_str() {
             "Text" | "Binary" => {
-                let basic = BasicModality::from_untyped_element_value(name, value)?;
+                let basic = BasicModality::from_raw_element_value(name, value)?;
                 Ok(CustomModality::Basic(basic))
             }
             "Custom" => {
-                let custom = T::from_untyped_element_value(value)?;
+                let custom = T::from_element_value(value)?;
                 Ok(CustomModality::Custom(custom))
             }
             _ => Err(format!("Unknown modality name: {}", name)),

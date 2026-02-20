@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { PathSegment } from 'golem:agent/common';
+import { PathSegment } from 'golem:agent/common@1.5.0';
 import { rejectEmptyString } from './validation';
 
 export function parsePath(path: string): PathSegment[] {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TextReference } from 'golem:agent/common';
+import { TextReference } from 'golem:agent/common@1.5.0';
 import * as Either from '../newTypes/either';
 
 type LanguageCode = string;

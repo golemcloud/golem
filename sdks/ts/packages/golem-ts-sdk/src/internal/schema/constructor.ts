@@ -17,7 +17,7 @@ import { ClassMetadata, ConstructorArg } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
 import * as WitType from '../mapping/types/WitType';
 
-import { DataSchema } from 'golem:agent/common';
+import { DataSchema } from 'golem:agent/common@1.5.0';
 import {
   getBinaryDescriptor,
   getMultimodalParamDetails,

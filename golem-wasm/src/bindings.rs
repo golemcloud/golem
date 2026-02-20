@@ -508,57 +508,6 @@ pub mod golem {
           }
         }
       }
-      /// An untyped element value, representing one element of an untyped data value
-      #[derive(Clone)]
-      pub enum UntypedElementValue {
-        ComponentModel(WitValue),
-        UnstructuredText(TextReference),
-        UnstructuredBinary(BinaryReference),
-      }
-      impl ::core::fmt::Debug for UntypedElementValue {
-        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-          match self {
-            UntypedElementValue::ComponentModel(e) => {
-              f.debug_tuple("UntypedElementValue::ComponentModel").field(e).finish()
-            }
-            UntypedElementValue::UnstructuredText(e) => {
-              f.debug_tuple("UntypedElementValue::UnstructuredText").field(e).finish()
-            }
-            UntypedElementValue::UnstructuredBinary(e) => {
-              f.debug_tuple("UntypedElementValue::UnstructuredBinary").field(e).finish()
-            }
-          }
-        }
-      }
-      /// A named untyped element value, used in multimodal data values
-      #[derive(Clone)]
-      pub struct UntypedNamedElementValue {
-        pub name: _rt::String,
-        pub value: UntypedElementValue,
-      }
-      impl ::core::fmt::Debug for UntypedNamedElementValue {
-        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-          f.debug_struct("UntypedNamedElementValue").field("name", &self.name).field("value", &self.value).finish()
-        }
-      }
-      /// An untyped data value, representing either a tuple of elements or a multimodal set of named elements
-      #[derive(Clone)]
-      pub enum UntypedDataValue {
-        Tuple(_rt::Vec::<UntypedElementValue>),
-        Multimodal(_rt::Vec::<UntypedNamedElementValue>),
-      }
-      impl ::core::fmt::Debug for UntypedDataValue {
-        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-          match self {
-            UntypedDataValue::Tuple(e) => {
-              f.debug_tuple("UntypedDataValue::Tuple").field(e).finish()
-            }
-            UntypedDataValue::Multimodal(e) => {
-              f.debug_tuple("UntypedDataValue::Multimodal").field(e).finish()
-            }
-          }
-        }
-      }
       #[allow(unused_unsafe, clippy::all)]
       /// Parses a UUID from a string
       #[allow(async_fn_in_trait)]
