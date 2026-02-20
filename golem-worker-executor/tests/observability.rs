@@ -66,7 +66,7 @@ async fn get_oplog_1(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "generate_idempotency_keys",
             data_value!(),
@@ -75,7 +75,7 @@ async fn get_oplog_1(
 
     executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key1,
             "generate_idempotency_keys",
@@ -85,7 +85,7 @@ async fn get_oplog_1(
 
     executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key2,
             "generate_idempotency_keys",
@@ -141,7 +141,7 @@ async fn search_oplog_1(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1000", "Golem T-Shirt M"),
@@ -150,7 +150,7 @@ async fn search_oplog_1(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -159,7 +159,7 @@ async fn search_oplog_1(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1002", "Mud Golem"),
@@ -168,7 +168,7 @@ async fn search_oplog_1(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1002", "Mud Golem"),
@@ -176,11 +176,11 @@ async fn search_oplog_1(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &repo_id, "get", data_value!("G1002"))
+        .invoke_and_await_agent(&component, &repo_id, "get", data_value!("G1002"))
         .await?;
 
     let result1 = executor.search_oplog(&worker_id, "G1002").await?;
@@ -243,11 +243,11 @@ async fn get_oplog_with_api_changing_updates(
     );
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f3", data_value!())
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f3", data_value!())
         .await?;
 
     executor
@@ -255,7 +255,7 @@ async fn get_oplog_with_api_changing_updates(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "f4", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f4", data_value!())
         .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -308,7 +308,7 @@ async fn get_oplog_starting_with_updated_component(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "f4", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f4", data_value!())
         .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -378,7 +378,7 @@ async fn invocation_context_test(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test1", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test1", data_value!())
         .await?;
 
     let start = std::time::Instant::now();

@@ -1625,7 +1625,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             method_name: method_name.clone(),
                             method_parameters: Some(method_parameters.clone()),
                             mode,
-                            schedule_at: schedule_at.clone(),
+                            schedule_at,
                             idempotency_key: idempotency_key.clone().map(|k| k.into()),
                             component_owner_account_id: Some(account_id.into()),
                             environment_id: Some(environment_id.into()),

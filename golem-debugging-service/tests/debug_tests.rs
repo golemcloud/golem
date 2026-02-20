@@ -1,6 +1,6 @@
 use crate::*;
 use golem_common::model::agent::AgentId;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionCompletedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{Timestamp, WorkerId};
@@ -76,7 +76,7 @@ async fn test_connect_invoked_worker(
 
     regular_worker_executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1000", "Golem T-Shirt M"),
@@ -85,7 +85,7 @@ async fn test_connect_invoked_worker(
 
     regular_worker_executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -121,7 +121,7 @@ async fn test_connect_and_playback(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -164,11 +164,11 @@ async fn test_connect_and_playback_raw(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     regular_worker_executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1002", "Mud Golem"),
@@ -176,7 +176,7 @@ async fn test_connect_and_playback_raw(
         .await?;
 
     regular_worker_executor
-        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     let oplogs = regular_worker_executor
@@ -256,7 +256,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -300,7 +300,7 @@ async fn test_playback_from_breakpoint(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -356,7 +356,7 @@ async fn test_playback_and_rewind(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -403,7 +403,7 @@ async fn test_playback_and_fork(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
+    run_repo_add_two(&regular_worker_executor, &component, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -431,7 +431,7 @@ async fn test_playback_and_fork(
     // Invoke the forked worker with another add
     regular_worker_executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &forked_repo_id,
             "add",
             data_value!("G1000", "Golem T-Shirt M"),
@@ -473,8 +473,7 @@ async fn test_playback_with_overrides(
         .start_agent(&component.id, repo_id.clone())
         .await?;
 
-    let workflow_result =
-        run_repo_workflow(&regular_worker_executor, &component.id, &repo_id).await?;
+    let workflow_result = run_repo_workflow(&regular_worker_executor, &component, &repo_id).await?;
 
     // Extract the actual response from the list invocation to get the correct type,
     // then construct a modified override value with the same type structure
@@ -570,12 +569,12 @@ fn previous_index(index: OplogIndex) -> OplogIndex {
 
 async fn run_repo_add_two(
     executor: &TestWorkerExecutor,
-    component_id: &ComponentId,
+    component: &ComponentDto,
     repo_id: &AgentId,
 ) -> anyhow::Result<()> {
     executor
         .invoke_and_await_agent(
-            component_id,
+            component,
             repo_id,
             "add",
             data_value!("G1000", "Golem T-Shirt M"),
@@ -584,7 +583,7 @@ async fn run_repo_add_two(
 
     executor
         .invoke_and_await_agent(
-            component_id,
+            component,
             repo_id,
             "add",
             data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -596,29 +595,24 @@ async fn run_repo_add_two(
 
 async fn run_repo_workflow(
     executor: &TestWorkerExecutor,
-    component_id: &ComponentId,
+    component: &ComponentDto,
     repo_id: &AgentId,
 ) -> anyhow::Result<RepoWorkflowResult> {
     // Add two items
-    run_repo_add_two(executor, component_id, repo_id).await?;
+    run_repo_add_two(executor, component, repo_id).await?;
 
     // List
     executor
-        .invoke_and_await_agent(component_id, repo_id, "list", data_value!())
+        .invoke_and_await_agent(component, repo_id, "list", data_value!())
         .await?;
 
     // Add another item
     executor
-        .invoke_and_await_agent(
-            component_id,
-            repo_id,
-            "add",
-            data_value!("G1002", "Mud Golem"),
-        )
+        .invoke_and_await_agent(component, repo_id, "add", data_value!("G1002", "Mud Golem"))
         .await?;
 
     let worker_id =
-        WorkerId::from_agent_id(*component_id, repo_id).map_err(|e| anyhow::anyhow!("{e}"))?;
+        WorkerId::from_agent_id(component.id, repo_id).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let oplogs = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 

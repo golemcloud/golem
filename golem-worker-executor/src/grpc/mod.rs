@@ -1684,12 +1684,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = worker.get_latest_worker_metadata().await;
         let worker_name = &metadata.worker_id.worker_name;
 
-        let agent_type_name =
-            AgentId::parse_agent_type_name(worker_name).map_err(|err| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Cannot parse agent type name from worker name '{worker_name}': {err}"
-                ))
-            })?;
+        let agent_type_name = AgentId::parse_agent_type_name(worker_name).map_err(|err| {
+            WorkerExecutorError::invalid_request(format!(
+                "Cannot parse agent type name from worker name '{worker_name}': {err}"
+            ))
+        })?;
 
         let component_metadata = worker
             .component_service()

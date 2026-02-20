@@ -50,7 +50,7 @@ async fn agent_self_rpc_is_not_allowed(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "selfRpc", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "selfRpc", data_value!())
         .await;
 
     let err = result.expect_err("Expected an error");
@@ -84,7 +84,7 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!(20f64))
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!(20f64))
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -126,7 +126,7 @@ async fn agent_env_inheritance(
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "envVarTest", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "envVarTest", data_value!())
         .await;
 
     let child_worker_id = WorkerId {
@@ -269,25 +269,25 @@ async fn ephemeral_agent_works(
     executor.log_output(&worker_id2).await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id1, "changeAndGet", data_value!())
+        .invoke_and_await_agent(&component, &agent_id1, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id1, "changeAndGet", data_value!())
+        .invoke_and_await_agent(&component, &agent_id1, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "changeAndGet", data_value!())
+        .invoke_and_await_agent(&component, &agent_id2, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");
 
     let result4 = executor
-        .invoke_and_await_agent(&component.id, &agent_id2, "changeAndGet", data_value!())
+        .invoke_and_await_agent(&component, &agent_id2, "changeAndGet", data_value!())
         .await?
         .into_return_value()
         .expect("Expected a return value");

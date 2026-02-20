@@ -26,9 +26,7 @@ use crate::custom_api::webhoooks::WebhookCallbackHandler;
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
-use crate::service::worker::{
-    WorkerClient, WorkerExecutorWorkerClient, WorkerService,
-};
+use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient, WorkerService};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};

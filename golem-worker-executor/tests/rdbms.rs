@@ -15,7 +15,7 @@
 use crate::Tracing;
 use golem_common::base_model::agent::AgentId;
 use golem_common::model::agent::DataValue;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
@@ -224,10 +224,10 @@ async fn rdbms_postgres_crud(
         .await?;
 
     let workers_1 =
-        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
+        start_workers::<PostgresType>(&executor, &component, &db_address, "", 1).await?;
 
     let workers_3 =
-        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 3).await?;
+        start_workers::<PostgresType>(&executor, &component, &db_address, "", 3).await?;
 
     let table_name = "test_users";
 
@@ -250,7 +250,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
     )
@@ -267,7 +267,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_3.clone(),
         RdbmsTest::new(
             vec![select_test1.clone(), select_test2],
@@ -280,7 +280,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Rollback)),
     )
@@ -288,7 +288,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::None)),
     )
@@ -298,7 +298,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -306,7 +306,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Commit)),
     )
@@ -316,7 +316,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -338,7 +338,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -346,7 +346,7 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         workers_3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -376,8 +376,7 @@ async fn rdbms_postgres_idempotency(
         .store()
         .await?;
 
-    let workers =
-        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
+    let workers = start_workers::<PostgresType>(&executor, &component, &db_address, "", 1).await?;
 
     let (worker_id, agent_id) = workers[0].clone();
 
@@ -406,7 +405,7 @@ async fn rdbms_postgres_idempotency(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -415,7 +414,7 @@ async fn rdbms_postgres_idempotency(
 
     let result2 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -434,7 +433,7 @@ async fn rdbms_postgres_idempotency(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -443,7 +442,7 @@ async fn rdbms_postgres_idempotency(
 
     let result2 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -466,7 +465,7 @@ async fn rdbms_postgres_idempotency(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -475,7 +474,7 @@ async fn rdbms_postgres_idempotency(
 
     let result2 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -496,7 +495,7 @@ async fn rdbms_postgres_idempotency(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -533,7 +532,7 @@ async fn postgres_transaction_recovery_test(
 
     let workers = start_workers::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &db_address,
         format!("-{}", fail_on.name()).as_str(),
         1,
@@ -558,7 +557,7 @@ async fn postgres_transaction_recovery_test(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         create_test.clone(),
@@ -578,7 +577,7 @@ async fn postgres_transaction_recovery_test(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         insert_test.clone(),
@@ -598,7 +597,7 @@ async fn postgres_transaction_recovery_test(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         select_test.clone(),
@@ -621,7 +620,7 @@ async fn postgres_transaction_recovery_test(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         select_test.clone(),
@@ -636,7 +635,7 @@ async fn postgres_transaction_recovery_test(
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         test.clone(),
@@ -898,11 +897,9 @@ async fn rdbms_mysql_crud(
         .store()
         .await?;
 
-    let workers_1 =
-        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let workers_1 = start_workers::<MysqlType>(&executor, &component, &db_address, "", 1).await?;
 
-    let workers_3 =
-        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 3).await?;
+    let workers_3 = start_workers::<MysqlType>(&executor, &component, &db_address, "", 3).await?;
 
     let table_name = "test_users";
 
@@ -926,7 +923,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
     )
@@ -943,7 +940,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_3.clone(),
         RdbmsTest::new(
             vec![select_test1.clone(), select_test2],
@@ -956,7 +953,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Rollback)),
     )
@@ -964,7 +961,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::None)),
     )
@@ -974,7 +971,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -982,7 +979,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Commit)),
     )
@@ -992,7 +989,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -1014,7 +1011,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -1022,7 +1019,7 @@ async fn rdbms_mysql_crud(
 
     rdbms_workers_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         workers_3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
@@ -1052,7 +1049,7 @@ async fn rdbms_mysql_idempotency(
         .store()
         .await?;
 
-    let workers = start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let workers = start_workers::<MysqlType>(&executor, &component, &db_address, "", 1).await?;
 
     let (worker_id, agent_id) = workers[0].clone();
 
@@ -1082,7 +1079,7 @@ async fn rdbms_mysql_idempotency(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1091,7 +1088,7 @@ async fn rdbms_mysql_idempotency(
 
     let result2 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1109,7 +1106,7 @@ async fn rdbms_mysql_idempotency(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1118,7 +1115,7 @@ async fn rdbms_mysql_idempotency(
 
     let result2 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1138,7 +1135,7 @@ async fn rdbms_mysql_idempotency(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1147,7 +1144,7 @@ async fn rdbms_mysql_idempotency(
 
     let result2 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1168,7 +1165,7 @@ async fn rdbms_mysql_idempotency(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key,
         test.clone(),
@@ -1205,7 +1202,7 @@ async fn mysql_transaction_recovery_test(
 
     let workers = start_workers::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &db_address,
         format!("-{}", fail_on.name()).as_str(),
         1,
@@ -1230,7 +1227,7 @@ async fn mysql_transaction_recovery_test(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         create_test.clone(),
@@ -1250,7 +1247,7 @@ async fn mysql_transaction_recovery_test(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         insert_test.clone(),
@@ -1267,7 +1264,7 @@ async fn mysql_transaction_recovery_test(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         select_test.clone(),
@@ -1288,7 +1285,7 @@ async fn mysql_transaction_recovery_test(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         select_test.clone(),
@@ -1303,7 +1300,7 @@ async fn mysql_transaction_recovery_test(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         test.clone(),
@@ -1561,7 +1558,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
         .store()
         .await?;
 
-    let workers = start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let workers = start_workers::<MysqlType>(&executor, &component, &db_address, "", 1).await?;
 
     let (worker_id, agent_id) = workers[0].clone();
 
@@ -1584,7 +1581,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         create_read_user_test.clone(),
@@ -1595,7 +1592,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 
     let db_address = mysql.public_connection_string_with_user("global_reader", "SomeSecurePass!");
 
-    let workers = start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let workers = start_workers::<MysqlType>(&executor, &component, &db_address, "", 1).await?;
 
     let (_worker_id, agent_id) = workers[0].clone();
 
@@ -1610,7 +1607,7 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
-        &component.id,
+        &component,
         &agent_id,
         &IdempotencyKey::fresh(),
         test.clone(),
@@ -1642,16 +1639,16 @@ async fn rdbms_component_test<T: RdbmsType>(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let workers = start_workers::<T>(&executor, &component.id, db_address, "", n_workers).await?;
+    let workers = start_workers::<T>(&executor, &component, db_address, "", n_workers).await?;
 
-    rdbms_workers_test::<T>(&executor, &component.id, workers, test).await?;
+    rdbms_workers_test::<T>(&executor, &component, workers, test).await?;
 
     Ok(())
 }
 
 async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
-    component_id: &ComponentId,
+    component: &ComponentDto,
     workers: Vec<(WorkerId, AgentId)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
@@ -1663,12 +1660,12 @@ async fn rdbms_workers_test<T: RdbmsType>(
         let worker_id_clone = worker_id.clone();
         let executor_clone = executor.clone();
         let test_clone = test.clone();
-        let component_id_clone = *component_id;
+        let component_clone = component.clone();
         let _ = fibers.spawn(
             async move {
                 let result = execute_worker_test::<T>(
                     &executor_clone,
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id,
                     &IdempotencyKey::fresh(),
                     test_clone,
@@ -1698,7 +1695,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 
 async fn execute_worker_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
-    component_id: &ComponentId,
+    component: &ComponentDto,
     agent_id: &AgentId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
@@ -1744,13 +1741,7 @@ async fn execute_worker_test<T: RdbmsType>(
     };
 
     executor
-        .invoke_and_await_agent_with_key(
-            component_id,
-            agent_id,
-            idempotency_key,
-            &method_name,
-            params,
-        )
+        .invoke_and_await_agent_with_key(component, agent_id, idempotency_key, &method_name, params)
         .await
 }
 
@@ -1806,7 +1797,7 @@ fn get_test_result_error(result: DataValue) -> String {
 
 async fn start_workers<T: RdbmsType>(
     executor: &TestWorkerExecutor,
-    component_id: &ComponentId,
+    component: &ComponentDto,
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
@@ -1827,11 +1818,11 @@ async fn start_workers<T: RdbmsType>(
         );
         let agent_id = agent_id!("relational-databases", worker_name);
         let worker_id = executor
-            .start_agent_with(component_id, agent_id.clone(), env.clone(), vec![])
+            .start_agent_with(&component.id, agent_id.clone(), env.clone(), vec![])
             .await?;
         workers.push((worker_id, agent_id.clone()));
         let _result = executor
-            .invoke_and_await_agent(component_id, &agent_id, "check", data_value!())
+            .invoke_and_await_agent(component, &agent_id, "check", data_value!())
             .await?;
     }
     Ok(workers)

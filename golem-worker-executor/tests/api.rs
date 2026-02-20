@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use axum::routing::get;
 use axum::Router;
 use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
@@ -87,17 +87,17 @@ async fn interruption(
     // Warmup: ensure the agent constructor has completed before we invoke the
     // long-running function we intend to interrupt.
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "sleep_for", data_value!(0.0f64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
                 .invoke_and_await_agent(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     "interruption",
                     data_value!(),
@@ -146,7 +146,7 @@ async fn delete_interrupts_long_rpc_call(
 
     executor
         .invoke_agent(
-            &component.id,
+            &component,
             &agent_id,
             "long-rpc-call",
             data_value!(600000f64), // 10 minutes
@@ -189,13 +189,13 @@ async fn simulated_crash(
     let mut rx = executor.capture_output(&worker_id).await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
                 .invoke_and_await_agent(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     "interruption",
                     data_value!(),
@@ -248,7 +248,7 @@ async fn shopping_cart_example(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1000", "Golem T-Shirt M"),
@@ -257,7 +257,7 @@ async fn shopping_cart_example(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -266,7 +266,7 @@ async fn shopping_cart_example(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1002", "Mud Golem"),
@@ -275,7 +275,7 @@ async fn shopping_cart_example(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &repo_id,
             "add",
             data_value!("G1002", "Mud Golem"),
@@ -283,7 +283,7 @@ async fn shopping_cart_example(
         .await?;
 
     let contents = executor
-        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -337,13 +337,13 @@ async fn dynamic_worker_creation(
     let agent_id = agent_id!("environment", "dynamic-worker-creation-1");
 
     let args = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_arguments", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let env = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -426,11 +426,11 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .await?;
 
     let _ = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?
         .into_return_value();
 
@@ -466,7 +466,7 @@ async fn promise(
         .await?;
 
     let promise_id_value = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "create_promise", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -478,16 +478,11 @@ async fn promise(
     });
 
     let poll1 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "poll_promise",
-            promise_data.clone(),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data.clone())
         .await;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let promise_data_clone = promise_data.clone();
 
@@ -495,7 +490,7 @@ async fn promise(
         async move {
             executor_clone
                 .invoke_and_await_agent(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     "await_promise",
                     promise_data_clone,
@@ -533,7 +528,7 @@ async fn promise(
     let result = fiber.await??;
 
     let poll2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "poll_promise", promise_data)
+        .invoke_and_await_agent(&component, &agent_id, "poll_promise", promise_data)
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -599,7 +594,7 @@ async fn get_workers_from_worker(
         .await?;
 
     async fn get_check(
-        component_id: &ComponentId,
+        component: &ComponentDto,
         caller_agent_id: &golem_common::base_model::agent::AgentId,
         name_filter: Option<String>,
         expected_count: usize,
@@ -607,7 +602,7 @@ async fn get_workers_from_worker(
         mut type_resolve: SharedAnalysedTypeResolve,
     ) -> anyhow::Result<()> {
         let component_id_val_and_type = {
-            let (high, low) = component_id.0.as_u64_pair();
+            let (high, low) = component.id.0.as_u64_pair();
             Record(vec![(
                 "uuid",
                 Record(vec![
@@ -656,7 +651,7 @@ async fn get_workers_from_worker(
         });
 
         let result = executor
-            .invoke_and_await_agent(component_id, caller_agent_id, "get_workers", params)
+            .invoke_and_await_agent(component, caller_agent_id, "get_workers", params)
             .await?;
 
         let result_value = result
@@ -674,7 +669,7 @@ async fn get_workers_from_worker(
         Ok(())
     }
     get_check(
-        &component.id,
+        &component,
         &agent_id1,
         None,
         2,
@@ -683,7 +678,7 @@ async fn get_workers_from_worker(
     )
     .await?;
     get_check(
-        &component.id,
+        &component,
         &agent_id2,
         Some("golem-host-api(\"worker-3\")".to_string()),
         1,
@@ -739,15 +734,15 @@ async fn get_metadata_from_worker(
     }
 
     async fn get_check(
-        component_id: &ComponentId,
+        component: &ComponentDto,
         caller_agent_id: &golem_common::base_model::agent::AgentId,
         other_agent_id: &golem_common::base_model::agent::AgentId,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
-        let agent_id_val1 = get_agent_id_val(component_id, caller_agent_id);
+        let agent_id_val1 = get_agent_id_val(&component.id, caller_agent_id);
 
         let result = executor
-            .invoke_and_await_agent(component_id, caller_agent_id, "get_self_uri", data_value!())
+            .invoke_and_await_agent(component, caller_agent_id, "get_self_uri", data_value!())
             .await?;
 
         let result_value = result
@@ -764,7 +759,7 @@ async fn get_metadata_from_worker(
             }
         }
 
-        let agent_id_val2 = get_agent_id_val(component_id, other_agent_id);
+        let agent_id_val2 = get_agent_id_val(&component.id, other_agent_id);
 
         let other_agent_id_val_and_type = ValueAndType {
             value: agent_id_val2.clone(),
@@ -788,7 +783,7 @@ async fn get_metadata_from_worker(
         });
 
         let result = executor
-            .invoke_and_await_agent(component_id, caller_agent_id, "get_worker_metadata", params)
+            .invoke_and_await_agent(component, caller_agent_id, "get_worker_metadata", params)
             .await?;
 
         let result_value = result
@@ -815,8 +810,8 @@ async fn get_metadata_from_worker(
         Ok(())
     }
 
-    get_check(&component.id, &agent_id1, &agent_id2, &executor).await?;
-    get_check(&component.id, &agent_id2, &agent_id1, &executor).await?;
+    get_check(&component, &agent_id1, &agent_id2, &executor).await?;
+    get_check(&component, &agent_id2, &agent_id1, &executor).await?;
 
     executor.check_oplog_is_queryable(&worker_id1).await?;
     executor.check_oplog_is_queryable(&worker_id2).await?;
@@ -846,7 +841,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     let idempotency_key = IdempotencyKey::fresh();
     executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &repo_id,
             &idempotency_key,
             "add",
@@ -856,7 +851,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
 
     executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &repo_id,
             &idempotency_key,
             "add",
@@ -865,7 +860,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
         .await?;
 
     let contents = executor
-        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -908,7 +903,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     let idempotency_key = IdempotencyKey::fresh();
     executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &repo_id,
             &idempotency_key,
             "add",
@@ -921,7 +916,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 
     executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &repo_id,
             &idempotency_key,
             "add",
@@ -930,7 +925,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .await?;
 
     let contents = executor
-        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -974,7 +969,7 @@ async fn component_env_variables(
     let worker_name = agent_id.to_string();
 
     let env = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1059,7 +1054,7 @@ async fn component_env_variables_update(
         .await?;
 
     let env = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1134,7 +1129,7 @@ async fn delete_worker(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
     let metadata1 = executor.get_worker_metadata(&worker_id).await;
@@ -1210,7 +1205,7 @@ async fn get_workers(
 
     for (worker_id, agent_id) in worker_ids.clone() {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
 
         get_check(
@@ -1327,7 +1322,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
         .await?;
 
     let failure = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1359,7 +1354,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
 
     let failure = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "increment",
             data_value!("extra parameter"),
@@ -1399,13 +1394,13 @@ async fn get_worker_metadata(
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
                 .invoke_and_await_agent(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     "sleep",
                     data_value!(2u64),
@@ -1475,12 +1470,12 @@ async fn create_invoke_delete_create_invoke(
         .await?;
 
     let r1 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
     assert_eq!(r1.into_return_value(), Some(Value::U32(1)));
 
     let r2 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
     assert_eq!(r2.into_return_value(), Some(Value::U32(2)));
 
@@ -1491,7 +1486,7 @@ async fn create_invoke_delete_create_invoke(
         .await?;
 
     let r3 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
     assert_eq!(r3.into_return_value(), Some(Value::U32(1)));
 
@@ -1524,7 +1519,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .await?;
 
     let r1 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
     // Updating the component with an incompatible new version
@@ -1539,7 +1534,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .await?;
 
     let r2 = executor
-        .invoke_and_await_agent(&component.id, &new_agent_id, "value", data_value!())
+        .invoke_and_await_agent(&component, &new_agent_id, "value", data_value!())
         .await?;
 
     // Restarting the server to force worker recovery
@@ -1548,7 +1543,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     // Call the first worker again to check if it is still working
     let r3 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
     let worker_id = WorkerId::from_agent_id(component.id, &counter_id)
@@ -1586,7 +1581,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
         .await?;
 
     let r1 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
     // Updating the component with an incompatible new version that also has a "counter" agent
@@ -1604,7 +1599,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
         .await?;
 
     let r2 = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "get_value", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1734,7 +1729,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
     // trying to invoke the previously created worker
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await;
 
     let err = result.expect_err("Expected ComponentParseFailed error");
@@ -1801,12 +1796,7 @@ async fn long_running_poll_loop_works_as_expected(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -1908,7 +1898,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
 
     executor
         .invoke_agent(
-            &component.id,
+            &component,
             &agent_id,
             "start_polling",
             data_value!("stop now"),
@@ -2022,12 +2012,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -2099,12 +2084,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -2143,7 +2123,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
     executor
         .invoke_agent(
-            &component.id,
+            &component,
             &agent_id,
             "start_polling",
             data_value!("second"),
@@ -2248,12 +2228,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -2340,12 +2315,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -2426,12 +2396,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -2567,12 +2532,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("first"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
         .await?;
 
     executor
@@ -2619,11 +2579,11 @@ async fn counter_resource_test_1(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(5u64))
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     let result_value = result
@@ -2662,17 +2622,17 @@ async fn reconstruct_interrupted_state(
     // Warmup: ensure the agent constructor has completed before we invoke the
     // long-running function we intend to interrupt.
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "sleep_for", data_value!(0.0f64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
                 .invoke_and_await_agent(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     "interruption",
                     data_value!(),
@@ -2764,12 +2724,7 @@ async fn invocation_queue_is_persistent(
     executor.log_output(&worker_id).await?;
 
     executor
-        .invoke_agent(
-            &component.id,
-            &agent_id,
-            "start_polling",
-            data_value!("done"),
-        )
+        .invoke_agent(&component, &agent_id, "start_polling", data_value!("done"))
         .await?;
 
     executor
@@ -2777,15 +2732,15 @@ async fn invocation_queue_is_persistent(
         .await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     executor.interrupt(&worker_id).await?;
@@ -2804,7 +2759,7 @@ async fn invocation_queue_is_persistent(
     let executor = start(deps, &context).await?;
 
     executor
-        .invoke_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     // executor.log_output(&worker_id).await?;
@@ -2818,7 +2773,7 @@ async fn invocation_queue_is_persistent(
     }
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
         .await?;
 
     http_server.abort();
@@ -2852,12 +2807,12 @@ async fn invoke_with_non_existing_function(
 
     // First we invoke a function that does not exist and expect a failure
     let failure = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "WRONG", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "WRONG", data_value!())
         .await;
 
     // Then we invoke an existing function, to prove the worker should not be in failed state
     let success = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
     assert!(failure.is_err());
@@ -2892,7 +2847,7 @@ async fn invoke_with_wrong_parameters(
     // First we invoke an existing function with wrong parameters
     let failure = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &counter_id,
             "increment",
             data_value!("unexpected"),
@@ -2901,7 +2856,7 @@ async fn invoke_with_wrong_parameters(
 
     // Then we invoke an existing function to prove the worker should not be in failed state
     let success = executor
-        .invoke_and_await_agent(&component.id, &counter_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
     assert!(failure.is_err());
@@ -2932,17 +2887,17 @@ async fn stderr_returned_for_failed_component(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(50u64))
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
@@ -3034,18 +2989,12 @@ async fn cancelling_pending_invocations(
 
     // inc_by(5) with ik1 - completes immediately
     executor
-        .invoke_and_await_agent_with_key(
-            &component.id,
-            &agent_id,
-            &ik1,
-            "inc_by",
-            data_value!(5u64),
-        )
+        .invoke_and_await_agent_with_key(&component, &agent_id, &ik1, "inc_by", data_value!(5u64))
         .await?;
 
     // create_promise - returns a PromiseId
     let promise_id_value = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "create_promise", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3055,7 +3004,7 @@ async fn cancelling_pending_invocations(
     // await_promise (fire-and-forget) - worker suspends
     executor
         .invoke_agent(
-            &component.id,
+            &component,
             &agent_id,
             "await_promise",
             DataValue::Tuple(ElementValues {
@@ -3066,11 +3015,11 @@ async fn cancelling_pending_invocations(
 
     // Queue inc_by(6) with ik2 and inc_by(7) with ik3 while suspended
     executor
-        .invoke_agent_with_key(&component.id, &agent_id, &ik2, "inc_by", data_value!(6u64))
+        .invoke_agent_with_key(&component, &agent_id, &ik2, "inc_by", data_value!(6u64))
         .await?;
 
     executor
-        .invoke_agent_with_key(&component.id, &agent_id, &ik3, "inc_by", data_value!(7u64))
+        .invoke_agent_with_key(&component, &agent_id, &ik3, "inc_by", data_value!(7u64))
         .await?;
 
     let cancel1 = executor.cancel_invocation(&worker_id, &ik1).await;
@@ -3097,7 +3046,7 @@ async fn cancelling_pending_invocations(
 
     // get_value should be 5 + 7 = 12 (ik1 already done, ik2 cancelled, ik3 goes through)
     let final_result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -3156,7 +3105,7 @@ async fn resolve_components_from_name(
 
     let result = executor
         .invoke_and_await_agent(
-            &resolver_component.id,
+            &resolver_component,
             &agent_id,
             "resolve_component",
             data_value!(),
@@ -3215,7 +3164,7 @@ async fn scheduled_invocation(
     {
         executor
             .invoke_and_await_agent(
-                &component.id,
+                &component,
                 &client_agent_id,
                 "test1",
                 data_value!(server_agent_name.clone()),
@@ -3226,7 +3175,7 @@ async fn scheduled_invocation(
         while !done {
             let result = executor
                 .invoke_and_await_agent(
-                    &component.id,
+                    &component,
                     &server_agent_id,
                     "get_global_value",
                     data_value!(),
@@ -3245,7 +3194,7 @@ async fn scheduled_invocation(
     {
         executor
             .invoke_and_await_agent(
-                &component.id,
+                &component,
                 &client_agent_id,
                 "test2",
                 data_value!(server_agent_name.clone()),
@@ -3256,7 +3205,7 @@ async fn scheduled_invocation(
 
         let result = executor
             .invoke_and_await_agent(
-                &component.id,
+                &component,
                 &server_agent_id,
                 "get_global_value",
                 data_value!(),
@@ -3269,14 +3218,14 @@ async fn scheduled_invocation(
     // third invocation: schedule increment on self in the future and poll
     {
         executor
-            .invoke_and_await_agent(&component.id, &client_agent_id, "test3", data_value!())
+            .invoke_and_await_agent(&component, &client_agent_id, "test3", data_value!())
             .await?;
 
         let mut done = false;
         while !done {
             let result = executor
                 .invoke_and_await_agent(
-                    &component.id,
+                    &component,
                     &client_agent_id,
                     "get_global_value",
                     data_value!(),
@@ -3318,11 +3267,11 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
         .await?;
 
     let failure = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!("not-a-number"))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!("not-a-number"))
         .await;
 
     let success = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
         .await;
 
     // TODO: the parameter type mismatch causes printing to fail due to a corrupted WasmValue.
@@ -3363,7 +3312,7 @@ async fn delete_worker_during_invocation(
     // Enqueuing a large number of invocations, each sleeping for 2 seconds
     for _ in 0..25 {
         executor
-            .invoke_agent(&component.id, &agent_id, "sleep", data_value!(2u64))
+            .invoke_agent(&component, &agent_id, "sleep", data_value!(2u64))
             .await?;
     }
 
@@ -3377,7 +3326,7 @@ async fn delete_worker_during_invocation(
     info!("Invoking again");
     // Invoke it one more time - it should create a new instance and return successfully
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(1u64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(1u64))
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
@@ -3417,7 +3366,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let invoking_task = {
         let executor = executor.clone();
-        let component_id = component.id;
+        let component_clone = component.clone();
         let agent_id = agent_id.clone();
         tokio::spawn(async move {
             let mut result = None;
@@ -3425,7 +3374,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 result = Some(
                     executor
                         .invoke_and_await_agent(
-                            &component_id,
+                            &component_clone,
                             &agent_id,
                             "inc_global_by",
                             data_value!(1u64),

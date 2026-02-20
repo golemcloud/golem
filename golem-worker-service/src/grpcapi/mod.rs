@@ -73,11 +73,9 @@ pub async fn start_grpc_server(
             .add_service(reflection_service)
             .add_service(health_service)
             .add_service(
-                WorkerServiceServer::new(WorkerGrpcApi::new(
-                    services.worker_service.clone(),
-                ))
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip),
+                WorkerServiceServer::new(WorkerGrpcApi::new(services.worker_service.clone()))
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip),
             )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .map_err(anyhow::Error::from)
