@@ -22,6 +22,7 @@ pub struct AgentDefinitionAttributes {
     pub agent_mode: TokenStream,
     pub http_mount: Option<TokenStream>,
     pub snapshotting: TokenStream,
+    pub config: Option<syn::Type>,
 }
 
 pub fn parse_agent_definition_attributes(
@@ -40,12 +41,14 @@ pub fn parse_agent_definition_attributes(
         phantom_agent: false,
         webhook_suffix: None,
     };
+    let mut config = None;
 
     if attrs.is_empty() {
         return Ok(AgentDefinitionAttributes {
             agent_mode: mode,
             http_mount: None,
             snapshotting,
+            config,
         });
     }
 
@@ -108,9 +111,20 @@ pub fn parse_agent_definition_attributes(
                         ));
                     }
                 }
+
+                if left.path.is_ident("config") {
+                    if let Expr::Lit(ExprLit {
+                        lit: Lit::Str(lit), ..
+                    }) = &*assign.right
+                    {
+                        config = Some(lit.parse::<syn::Type>()?);
+                        continue;
+                    } else {
+                        return Err(Error::new_spanned(&assign.right, "config must be a type"));
+                    }
+                }
             }
         }
-
         parse_http_expr(expr, &mut http)?;
     }
 
@@ -141,6 +155,7 @@ pub fn parse_agent_definition_attributes(
         agent_mode: mode,
         http_mount: http_tokens,
         snapshotting,
+        config,
     })
 }
 
@@ -244,7 +259,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: mode, snapshotting, mount, auth, phantom-agent, cors, webhook-suffix",
+        "Unknown agent_definition parameter. Valid parameters are: mode, snapshotting, config, mount, auth, phantom-agent, cors, webhook-suffix",
     ))
 }
 

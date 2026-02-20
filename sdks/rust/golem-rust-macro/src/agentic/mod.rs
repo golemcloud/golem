@@ -18,6 +18,7 @@ pub use allowed_language_derivation::*;
 pub use allowed_mimetypes_derivation::*;
 pub use client_generation::*;
 pub use compile_errors::*;
+pub use config_schema_derivation::*;
 pub use multimodal_derivation::*;
 pub use schema_derivation::*;
 
@@ -29,6 +30,7 @@ mod allowed_language_derivation;
 mod allowed_mimetypes_derivation;
 mod client_generation;
 mod compile_errors;
+mod config_schema_derivation;
 mod helpers;
 mod multimodal_derivation;
 mod schema_derivation;
