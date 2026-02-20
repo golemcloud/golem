@@ -451,7 +451,9 @@ macro_rules! data_value {
                 $crate::model::agent::ElementValues {
                     elements: vec![
                         $($crate::model::agent::ElementValue::ComponentModel(
-                            $element.convert_to_value_and_type()
+                            $crate::model::agent::ComponentModelElementValue {
+                                value: $element.convert_to_value_and_type()
+                            }
                         )),*
                     ],
                 }

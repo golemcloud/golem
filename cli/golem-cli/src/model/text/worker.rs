@@ -25,7 +25,7 @@ use base64::Engine;
 use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
-use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::agent::{BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
@@ -520,11 +520,22 @@ impl TextView for PublicOplogEntry {
                 ));
             }
             PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
-                PublicWorkerInvocation::ExportedFunction(inner_params) => {
+                PublicWorkerInvocation::AgentInitialization(inner_params) => {
+                    logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&inner_params.idempotency_key),
+                    ));
+                }
+                PublicWorkerInvocation::AgentMethodInvocation(inner_params) => {
                     logln(format!(
                         "{} {}",
                         format_message_highlight("ENQUEUED INVOCATION"),
-                        format_id(&inner_params.full_function_name),
+                        format_id(&inner_params.method_name),
                     ));
                     logln(format!(
                         "{pad}at:                {}",
@@ -534,12 +545,27 @@ impl TextView for PublicOplogEntry {
                         "{pad}idempotency key:   {}",
                         format_id(&inner_params.idempotency_key),
                     ));
-                    if let Some(input) = &inner_params.function_input {
-                        logln(format!("{pad}input:"));
-                        for param in input {
-                            logln(format!("{pad}  - {}", value_to_string(param)));
-                        }
-                    }
+                }
+                PublicWorkerInvocation::SaveSnapshot(_) => {
+                    logln(format_message_highlight("ENQUEUED SAVE SNAPSHOT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicWorkerInvocation::LoadSnapshot(_) => {
+                    logln(format_message_highlight("ENQUEUED LOAD SNAPSHOT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicWorkerInvocation::ProcessOplogEntries(_) => {
+                    logln(format_message_highlight("ENQUEUED PROCESS OPLOG ENTRIES"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
                 }
                 PublicWorkerInvocation::ManualUpdate(inner_params) => {
                     logln(format_message_highlight("ENQUEUED MANUAL UPDATE"));
@@ -913,10 +939,10 @@ fn log_data_value(pad: &str, value: &DataValue) {
 #[allow(dead_code)]
 fn log_element_value(pad: &str, value: &ElementValue) {
     match value {
-        ElementValue::ComponentModel(value) => {
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
             logln(format!("{pad}- {}", value_to_string(value)));
         }
-        ElementValue::UnstructuredText(value) => match value {
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
             TextReference::Url(url) => {
                 logln(format!("{pad}- URL: {}", format_id(&url.value)));
             }
@@ -930,7 +956,7 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                 }
             }
         },
-        ElementValue::UnstructuredBinary(value) => match value {
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => match value {
             BinaryReference::Url(url) => {
                 logln(format!("{pad}- URL: {}", format_id(&url.value)));
             }

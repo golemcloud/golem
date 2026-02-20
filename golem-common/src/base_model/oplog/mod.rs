@@ -36,7 +36,7 @@ mod raw_imports {
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::*;
-    pub use crate::model::{RetryConfig, WorkerInvocation};
+    pub use crate::model::{RetryConfig, AgentInvocation};
     pub use golem_wasm::wasmtime::ResourceTypeId;
     pub use golem_wasm::Value;
     pub use std::collections::{HashMap, HashSet};
@@ -91,7 +91,7 @@ oplog_entry! {
             original_phantom_id: Option<Uuid>
         }
     },
-    /// The worker invoked a host function
+    /// The agent invoked a host function
     HostCall {
         hint: false
         raw {
@@ -107,7 +107,7 @@ oplog_entry! {
             durable_function_type: PublicDurableFunctionType,
         }
     },
-    /// The worker has been invoked
+    /// The agent has been invoked
     ExportedFunctionInvoked {
         hint: false
         raw {
@@ -127,7 +127,7 @@ oplog_entry! {
             invocation_context: Vec<Vec<PublicSpanData>>,
         }
     },
-    /// The worker has completed an invocation
+    /// The agent has completed an invocation
     ExportedFunctionCompleted {
         hint: false
         raw {
@@ -245,7 +245,7 @@ oplog_entry! {
     PendingWorkerInvocation {
         hint: true
         raw {
-            invocation: WorkerInvocation,
+            invocation: AgentInvocation,
         }
         public {
             invocation: PublicWorkerInvocation

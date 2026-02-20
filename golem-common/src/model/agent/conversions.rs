@@ -21,11 +21,13 @@ use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
     AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
-    BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue,
-    ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    BinaryType, ComponentModelElementSchema, ComponentModelElementValue, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues,
     RegisteredAgentType, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
-    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue, Url,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue, UntypedDataValue,
+    UntypedElementValue, UntypedNamedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
@@ -331,12 +333,14 @@ impl DataValue {
 impl From<ElementValue> for UntypedElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(vat) => UntypedElementValue::ComponentModel(vat.value),
-            ElementValue::UnstructuredText(text_ref) => {
-                UntypedElementValue::UnstructuredText(TextReferenceValue { value: text_ref })
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                UntypedElementValue::ComponentModel(value.value)
             }
-            ElementValue::UnstructuredBinary(bin_ref) => {
-                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value: bin_ref })
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                UntypedElementValue::UnstructuredText(TextReferenceValue { value })
+            }
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value })
             }
         }
     }
@@ -433,19 +437,19 @@ impl ElementValue {
             ) => {
                 let val: Value = wit_value.into();
                 let typ: AnalysedType = wit_schema.into();
-                Ok(ElementValue::ComponentModel(ValueAndType::new(val, typ)))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(val, typ) }))
             }
             (
                 crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredText(text),
-                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(_),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(descriptor),
             ) => {
-                Ok(ElementValue::UnstructuredText(text.into()))
+                Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text.into(), descriptor: descriptor.into() }))
             }
             (
                 crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredBinary(binary),
-                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredBinary(_),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredBinary(descriptor),
             ) => {
-                Ok(ElementValue::UnstructuredBinary(binary.into()))
+                Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: binary.into(), descriptor: descriptor.into() }))
             }
             _ => Err("Element value does not match schema".to_string()),
         }
@@ -461,16 +465,16 @@ impl ElementValue {
                 ElementSchema::ComponentModel(component_model_schema),
             ) => {
                 let typ: AnalysedType = component_model_schema.element_type;
-                Ok(ElementValue::ComponentModel(ValueAndType::new(value, typ)))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(value, typ) }))
             }
             (
                 UntypedElementValue::UnstructuredText(text_ref),
-                ElementSchema::UnstructuredText(_),
-            ) => Ok(ElementValue::UnstructuredText(text_ref.value)),
+                ElementSchema::UnstructuredText(descriptor),
+            ) => Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text_ref.value, descriptor })),
             (
                 UntypedElementValue::UnstructuredBinary(binary_ref),
-                ElementSchema::UnstructuredBinary(_),
-            ) => Ok(ElementValue::UnstructuredBinary(binary_ref.value)),
+                ElementSchema::UnstructuredBinary(descriptor),
+            ) => Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: binary_ref.value, descriptor })),
             _ => Err("Element value does not match schema".to_string()),
         }
     }
@@ -479,17 +483,15 @@ impl ElementValue {
 impl From<ElementValue> for super::bindings::golem::agent::common::ElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(wit_value) => {
-                super::bindings::golem::agent::common::ElementValue::ComponentModel(
-                    wit_value.into(),
-                )
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                super::bindings::golem::agent::common::ElementValue::ComponentModel(value.into())
             }
-            ElementValue::UnstructuredText(text) => {
-                super::bindings::golem::agent::common::ElementValue::UnstructuredText(text.into())
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                super::bindings::golem::agent::common::ElementValue::UnstructuredText(value.into())
             }
-            ElementValue::UnstructuredBinary(binary) => {
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
                 super::bindings::golem::agent::common::ElementValue::UnstructuredBinary(
-                    binary.into(),
+                    value.into(),
                 )
             }
         }

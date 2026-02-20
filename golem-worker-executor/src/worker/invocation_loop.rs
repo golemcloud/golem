@@ -36,7 +36,7 @@ use golem_common::model::{
     OplogIndex,
 };
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    IdempotencyKey, OwnedWorkerId, TimestampedAgentInvocation, WorkerId, AgentInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -478,37 +478,59 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// it is a special case of the exported function invocation).
     async fn external_invocation(
         &mut self,
-        inner: TimestampedWorkerInvocation,
+        inner: TimestampedAgentInvocation,
         invocation_span: &Span,
     ) -> CommandOutcome {
         match inner.invocation {
-            WorkerInvocation::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => {
-                // Need to check if the same idempotency key has already been processed and then ignore this entry.
-                let has_result = {
-                    let invocation_results = self.parent.invocation_results.read().await;
-                    invocation_results.contains_key(&idempotency_key)
-                };
-                if !has_result {
-                    self.invoke_exported_function(
-                        invocation_context,
-                        idempotency_key,
-                        full_function_name,
-                        function_input,
-                        invocation_span,
-                    )
-                    .await
-                } else {
-                    debug!("Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result");
-                    CommandOutcome::Continue
-                }
-            }
-            WorkerInvocation::ManualUpdate { target_revision } => {
+            // AgentInvocation::ExportedFunction {
+            //     idempotency_key,
+            //     full_function_name,
+            //     function_input,
+            //     invocation_context,
+            // } => {
+            //     // Need to check if the same idempotency key has already been processed and then ignore this entry.
+            //     let has_result = {
+            //         let invocation_results = self.parent.invocation_results.read().await;
+            //         invocation_results.contains_key(&idempotency_key)
+            //     };
+            //     if !has_result {
+            //         self.invoke_exported_function(
+            //             invocation_context,
+            //             idempotency_key,
+            //             full_function_name,
+            //             function_input,
+            //             invocation_span,
+            //         )
+            //         .await
+            //     } else {
+            //         debug!("Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result");
+            //         CommandOutcome::Continue
+            //     }
+            // }
+            AgentInvocation::ManualUpdate { target_revision } => {
                 self.manual_update(target_revision).await
+            }
+            AgentInvocation::AgentInitialization { .. } => {
+                // full_function_name: "golem:agent/guest.{initialize}".to_string(),
+                // function_input: vec![
+                //                             agent_id.agent_type.clone().into_value(),
+                //                             agent_id.parameters.clone().into_value(),
+                //                             // Fixme: this needs to come from the invocation that caused this agent to be created
+                //                             golem_common::model::agent::Principal::anonymous().into_value(),
+                //                         ],
+                todo!()
+            }
+            AgentInvocation::AgentMethod { .. } => {
+                todo!()
+            }
+            AgentInvocation::LoadSnapshot { .. } => {
+                todo!()
+            }
+            AgentInvocation::SaveSnapshot { .. } => {
+                todo!()
+            }
+            AgentInvocation::ProcessOplogEntries { .. } => {
+                todo!()
             }
         }
     }

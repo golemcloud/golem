@@ -8,7 +8,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, SuccessfulUpdateRecord,
-    TimestampedWorkerInvocation, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
+    TimestampedAgentInvocation, AgentInvocation, WorkerResourceDescription, WorkerStatus,
     WorkerStatusRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -425,9 +425,9 @@ fn calculate_skipped_regions(
 }
 
 fn calculate_pending_invocations(
-    initial: Vec<TimestampedWorkerInvocation>,
+    initial: Vec<TimestampedAgentInvocation>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Vec<TimestampedWorkerInvocation> {
+) -> Vec<TimestampedAgentInvocation> {
     let mut result = initial;
     for entry in entries.values() {
         // Here we are handling two categories of oplog entries:
@@ -450,7 +450,7 @@ fn calculate_pending_invocations(
                 invocation,
                 ..
             } => {
-                result.push(TimestampedWorkerInvocation {
+                result.push(TimestampedAgentInvocation {
                     timestamp: *timestamp,
                     invocation: invocation.clone(),
                 });
@@ -458,17 +458,7 @@ fn calculate_pending_invocations(
             OplogEntry::ExportedFunctionInvoked {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| match invocation {
-                    TimestampedWorkerInvocation {
-                        invocation:
-                            WorkerInvocation::ExportedFunction {
-                                idempotency_key: key,
-                                ..
-                            },
-                        ..
-                    } => key != idempotency_key,
-                    _ => true,
-                });
+                result.retain(|invocation| !invocation.invocation.has_idempotency_key(idempotency_key));
             }
             OplogEntry::PendingUpdate {
                 description:
@@ -477,9 +467,9 @@ fn calculate_pending_invocations(
                     },
                 ..
             } => result.retain(|invocation| match invocation {
-                TimestampedWorkerInvocation {
+                TimestampedAgentInvocation {
                     invocation:
-                        WorkerInvocation::ManualUpdate {
+                        AgentInvocation::ManualUpdate {
                             target_revision: revision,
                             ..
                         },
@@ -490,9 +480,9 @@ fn calculate_pending_invocations(
             OplogEntry::FailedUpdate {
                 target_revision, ..
             } => result.retain(|invocation| match invocation {
-                TimestampedWorkerInvocation {
+                TimestampedAgentInvocation {
                     invocation:
-                        WorkerInvocation::ManualUpdate {
+                        AgentInvocation::ManualUpdate {
                             target_revision: revision,
                             ..
                         },
@@ -503,17 +493,7 @@ fn calculate_pending_invocations(
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| match invocation {
-                    TimestampedWorkerInvocation {
-                        invocation:
-                            WorkerInvocation::ExportedFunction {
-                                idempotency_key: key,
-                                ..
-                            },
-                        ..
-                    } => key != idempotency_key,
-                    _ => true,
-                });
+                result.retain(|invocation| !invocation.invocation.has_idempotency_key(idempotency_key));
             }
             _ => {}
         }
@@ -826,7 +806,7 @@ mod test {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, ScanCursor,
-        SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+        SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation, WorkerId, AgentInvocation,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::read_only_lock;
@@ -982,7 +962,7 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate {
+            .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
             .host_call(
@@ -1020,7 +1000,7 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate {
+            .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
             .host_call(
@@ -1058,7 +1038,7 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate {
+            .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
             .failed_update(update2)
@@ -1125,7 +1105,7 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate {
+            .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
             .host_call(
@@ -1169,7 +1149,7 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate {
+            .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
             .host_call(
@@ -1182,7 +1162,7 @@ mod test {
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .exported_function_invoked("c", vec![], k2.clone())
-            .pending_invocation(WorkerInvocation::ManualUpdate {
+            .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
             .exported_function_completed(None, k2)
@@ -1203,7 +1183,7 @@ mod test {
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .pending_invocation(WorkerInvocation::ExportedFunction {
+            .pending_invocation(AgentInvocation::ExportedFunction {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
                 function_input: vec![Value::Bool(true)],
@@ -1228,13 +1208,13 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .pending_invocation(WorkerInvocation::ExportedFunction {
+            .pending_invocation(AgentInvocation::ExportedFunction {
                 idempotency_key: k1.clone(),
                 full_function_name: "a".to_string(),
                 function_input: vec![Value::Bool(true)],
                 invocation_context: InvocationContextStack::fresh(),
             })
-            .pending_invocation(WorkerInvocation::ExportedFunction {
+            .pending_invocation(AgentInvocation::ExportedFunction {
                 idempotency_key: k2.clone(),
                 full_function_name: "b".to_string(),
                 function_input: vec![],
@@ -1504,12 +1484,12 @@ mod test {
             })
         }
 
-        pub fn pending_invocation(self, invocation: WorkerInvocation) -> Self {
+        pub fn pending_invocation(self, invocation: AgentInvocation) -> Self {
             let entry = OplogEntry::pending_worker_invocation(invocation.clone()).rounded();
             self.add(entry.clone(), move |mut status| {
                 status
                     .pending_invocations
-                    .push(TimestampedWorkerInvocation {
+                    .push(TimestampedAgentInvocation {
                         timestamp: entry.timestamp(),
                         invocation,
                     });
@@ -1523,9 +1503,9 @@ mod test {
                 status
                     .pending_invocations
                     .retain(|invocation| match invocation {
-                        TimestampedWorkerInvocation {
+                        TimestampedAgentInvocation {
                             invocation:
-                                WorkerInvocation::ExportedFunction {
+                                AgentInvocation::ExportedFunction {
                                     idempotency_key: key,
                                     ..
                                 },
@@ -1636,9 +1616,9 @@ mod test {
                     status
                         .pending_invocations
                         .retain(|invocation| match invocation {
-                            TimestampedWorkerInvocation {
+                            TimestampedAgentInvocation {
                                 invocation:
-                                    WorkerInvocation::ManualUpdate {
+                                    AgentInvocation::ManualUpdate {
                                         target_revision: revision,
                                         ..
                                     },

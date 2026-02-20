@@ -16,7 +16,7 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::routing::get;
 use axum::Router;
-use golem_common::model::agent::{DataValue, ElementValue, ElementValues};
+use golem_common::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerMetadataDto;
@@ -474,7 +474,7 @@ async fn promise(
     let promise_id_vat = ValueAndType::new(promise_id_value.clone(), PromiseId::get_type());
 
     let promise_data = DataValue::Tuple(ElementValues {
-        elements: vec![ElementValue::ComponentModel(promise_id_vat)],
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: promise_id_vat })],
     });
 
     let poll1 = executor
@@ -644,9 +644,9 @@ async fn get_workers_from_worker(
 
         let params = DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(component_id_val_and_type),
-                ElementValue::ComponentModel(filter_val_and_type),
-                ElementValue::ComponentModel(true.into_value_and_type()),
+                ElementValue::ComponentModel(ComponentModelElementValue { value: component_id_val_and_type }),
+                ElementValue::ComponentModel(ComponentModelElementValue { value: filter_val_and_type }),
+                ElementValue::ComponentModel(ComponentModelElementValue { value: true.into_value_and_type() }),
             ],
         });
 
@@ -779,7 +779,7 @@ async fn get_metadata_from_worker(
         };
 
         let params = DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(other_agent_id_val_and_type)],
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: other_agent_id_val_and_type })],
         });
 
         let result = executor
@@ -3008,7 +3008,7 @@ async fn cancelling_pending_invocations(
             &agent_id,
             "await_promise",
             DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(promise_id_vat)],
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: promise_id_vat })],
             }),
         )
         .await?;

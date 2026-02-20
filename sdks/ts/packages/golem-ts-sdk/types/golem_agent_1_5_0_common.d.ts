@@ -11,6 +11,12 @@ declare module 'golem:agent/common@1.5.0' {
   export type TextReference = golemCore150Types.TextReference;
   export type BinaryType = golemCore150Types.BinaryType;
   export type BinaryReference = golemCore150Types.BinaryReference;
+  export type TextDescriptor = golemCore150Types.TextDescriptor;
+  export type BinaryDescriptor = golemCore150Types.BinaryDescriptor;
+  export type ElementSchema = golemCore150Types.ElementSchema;
+  export type ElementValue = golemCore150Types.ElementValue;
+  export type DataSchema = golemCore150Types.DataSchema;
+  export type DataValue = golemCore150Types.DataValue;
   export type Duration = wasiClocks023MonotonicClock.Duration;
   export type AgentMode = "durable" | "ephemeral";
   export type CorsOptions = {
@@ -96,6 +102,14 @@ declare module 'golem:agent/common@1.5.0' {
     authDetails?: AuthDetails;
     corsOptions: CorsOptions;
   };
+  export type AgentMethod = {
+    name: string;
+    description: string;
+    httpEndpoint: HttpEndpointDetails[];
+    promptHint?: string;
+    inputSchema: DataSchema;
+    outputSchema: DataSchema;
+  };
   export type OidcPrincipal = {
     sub: string;
     issuer: string;
@@ -129,71 +143,6 @@ declare module 'golem:agent/common@1.5.0' {
   } |
   {
     tag: 'anonymous'
-  };
-  export type ElementValue = 
-  {
-    tag: 'component-model'
-    val: WitValue
-  } |
-  {
-    tag: 'unstructured-text'
-    val: TextReference
-  } |
-  {
-    tag: 'unstructured-binary'
-    val: BinaryReference
-  };
-  export type DataValue = 
-  /** List of element values, each corresponding to an element of the tuple `data-schema` */
-  {
-    tag: 'tuple'
-    val: ElementValue[]
-  } |
-  /**
-   * List of element values and their schema names; each name points to one named element of the corresponding
-   * multimodal `data-schema`.
-   */
-  {
-    tag: 'multimodal'
-    val: [string, ElementValue][]
-  };
-  export type TextDescriptor = {
-    restrictions?: TextType[];
-  };
-  export type BinaryDescriptor = {
-    restrictions?: BinaryType[];
-  };
-  export type ElementSchema = 
-  {
-    tag: 'component-model'
-    val: WitType
-  } |
-  {
-    tag: 'unstructured-text'
-    val: TextDescriptor
-  } |
-  {
-    tag: 'unstructured-binary'
-    val: BinaryDescriptor
-  };
-  export type DataSchema = 
-  /** List of named elements */
-  {
-    tag: 'tuple'
-    val: [string, ElementSchema][]
-  } |
-  /** List of named variants that can be used 0 or more times in a multimodal `data-value` */
-  {
-    tag: 'multimodal'
-    val: [string, ElementSchema][]
-  };
-  export type AgentMethod = {
-    name: string;
-    description: string;
-    httpEndpoint: HttpEndpointDetails[];
-    promptHint?: string;
-    inputSchema: DataSchema;
-    outputSchema: DataSchema;
   };
   export type AgentConstructor = {
     name?: string;

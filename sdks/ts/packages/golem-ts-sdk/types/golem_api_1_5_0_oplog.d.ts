@@ -17,6 +17,8 @@ declare module 'golem:api/oplog@1.5.0' {
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type ValueAndType = golemCore150Types.ValueAndType;
   export type AccountId = golemCore150Types.AccountId;
+  export type DataValue = golemCore150Types.DataValue;
+  export type DataSchema = golemCore150Types.DataSchema;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type PersistenceLevel = golemApi150Host.PersistenceLevel;
@@ -155,26 +157,57 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
-  export type ExportedFunctionInvocationParameters = {
+  export type TypedDataValue = {
+    value: DataValue;
+    schema: DataSchema;
+  };
+  export type AgentInitializationParameters = {
     idempotencyKey: string;
-    functionName: string;
-    input?: ValueAndType[];
+    constructorParameters: TypedDataValue;
     traceId: string;
     traceStates: string[];
-    /**
-     * The first one is the invocation context stack associated with the exported function invocation,
-     * and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
-     */
     invocationContext: SpanData[][];
+  };
+  export type AgentMethodInvocationParameters = {
+    idempotencyKey: string;
+    methodName: string;
+    functionInput: TypedDataValue;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[][];
+  };
+  export type LoadSnapshotParameters = {
+    snapshot: Snapshot;
+  };
+  export type ProcessOplogEntriesParameters = {
+    idempotencyKey: string;
+  };
+  export type ManualUpdateParameters = {
+    targetRevision: ComponentRevision;
   };
   export type AgentInvocation = 
   {
-    tag: 'exported-function'
-    val: ExportedFunctionInvocationParameters
+    tag: 'agent-initialization'
+    val: AgentInitializationParameters
+  } |
+  {
+    tag: 'agent-method-invocation'
+    val: AgentMethodInvocationParameters
+  } |
+  {
+    tag: 'save-snapshot'
+  } |
+  {
+    tag: 'load-snapshot'
+    val: LoadSnapshotParameters
+  } |
+  {
+    tag: 'process-oplog-entries'
+    val: ProcessOplogEntriesParameters
   } |
   {
     tag: 'manual-update'
-    val: ComponentRevision
+    val: ManualUpdateParameters
   };
   export type PendingAgentInvocationParameters = {
     timestamp: Datetime;

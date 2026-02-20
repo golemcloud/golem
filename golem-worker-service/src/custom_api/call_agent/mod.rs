@@ -27,8 +27,8 @@ use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use anyhow::anyhow;
 use golem_common::model::agent::{
-    AgentId, BinaryReference, BinaryReferenceValue, DataValue, ElementValue, ElementValues,
-    OidcPrincipal, Principal, UntypedDataValue, UntypedElementValue,
+    AgentId, BinaryReference, BinaryReferenceValue, ComponentModelElementValue, DataValue,
+    ElementValue, ElementValues, OidcPrincipal, Principal, UntypedDataValue, UntypedElementValue,
 };
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, MethodParameter};
@@ -131,10 +131,9 @@ impl CallAgentHandler {
 
                     let value = parse_path_segment_value_to_component_model(raw, parameter_type)?;
 
-                    values.push(ElementValue::ComponentModel(ValueAndType::new(
-                        value,
-                        parameter_type.into(),
-                    )));
+                    values.push(ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType::new(value, parameter_type.into()),
+                    }));
                 }
             }
         }

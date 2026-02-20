@@ -133,7 +133,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                         } else if has_only_named_fields(&variant.fields) {
                             // record case
 
-
+                            let mut wit_idx = 0usize;
                             let field_values = variant.fields.iter().enumerate().map(|(field_idx, field)| {
                                 let field_ident = field.ident.as_ref().unwrap();
                                 let field_ty = &field.ty;
@@ -141,7 +141,9 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 let field_from_value = if wit_field.skip || has_from_value_skip_attribute(&field.attrs) {
                                     quote! { Default::default() }
                                 } else {
-                                    apply_from_conversions(field_ty, wit_field, quote! { fields[#field_idx].clone() })
+                                    let current_wit_idx = wit_idx;
+                                    wit_idx += 1;
+                                    apply_from_conversions(field_ty, wit_field, quote! { fields[#current_wit_idx].clone() })
                                 };
                                 quote! {
                                     #field_ident: #field_from_value
@@ -252,6 +254,7 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let mut wit_idx = 0usize;
         let field_values = fields.iter().enumerate().map(|(idx, field)| {
             let wit_field = &wit_fields[idx];
             let field_name = field.ident.as_ref().unwrap();
@@ -260,8 +263,10 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
                     #field_name: Default::default()
                 }
             } else {
+                let current_wit_idx = wit_idx;
+                wit_idx += 1;
                 let field_from_value =
-                    apply_from_conversions(&field.ty, wit_field, quote! { fields[#idx].clone() });
+                    apply_from_conversions(&field.ty, wit_field, quote! { fields[#current_wit_idx].clone() });
                 quote! {
                     #field_name: #field_from_value
                 }

@@ -508,6 +508,111 @@ pub mod golem {
           }
         }
       }
+      /// Descriptor for text-type element schemas
+      #[derive(Clone)]
+      pub struct TextDescriptor {
+        pub restrictions: Option<_rt::Vec::<TextType>>,
+      }
+      impl ::core::fmt::Debug for TextDescriptor {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+          f.debug_struct("TextDescriptor").field("restrictions", &self.restrictions).finish()
+        }
+      }
+      /// Descriptor for binary-type element schemas
+      #[derive(Clone)]
+      pub struct BinaryDescriptor {
+        pub restrictions: Option<_rt::Vec::<BinaryType>>,
+      }
+      impl ::core::fmt::Debug for BinaryDescriptor {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+          f.debug_struct("BinaryDescriptor").field("restrictions", &self.restrictions).finish()
+        }
+      }
+      /// Schema for a single element within a data-schema
+      #[derive(Clone)]
+      pub enum ElementSchema {
+        ComponentModel(WitType),
+        UnstructuredText(TextDescriptor),
+        UnstructuredBinary(BinaryDescriptor),
+      }
+      impl ::core::fmt::Debug for ElementSchema {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+          match self {
+            ElementSchema::ComponentModel(e) => {
+              f.debug_tuple("ElementSchema::ComponentModel").field(e).finish()
+            }
+            ElementSchema::UnstructuredText(e) => {
+              f.debug_tuple("ElementSchema::UnstructuredText").field(e).finish()
+            }
+            ElementSchema::UnstructuredBinary(e) => {
+              f.debug_tuple("ElementSchema::UnstructuredBinary").field(e).finish()
+            }
+          }
+        }
+      }
+      /// Value of a single element within a data-value
+      #[derive(Clone)]
+      pub enum ElementValue {
+        ComponentModel(WitValue),
+        UnstructuredText(TextReference),
+        UnstructuredBinary(BinaryReference),
+      }
+      impl ::core::fmt::Debug for ElementValue {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+          match self {
+            ElementValue::ComponentModel(e) => {
+              f.debug_tuple("ElementValue::ComponentModel").field(e).finish()
+            }
+            ElementValue::UnstructuredText(e) => {
+              f.debug_tuple("ElementValue::UnstructuredText").field(e).finish()
+            }
+            ElementValue::UnstructuredBinary(e) => {
+              f.debug_tuple("ElementValue::UnstructuredBinary").field(e).finish()
+            }
+          }
+        }
+      }
+      /// Schema describing the structure of a data-value
+      #[derive(Clone)]
+      pub enum DataSchema {
+        /// List of named elements
+        Tuple(_rt::Vec::<(_rt::String,ElementSchema,)>),
+        /// List of named variants that can be used 0 or more times in a multimodal data-value
+        Multimodal(_rt::Vec::<(_rt::String,ElementSchema,)>),
+      }
+      impl ::core::fmt::Debug for DataSchema {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+          match self {
+            DataSchema::Tuple(e) => {
+              f.debug_tuple("DataSchema::Tuple").field(e).finish()
+            }
+            DataSchema::Multimodal(e) => {
+              f.debug_tuple("DataSchema::Multimodal").field(e).finish()
+            }
+          }
+        }
+      }
+      /// A structured value consisting of typed elements
+      #[derive(Clone)]
+      pub enum DataValue {
+        /// List of element values, each corresponding to an element of the tuple data-schema
+        Tuple(_rt::Vec::<ElementValue>),
+        /// List of element values and their schema names; each name points to one named element of the corresponding
+        /// multimodal data-schema.
+        Multimodal(_rt::Vec::<(_rt::String,ElementValue,)>),
+      }
+      impl ::core::fmt::Debug for DataValue {
+        fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+          match self {
+            DataValue::Tuple(e) => {
+              f.debug_tuple("DataValue::Tuple").field(e).finish()
+            }
+            DataValue::Multimodal(e) => {
+              f.debug_tuple("DataValue::Multimodal").field(e).finish()
+            }
+          }
+        }
+      }
       #[allow(unused_unsafe, clippy::all)]
       /// Parses a UUID from a string
       #[allow(async_fn_in_trait)]
@@ -649,9 +754,9 @@ mod _rt {
 #[unsafe(link_section = "component-type:wit-bindgen:0.42.1:golem:rpc:wasm-rpc:encoded world")]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2091] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xac\x0f\x01A\x02\x01\
-A\x06\x01BM\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\0\x01r\x01\x04\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2268] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdd\x10\x01A\x02\x01\
+A\x06\x01BZ\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\0\x01r\x01\x04\
 uuid\x01\x04\0\x0ccomponent-id\x03\0\x02\x01r\x02\x0ccomponent-id\x03\x08agent-i\
 ds\x04\0\x08agent-id\x03\0\x04\x01r\x01\x04uuid\x01\x04\0\x0aaccount-id\x03\0\x06\
 \x01w\x04\0\x0boplog-index\x03\0\x08\x01r\x02\x08agent-id\x05\x09oplog-idx\x09\x04\
@@ -680,21 +785,25 @@ value-\x03typ\"\x04\0\x0evalue-and-type\x03\0.\x01s\x04\0\x03url\x03\00\x01r\x01
 e4\x04\0\x0btext-source\x03\05\x01q\x02\x03url\x01s\0\x06inline\x016\0\x04\0\x0e\
 text-reference\x03\07\x01r\x01\x09mime-types\x04\0\x0bbinary-type\x03\09\x01p}\x01\
 r\x02\x04data;\x0bbinary-type:\x04\0\x0dbinary-source\x03\0<\x01q\x02\x03url\x01\
-1\0\x06inline\x01=\0\x04\0\x10binary-reference\x03\0>\x01q\x03\x0fcomponent-mode\
-l\x01-\0\x11unstructured-text\x018\0\x13unstructured-binary\x01?\0\x04\0\x15unty\
-ped-element-value\x03\0@\x01r\x02\x04names\x05value\xc1\0\x04\0\x1buntyped-named\
--element-value\x03\0B\x01p\xc1\0\x01p\xc3\0\x01q\x02\x05tuple\x01\xc4\0\0\x0amul\
-timodal\x01\xc5\0\0\x04\0\x12untyped-data-value\x03\0F\x01j\x01\x01\x01s\x01@\x01\
-\x04uuids\0\xc8\0\x04\0\x0aparse-uuid\x01I\x01@\x01\x04uuid\x01\0s\x04\0\x0euuid\
--to-string\x01J\x03\0\x16golem:core/types@1.5.0\x05\0\x01B\x05\x01r\x02\x07secon\
-dsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\
-\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-clock@0.2.3\x05\x01\x01B\x0a\x04\
-\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]pollab\
-le.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\x03\
-\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\x12wasi:io/\
-poll@0.2.3\x05\x02\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-rpc\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.230.0\x10wit-\
-bindgen-rust\x060.42.1";
+1\0\x06inline\x01=\0\x04\0\x10binary-reference\x03\0>\x01p3\x01k\xc0\0\x01r\x01\x0c\
+restrictions\xc1\0\x04\0\x0ftext-descriptor\x03\0B\x01p:\x01k\xc4\0\x01r\x01\x0c\
+restrictions\xc5\0\x04\0\x11binary-descriptor\x03\0F\x01q\x03\x0fcomponent-model\
+\x01\"\0\x11unstructured-text\x01\xc3\0\0\x13unstructured-binary\x01\xc7\0\0\x04\
+\0\x0eelement-schema\x03\0H\x01q\x03\x0fcomponent-model\x01-\0\x11unstructured-t\
+ext\x018\0\x13unstructured-binary\x01?\0\x04\0\x0delement-value\x03\0J\x01o\x02s\
+\xc9\0\x01p\xcc\0\x01q\x02\x05tuple\x01\xcd\0\0\x0amultimodal\x01\xcd\0\0\x04\0\x0b\
+data-schema\x03\0N\x01p\xcb\0\x01o\x02s\xcb\0\x01p\xd1\0\x01q\x02\x05tuple\x01\xd0\
+\0\0\x0amultimodal\x01\xd2\0\0\x04\0\x0adata-value\x03\0S\x01j\x01\x01\x01s\x01@\
+\x01\x04uuids\0\xd5\0\x04\0\x0aparse-uuid\x01V\x01@\x01\x04uuid\x01\0s\x04\0\x0e\
+uuid-to-string\x01W\x03\0\x16golem:core/types@1.5.0\x05\0\x01B\x05\x01r\x02\x07s\
+econdsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\
+\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-clock@0.2.3\x05\x01\x01B\x0a\
+\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[method]po\
+llable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.block\x01\
+\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\x12wasi\
+:io/poll@0.2.3\x05\x02\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-r\
+pc\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.230.0\x10\
+wit-bindgen-rust\x060.42.1";
 
 #[inline(never)]
 #[doc(hidden)]

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams,
@@ -22,7 +23,7 @@ use crate::model::oplog::public_oplog_entry::{
     RestartParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    ExportedFunctionParameters, LogLevel, PluginInstallationDescription, PublicAttribute,
+    AgentMethodInvocationParameters, LogLevel, PluginInstallationDescription, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData, PublicOplogEntry,
     PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
     SnapshotBasedUpdateParameters, StringAttributeValue, WorkerResourceId,
@@ -280,19 +281,21 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation: PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
+        invocation: PublicWorkerInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-            full_function_name: "test".to_string(),
-            function_input: Some(vec![
-                ValueAndType {
-                    value: Value::String("test".to_string()),
-                    typ: str(),
-                },
-                ValueAndType {
-                    value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                    typ: record(vec![field("x", s16()), field("y", s16())]),
-                },
-            ]),
+            method_name: "test".to_string(),
+            function_input: DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
+                        value: Value::String("test".to_string()),
+                        typ: str(),
+                    } }),
+                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
+                        value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                        typ: record(vec![field("x", s16()), field("y", s16())]),
+                    } }),
+                ],
+            }),
             trace_id: TraceId::generate(),
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {

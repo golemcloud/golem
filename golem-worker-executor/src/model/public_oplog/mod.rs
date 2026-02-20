@@ -36,13 +36,15 @@ use golem_common::model::oplog::public_oplog_entry::{
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
-    ExportedFunctionParameters, HostRequest, HostRequestGolemRpcInvoke,
+    AgentInitializationParameters, AgentMethodInvocationParameters,
+    HostRequest, HostRequestGolemRpcInvoke,
     HostRequestGolemRpcScheduledInvocation, HostResponse, JsonSnapshotData, ManualUpdateParameters,
     OplogEntry, OplogIndex, PluginInstallationDescription, PublicAttribute, PublicOplogEntry,
     PublicSnapshotData, PublicUpdateDescription, PublicWorkerInvocation, RawSnapshotData,
     SnapshotBasedUpdateParameters, UpdateDescription,
 };
-use golem_common::model::{Empty, OwnedWorkerId, WorkerId, WorkerInvocation};
+use golem_common::model::agent::{DataValue, ElementValues};
+use golem_common::model::{Empty, OwnedWorkerId, WorkerId, AgentInvocation};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::AnalysedFunctionParameter;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -417,10 +419,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 invocation,
             } => {
                 let invocation = match invocation {
-                    WorkerInvocation::ExportedFunction {
+                    AgentInvocation::AgentInitialization {
                         idempotency_key,
-                        full_function_name,
-                        function_input,
+                        input,
                         invocation_context,
                     } => {
                         let metadata = components
@@ -431,45 +432,81 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function = metadata.metadata.find_function(&full_function_name)?;
+                        let constructor_schema = metadata
+                            .metadata
+                            .agent_types()
+                            .first()
+                            .map(|at| at.constructor.input_schema.clone());
 
-                        // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
-                        // we only know the current component version. If the client enqueued an update earlier and assumes
-                        // it will succeed, it is possible that it enqueues an invocation using a future API.
-                        //
-                        // If we cannot resolve the type, we leave the `function_input` field empty in the public oplog.
-                        let mut params = None;
-                        if let Some(function) = function {
-                            if function.analysed_export.parameters.len() == function_input.len() {
-                                params = Some(
-                                    function
-                                        .analysed_export
-                                        .parameters
-                                        .iter()
-                                        .zip(function_input)
-                                        .map(|(param, value)| {
-                                            ValueAndType::new(value, param.typ.clone())
-                                        })
-                                        .collect(),
-                                );
-                            }
-                        }
+                        let constructor_parameters = match constructor_schema {
+                            Some(schema) => DataValue::try_from_untyped(input, schema)
+                                .unwrap_or_else(|_| DataValue::Tuple(ElementValues { elements: vec![] })),
+                            None => DataValue::Tuple(ElementValues { elements: vec![] }),
+                        };
 
                         let span_data = invocation_context.to_oplog_data();
 
-                        PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
+                        PublicWorkerInvocation::AgentInitialization(AgentInitializationParameters {
                             idempotency_key,
-                            full_function_name,
-                            function_input: params,
+                            constructor_parameters,
                             trace_id: invocation_context.trace_id.clone(),
                             trace_states: invocation_context.trace_states.clone(),
                             invocation_context: encode_span_data(&span_data),
                         })
                     }
-                    WorkerInvocation::ManualUpdate { target_revision } => {
+                    AgentInvocation::AgentMethod {
+                        idempotency_key,
+                        method_name,
+                        input,
+                        invocation_context,
+                    } => {
+                        let metadata = components
+                            .get_metadata(
+                                owned_worker_id.worker_id.component_id,
+                                Some(component_revision),
+                            )
+                            .await
+                            .map_err(|err| err.to_string())?;
+
+                        let method_schema = metadata
+                            .metadata
+                            .agent_types()
+                            .first()
+                            .and_then(|at| at.methods.iter().find(|m| m.name == method_name))
+                            .map(|m| m.input_schema.clone());
+
+                        let function_input = match method_schema {
+                            Some(schema) => DataValue::try_from_untyped(input, schema)
+                                .unwrap_or_else(|_| DataValue::Tuple(ElementValues { elements: vec![] })),
+                            None => DataValue::Tuple(ElementValues { elements: vec![] }),
+                        };
+
+                        let span_data = invocation_context.to_oplog_data();
+
+                        PublicWorkerInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+                            idempotency_key,
+                            method_name,
+                            function_input,
+                            trace_id: invocation_context.trace_id.clone(),
+                            trace_states: invocation_context.trace_states.clone(),
+                            invocation_context: encode_span_data(&span_data),
+                        })
+                    }
+                    AgentInvocation::ManualUpdate { target_revision } => {
                         PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
                             target_revision,
                         })
+                    }
+                    AgentInvocation::SaveSnapshot { .. } => {
+                        PublicWorkerInvocation::SaveSnapshot(Empty {})
+                    }
+                    AgentInvocation::LoadSnapshot { .. } => {
+                        // TODO: implement properly
+                        todo!("LoadSnapshot public oplog conversion not yet implemented")
+                    }
+                    AgentInvocation::ProcessOplogEntries { .. } => {
+                        // TODO: implement properly
+                        todo!("ProcessOplogEntries public oplog conversion not yet implemented")
                     }
                 };
                 Ok(PublicOplogEntry::PendingWorkerInvocation(

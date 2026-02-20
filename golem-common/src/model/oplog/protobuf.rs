@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use super::{
-    ExportedFunctionParameters, JsonSnapshotData, LogLevel, ManualUpdateParameters, OplogCursor,
-    PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
-    PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicOplogEntryWithIndex, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
-    PublicUpdateDescription, PublicWorkerInvocation, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError, WorkerResourceId,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    JsonSnapshotData, LogLevel, ManualUpdateParameters, OplogCursor, PluginInstallationDescription,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData,
+    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex, PublicRetryConfig,
+    PublicSnapshotData, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError,
+    WorkerResourceId, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::model::component::PluginPriority;
@@ -30,12 +29,11 @@ use crate::model::oplog::public_oplog_entry::{
     ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
     ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
-    PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
+    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
+    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
@@ -238,12 +236,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 ),
                 original_phantom_id: create.original_phantom_id.map(|id| id.into()),
             })),
-            oplog_entry::Entry::HostCall(host_call) => Ok(
-                PublicOplogEntry::HostCall(HostCallParams {
-                    timestamp: host_call
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
+            oplog_entry::Entry::HostCall(host_call) => {
+                Ok(PublicOplogEntry::HostCall(HostCallParams {
+                    timestamp: host_call.timestamp.ok_or("Missing timestamp field")?.into(),
                     function_name: host_call.function_name,
                     request: host_call
                         .request
@@ -257,8 +252,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .wrapped_function_type
                         .ok_or("Missing wrapped_function_type field")?
                         .try_into()?,
-                }),
-            ),
+                }))
+            }
             oplog_entry::Entry::ExportedFunctionInvoked(exported_function_invoked) => Ok(
                 PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParams {
                     timestamp: exported_function_invoked
@@ -649,9 +644,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             function_name: host_call.function_name.clone(),
                             request: Some(host_call.request.into()),
                             response: Some(host_call.response.into()),
-                            wrapped_function_type: Some(
-                                host_call.durable_function_type.into(),
-                            ),
+                            wrapped_function_type: Some(host_call.durable_function_type.into()),
                         },
                     )),
                 }
@@ -1222,31 +1215,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
         value: golem_api_grpc::proto::golem::worker::WorkerInvocation,
     ) -> Result<Self, Self::Error> {
         match value.invocation.ok_or("Missing invocation field")? {
-            worker_invocation::Invocation::ExportedFunction(exported_function) => Ok(
-                PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
-                    idempotency_key: exported_function
-                        .idempotency_key
-                        .ok_or("Missing idempotency_key field")?
-                        .into(),
-                    full_function_name: exported_function.function_name,
-                    function_input: if exported_function.valid_input {
-                        Some(
-                            exported_function
-                                .input
-                                .into_iter()
-                                .map(TryInto::try_into)
-                                .collect::<Result<Vec<ValueAndType>, String>>()?,
-                        )
-                    } else {
-                        None
-                    },
-                    trace_id: TraceId::from_string(&exported_function.trace_id)?,
-                    trace_states: exported_function.trace_states,
-                    invocation_context: encode_public_span_data(
-                        exported_function.invocation_context,
-                    )?,
-                }),
-            ),
+            worker_invocation::Invocation::ExportedFunction(_exported_function) => {
+                Err("ExportedFunction invocations are no longer supported in the public oplog; use AgentInitialization or AgentMethodInvocation instead".to_string())
+            }
             worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
                 PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
                     target_revision: manual_update.try_into()?,
@@ -1261,31 +1232,16 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
 
     fn try_from(value: PublicWorkerInvocation) -> Result<Self, Self::Error> {
         Ok(match value {
-            PublicWorkerInvocation::ExportedFunction(exported_function) => {
-                golem_api_grpc::proto::golem::worker::WorkerInvocation {
-                    invocation: Some(worker_invocation::Invocation::ExportedFunction(
-                        golem_api_grpc::proto::golem::worker::ExportedFunctionInvocationParameters {
-                            idempotency_key: Some(exported_function.idempotency_key.into()),
-                            function_name: exported_function.full_function_name,
-                            valid_input: exported_function.function_input.is_some(),
-                            input: exported_function
-                                .function_input
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|input| input.into()).collect(),
-                            trace_id: exported_function.trace_id.to_string(),
-                            trace_states: exported_function.trace_states,
-                            invocation_context: decode_public_span_data(&exported_function.invocation_context, 0),
-                        },
-                    )),
-                }
-            }
             PublicWorkerInvocation::ManualUpdate(manual_update) => {
                 golem_api_grpc::proto::golem::worker::WorkerInvocation {
                     invocation: Some(worker_invocation::Invocation::ManualUpdate(
                         manual_update.target_revision.into(),
                     )),
                 }
+            }
+            _ => {
+                // TODO: update protobuf definitions to support new invocation types
+                return Err(format!("Protobuf encoding not yet implemented for this invocation type"));
             }
         })
     }

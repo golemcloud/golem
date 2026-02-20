@@ -49,8 +49,8 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation, WorkerId,
-    WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    AgentInvocation, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedAgentInvocation,
+    WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -59,6 +59,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
+use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -301,22 +302,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // just some sanity checking
         assert!(last_oplog_idx >= OplogIndex::INITIAL);
 
-        tracing::debug!("Checking worker for agent initialization: last_oplog_idx: {last_oplog_idx}; agent_id: {agent_id:?}");
-
         // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
         // We might have crashed between creating the oplog and writing it, so just check here for it.
         if let Some(agent_id) = &agent_id {
             if last_oplog_idx <= OplogIndex::from_u64(2) {
                 worker
-                    .enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
+                    .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                         idempotency_key: IdempotencyKey::fresh(),
-                        full_function_name: "golem:agent/guest.{initialize}".to_string(),
-                        function_input: vec![
-                            agent_id.agent_type.clone().into_value(),
-                            agent_id.parameters.clone().into_value(),
-                            // Fixme: this needs to come from the invocation that caused this agent to be created
-                            golem_common::model::agent::Principal::anonymous().into_value(),
-                        ],
+                        input: agent_id.parameters.clone().into(),
                         invocation_context: invocation_context_stack.clone(),
                     })
                     .await
@@ -572,10 +565,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
-                self.enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
+                self.enqueue_worker_invocation(AgentInvocation::AgentMethod {
                     idempotency_key,
-                    full_function_name,
-                    function_input,
+                    method_name: full_function_name,
+                    input: UntypedDataValue::Tuple(
+                        function_input
+                            .into_iter()
+                            .map(UntypedElementValue::ComponentModel)
+                            .collect(),
+                    ),
                     invocation_context,
                 })
                 .await?;
@@ -649,11 +647,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_revision })
+        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
             .await
     }
 
-    pub async fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
+    pub async fn pending_invocations(&self) -> Vec<TimestampedAgentInvocation> {
         self.last_known_status
             .read()
             .await
@@ -815,7 +813,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Enqueue invocation of an exported function
     async fn enqueue_worker_invocation(
         &self,
-        invocation: WorkerInvocation,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -826,7 +824,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         let entry = OplogEntry::pending_worker_invocation(invocation.clone());
-        let timestamped_invocation = TimestampedWorkerInvocation {
+        let timestamped_invocation = TimestampedAgentInvocation {
             timestamp: entry.timestamp(),
             invocation,
         };
@@ -1252,7 +1250,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocations()
                 .await
                 .iter()
-                .any(|entry| entry.invocation.is_idempotency_key(key));
+                .any(|entry| entry.invocation.has_idempotency_key(key));
             if is_pending {
                 LookupResult::Pending
             } else {

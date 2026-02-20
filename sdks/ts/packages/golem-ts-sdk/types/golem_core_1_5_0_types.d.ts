@@ -386,5 +386,80 @@ declare module 'golem:core/types@1.5.0' {
     tag: 'inline'
     val: BinarySource
   };
+  /**
+   * Descriptor for text-type element schemas
+   */
+  export type TextDescriptor = {
+    restrictions?: TextType[];
+  };
+  /**
+   * Descriptor for binary-type element schemas
+   */
+  export type BinaryDescriptor = {
+    restrictions?: BinaryType[];
+  };
+  /**
+   * Schema for a single element within a data-schema
+   */
+  export type ElementSchema = 
+  {
+    tag: 'component-model'
+    val: WitType
+  } |
+  {
+    tag: 'unstructured-text'
+    val: TextDescriptor
+  } |
+  {
+    tag: 'unstructured-binary'
+    val: BinaryDescriptor
+  };
+  /**
+   * Value of a single element within a data-value
+   */
+  export type ElementValue = 
+  {
+    tag: 'component-model'
+    val: WitValue
+  } |
+  {
+    tag: 'unstructured-text'
+    val: TextReference
+  } |
+  {
+    tag: 'unstructured-binary'
+    val: BinaryReference
+  };
+  /**
+   * Schema describing the structure of a data-value
+   */
+  export type DataSchema = 
+  /** List of named elements */
+  {
+    tag: 'tuple'
+    val: [string, ElementSchema][]
+  } |
+  /** List of named variants that can be used 0 or more times in a multimodal data-value */
+  {
+    tag: 'multimodal'
+    val: [string, ElementSchema][]
+  };
+  /**
+   * A structured value consisting of typed elements
+   */
+  export type DataValue = 
+  /** List of element values, each corresponding to an element of the tuple data-schema */
+  {
+    tag: 'tuple'
+    val: ElementValue[]
+  } |
+  /**
+   * List of element values and their schema names; each name points to one named element of the corresponding
+   * multimodal data-schema.
+   */
+  {
+    tag: 'multimodal'
+    val: [string, ElementValue][]
+  };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

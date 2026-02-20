@@ -15,7 +15,8 @@
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::{
-    BinaryReference, DataSchema, DataValue, ElementValue, ElementValues, UntypedDataValue,
+    BinaryReference, ComponentModelElementValue, DataSchema, DataValue, ElementValue,
+    ElementValues, UnstructuredBinaryElementValue, UntypedDataValue,
 };
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::ValueAndType;
@@ -71,11 +72,11 @@ fn map_single_element_agent_response(
     element: ElementValue,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     match element {
-        ElementValue::ComponentModel(value_and_type) => {
-            map_component_model_agent_response(value_and_type)
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+            map_component_model_agent_response(value)
         }
 
-        ElementValue::UnstructuredBinary(BinaryReference::Inline(binary)) => {
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: BinaryReference::Inline(binary), .. }) => {
             Ok(RouteExecutionResult {
                 status: StatusCode::OK,
                 headers: HashMap::new(),

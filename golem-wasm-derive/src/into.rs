@@ -157,12 +157,14 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 })
                                 .collect::<Vec<_>>();
 
-                            let field_values = variant.fields.iter().map(|field| {
-                                let field = field.ident.as_ref().expect("Expected field to have an identifier");
-                                quote! {
-                                    #field.into_value()
+                            let field_values = variant.fields.iter().zip(&wit_fields).filter_map(|(field, wit_field)| {
+                                if wit_field.skip {
+                                    None
+                                } else {
+                                    let field_name = field.ident.as_ref().expect("Expected field to have an identifier");
+                                    Some(apply_conversions(wit_field, quote! { #field_name }))
                                 }
-                            });
+                            }).collect::<Vec<_>>();
 
                             if is_unit_case(variant) {
                                 quote! {

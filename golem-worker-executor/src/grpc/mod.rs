@@ -55,8 +55,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp, TimestampedWorkerInvocation,
-    WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp, TimestampedAgentInvocation,
+    WorkerEvent, WorkerFilter, WorkerId, AgentInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -1059,7 +1059,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
+                    matches!(invocation, TimestampedAgentInvocation { invocation: AgentInvocation::ManualUpdate { target_revision: update_target_revision, .. }, ..} if *update_target_revision == target_revision)
                 ) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1716,9 +1716,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let latest_status = metadata.last_known_status;
         for pending_invocation in &latest_status.pending_invocations {
-            if let TimestampedWorkerInvocation {
+            if let TimestampedAgentInvocation {
                 timestamp,
-                invocation: WorkerInvocation::ManualUpdate { target_revision },
+                invocation: AgentInvocation::ManualUpdate { target_revision },
             } = pending_invocation
             {
                 updates.push(golem::worker::UpdateRecord {

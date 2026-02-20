@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::base_model::oplog::PublicSnapshotData;
-use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::agent::{BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
@@ -174,11 +174,20 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
         PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
-            PublicWorkerInvocation::ExportedFunction(inner_params) => {
+            PublicWorkerInvocation::AgentInitialization(inner_params) => {
+                let _ = writeln!(result, "ENQUEUED AGENT INITIALIZATION");
+                let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+                let _ = writeln!(
+                    result,
+                    "{pad}idempotency key:   {}",
+                    &inner_params.idempotency_key,
+                );
+            }
+            PublicWorkerInvocation::AgentMethodInvocation(inner_params) => {
                 let _ = writeln!(
                     result,
                     "ENQUEUED INVOCATION {}",
-                    &inner_params.full_function_name,
+                    &inner_params.method_name,
                 );
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
                 let _ = writeln!(
@@ -186,12 +195,18 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     "{pad}idempotency key:   {}",
                     &inner_params.idempotency_key,
                 );
-                if let Some(input) = &inner_params.function_input {
-                    let _ = writeln!(result, "{pad}input:");
-                    for param in input {
-                        let _ = writeln!(result, "{pad}  - {}", value_to_string(param));
-                    }
-                }
+            }
+            PublicWorkerInvocation::SaveSnapshot(_) => {
+                let _ = writeln!(result, "ENQUEUED SAVE SNAPSHOT");
+                let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            }
+            PublicWorkerInvocation::LoadSnapshot(_) => {
+                let _ = writeln!(result, "ENQUEUED LOAD SNAPSHOT");
+                let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            }
+            PublicWorkerInvocation::ProcessOplogEntries(_) => {
+                let _ = writeln!(result, "ENQUEUED PROCESS OPLOG ENTRIES");
+                let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             }
             PublicWorkerInvocation::ManualUpdate(inner_params) => {
                 let _ = writeln!(result, "ENQUEUED MANUAL UPDATE");
@@ -445,10 +460,10 @@ fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
 #[allow(dead_code)]
 fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
     match value {
-        ElementValue::ComponentModel(value) => {
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
             let _ = writeln!(output, "{pad}- {}", value_to_string(value));
         }
-        ElementValue::UnstructuredText(value) => match value {
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
             TextReference::Url(url) => {
                 let _ = writeln!(output, "{pad}- URL: {}", url.value);
             }
@@ -459,7 +474,7 @@ fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
                 }
             }
         },
-        ElementValue::UnstructuredBinary(value) => match value {
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => match value {
             BinaryReference::Url(url) => {
                 let _ = writeln!(output, "{pad}- URL: {}", url.value);
             }

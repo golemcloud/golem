@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::agent::ElementValue;
+use golem_common::base_model::agent::{ComponentModelElementValue, ElementValue};
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -548,7 +548,7 @@ async fn wasm_rpc_bug_32_test(
             &agent_id,
             "bug_wasm_rpc_i32",
             DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(input_vat)],
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: input_vat })],
             }),
         )
         .await?;

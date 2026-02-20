@@ -2,7 +2,8 @@ package golem:agent@1.5.0;
 
 interface common {
   use golem:core/types@1.5.0.{value-and-type, wit-type, wit-value, agent-id, account-id, component-id,
-    text-type, text-reference, binary-type, binary-reference};
+    text-type, text-reference, binary-type, binary-reference,
+    text-descriptor, binary-descriptor, element-schema, element-value, data-schema, data-value};
   use wasi:clocks/monotonic-clock@0.2.3.{duration};
 
   enum agent-mode {
@@ -145,40 +146,7 @@ interface common {
     input-schema:  data-schema,
   }
 
-  variant data-schema {
-    /// List of named elements
-    %tuple(list<tuple<string, element-schema>>),
-    /// List of named variants that can be used 0 or more times in a multimodal `data-value`
-    multimodal(list<tuple<string, element-schema>>),
-  }
 
-  variant data-value {
-    /// List of element values, each corresponding to an element of the tuple `data-schema`
-    %tuple(list<element-value>),
-    /// List of element values and their schema names; each name points to one named element of the corresponding
-    /// multimodal `data-schema`.
-    multimodal(list<tuple<string, element-value>>),
-  }
-
-  variant element-schema {
-    component-model(wit-type),
-    unstructured-text(text-descriptor),
-    unstructured-binary(binary-descriptor),
-  }
-
-  variant element-value {
-    component-model(wit-value),
-    unstructured-text(text-reference),
-    unstructured-binary(binary-reference),
-  }
-
-  record text-descriptor {
-    restrictions: option<list<text-type>>,
-  }
-
-  record binary-descriptor {
-    restrictions: option<list<binary-type>>,
-  }
 
   /// Agent-level failures
   variant agent-error {

@@ -20,7 +20,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
     ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    ExportedFunctionParameters, FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
     HostCallParams, InterruptedParams, JumpParams, LogParams,
     ManualUpdateParameters, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
@@ -423,26 +423,52 @@ impl From<golem_common::model::oplog::LogLevel> for oplog::LogLevel {
 impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
     fn from(value: PublicWorkerInvocation) -> Self {
         match value {
-            PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                trace_id,
-                trace_states,
-                invocation_context,
-            }) => Self::ExportedFunction(oplog::ExportedFunctionInvocationParameters {
-                function_name: full_function_name,
-                input: function_input.map(|input| input.into_iter().map(|v| v.into()).collect()),
-                idempotency_key: idempotency_key.value,
-                trace_id: trace_id.to_string(),
-                trace_states,
-                invocation_context: invocation_context
-                    .into_iter()
-                    .map(|inner| inner.into_iter().map(|span| span.into()).collect())
-                    .collect(),
-            }),
+            PublicWorkerInvocation::AgentInitialization(params) => {
+                let schema = params.constructor_parameters.extract_schema();
+                Self::AgentInitialization(oplog::AgentInitializationParameters {
+                    idempotency_key: params.idempotency_key.value,
+                    constructor_parameters: oplog::TypedDataValue {
+                        value: params.constructor_parameters.into(),
+                        schema: schema.into(),
+                    },
+                    trace_id: params.trace_id.to_string(),
+                    trace_states: params.trace_states,
+                    invocation_context: params
+                        .invocation_context
+                        .into_iter()
+                        .map(|inner| inner.into_iter().map(|span| span.into()).collect())
+                        .collect(),
+                })
+            }
+            PublicWorkerInvocation::AgentMethodInvocation(params) => {
+                let schema = params.function_input.extract_schema();
+                Self::AgentMethodInvocation(oplog::AgentMethodInvocationParameters {
+                    idempotency_key: params.idempotency_key.value,
+                    method_name: params.method_name,
+                    function_input: oplog::TypedDataValue {
+                        value: params.function_input.into(),
+                        schema: schema.into(),
+                    },
+                    trace_id: params.trace_id.to_string(),
+                    trace_states: params.trace_states,
+                    invocation_context: params
+                        .invocation_context
+                        .into_iter()
+                        .map(|inner| inner.into_iter().map(|span| span.into()).collect())
+                        .collect(),
+                })
+            }
+            PublicWorkerInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
+            PublicWorkerInvocation::LoadSnapshot(_params) => {
+                // TODO: implement load snapshot conversion
+                todo!("LoadSnapshot WIT conversion not yet implemented")
+            }
+            PublicWorkerInvocation::ProcessOplogEntries(_params) => {
+                // TODO: implement process oplog entries conversion
+                todo!("ProcessOplogEntries WIT conversion not yet implemented")
+            }
             PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Self::ManualUpdate(target_revision.into())
+                Self::ManualUpdate(oplog::ManualUpdateParameters { target_revision: target_revision.into() })
             }
         }
     }

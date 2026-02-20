@@ -166,23 +166,39 @@ impl PublicOplogEntry {
                 Self::string_match("pendingworkerinvocation", &[], query_path, query)
                     || Self::string_match("pending-worker-invocation", &[], query_path, query)
                     || match &params.invocation {
-                        PublicWorkerInvocation::ExportedFunction(params) => {
-                            Self::string_match(&params.full_function_name, &[], query_path, query)
+                        PublicWorkerInvocation::AgentInitialization(params) => {
+                            Self::string_match("agent-initialization", &[], query_path, query)
                                 || Self::string_match(
                                     &params.idempotency_key.value,
                                     &[],
                                     query_path,
                                     query,
                                 )
-                                || params
-                                    .function_input
-                                    .as_ref()
-                                    .map(|params| {
-                                        params
-                                            .iter()
-                                            .any(|v| Self::match_value(v, &[], query_path, query))
-                                    })
-                                    .unwrap_or(false)
+                        }
+                        PublicWorkerInvocation::AgentMethodInvocation(params) => {
+                            Self::string_match("agent-method-invocation", &[], query_path, query)
+                                || Self::string_match(&params.method_name, &[], query_path, query)
+                                || Self::string_match(
+                                    &params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
+                        PublicWorkerInvocation::SaveSnapshot(_) => {
+                            Self::string_match("save-snapshot", &[], query_path, query)
+                        }
+                        PublicWorkerInvocation::LoadSnapshot(_) => {
+                            Self::string_match("load-snapshot", &[], query_path, query)
+                        }
+                        PublicWorkerInvocation::ProcessOplogEntries(params) => {
+                            Self::string_match("process-oplog-entries", &[], query_path, query)
+                                || Self::string_match(
+                                    &params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
                         }
                         PublicWorkerInvocation::ManualUpdate(params) => Self::string_match(
                             &params.target_revision.to_string(),

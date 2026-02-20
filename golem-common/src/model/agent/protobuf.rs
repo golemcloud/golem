@@ -1,15 +1,17 @@
 use super::{
     AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentInvocationMode, AgentMethod,
     AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
-    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions,
-    CustomHttpMethod, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
+    ComponentModelElementValue, CorsOptions, CustomHttpMethod, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues,
     GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
     LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
     OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment, TextDescriptor, TextReference,
-    TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
-    UntypedNamedElementValue, Url,
+    TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
+    UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+    Url,
 };
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
@@ -625,13 +627,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementValue> for ElementV
             None => Err("Missing field: value".to_string()),
             Some(v) => match v {
                 element_value::Value::ComponentModel(val) => {
-                    Ok(ElementValue::ComponentModel(val.try_into()?))
+                    Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: val.try_into()? }))
                 }
                 element_value::Value::UnstructuredText(text_ref) => {
-                    Ok(ElementValue::UnstructuredText(text_ref.try_into()?))
+                    Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text_ref.try_into()?, descriptor: TextDescriptor::default() }))
                 }
                 element_value::Value::UnstructuredBinary(bin_ref) => {
-                    Ok(ElementValue::UnstructuredBinary(bin_ref.try_into()?))
+                    Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: bin_ref.try_into()?, descriptor: BinaryDescriptor::default() }))
                 }
             },
         }
@@ -641,19 +643,19 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementValue> for ElementV
 impl From<ElementValue> for golem_api_grpc::proto::golem::component::ElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(val) => {
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
                 golem_api_grpc::proto::golem::component::ElementValue {
-                    value: Some(element_value::Value::ComponentModel(val.into())),
+                    value: Some(element_value::Value::ComponentModel(value.into())),
                 }
             }
-            ElementValue::UnstructuredText(text_ref) => {
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
                 golem_api_grpc::proto::golem::component::ElementValue {
-                    value: Some(element_value::Value::UnstructuredText(text_ref.into())),
+                    value: Some(element_value::Value::UnstructuredText(value.into())),
                 }
             }
-            ElementValue::UnstructuredBinary(bin_ref) => {
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
                 golem_api_grpc::proto::golem::component::ElementValue {
-                    value: Some(element_value::Value::UnstructuredBinary(bin_ref.into())),
+                    value: Some(element_value::Value::UnstructuredBinary(value.into())),
                 }
             }
         }

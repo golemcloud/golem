@@ -14,8 +14,9 @@
 
 use super::{
     AgentConstructor, AgentDependency, AgentMethod, AgentType, AgentTypeName,
-    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    ComponentModelElementSchema, ComponentModelElementValue, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
+    NamedElementValues,
 };
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
@@ -300,10 +301,9 @@ impl ToWitNaming for NamedElementValue {
 impl ToWitNaming for ElementValue {
     fn to_wit_naming(&self) -> Self {
         match self {
-            ElementValue::ComponentModel(vnt) => ElementValue::ComponentModel(ValueAndType::new(
-                vnt.value.clone(),
-                vnt.typ.to_wit_naming(),
-            )),
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(value.value.clone(), value.typ.to_wit_naming()),
+            }),
             ElementValue::UnstructuredText(_) => self.clone(),
             ElementValue::UnstructuredBinary(_) => self.clone(),
         }

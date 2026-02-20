@@ -55,7 +55,7 @@ use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriorit
 use self::environment::EnvironmentId;
 use crate::base_model::agent::AgentId;
 use crate::model::account::AccountId;
-use crate::model::agent::AgentTypeResolver;
+use crate::model::agent::{AgentTypeResolver, UntypedDataValue};
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
@@ -632,7 +632,7 @@ pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
-    pub pending_invocations: Vec<TimestampedWorkerInvocation>,
+    pub pending_invocations: Vec<TimestampedAgentInvocation>,
     pub pending_updates: VecDeque<TimestampedUpdateDescription>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
@@ -697,22 +697,39 @@ pub struct SuccessfulUpdateRecord {
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub enum WorkerInvocation {
+pub enum AgentInvocation {
     ManualUpdate {
         target_revision: ComponentRevision,
     },
-    ExportedFunction {
+    AgentInitialization {
         idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
+        input: UntypedDataValue,
         invocation_context: InvocationContextStack,
+    },
+    AgentMethod {
+        idempotency_key: IdempotencyKey,
+        method_name: String,
+        input: UntypedDataValue,
+        invocation_context: InvocationContextStack,
+    },
+    LoadSnapshot {
+        // TODO
+    },
+    SaveSnapshot {
+        // TODO
+    },
+    ProcessOplogEntries {
+        // TODO
     },
 }
 
-impl WorkerInvocation {
-    pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+impl AgentInvocation {
+    pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
         match self {
-            Self::ExportedFunction {
+            Self::AgentMethod {
+                idempotency_key, ..
+            } => idempotency_key == key,
+            Self::AgentInitialization {
                 idempotency_key, ..
             } => idempotency_key == key,
             _ => false,
@@ -721,7 +738,10 @@ impl WorkerInvocation {
 
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
         match self {
-            Self::ExportedFunction {
+            Self::AgentMethod {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::AgentInitialization {
                 idempotency_key, ..
             } => Some(idempotency_key),
             _ => None,
@@ -730,7 +750,10 @@ impl WorkerInvocation {
 
     pub fn invocation_context(&self) -> InvocationContextStack {
         match self {
-            Self::ExportedFunction {
+            Self::AgentInitialization {
+                invocation_context, ..
+            } => invocation_context.clone(),
+            Self::AgentMethod {
                 invocation_context, ..
             } => invocation_context.clone(),
             _ => InvocationContextStack::fresh(),
@@ -740,9 +763,9 @@ impl WorkerInvocation {
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub struct TimestampedWorkerInvocation {
+pub struct TimestampedAgentInvocation {
     pub timestamp: Timestamp,
-    pub invocation: WorkerInvocation,
+    pub invocation: AgentInvocation,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize)]

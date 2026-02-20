@@ -783,13 +783,13 @@ impl RustBridgeGenerator {
                             Ident::new(&to_rust_ident(&named_element.name), Span::call_site());
                         match &named_element.schema {
                             ElementSchema::ComponentModel(_) => {
-                                quote! { golem_common::model::agent::ElementValue::ComponentModel(#name.into_value_and_type()) }
+                                quote! { golem_common::model::agent::ElementValue::ComponentModel(golem_common::model::agent::ComponentModelElementValue { value: #name.into_value_and_type() }) }
                             }
                             ElementSchema::UnstructuredText(_) => {
-                                quote! { golem_common::model::agent::ElementValue::UnstructuredText(#name.into_text_reference()) }
+                                quote! { golem_common::model::agent::ElementValue::UnstructuredText(golem_common::model::agent::UnstructuredTextElementValue { value: #name.into_text_reference(), descriptor: golem_common::model::agent::TextDescriptor::default() }) }
                             }
                             ElementSchema::UnstructuredBinary(_) => {
-                                quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(#name.into_binary_reference()) }
+                                quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(golem_common::model::agent::UnstructuredBinaryElementValue { value: #name.into_binary_reference(), descriptor: golem_common::model::agent::BinaryDescriptor::default() }) }
                             }
                         }
                     })
@@ -1535,7 +1535,7 @@ impl RustBridgeGenerator {
                                     match #ident {
                                         golem_common::model::agent::DataValue::Tuple(element_values) => {
                                             match element_values.elements.get(0) {
-                                                Some(golem_common::model::agent::ElementValue::ComponentModel(vnt)) => {
+                                                Some(golem_common::model::agent::ElementValue::ComponentModel(golem_common::model::agent::ComponentModelElementValue { value: vnt })) => {
                                                     Ok(Some(<#return_type>::from_value_and_type(vnt.clone()).map_err(
                                                         |err| golem_client::bridge::ClientError::InvocationFailed {
                                                             message: format!("Failed to decode result value: {err}"),
@@ -1572,7 +1572,7 @@ impl RustBridgeGenerator {
                                 match #ident {
                                     golem_common::model::agent::DataValue::Tuple(element_values) => {
                                         match element_values.elements.get(0) {
-                                            Some(golem_common::model::agent::ElementValue::UnstructuredText(text_ref)) => {
+                                            Some(golem_common::model::agent::ElementValue::UnstructuredText(golem_common::model::agent::UnstructuredTextElementValue { value: text_ref, .. })) => {
                                                 <#unstructured_text>::from_text_reference(text_ref.clone())
                                                     .map(Some)
                                                     .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
@@ -1606,7 +1606,7 @@ impl RustBridgeGenerator {
                                 match #ident {
                                     golem_common::model::agent::DataValue::Tuple(element_values) => {
                                         match element_values.elements.get(0) {
-                                            Some(golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref)) => {
+                                            Some(golem_common::model::agent::ElementValue::UnstructuredBinary(golem_common::model::agent::UnstructuredBinaryElementValue { value: binary_ref, .. })) => {
                                                 <#unstructured_binary>::from_binary_reference(binary_ref.clone())
                                                     .map(Some)
                                                     .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
@@ -1685,13 +1685,13 @@ impl RustBridgeGenerator {
 
                     let encode_value = match &named_element.schema {
                         ElementSchema::ComponentModel(_) => {
-                            quote! { golem_common::model::agent::ElementValue::ComponentModel(value.clone().into_value_and_type()) }
+                            quote! { golem_common::model::agent::ElementValue::ComponentModel(golem_common::model::agent::ComponentModelElementValue { value: value.clone().into_value_and_type() }) }
                         }
                         ElementSchema::UnstructuredText(_) => {
-                            quote! { golem_common::model::agent::ElementValue::UnstructuredText(value.clone().into_text_reference()) }
+                            quote! { golem_common::model::agent::ElementValue::UnstructuredText(golem_common::model::agent::UnstructuredTextElementValue { value: value.clone().into_text_reference(), descriptor: golem_common::model::agent::TextDescriptor::default() }) }
                         }
                         ElementSchema::UnstructuredBinary(_) => {
-                            quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(value.clone().into_binary_reference()) }
+                            quote! { golem_common::model::agent::ElementValue::UnstructuredBinary(golem_common::model::agent::UnstructuredBinaryElementValue { value: value.clone().into_binary_reference(), descriptor: golem_common::model::agent::BinaryDescriptor::default() }) }
                         }
                     };
                     to_named_element_value_cases.push(quote! {
@@ -1706,7 +1706,7 @@ impl RustBridgeGenerator {
                             let value_type = self.wit_type_to_typeref(&schema.element_type)?;
                             quote! {
                                 let value = match &named_element_value.value {
-                                    golem_common::model::agent::ElementValue::ComponentModel(vnt) => {
+                                    golem_common::model::agent::ElementValue::ComponentModel(golem_common::model::agent::ComponentModelElementValue { value: vnt }) => {
                                         Ok(<#value_type>::from_value_and_type(vnt.clone()).map_err(
                                             |err| golem_client::bridge::ClientError::InvocationFailed {
                                                 message: format!("Failed to decode result value: {err}"),
@@ -1735,7 +1735,7 @@ impl RustBridgeGenerator {
                             };
                             quote! {
                                 let value = match &named_element_value.value {
-                                    golem_common::model::agent::ElementValue::UnstructuredText(text_ref) => {
+                                    golem_common::model::agent::ElementValue::UnstructuredText(golem_common::model::agent::UnstructuredTextElementValue { value: text_ref, .. }) => {
                                         <#unstructured_text>::from_text_reference(text_ref.clone())
                                             .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
                                                 message: format!("Failed to decode result value: {err}"),
@@ -1763,7 +1763,7 @@ impl RustBridgeGenerator {
                             };
                             quote! {
                                 let value = match &named_element_value.value {
-                                    golem_common::model::agent::ElementValue::UnstructuredBinary(binary_ref) => {
+                                    golem_common::model::agent::ElementValue::UnstructuredBinary(golem_common::model::agent::UnstructuredBinaryElementValue { value: binary_ref, .. }) => {
                                         <#unstructured_binary>::from_binary_reference(binary_ref.clone())
                                             .map_err(|err| golem_client::bridge::ClientError::InvocationFailed {
                                                 message: format!("Failed to decode result value: {err}"),

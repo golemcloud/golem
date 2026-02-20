@@ -147,7 +147,9 @@ pub struct ComponentModelElementSchema {
     pub element_type: AnalysedType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -212,7 +214,9 @@ pub enum TextReference {
     Inline(TextSource),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -509,7 +513,7 @@ impl DataValue {
         match self {
             DataValue::Tuple(mut elements) if elements.elements.len() == 1 => {
                 match elements.elements.remove(0) {
-                    ElementValue::ComponentModel(value) => Some(value.value),
+                    ElementValue::ComponentModel(ComponentModelElementValue { value }) => Some(value.value),
                     _ => None,
                 }
             }
@@ -519,21 +523,21 @@ impl DataValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
 pub enum UntypedDataValue {
     Tuple(Vec<UntypedElementValue>),
     Multimodal(Vec<UntypedNamedElementValue>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
 pub struct UntypedNamedElementValue {
     pub name: String,
     pub value: UntypedElementValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
 pub enum UntypedElementValue {
     ComponentModel(Value),
     UnstructuredText(TextReferenceValue),
@@ -629,22 +633,18 @@ pub enum UntypedJsonElementValue {
 impl From<ElementValue> for UntypedJsonElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(value) => {
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
                 UntypedJsonElementValue::ComponentModel(JsonComponentModelValue {
                     value: value
                         .to_json_value()
                         .expect("Invalid ValueAndType in ElementValue"), // TODO: convert to TryFrom and propagate this
                 })
             }
-            ElementValue::UnstructuredText(text_reference) => {
-                UntypedJsonElementValue::UnstructuredText(TextReferenceValue {
-                    value: text_reference,
-                })
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                UntypedJsonElementValue::UnstructuredText(TextReferenceValue { value })
             }
-            ElementValue::UnstructuredBinary(binary_reference) => {
-                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue {
-                    value: binary_reference,
-                })
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                UntypedJsonElementValue::UnstructuredBinary(BinaryReferenceValue { value })
             }
         }
     }
@@ -653,7 +653,7 @@ impl From<ElementValue> for UntypedJsonElementValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -702,17 +702,84 @@ pub struct NamedElementValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentModelElementValue {
+    #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))]
+    pub value: ValueAndType,
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for ComponentModelElementValue {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(mut fields) if fields.len() == 1 => {
+                let wit_value =
+                    <golem_wasm::WitValue as golem_wasm::FromValue>::from_value(fields.remove(0))?;
+                let value: Value = wit_value.into();
+                // NOTE: The type information is lost during WitValue serialization.
+                // The actual type should be reconstructed from the accompanying DataSchema
+                // when available (e.g., via TypedDataValue).
+                Ok(ComponentModelElementValue {
+                    value: ValueAndType::new(
+                        value,
+                        AnalysedType::Str(golem_wasm::analysis::TypeStr),
+                    ),
+                })
+            }
+            _ => Err(format!(
+                "Expected Record with 1 field for ComponentModelElementValue, got {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UnstructuredTextElementValue {
+    pub value: TextReference,
+    #[cfg_attr(feature = "full", wit_field(skip))]
+    #[serde(default)]
+    pub descriptor: TextDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct UnstructuredBinaryElementValue {
+    pub value: BinaryReference,
+    #[cfg_attr(feature = "full", wit_field(skip))]
+    #[serde(default)]
+    pub descriptor: BinaryDescriptor,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub enum ElementValue {
-    ComponentModel(
-        #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))] ValueAndType,
-    ),
-    UnstructuredText(TextReference),
-    UnstructuredBinary(BinaryReference),
+    ComponentModel(ComponentModelElementValue),
+    UnstructuredText(UnstructuredTextElementValue),
+    UnstructuredBinary(UnstructuredBinaryElementValue),
 }
 
 impl ElementValue {
@@ -733,16 +800,16 @@ impl ElementValue {
                             errors.join(", ")
                         )
                     })?;
-                Ok(ElementValue::ComponentModel(value_and_type))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: value_and_type }))
             }
             (
                 UntypedJsonElementValue::UnstructuredText(text),
-                ElementSchema::UnstructuredText(_),
-            ) => Ok(ElementValue::UnstructuredText(text.value)),
+                ElementSchema::UnstructuredText(descriptor),
+            ) => Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text.value, descriptor })),
             (
                 UntypedJsonElementValue::UnstructuredBinary(binary),
-                ElementSchema::UnstructuredBinary(_),
-            ) => Ok(ElementValue::UnstructuredBinary(binary.value)),
+                ElementSchema::UnstructuredBinary(descriptor),
+            ) => Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: binary.value, descriptor })),
             _ => Err("Element value does not match schema".to_string()),
         }
     }

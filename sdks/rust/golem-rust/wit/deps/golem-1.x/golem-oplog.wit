@@ -3,7 +3,7 @@ package golem:api@1.5.0;
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:core/types@1.5.0.{value-and-type, account-id};
+    use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
     use context.{attribute, attribute-value, span-id, trace-id};
@@ -126,20 +126,47 @@ interface oplog {
         begin-index: oplog-index
     }
 
-    record exported-function-invocation-parameters {
+    record typed-data-value {
+        value: data-value,
+        schema: data-schema,
+    }
+
+    record agent-initialization-parameters {
         idempotency-key: string,
-        function-name: string,
-        input: option<list<value-and-type>>,
+        constructor-parameters: typed-data-value,
         trace-id: string,
         trace-states: list<string>,
-        /// The first one is the invocation context stack associated with the exported function invocation,
-        /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
-        invocation-context: list<list<span-data>>
+        invocation-context: list<list<span-data>>,
+    }
+
+    record agent-method-invocation-parameters {
+        idempotency-key: string,
+        method-name: string,
+        function-input: typed-data-value,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<list<span-data>>,
+    }
+
+    record load-snapshot-parameters {
+        snapshot: snapshot,
+    }
+
+    record process-oplog-entries-parameters {
+        idempotency-key: string,
+    }
+
+    record manual-update-parameters {
+        target-revision: component-revision,
     }
 
     variant agent-invocation {
-        exported-function(exported-function-invocation-parameters),
-        manual-update(component-revision)
+        agent-initialization(agent-initialization-parameters),
+        agent-method-invocation(agent-method-invocation-parameters),
+        save-snapshot,
+        load-snapshot(load-snapshot-parameters),
+        process-oplog-entries(process-oplog-entries-parameters),
+        manual-update(manual-update-parameters),
     }
 
     record pending-agent-invocation-parameters {
