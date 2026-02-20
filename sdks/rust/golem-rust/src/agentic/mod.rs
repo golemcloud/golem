@@ -14,6 +14,7 @@
 
 pub use crate::golem_agentic::golem::agent::common::Principal;
 pub use agent::*;
+pub use agent_config::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use async_utils::*;
@@ -45,3 +46,4 @@ mod unstructured_binary;
 mod unstructured_text;
 mod webhook;
 mod wit_utils;
+mod agent_config;

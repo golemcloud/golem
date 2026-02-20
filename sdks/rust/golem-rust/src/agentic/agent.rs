@@ -24,7 +24,7 @@ pub struct SnapshotData {
 }
 
 #[async_trait::async_trait(?Send)]
-pub trait BaseAgent {
+pub trait BaseAgent<T = ()> {
     /// Gets the agent ID string of this agent.
     ///
     /// The agent ID consists of the agent type name, constructor parameter values and optional

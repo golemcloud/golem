@@ -421,7 +421,7 @@ fn generate_base_agent_impl(
 
     quote! {
         #[golem_rust::async_trait::async_trait(?Send)]
-        impl #impl_generics golem_rust::agentic::BaseAgent for #self_ty #ty_generics #where_clause {
+        impl<T> #impl_generics golem_rust::agentic::BaseAgent<T> for #self_ty #ty_generics #where_clause {
             fn get_agent_id(&self) -> String {
                 golem_rust::agentic::get_agent_id().agent_id
             }
