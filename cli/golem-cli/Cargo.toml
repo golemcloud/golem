@@ -32,11 +32,13 @@ harness = false
 golem-templates = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-wasm = { workspace = true , default-features = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
+ariadne = { workspace = true }
+assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
 base64 = { workspace = true }
@@ -49,8 +51,11 @@ clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
+crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+evcxr = { workspace = true }
+flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
@@ -73,6 +78,7 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+rustyline = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
@@ -98,6 +104,7 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
+unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }

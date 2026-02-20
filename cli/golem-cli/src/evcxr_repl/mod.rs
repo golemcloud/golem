@@ -12,14 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem::command_handler::ServerCommandHandler;
-use golem_cli::command_handler::CommandHandler;
-use golem_cli::main_wrapper;
+use crate::evcxr_repl::repl::Repl;
+use crate::log::log_anyhow_error;
 use std::process::ExitCode;
-use std::sync::Arc;
 
-fn main() -> ExitCode {
-    main_wrapper(|| {
-        CommandHandler::handle_args(std::env::args_os(), Arc::new(ServerCommandHandler {}))
-    })
+mod cli_repl_interop;
+mod config;
+mod log;
+mod repl;
+
+pub use config::ReplConfig;
+pub use config::REPL_CONFIG_FILE_NAME;
+
+pub fn main() -> ExitCode {
+    match Repl::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            log_anyhow_error(&err);
+            ExitCode::FAILURE
+        }
+    }
 }
