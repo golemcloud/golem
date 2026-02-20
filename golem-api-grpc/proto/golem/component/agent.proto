@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "golem/common/empty.proto";
 import "wasm/rpc/type.proto";
+import "wasm/rpc/val.proto";
 import "wasm/rpc/value_and_type.proto";
 import "golem/common/account_id.proto";
 import "golem/component/component_id.proto";
@@ -115,6 +116,34 @@ message NamedElementValue {
 message ElementValue {
   oneof value {
     wasm.rpc.ValueAndType component_model = 1;
+    TextReference unstructured_text = 2;
+    BinaryReference unstructured_binary = 3;
+  }
+}
+
+message UntypedDataValue {
+  oneof value {
+    UntypedTupleValue tuple = 1;
+    UntypedMultimodalValue multimodal = 2;
+  }
+}
+
+message UntypedTupleValue {
+  repeated UntypedElementValue elements = 1;
+}
+
+message UntypedMultimodalValue {
+  repeated UntypedNamedElementValue elements = 1;
+}
+
+message UntypedNamedElementValue {
+  string name = 1;
+  UntypedElementValue value = 2;
+}
+
+message UntypedElementValue {
+  oneof value {
+    wasm.rpc.Val component_model = 1;
     TextReference unstructured_text = 2;
     BinaryReference unstructured_binary = 3;
   }

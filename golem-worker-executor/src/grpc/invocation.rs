@@ -432,6 +432,28 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     Ok(input)
 }
 
+impl ProtobufInvocationDetails
+    for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest
+{
+    fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
+        &self.worker_id
+    }
+
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
+    }
+
+    fn proto_invocation_context(
+        &self,
+    ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
+        &self.context
+    }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
+    }
+}
+
 fn from_proto_invocation_context(
     context: &Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
 ) -> InvocationContextStack {

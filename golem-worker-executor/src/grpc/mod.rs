@@ -43,14 +43,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
     GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest,
-    InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, InvokeJsonWorkerRequest,
-    InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAgentRequest, InvokeAgentResponse, InvokeAndAwaitWorkerJsonRequest,
+    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
+    InvokeJsonWorkerRequest, InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode, UntypedDataValue};
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -1655,6 +1655,51 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn invoke_agent_internal(
+        &self,
+        request: InvokeAgentRequest,
+    ) -> Result<Option<UntypedDataValue>, WorkerExecutorError> {
+        let worker_id = request.worker_id()?;
+        let environment_id = request.environment_id()?;
+        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let _auth_ctx = request.auth_ctx()?;
+
+        let _parameters: UntypedDataValue = request
+            .parameters
+            .ok_or(WorkerExecutorError::invalid_request(
+                "parameters not found",
+            ))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting parameters: {e}"))
+            })?;
+
+        let _method_parameters: UntypedDataValue = request
+            .method_parameters
+            .ok_or(WorkerExecutorError::invalid_request(
+                "method_parameters not found",
+            ))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "failed converting method_parameters: {e}"
+                ))
+            })?;
+
+        let _idempotency_key: Option<IdempotencyKey> =
+            request.idempotency_key.map(|k| k.into());
+
+        let _agent_type_name = request.agent_type_name;
+        let _method_name = request.method_name;
+
+        // TODO: implement agent invocation logic
+        Err(WorkerExecutorError::invalid_request(
+            "invoke_agent not yet implemented",
+        ))
+    }
+
     fn create_proto_metadata(
         metadata: WorkerMetadata,
         last_error_and_retry_count: Option<LastError>,
@@ -2727,6 +2772,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Response::new(DeactivatePluginResponse {
                     result: Some(
                         golem::workerexecutor::v1::deactivate_plugin_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn invoke_agent(
+        &self,
+        request: Request<InvokeAgentRequest>,
+    ) -> Result<Response<InvokeAgentResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_agent",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_type_name = request.agent_type_name.clone(),
+            method_name = request.method_name.clone(),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+        );
+
+        match self
+            .invoke_agent_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(Ok(Response::new(InvokeAgentResponse {
+                result: Some(
+                    golem::workerexecutor::v1::invoke_agent_response::Result::Success(
+                        golem::workerexecutor::v1::InvokeAgentSuccess {
+                            result: result.map(|v| v.into()),
+                        },
+                    ),
+                ),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(InvokeAgentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::invoke_agent_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),
