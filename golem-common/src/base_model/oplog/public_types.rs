@@ -246,7 +246,7 @@ pub struct PublicRetryConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInitializationParameters {
     pub idempotency_key: IdempotencyKey,
-    #[cfg_attr(feature = "full", wit_field(convert = TypedDataValue))]
+    #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
     pub constructor_parameters: DataValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
@@ -260,7 +260,7 @@ pub struct AgentInitializationParameters {
 pub struct AgentMethodInvocationParameters {
     pub idempotency_key: IdempotencyKey,
     pub method_name: String,
-    #[cfg_attr(feature = "full", wit_field(convert = TypedDataValue))]
+    #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
     pub function_input: DataValue,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,

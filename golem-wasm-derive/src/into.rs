@@ -436,16 +436,20 @@ fn apply_conversions(
 ) -> proc_macro2::TokenStream {
     match (
         &wit_field.convert,
+        &wit_field.try_convert,
         &wit_field.convert_vec,
         &wit_field.convert_option,
     ) {
-        (Some(convert_to), None, None) => {
+        (Some(convert_to), None, None, None) => {
             quote! { Into::<#convert_to>::into(#field_access).into_value() }
         }
-        (None, Some(convert_to), None) => {
+        (None, Some(convert_to), None, None) => {
+            quote! { Into::<#convert_to>::into(#field_access).into_value() }
+        }
+        (None, None, Some(convert_to), None) => {
             quote! { #field_access.into_iter().map(Into::<#convert_to>::into).collect::<Vec<_>>().into_value() }
         }
-        (None, None, Some(convert_to)) => {
+        (None, None, None, Some(convert_to)) => {
             quote! { #field_access.map(Into::<#convert_to>::into).into_value() }
         }
         _ => quote! { #field_access.into_value() },

@@ -331,16 +331,20 @@ fn apply_from_conversions(
 ) -> proc_macro2::TokenStream {
     match (
         &wit_field.convert,
+        &wit_field.try_convert,
         &wit_field.convert_vec,
         &wit_field.convert_option,
     ) {
-        (Some(convert_to), None, None) => {
+        (Some(convert_to), None, None, None) => {
             quote! { Into::<#ty>::into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?) }
         }
-        (None, Some(convert_to), None) => {
+        (None, Some(convert_to), None, None) => {
+            quote! { TryInto::<#ty>::try_into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?)? }
+        }
+        (None, None, Some(convert_to), None) => {
             quote! { Vec::<#convert_to>::from_value(#field_access)?.into_iter().map(|item| Into::into(item)).collect::<Vec<_>>() }
         }
-        (None, None, Some(convert_to)) => {
+        (None, None, None, Some(convert_to)) => {
             quote! { Option::<#convert_to>::from_value(#field_access)?.into_iter().map(Into::into) }
         }
         _ => quote! { <#ty as golem_wasm::FromValue>::from_value(#field_access)? },

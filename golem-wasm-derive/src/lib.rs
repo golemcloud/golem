@@ -40,6 +40,7 @@ struct WitField {
     skip: bool,
     rename: Option<LitStr>,
     convert: Option<Type>,
+    try_convert: Option<Type>,
     convert_vec: Option<Type>,
     convert_option: Option<Type>,
 }
@@ -54,6 +55,7 @@ impl Parse for WitField {
         let mut skip = false;
         let mut rename = None;
         let mut convert = None;
+        let mut try_convert = None;
         let mut convert_vec = None;
         let mut convert_option = None;
 
@@ -67,6 +69,9 @@ impl Parse for WitField {
             } else if ident == "convert" {
                 input.parse::<syn::Token![=]>()?;
                 convert = Some(input.parse()?);
+            } else if ident == "try_convert" {
+                input.parse::<syn::Token![=]>()?;
+                try_convert = Some(input.parse()?);
             } else if ident == "convert_vec" {
                 input.parse::<syn::Token![=]>()?;
                 convert_vec = Some(input.parse()?);
@@ -82,6 +87,7 @@ impl Parse for WitField {
             skip,
             rename,
             convert,
+            try_convert,
             convert_vec,
             convert_option,
         })
