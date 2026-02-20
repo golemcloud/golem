@@ -16,28 +16,22 @@ use super::error::WorkerTraceErrorKind;
 use super::{bad_request_error, validate_protobuf_worker_id};
 use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::common::Empty;
-use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
-    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest,
+    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest,
     LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError as GrpcWorkerError, complete_promise_response,
-    fork_worker_response, invoke_agent_response, invoke_and_await_response, invoke_response,
-    launch_new_worker_response, resume_worker_response, revert_worker_response,
-    update_worker_response,
+    fork_worker_response, invoke_agent_response, launch_new_worker_response,
+    resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_common::model::WorkerId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::grpc::{
-    proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
-};
+use golem_service_base::grpc::{proto_component_id_string, proto_worker_id_string};
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -106,64 +100,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(CompletePromiseResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn invoke_and_await(
-        &self,
-        request: Request<InvokeAndAwaitRequest>,
-    ) -> Result<Response<InvokeAndAwaitResponse>, Status> {
-        let (_, _, request) = request.into_parts();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            function = request.function,
-            context_parent_worker_id =
-                proto_invocation_context_parent_worker_id_string(&request.context)
-        );
-
-        let response = match self
-            .invoke_and_await(request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(result) => record.succeed(invoke_and_await_response::Result::Success(result)),
-            Err(error) => record.fail(
-                invoke_and_await_response::Result::Error(error.clone()),
-                &mut WorkerTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(InvokeAndAwaitResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn invoke(
-        &self,
-        request: Request<InvokeRequest>,
-    ) -> Result<Response<InvokeResponse>, Status> {
-        let (_, _, request) = request.into_parts();
-        let record = recorded_grpc_api_request!(
-            "invoke",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            function = request.function,
-            context_parent_worker_id =
-                proto_invocation_context_parent_worker_id_string(&request.context)
-        );
-
-        let response = match self.invoke(request).instrument(record.span.clone()).await {
-            Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
-            Err(error) => record.fail(
-                invoke_response::Result::Error(error.clone()),
-                &mut WorkerTraceErrorKind(&error),
-            ),
-        };
-
-        Ok(Response::new(InvokeResponse {
             result: Some(response),
         }))
     }
@@ -371,69 +307,6 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(result)
-    }
-
-    async fn invoke(&self, request: InvokeRequest) -> Result<(), GrpcWorkerError> {
-        let auth: AuthCtx = request
-            .auth_ctx
-            .ok_or(bad_request_error("auth_ctx not found"))?
-            .try_into()
-            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-
-        let params = request
-            .invoke_parameters
-            .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
-
-        self.worker_service
-            .invoke(
-                &worker_id,
-                request.idempotency_key.map(|k| k.into()),
-                request.function,
-                params.params,
-                request.context,
-                auth,
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn invoke_and_await(
-        &self,
-        request: InvokeAndAwaitRequest,
-    ) -> Result<InvokeResultTyped, GrpcWorkerError> {
-        let auth: AuthCtx = request
-            .auth_ctx
-            .ok_or(bad_request_error("auth_ctx not found"))?
-            .try_into()
-            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-
-        let params = request
-            .invoke_parameters
-            .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
-
-        let idempotency_key = request
-            .idempotency_key
-            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
-            .into();
-
-        let result = self
-            .worker_service
-            .invoke_and_await(
-                &worker_id,
-                Some(idempotency_key),
-                request.function,
-                params.params,
-                request.context,
-                auth,
-            )
-            .await?;
-
-        Ok(InvokeResultTyped {
-            result: result.map(|tav| tav.into()),
-        })
     }
 
     async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {

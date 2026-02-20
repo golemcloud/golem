@@ -17,7 +17,7 @@ use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::worker::ConnectWorkerStream;
-use crate::service::worker::{InvocationParameters, WorkerService, proxy_worker_connection};
+use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::model::auth::TokenSecret;
@@ -37,7 +37,7 @@ use golem_service_base::model::auth::{
 use golem_service_base::model::*;
 use poem::Body;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
-use poem_openapi::param::{Header, Path, Query};
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
 use std::str::FromStr;
@@ -177,182 +177,6 @@ impl WorkerApi {
     ) -> Result<Json<DeleteWorkerResponse>> {
         self.worker_service.delete(&worker_id, auth).await?;
         Ok(Json(DeleteWorkerResponse {}))
-    }
-
-    /// Invoke a function and await its resolution
-    ///
-    /// Supply the parameters in the request body as JSON.
-    #[oai(
-        path = "/:component_id/workers/:worker_name/invoke-and-await",
-        method = "post",
-        operation_id = "invoke_and_await_function"
-    )]
-    async fn invoke_and_await_function(
-        &self,
-        component_id: Path<ComponentId>,
-        worker_name: Path<String>,
-        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
-        function: Query<String>,
-        params: Json<InvokeParameters>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<InvokeResult>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!(
-            "invoke_and_await_function",
-            worker_id = worker_id.to_string(),
-            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
-            function = function.0
-        );
-
-        let response = self
-            .invoke_and_await_function_internal(
-                worker_id,
-                idempotency_key.0,
-                function.0,
-                params.0,
-                auth,
-            )
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn invoke_and_await_function_internal(
-        &self,
-        target_worker_id: WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function: String,
-        params: InvokeParameters,
-        auth: AuthCtx,
-    ) -> Result<Json<InvokeResult>> {
-        let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
-                .map_err(|errors| {
-                    ApiEndpointError::BadRequest(Json(ErrorsBody {
-                        errors,
-                        cause: None,
-                    }))
-                })?;
-
-        let result = match params {
-            InvocationParameters::TypedProtoVals(vals) => {
-                self.worker_service
-                    .invoke_and_await_typed(
-                        &target_worker_id,
-                        idempotency_key,
-                        function,
-                        vals,
-                        None,
-                        auth,
-                    )
-                    .await
-            }
-            InvocationParameters::RawJsonStrings(jsons) => {
-                self.worker_service
-                    .invoke_and_await_json(
-                        &target_worker_id,
-                        idempotency_key,
-                        function,
-                        jsons,
-                        None,
-                        auth,
-                    )
-                    .await
-            }
-        }?;
-
-        Ok(Json(InvokeResult { result }))
-    }
-
-    /// Invoke a function
-    ///
-    /// A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-    #[oai(
-        path = "/:component_id/workers/:worker_name/invoke",
-        method = "post",
-        operation_id = "invoke_function"
-    )]
-    async fn invoke_function(
-        &self,
-        component_id: Path<ComponentId>,
-        worker_name: Path<String>,
-        #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
-        /// name of the exported function to be invoked
-        function: Query<String>,
-        params: Json<InvokeParameters>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<InvokeResponse>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!(
-            "invoke_function",
-            worker_id = worker_id.to_string(),
-            idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
-            function = function.0
-        );
-
-        let response = self
-            .invoke_function_internal(worker_id, idempotency_key.0, function.0, params.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn invoke_function_internal(
-        &self,
-        target_worker_id: WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function: String,
-        params: InvokeParameters,
-        auth: AuthCtx,
-    ) -> Result<Json<InvokeResponse>> {
-        let params =
-            InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
-                .map_err(|errors| {
-                    ApiEndpointError::BadRequest(Json(ErrorsBody {
-                        errors,
-                        cause: None,
-                    }))
-                })?;
-
-        match params {
-            InvocationParameters::TypedProtoVals(vals) => {
-                self.worker_service
-                    .invoke_typed(
-                        &target_worker_id,
-                        idempotency_key,
-                        function,
-                        vals,
-                        None,
-                        auth,
-                    )
-                    .await
-            }
-            InvocationParameters::RawJsonStrings(jsons) => {
-                self.worker_service
-                    .invoke_json(
-                        &target_worker_id,
-                        idempotency_key,
-                        function,
-                        jsons,
-                        None,
-                        auth,
-                    )
-                    .await
-            }
-        }?;
-        Ok(Json(InvokeResponse {}))
     }
 
     /// Complete a promise

@@ -21,13 +21,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use futures::{Stream, StreamExt};
-use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult, LogEvent};
+use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
     CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerJsonRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest,
+    ResumeWorkerRequest,
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
@@ -49,9 +49,6 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
-use golem_wasm::ValueAndType;
-use golem_wasm::analysis::AnalysedFunctionResult;
-use golem_wasm::protobuf::Val as ProtoVal;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
@@ -84,78 +81,6 @@ pub trait WorkerClient: Send + Sync {
         &self,
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<()>;
-
-    /// Invokes a worker using raw `Val` parameter values and awaits its results returning
-    /// it as a `TypeAnnotatedValue`.
-    async fn invoke_and_await_typed(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<Option<ValueAndType>>;
-
-    /// Invokes a worker using raw `Val` parameter values and awaits its results returning
-    /// a `Val` values (without type information)
-    async fn invoke_and_await(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<InvokeResult>;
-
-    /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
-    /// returning it as a `TypeAnnotatedValue`. The input parameter JSONs cannot be converted to `Val`
-    /// without type information so they get forwarded to the executor.
-    async fn invoke_and_await_json(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<String>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<Option<ValueAndType>>;
-
-    /// Enqueues an invocation for the worker without awaiting its results, using raw `Val`
-    /// parameters.
-    async fn invoke(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<()>;
-
-    /// Enqueues an invocation for the worker without awaiting its results, using JSON value
-    /// encoding represented as raw strings. Without type information these representations cannot
-    /// be converted to `Val` so they get forwarded as-is to the executor.
-    async fn invoke_json(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<String>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -305,11 +230,6 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<UntypedDataValue>>;
-}
-
-pub struct TypedResult {
-    pub result: ValueAndType,
-    pub function_result_types: Vec<AnalysedFunctionResult>,
 }
 
 #[derive(Clone)]
@@ -588,287 +508,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
         .await?;
 
-        Ok(())
-    }
-
-    async fn invoke_and_await_typed(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<Option<ValueAndType>> {
-        let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
-
-        let invoke_response = self.call_worker_executor(
-            worker_id.clone(),
-            "invoke_and_await_worker_typed",
-            move |worker_executor_client| {
-                Box::pin(worker_executor_client.invoke_and_await_worker_typed(
-                    InvokeAndAwaitWorkerRequest {
-                        worker_id: Some(worker_id_clone.clone().into()),
-                        name: function_name.clone(),
-                        input: params.clone(),
-                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        component_owner_account_id: Some(account_id.into()),
-                        context: invocation_context.clone(),
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
-                    }
-                )
-                )
-            },
-            move |response| {
-                match response.into_inner() {
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result:
-                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
-                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                                     output
-                                 },
-                             )),
-                    } => {
-                        match output {
-                            Some(vnt) => ValueAndType::try_from(vnt).map(Some).map_err(|err| WorkerExecutorError::unknown(err).into()),
-                            None => Ok(None),
-                        }
-                    }
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result:
-                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
-                    } => {
-                        Err(err.into())
-                    }
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
-                        Err("Empty response".into())
-                    }
-                }
-            },
-            WorkerServiceError::InternalCallError,
-        ).await?;
-
-        Ok(invoke_response)
-    }
-
-    async fn invoke_and_await(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<InvokeResult> {
-        let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
-
-        let invoke_response = self.call_worker_executor(
-            worker_id.clone(),
-            "invoke_and_await_worker",
-            move |worker_executor_client| {
-                Box::pin(worker_executor_client.invoke_and_await_worker(
-                    InvokeAndAwaitWorkerRequest {
-                        worker_id: Some(worker_id_clone.clone().into()),
-                        name: function_name.clone(),
-                        input: params.clone(),
-                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        component_owner_account_id: Some(account_id.into()),
-                        context: invocation_context.clone(),
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
-                    }
-                )
-                )
-            },
-            move |response| {
-                match response.into_inner() {
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponse {
-                        result:
-                        Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Success(
-                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccess {
-                                     output,
-                                 },
-                             )),
-                    } => {
-                        Ok(InvokeResult { result: output })
-                    }
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponse {
-                        result:
-                        Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(err)),
-                    } => {
-                        Err(err.into())
-                    }
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponse { .. } => {
-                        Err("Empty response".into())
-                    }
-                }
-            },
-            WorkerServiceError::InternalCallError,
-        ).await?;
-
-        Ok(invoke_response)
-    }
-
-    async fn invoke_and_await_json(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<String>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<Option<ValueAndType>> {
-        let worker_id = worker_id.clone();
-        let worker_id_clone = worker_id.clone();
-
-        let invoke_response = self.call_worker_executor(
-            worker_id.clone(),
-            "invoke_and_await_worker_json",
-            move |worker_executor_client| {
-                Box::pin(worker_executor_client.invoke_and_await_worker_json(
-                    InvokeAndAwaitWorkerJsonRequest {
-                        worker_id: Some(worker_id_clone.clone().into()),
-                        name: function_name.clone(),
-                        input: params.clone(),
-                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        component_owner_account_id: Some(account_id.into()),
-                        context: invocation_context.clone(),
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
-                    }
-                )
-                )
-            },
-            move |response| {
-                match response.into_inner() {
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result:
-                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
-                                 workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                                     output
-                                 },
-                             )),
-                    } => {
-                        match output {
-                            Some(vnt) => {
-                                ValueAndType::try_from(vnt).map(Some).map_err(|err| WorkerExecutorError::unknown(err).into())
-                            }
-                            None => Ok(None),
-                        }
-                    }
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result:
-                        Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(err)),
-                    } => {
-                        Err(err.into())
-                    }
-                    workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped { .. } => {
-                        Err("Empty response".into())
-                    }
-                }
-            },
-            WorkerServiceError::InternalCallError,
-        ).await?;
-
-        Ok(invoke_response)
-    }
-
-    async fn invoke(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
-        self.call_worker_executor(
-            worker_id.clone(),
-            "invoke_worker",
-            move |worker_executor_client| {
-                let worker_id = worker_id.clone();
-                Box::pin(worker_executor_client.invoke_worker(
-                    workerexecutor::v1::InvokeWorkerRequest {
-                        worker_id: Some(worker_id.into()),
-                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        name: function_name.clone(),
-                        input: params.clone(),
-                        component_owner_account_id: Some(account_id.into()),
-                        context: invocation_context.clone(),
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into()),
-                    },
-                ))
-            },
-            |response| match response.into_inner() {
-                workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
-                } => Ok(()),
-                workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
-                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
-            },
-            WorkerServiceError::InternalCallError,
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn invoke_json(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<String>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
-        self.call_worker_executor(
-            worker_id.clone(),
-            "invoke_worker_json",
-            move |worker_executor_client| {
-                let worker_id = worker_id.clone();
-                Box::pin(worker_executor_client.invoke_worker_json(
-                    workerexecutor::v1::InvokeJsonWorkerRequest {
-                        worker_id: Some(worker_id.into()),
-                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        name: function_name.clone(),
-                        input: params.clone(),
-                        component_owner_account_id: Some(account_id.into()),
-                        context: invocation_context.clone(),
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into()),
-                    },
-                ))
-            },
-            |response| match response.into_inner() {
-                workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
-                } => Ok(()),
-                workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
-                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
-            },
-            WorkerServiceError::InternalCallError,
-        )
-        .await?;
         Ok(())
     }
 

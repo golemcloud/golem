@@ -8,9 +8,7 @@ import "golem/worker/complete_parameters.proto";
 import "golem/worker/cursor.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
-import "golem/worker/invoke_parameters.proto";
-import "golem/worker/invoke_result.proto";
-import "golem/worker/invoke_result_json.proto";
+
 import "golem/worker/v1/worker_error.proto";
 import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_metadata.proto";
@@ -29,8 +27,6 @@ import "google/protobuf/timestamp.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
-  rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
-  rpc Invoke (InvokeRequest) returns (InvokeResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
@@ -84,38 +80,6 @@ message ForkWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerError error  = 2;
-  }
-}
-
-message InvokeAndAwaitRequest {
-  golem.worker.WorkerId workerId = 1;
-  golem.worker.IdempotencyKey idempotencyKey = 2;
-  string function = 3;
-  golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 5;
-  golem.auth.AuthCtx auth_ctx = 6;
-}
-
-message InvokeAndAwaitResponse {
-  oneof result {
-    golem.worker.InvokeResultTyped success = 1;
-    golem.worker.v1.WorkerError error = 2;
-  }
-}
-
-message InvokeRequest {
-  golem.worker.WorkerId workerId = 1;
-  golem.worker.IdempotencyKey idempotencyKey = 2;
-  string function = 3;
-  golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 5;
-  golem.auth.AuthCtx auth_ctx = 6;
-}
-
-message InvokeResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.worker.v1.WorkerError error = 2;
   }
 }
 
