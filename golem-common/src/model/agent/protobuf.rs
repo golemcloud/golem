@@ -1,15 +1,15 @@
 use super::{
     AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentMode,
-    AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource,
-    BinaryReferenceValue, BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod,
-    DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
-    PathVariable, Principal, QueryVariable, RegisteredAgentType, RegisteredAgentTypeImplementer,
-    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
-    SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextReferenceValue,
-    TextSource, TextType, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue, Url,
+    AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
+    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions,
+    CustomHttpMethod, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+    LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
+    RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    SnapshottingPeriodic, SystemVariable, SystemVariableSegment, TextDescriptor, TextReference,
+    TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue,
+    UntypedNamedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
@@ -699,11 +699,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::UntypedElementValue> for U
                         value: text_ref.try_into()?,
                     }))
                 }
-                untyped_element_value::Value::UnstructuredBinary(bin_ref) => {
-                    Ok(UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                untyped_element_value::Value::UnstructuredBinary(bin_ref) => Ok(
+                    UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
                         value: bin_ref.try_into()?,
-                    }))
-                }
+                    }),
+                ),
             },
         }
     }

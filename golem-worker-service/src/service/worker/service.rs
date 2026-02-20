@@ -14,6 +14,7 @@
 
 use super::WorkerResult;
 use super::{ConnectWorkerStream, WorkerClient, WorkerServiceError};
+use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
@@ -21,6 +22,7 @@ use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -30,6 +32,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_wasm::ValueAndType;
@@ -40,6 +43,7 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
 pub struct WorkerService {
+    registry_service: Arc<dyn RegistryService>,
     component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn AuthService>,
     limit_service: Arc<dyn LimitService>,
@@ -48,12 +52,14 @@ pub struct WorkerService {
 
 impl WorkerService {
     pub fn new(
+        registry_service: Arc<dyn RegistryService>,
         component_service: Arc<dyn ComponentService>,
         auth_service: Arc<dyn AuthService>,
         limit_service: Arc<dyn LimitService>,
         worker_client: Arc<dyn WorkerClient>,
     ) -> Self {
         Self {
+            registry_service,
             component_service,
             auth_service,
             limit_service,
@@ -937,5 +943,174 @@ impl WorkerService {
             .await?;
 
         Ok(canceled)
+    }
+
+    pub async fn invoke_agent(
+        &self,
+        worker_id: &WorkerId,
+        method_name: String,
+        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        mode: i32,
+        schedule_at: Option<::prost_types::Timestamp>,
+        idempotency_key: Option<IdempotencyKey>,
+        invocation_context: Option<InvocationContext>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<UntypedDataValue>> {
+        let component = self
+            .component_service
+            .get_latest_by_id(worker_id.component_id)
+            .await?;
+
+        let environment_auth_details = self
+            .auth_service
+            .authorize_environment_actions(
+                component.environment_id,
+                EnvironmentAction::UpdateWorker,
+                &auth_ctx,
+            )
+            .await?;
+
+        self.worker_client
+            .invoke_agent(
+                worker_id,
+                method_name,
+                method_parameters,
+                mode,
+                schedule_at,
+                idempotency_key,
+                invocation_context,
+                component.environment_id,
+                environment_auth_details.account_id_owning_environment,
+                auth_ctx,
+            )
+            .await
+    }
+
+    /// REST/JSON path: resolves agent via registry, converts JSON parameters, then delegates.
+    pub async fn invoke_agent_rest(
+        &self,
+        request: AgentInvocationRequest,
+        auth: AuthCtx,
+    ) -> WorkerResult<AgentInvocationResult> {
+        let registered_agent_type = self
+            .registry_service
+            .resolve_latest_agent_type_by_names(
+                &auth.account_id(),
+                &request.app_name,
+                &request.env_name,
+                &request.agent_type_name,
+            )
+            .await?;
+
+        let component_metadata = self
+            .component_service
+            .get_revision(
+                registered_agent_type.implemented_by.component_id,
+                registered_agent_type.implemented_by.component_revision,
+            )
+            .await?;
+
+        let agent_type = component_metadata
+            .metadata
+            .find_agent_type_by_name(&request.agent_type_name)
+            .map_err(|err| {
+                WorkerServiceError::Internal(format!(
+                    "Cannot get agent type {} from component metadata: {err}",
+                    request.agent_type_name
+                ))
+            })?
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent type {} not found in component metadata",
+                    request.agent_type_name
+                ))
+            })?;
+
+        let constructor_parameters: DataValue = DataValue::try_from_untyped_json(
+            request.parameters.clone(),
+            agent_type.constructor.input_schema.clone(),
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!(
+                "Agent constructor parameters type error: {err}"
+            ))
+        })?;
+
+        let agent_id = AgentId::new(
+            request.agent_type_name.clone(),
+            constructor_parameters,
+            request.phantom_id,
+        );
+
+        let worker_id = WorkerId {
+            component_id: component_metadata.id,
+            worker_name: agent_id.to_string(),
+        };
+
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == request.method_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method {} not found in agent type {}",
+                    request.method_name, request.agent_type_name
+                ))
+            })?;
+
+        let method_parameters: DataValue = DataValue::try_from_untyped_json(
+            request.method_parameters,
+            method.input_schema.clone(),
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!("Agent method parameters type error: {err}"))
+        })?;
+
+        let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
+            UntypedDataValue::from(method_parameters).into();
+
+        let proto_mode = match request.mode {
+            AgentInvocationMode::Await => {
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32
+            }
+            AgentInvocationMode::Schedule => {
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule
+                    as i32
+            }
+        };
+
+        let proto_schedule_at = request.schedule_at.map(|dt| ::prost_types::Timestamp {
+            seconds: dt.timestamp(),
+            nanos: dt.timestamp_subsec_nanos() as i32,
+        });
+
+        let result = self
+            .invoke_agent(
+                &worker_id,
+                request.method_name,
+                proto_method_parameters,
+                proto_mode,
+                proto_schedule_at,
+                request.idempotency_key,
+                None,
+                auth,
+            )
+            .await?;
+
+        match result {
+            Some(untyped_data_value) => {
+                let typed_data_value =
+                    DataValue::try_from_untyped(untyped_data_value, method.output_schema.clone())
+                        .map_err(|err| {
+                        WorkerServiceError::TypeChecker(format!(
+                            "DataValue conversion error: {err}"
+                        ))
+                    })?;
+                Ok(AgentInvocationResult {
+                    result: Some(typed_data_value.into()),
+                })
+            }
+            None => Ok(AgentInvocationResult { result: None }),
+        }
     }
 }

@@ -505,9 +505,6 @@ enum AgentInvocationMode {
 
 message InvokeAgentRequest {
   golem.worker.WorkerId worker_id = 1;
-  string agent_type_name = 2;
-  golem.component.UntypedDataValue parameters = 3;
-  optional golem.common.UUID phantom_id = 4;
   string method_name = 5;
   golem.component.UntypedDataValue method_parameters = 6;
   AgentInvocationMode mode = 7;

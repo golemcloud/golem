@@ -20,12 +20,12 @@ use super::{
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
-    AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
-    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
+    AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
+    BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue,
+    ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
     RegisteredAgentType, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
-    UntypedElementValue, Url,
+    SnapshottingPeriodic, TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
+    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
@@ -324,6 +324,42 @@ impl DataValue {
                 }))
             }
             _ => Err("Data value does not match schema".to_string()),
+        }
+    }
+}
+
+impl From<ElementValue> for UntypedElementValue {
+    fn from(value: ElementValue) -> Self {
+        match value {
+            ElementValue::ComponentModel(vat) => UntypedElementValue::ComponentModel(vat.value),
+            ElementValue::UnstructuredText(text_ref) => {
+                UntypedElementValue::UnstructuredText(TextReferenceValue { value: text_ref })
+            }
+            ElementValue::UnstructuredBinary(bin_ref) => {
+                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value: bin_ref })
+            }
+        }
+    }
+}
+
+impl From<NamedElementValue> for UntypedNamedElementValue {
+    fn from(value: NamedElementValue) -> Self {
+        UntypedNamedElementValue {
+            name: value.name,
+            value: value.value.into(),
+        }
+    }
+}
+
+impl From<DataValue> for UntypedDataValue {
+    fn from(value: DataValue) -> Self {
+        match value {
+            DataValue::Tuple(elements) => {
+                UntypedDataValue::Tuple(elements.elements.into_iter().map(Into::into).collect())
+            }
+            DataValue::Multimodal(elements) => UntypedDataValue::Multimodal(
+                elements.elements.into_iter().map(Into::into).collect(),
+            ),
         }
     }
 }

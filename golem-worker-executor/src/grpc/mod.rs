@@ -14,7 +14,7 @@
 
 mod invocation;
 
-use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
+use crate::grpc::invocation::{from_proto_invocation_context, CanStartWorker, GrpcInvokeRequest};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
@@ -50,7 +50,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, UntypedDataValue};
+use golem_common::model::agent::{AgentId, AgentMode, DataValue, UntypedDataValue};
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -69,7 +69,7 @@ use golem_service_base::grpc::{
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::protobuf::Val;
-use golem_wasm::ValueAndType;
+use golem_wasm::{FromValue, IntoValue, ValueAndType};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -1659,25 +1659,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: InvokeAgentRequest,
     ) -> Result<Option<UntypedDataValue>, WorkerExecutorError> {
-        let worker_id = request.worker_id()?;
-        let environment_id = request.environment_id()?;
-        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+        let method_name = request.method_name.clone();
 
-        let _auth_ctx = request.auth_ctx()?;
-
-        let _parameters: UntypedDataValue = request
-            .parameters
-            .ok_or(WorkerExecutorError::invalid_request(
-                "parameters not found",
-            ))?
-            .try_into()
-            .map_err(|e| {
-                WorkerExecutorError::invalid_request(format!("failed converting parameters: {e}"))
-            })?;
-
-        let _method_parameters: UntypedDataValue = request
+        let method_parameters: UntypedDataValue = request
             .method_parameters
+            .clone()
             .ok_or(WorkerExecutorError::invalid_request(
                 "method_parameters not found",
             ))?
@@ -1688,16 +1674,118 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
-        let _idempotency_key: Option<IdempotencyKey> =
-            request.idempotency_key.map(|k| k.into());
+        let idempotency_key: Option<IdempotencyKey> =
+            request.idempotency_key.clone().map(|k| k.into());
 
-        let _agent_type_name = request.agent_type_name;
-        let _method_name = request.method_name;
+        let mode = request.mode();
 
-        // TODO: implement agent invocation logic
-        Err(WorkerExecutorError::invalid_request(
-            "invoke_agent not yet implemented",
-        ))
+        let worker = self.get_or_create(&request).await?;
+
+        let metadata = worker.get_latest_worker_metadata().await;
+        let worker_name = &metadata.worker_id.worker_name;
+
+        let agent_type_name =
+            AgentId::parse_agent_type_name(worker_name).map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Cannot parse agent type name from worker name '{worker_name}': {err}"
+                ))
+            })?;
+
+        let component_metadata = worker
+            .component_service()
+            .get_metadata(
+                metadata.worker_id.component_id,
+                Some(metadata.last_known_status.component_revision),
+            )
+            .await?;
+
+        let agent_type = component_metadata
+            .metadata
+            .find_agent_type_by_wrapper_name(&agent_type_name)
+            .map_err(WorkerExecutorError::invalid_request)?
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Agent type {} not found in component metadata",
+                    agent_type_name
+                ))
+            })?;
+
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Agent method {} not found in agent type {}",
+                    method_name, agent_type_name
+                ))
+            })?;
+
+        let method_parameters_typed =
+            DataValue::try_from_untyped(method_parameters, method.input_schema.clone()).map_err(
+                |err| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Agent method parameters type error: {err}"
+                    ))
+                },
+            )?;
+
+        let function_name = "golem:agent/guest.{invoke}".to_string();
+        let function_input: Vec<golem_wasm::Value> = vec![
+            method_name.into_value(),
+            method_parameters_typed.into_value(),
+            golem_common::model::agent::Principal::anonymous().into_value(),
+        ];
+
+        let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let invocation_context = from_proto_invocation_context(&request.context);
+
+        match mode {
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
+                let value = worker
+                    .invoke_and_await(ik, function_name, function_input, invocation_context)
+                    .await?;
+
+                match value {
+                    Some(value_and_type) => match value_and_type.value {
+                        golem_wasm::Value::Result(Ok(Some(data_value_value))) => {
+                            let untyped =
+                                UntypedDataValue::from_value(*data_value_value).map_err(|err| {
+                                    WorkerExecutorError::unknown(format!(
+                                        "Unexpected DataValue value: {err}"
+                                    ))
+                                })?;
+                            Ok(Some(untyped))
+                        }
+                        golem_wasm::Value::Result(Err(Some(agent_error_value))) => {
+                            let agent_error = golem_common::model::agent::AgentError::from_value(
+                                *agent_error_value,
+                            )
+                            .map_err(|err| {
+                                WorkerExecutorError::unknown(format!(
+                                    "Unexpected AgentError value: {err}"
+                                ))
+                            })?;
+                            Err(WorkerExecutorError::runtime(format!(
+                                "Agent invocation failed: {agent_error}"
+                            )))
+                        }
+                        _ => Err(WorkerExecutorError::unknown(
+                            "Unexpected return value from agent invocation",
+                        )),
+                    },
+                    None => Err(WorkerExecutorError::unknown(
+                        "Unexpected missing invoke result value",
+                    )),
+                }
+            }
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
+                worker
+                    .invoke(ik, function_name, function_input, invocation_context)
+                    .await?;
+                Ok(None)
+            }
+        }
     }
 
     fn create_proto_metadata(
@@ -2789,7 +2877,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "invoke_agent",
             worker_id = proto_worker_id_string(&request.worker_id),
-            agent_type_name = request.agent_type_name.clone(),
             method_name = request.method_name.clone(),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
         );

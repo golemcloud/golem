@@ -454,7 +454,7 @@ impl ProtobufInvocationDetails
     }
 }
 
-fn from_proto_invocation_context(
+pub fn from_proto_invocation_context(
     context: &Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
 ) -> InvocationContextStack {
     let provided_context = context.as_ref().and_then(|context| {

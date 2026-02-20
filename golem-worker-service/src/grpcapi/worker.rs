@@ -20,11 +20,12 @@ use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
-    complete_promise_response, fork_worker_response, invoke_and_await_response, invoke_response,
+    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, InvokeAndAwaitRequest,
+    InvokeAndAwaitResponse, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest,
+    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError as GrpcWorkerError, complete_promise_response,
+    fork_worker_response, invoke_agent_response, invoke_and_await_response, invoke_response,
     launch_new_worker_response, resume_worker_response, revert_worker_response,
     update_worker_response,
 };
@@ -275,6 +276,34 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn invoke_agent(
+        &self,
+        request: Request<InvokeAgentRequest>,
+    ) -> Result<Response<InvokeAgentResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "invoke_agent",
+            worker_id = proto_worker_id_string(&request.worker_id),
+            method_name = request.method_name
+        );
+
+        let response = match self
+            .invoke_agent(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(invoke_agent_response::Result::Success(result)),
+            Err(error) => record.fail(
+                invoke_agent_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InvokeAgentResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -486,5 +515,40 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(())
+    }
+
+    async fn invoke_agent(
+        &self,
+        request: InvokeAgentRequest,
+    ) -> Result<InvokeAgentSuccess, GrpcWorkerError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+
+        let method_parameters = request
+            .method_parameters
+            .ok_or_else(|| bad_request_error("Missing method_parameters"))?;
+
+        let result = self
+            .worker_service
+            .invoke_agent(
+                &worker_id,
+                request.method_name,
+                method_parameters,
+                request.mode,
+                request.schedule_at,
+                request.idempotency_key.map(|k| k.into()),
+                request.context,
+                auth,
+            )
+            .await?;
+
+        Ok(InvokeAgentSuccess {
+            result: result.map(|v| v.into()),
+        })
     }
 }

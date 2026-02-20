@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod agents;
 mod client;
 mod connect;
 mod connect_proxy;
@@ -22,7 +21,6 @@ mod routing_logic;
 mod service;
 mod worker_stream;
 
-pub use agents::*;
 pub use client::*;
 pub use connect::*;
 pub use connect_proxy::*;

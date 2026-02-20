@@ -32,6 +32,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -290,6 +291,20 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<bool>;
+
+    async fn invoke_agent(
+        &self,
+        worker_id: &WorkerId,
+        method_name: String,
+        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        mode: i32,
+        schedule_at: Option<::prost_types::Timestamp>,
+        idempotency_key: Option<IdempotencyKey>,
+        invocation_context: Option<InvocationContext>,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<UntypedDataValue>>;
 }
 
 pub struct TypedResult {
@@ -1581,6 +1596,67 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
             .await?;
         Ok(canceled)
+    }
+
+    async fn invoke_agent(
+        &self,
+        worker_id: &WorkerId,
+        method_name: String,
+        method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue,
+        mode: i32,
+        schedule_at: Option<::prost_types::Timestamp>,
+        idempotency_key: Option<IdempotencyKey>,
+        invocation_context: Option<InvocationContext>,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Option<UntypedDataValue>> {
+        let worker_id = worker_id.clone();
+        let worker_id_clone = worker_id.clone();
+
+        let result = self
+            .call_worker_executor(
+                worker_id.clone(),
+                "invoke_agent",
+                move |worker_executor_client| {
+                    Box::pin(worker_executor_client.invoke_agent(
+                        workerexecutor::v1::InvokeAgentRequest {
+                            worker_id: Some(worker_id_clone.clone().into()),
+                            method_name: method_name.clone(),
+                            method_parameters: Some(method_parameters.clone()),
+                            mode,
+                            schedule_at: schedule_at.clone(),
+                            idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                            component_owner_account_id: Some(account_id.into()),
+                            environment_id: Some(environment_id.into()),
+                            auth_ctx: Some(auth_ctx.clone().into()),
+                            context: invocation_context.clone(),
+                        },
+                    ))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::InvokeAgentResponse {
+                        result:
+                            Some(workerexecutor::v1::invoke_agent_response::Result::Success(
+                                workerexecutor::v1::InvokeAgentSuccess { result },
+                            )),
+                    } => match result {
+                        Some(proto_val) => UntypedDataValue::try_from(proto_val)
+                            .map(Some)
+                            .map_err(|err| WorkerExecutorError::unknown(err).into()),
+                        None => Ok(None),
+                    },
+                    workerexecutor::v1::InvokeAgentResponse {
+                        result:
+                            Some(workerexecutor::v1::invoke_agent_response::Result::Failure(err)),
+                    } => Err(err.into()),
+                    workerexecutor::v1::InvokeAgentResponse { .. } => Err("Empty response".into()),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        Ok(result)
     }
 }
 
