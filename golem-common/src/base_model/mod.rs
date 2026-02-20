@@ -155,6 +155,16 @@ impl FromValue for Timestamp {
     }
 }
 
+impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
+    fn from(value: Timestamp) -> Self {
+        let ms = value.to_millis();
+        Self {
+            seconds: ms / 1000,
+            nanoseconds: ((ms % 1000) * 1_000_000) as u32,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[cfg_attr(
     feature = "full",

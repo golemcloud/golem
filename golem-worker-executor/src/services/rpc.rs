@@ -184,15 +184,28 @@ impl From<WorkerProxyError> for RpcError {
     }
 }
 
-impl From<golem_wasm::RpcError> for RpcError {
-    fn from(value: golem_wasm::RpcError) -> Self {
+impl From<crate::preview2::golem::agent::host::RpcError> for RpcError {
+    fn from(value: crate::preview2::golem::agent::host::RpcError) -> Self {
+        use crate::preview2::golem::agent::host::RpcError as WitRpcError;
         match value {
-            golem_wasm::RpcError::ProtocolError(details) => Self::ProtocolError { details },
-            golem_wasm::RpcError::Denied(details) => Self::Denied { details },
-            golem_wasm::RpcError::NotFound(details) => Self::NotFound { details },
-            golem_wasm::RpcError::RemoteInternalError(details) => {
-                Self::RemoteInternalError { details }
-            }
+            WitRpcError::ProtocolError(details) => Self::ProtocolError { details },
+            WitRpcError::Denied(details) => Self::Denied { details },
+            WitRpcError::NotFound(details) => Self::NotFound { details },
+            WitRpcError::RemoteInternalError(details) => Self::RemoteInternalError { details },
+            WitRpcError::RemoteAgentError(err) => Self::RemoteInternalError {
+                details: format!("{err:?}"),
+            },
+        }
+    }
+}
+
+impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
+    fn from(value: RpcError) -> Self {
+        match value {
+            RpcError::ProtocolError { details } => Self::ProtocolError(details),
+            RpcError::Denied { details } => Self::Denied(details),
+            RpcError::NotFound { details } => Self::NotFound(details),
+            RpcError::RemoteInternalError { details } => Self::RemoteInternalError(details),
         }
     }
 }

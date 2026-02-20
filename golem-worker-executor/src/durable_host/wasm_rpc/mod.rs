@@ -12,22 +12,358 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
+    HostWasmRpc, RpcError,
+};
+use crate::services::rpc::RpcDemand;
+use crate::workerctx::WorkerCtx;
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_wasm::WasmRpcEntry;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+use wasmtime::component::Resource;
+
+use crate::workerctx::InvocationContextManagement;
+
+// NOTE: The golem:agent/host wasm-rpc resource has been significantly redesigned.
+// The old implementation (previously using golem:rpc/types) has been commented out below.
+// New stubs are provided that will trap at runtime until the real implementation is done.
+
+impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        _agent_type_name: String,
+        _constructor: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        _phantom_id: Option<golem_wasm::Uuid>,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
+        // TODO: Implement new wasm-rpc constructor
+        // Old constructor took an AgentId; new one takes agent_type_name + constructor + phantom_id
+        Err(anyhow::anyhow!(
+            "wasm-rpc constructor not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn invoke_and_await(
+        &mut self,
+        _self_: Resource<WasmRpcEntry>,
+        _method_name: String,
+        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>
+    {
+        // TODO: Implement invoke_and_await for the new interface
+        Err(anyhow::anyhow!(
+            "wasm-rpc invoke-and-await not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn invoke(
+        &mut self,
+        _self_: Resource<WasmRpcEntry>,
+        _method_name: String,
+        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Result<(), RpcError>> {
+        // TODO: Implement invoke for the new interface
+        Err(anyhow::anyhow!(
+            "wasm-rpc invoke not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn async_invoke_and_await(
+        &mut self,
+        _this: Resource<WasmRpcEntry>,
+        _method_name: String,
+        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Resource<FutureInvokeResult>> {
+        // TODO: Implement async_invoke_and_await for the new interface
+        Err(anyhow::anyhow!(
+            "wasm-rpc async-invoke-and-await not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn schedule_invocation(
+        &mut self,
+        _this: Resource<WasmRpcEntry>,
+        _scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        _method_name: String,
+        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<()> {
+        // TODO: Implement schedule_invocation for the new interface
+        Err(anyhow::anyhow!(
+            "wasm-rpc schedule-invocation not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn schedule_cancelable_invocation(
+        &mut self,
+        _this: Resource<WasmRpcEntry>,
+        _scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        _method_name: String,
+        _input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
+        // TODO: Implement schedule_cancelable_invocation for the new interface
+        Err(anyhow::anyhow!(
+            "wasm-rpc schedule-cancelable-invocation not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn drop(&mut self, rep: Resource<WasmRpcEntry>) -> anyhow::Result<()> {
+        self.observe_function_call("golem::rpc::wasm-rpc", "drop");
+
+        let entry = self.table().delete(rep)?;
+        let payload = entry.payload.downcast::<WasmRpcEntryPayload>();
+        if let Ok(payload) = payload {
+            self.finish_span(payload.span_id()).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
+    async fn subscribe(
+        &mut self,
+        _this: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
+        // TODO: Implement subscribe for the new interface
+        Err(anyhow::anyhow!(
+            "future-invoke-result subscribe not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn get(
+        &mut self,
+        _this: Resource<FutureInvokeResult>,
+    ) -> anyhow::Result<
+        Option<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>,
+    > {
+        // TODO: Implement get for the new interface
+        Err(anyhow::anyhow!(
+            "future-invoke-result get not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+        let _ = self.table().delete(this)?;
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
+    async fn cancel(&mut self, _this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        // TODO: Implement cancel for the new interface
+        Err(anyhow::anyhow!(
+            "cancellation-token cancel not yet implemented for the new agent-based interface"
+        ))
+    }
+
+    async fn drop(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        self.observe_function_call("golem::rpc::cancellation-token", "drop");
+        let _ = self.table().delete(this)?;
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
+    async fn parse_uuid(
+        &mut self,
+        uuid: String,
+    ) -> anyhow::Result<Result<golem_wasm::Uuid, String>> {
+        Ok(uuid::Uuid::parse_str(&uuid)
+            .map(|uuid| uuid.into())
+            .map_err(|e| e.to_string()))
+    }
+
+    async fn uuid_to_string(&mut self, uuid: golem_wasm::Uuid) -> anyhow::Result<String> {
+        let uuid: uuid::Uuid = uuid.into();
+        Ok(uuid.to_string())
+    }
+}
+
+pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    remote_worker_id: WorkerId,
+    env: &[(String, String)],
+    config: std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+
+    let stack = ctx
+        .state
+        .invocation_context
+        .clone_as_inherited_stack(span.span_id());
+
+    let remote_worker_id =
+        OwnedWorkerId::new(ctx.owned_worker_id.environment_id, &remote_worker_id);
+    let demand = ctx
+        .rpc()
+        .create_demand(
+            &remote_worker_id,
+            ctx.created_by(),
+            ctx.worker_id(),
+            env,
+            config,
+            stack,
+        )
+        .await?;
+    let entry = ctx.table().push(WasmRpcEntry {
+        payload: Box::new(WasmRpcEntryPayload::Interface {
+            demand,
+            remote_worker_id,
+            span_id: span.span_id().clone(),
+        }),
+    })?;
+    Ok(entry)
+}
+
+pub enum WasmRpcEntryPayload {
+    Interface {
+        #[allow(dead_code)]
+        demand: Box<dyn RpcDemand>,
+        remote_worker_id: OwnedWorkerId,
+        span_id: SpanId,
+    },
+    Resource {
+        #[allow(dead_code)]
+        demand: Box<dyn RpcDemand>,
+        remote_worker_id: OwnedWorkerId,
+        resource_uri: golem_wasm::Uri,
+        resource_id: u64,
+        span_id: SpanId,
+    },
+}
+
+impl Debug for WasmRpcEntryPayload {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Interface {
+                remote_worker_id, ..
+            } => f
+                .debug_struct("Interface")
+                .field("remote_worker_id", remote_worker_id)
+                .finish(),
+            Self::Resource {
+                remote_worker_id,
+                resource_uri,
+                resource_id,
+                ..
+            } => f
+                .debug_struct("Resource")
+                .field("remote_worker_id", remote_worker_id)
+                .field("resource_uri", resource_uri)
+                .field("resource_id", resource_id)
+                .finish(),
+        }
+    }
+}
+
+impl WasmRpcEntryPayload {
+    pub fn remote_worker_id(&self) -> &OwnedWorkerId {
+        match self {
+            Self::Interface {
+                remote_worker_id, ..
+            } => remote_worker_id,
+            Self::Resource {
+                remote_worker_id, ..
+            } => remote_worker_id,
+        }
+    }
+
+    pub fn span_id(&self) -> &SpanId {
+        match self {
+            Self::Interface { span_id, .. } => span_id,
+            Self::Resource { span_id, .. } => span_id,
+        }
+    }
+
+    #[allow(clippy::borrowed_box)]
+    pub fn demand(&self) -> &Box<dyn RpcDemand> {
+        match self {
+            Self::Interface { demand, .. } => demand,
+            Self::Resource { demand, .. } => demand,
+        }
+    }
+}
+
+pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
+    ctx: &mut Ctx,
+    target_worker_id: &WorkerId,
+) -> anyhow::Result<Arc<InvocationContextSpan>> {
+    Ok(ctx
+        .start_span(
+            &[
+                (
+                    "name".to_string(),
+                    AttributeValue::String("rpc-connection".to_string()),
+                ),
+                (
+                    "target_worker_id".to_string(),
+                    AttributeValue::String(target_worker_id.to_string()),
+                ),
+            ],
+            false,
+        )
+        .await?)
+}
+
+pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
+    ctx: &mut Ctx,
+    connection_span_id: &SpanId,
+    function_name: &str,
+    idempotency_key: &IdempotencyKey,
+) -> anyhow::Result<Arc<InvocationContextSpan>> {
+    Ok(ctx
+        .start_child_span(
+            connection_span_id,
+            &[
+                (
+                    "name".to_string(),
+                    AttributeValue::String("rpc-invocation".to_string()),
+                ),
+                (
+                    "function_name".to_string(),
+                    AttributeValue::String(function_name.to_string()),
+                ),
+                (
+                    "idempotency_key".to_string(),
+                    AttributeValue::String(idempotency_key.to_string()),
+                ),
+            ],
+        )
+        .await?)
+}
+
+// =============================================================================
+// Old implementation (commented out) — was using golem:rpc/types interface
+// The wasm-rpc resource has moved to golem:agent/host with a significantly
+// different interface:
+// - Constructor: (agent-type-name: string, constructor: untyped-data-value, phantom-id: option<uuid>)
+//   instead of (agent-id: agent-id)
+// - Methods use method-name + input: untyped-data-value instead of
+//   function-name + function-params: list<wit-value>
+// - Return type: result<untyped-data-value, rpc-error>
+// - rpc-error has an extra variant: remote-agent-error(agent-error)
+// =============================================================================
+
+/*
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::WorkerConfig;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::rpc::{enrich_function_name, RpcDemand, RpcError};
+use crate::services::rpc::{enrich_function_name, RpcError as InternalRpcError};
 use crate::services::HasWorker;
 use crate::workerctx::{
-    HasWasiConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
+    HasWasiConfigVars, InvocationManagement,
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
-use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::GolemRpcFutureInvokeResultGet;
 use golem_common::model::oplog::host_functions::{
     GolemRpcCancellationTokenCancel, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
@@ -43,7 +379,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::{IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId};
+use golem_common::model::{OplogIndex, OwnedWorkerId, ScheduledAction};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
@@ -57,11 +393,8 @@ use golem_wasm::{
 };
 use std::any::Any;
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use tracing::{error, Instrument};
 use uuid::Uuid;
-use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi::subscribe;
@@ -1078,58 +1411,6 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
-    async fn parse_uuid(
-        &mut self,
-        uuid: String,
-    ) -> anyhow::Result<Result<golem_wasm::Uuid, String>> {
-        Ok(Uuid::parse_str(&uuid)
-            .map(|uuid| uuid.into())
-            .map_err(|e| e.to_string()))
-    }
-
-    async fn uuid_to_string(&mut self, uuid: golem_wasm::Uuid) -> anyhow::Result<String> {
-        let uuid: Uuid = uuid.into();
-        Ok(uuid.to_string())
-    }
-}
-
-pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_worker_id: WorkerId,
-    env: &[(String, String)],
-    config: BTreeMap<String, String>,
-) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
-
-    let stack = ctx
-        .state
-        .invocation_context
-        .clone_as_inherited_stack(span.span_id());
-
-    let remote_worker_id =
-        OwnedWorkerId::new(ctx.owned_worker_id.environment_id, &remote_worker_id);
-    let demand = ctx
-        .rpc()
-        .create_demand(
-            &remote_worker_id,
-            ctx.created_by(),
-            ctx.worker_id(),
-            env,
-            config,
-            stack,
-        )
-        .await?;
-    let entry = ctx.table().push(WasmRpcEntry {
-        payload: Box::new(WasmRpcEntryPayload::Interface {
-            demand,
-            remote_worker_id,
-            span_id: span.span_id().clone(),
-        }),
-    })?;
-    Ok(entry)
-}
-
 /// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
 /// target component.
 /// If the query fails, or the expected function name is not in its metadata or the number of parameters does not match, then it returns an
@@ -1156,120 +1437,4 @@ async fn try_get_typed_parameters(
 
     Vec::new()
 }
-
-pub enum WasmRpcEntryPayload {
-    Interface {
-        #[allow(dead_code)]
-        demand: Box<dyn RpcDemand>,
-        remote_worker_id: OwnedWorkerId,
-        span_id: SpanId,
-    },
-    Resource {
-        #[allow(dead_code)]
-        demand: Box<dyn RpcDemand>,
-        remote_worker_id: OwnedWorkerId,
-        resource_uri: Uri,
-        resource_id: u64,
-        span_id: SpanId,
-    },
-}
-
-impl Debug for WasmRpcEntryPayload {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Interface {
-                remote_worker_id, ..
-            } => f
-                .debug_struct("Interface")
-                .field("remote_worker_id", remote_worker_id)
-                .finish(),
-            Self::Resource {
-                remote_worker_id,
-                resource_uri,
-                resource_id,
-                ..
-            } => f
-                .debug_struct("Resource")
-                .field("remote_worker_id", remote_worker_id)
-                .field("resource_uri", resource_uri)
-                .field("resource_id", resource_id)
-                .finish(),
-        }
-    }
-}
-
-impl WasmRpcEntryPayload {
-    pub fn remote_worker_id(&self) -> &OwnedWorkerId {
-        match self {
-            Self::Interface {
-                remote_worker_id, ..
-            } => remote_worker_id,
-            Self::Resource {
-                remote_worker_id, ..
-            } => remote_worker_id,
-        }
-    }
-
-    pub fn span_id(&self) -> &SpanId {
-        match self {
-            Self::Interface { span_id, .. } => span_id,
-            Self::Resource { span_id, .. } => span_id,
-        }
-    }
-
-    #[allow(clippy::borrowed_box)]
-    pub fn demand(&self) -> &Box<dyn RpcDemand> {
-        match self {
-            Self::Interface { demand, .. } => demand,
-            Self::Resource { demand, .. } => demand,
-        }
-    }
-}
-
-pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
-    ctx: &mut Ctx,
-    target_worker_id: &WorkerId,
-) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    Ok(ctx
-        .start_span(
-            &[
-                (
-                    "name".to_string(),
-                    AttributeValue::String("rpc-connection".to_string()),
-                ),
-                (
-                    "target_worker_id".to_string(),
-                    AttributeValue::String(target_worker_id.to_string()),
-                ),
-            ],
-            false,
-        )
-        .await?)
-}
-
-pub async fn create_invocation_span<Ctx: InvocationContextManagement>(
-    ctx: &mut Ctx,
-    connection_span_id: &SpanId,
-    function_name: &str,
-    idempotency_key: &IdempotencyKey,
-) -> anyhow::Result<Arc<InvocationContextSpan>> {
-    Ok(ctx
-        .start_child_span(
-            connection_span_id,
-            &[
-                (
-                    "name".to_string(),
-                    AttributeValue::String("rpc-invocation".to_string()),
-                ),
-                (
-                    "function_name".to_string(),
-                    AttributeValue::String(function_name.to_string()),
-                ),
-                (
-                    "idempotency_key".to_string(),
-                    AttributeValue::String(idempotency_key.to_string()),
-                ),
-            ],
-        )
-        .await?)
-}
+*/

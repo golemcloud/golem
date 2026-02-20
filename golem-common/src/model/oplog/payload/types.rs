@@ -76,15 +76,6 @@ pub struct SerializableDateTime {
     pub nanoseconds: u32,
 }
 
-impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
-}
-
 impl From<golem_wasm::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
     fn from(value: golem_wasm::wasi::clocks::wall_clock::Datetime) -> Self {
         Self {

@@ -63,10 +63,11 @@ use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
-use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
-use golem_wasm::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
+use golem_wasm::{Uri, Value, ValueAndType};
+use golem_worker_executor::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
+};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -873,64 +874,70 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(worker_id).await
+    async fn new(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        phantom_id: Option<golem_wasm::Uuid>,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx
+            .new(agent_type_name, constructor, phantom_id)
+            .await
     }
 
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Result<WitValue, RpcError>> {
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>
+    {
         self.durable_ctx
-            .invoke_and_await(self_, function_name, function_params)
+            .invoke_and_await(self_, method_name, input)
             .await
     }
 
     async fn invoke(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
-        self.durable_ctx
-            .invoke(self_, function_name, function_params)
-            .await
+        self.durable_ctx.invoke(self_, method_name, input).await
     }
 
     async fn async_invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
-            .async_invoke_and_await(self_, function_name, function_params)
+            .async_invoke_and_await(self_, method_name, input)
             .await
     }
 
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm::wasi::clocks::wall_clock::Datetime,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
     ) -> anyhow::Result<()> {
         self.durable_ctx
-            .schedule_invocation(self_, datetime, function_name, function_params)
+            .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
     }
 
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm::wasi::clocks::wall_clock::Datetime,
-        function_name: String,
-        function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<golem_wasm::golem_rpc_0_2_x::types::CancellationToken>> {
+        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, datetime, function_name, function_params)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await
     }
 
@@ -943,14 +950,16 @@ impl HostFutureInvokeResult for TestWorkerCtx {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
     async fn get(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Option<Result<WitValue, RpcError>>> {
+    ) -> anyhow::Result<
+        Option<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>,
+    > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
 
@@ -1178,7 +1187,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             &mut linker,
             get_durable_ctx,
         )?;
-        golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
 }

@@ -1,9 +1,9 @@
-package golem:api@1.3.0;
+package golem:api@1.5.0;
 
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
-    use golem:rpc/types@0.2.2.{value-and-type, account-id};
+    use golem:core/types@1.5.0.{value-and-type, account-id};
 
     use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
     use context.{attribute, attribute-value, span-id, trace-id};

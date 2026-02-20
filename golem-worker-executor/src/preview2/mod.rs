@@ -37,9 +37,13 @@ wasmtime::component::bindgen!({
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability/lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
-        "golem:rpc": golem_wasm::golem_rpc_0_2_x,
+        "golem:core": golem_wasm::golem_core_1_5_x,
+        "golem:agent/host/wasm-rpc": golem_wasm::WasmRpcEntry,
+        "golem:agent/host/future-invoke-result": golem_wasm::FutureInvokeResultEntry,
+        "golem:agent/host/cancellation-token": golem_wasm::CancellationTokenEntry,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll": golem_wasm::wasi::io::poll,
+        "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
         "golem:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
         "golem:rdbms/mysql/db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
         "golem:rdbms/mysql/db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
@@ -57,6 +61,6 @@ pub type OutputStream = wasmtime_wasi::DynOutputStream;
 pub type Pollable = golem_wasm::wasi::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
-pub use self::golem::api1_3_0 as golem_api_1_x;
+pub use self::golem::api1_5_0 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;

@@ -106,7 +106,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
         input: DataValue,
-        phantom_id: Option<crate::preview2::golem::rpc::types::Uuid>,
+        phantom_id: Option<golem_wasm::Uuid>,
     ) -> anyhow::Result<Result<String, AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
 
@@ -138,7 +138,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             (
                 String,
                 DataValue,
-                Option<crate::preview2::golem::rpc::types::Uuid>,
+                Option<golem_wasm::Uuid>,
             ),
             AgentError,
         >,

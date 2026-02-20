@@ -58,13 +58,12 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::golem_rpc_0_2_x::types::{
-    Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
+use crate::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
+    HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{
-    CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
-};
+use golem_wasm::{Uri, Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Weak};
@@ -381,64 +380,70 @@ impl FileSystemReading for Context {
 }
 
 impl HostWasmRpc for Context {
-    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.new(worker_id).await
+    async fn new(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+        phantom_id: Option<golem_wasm::Uuid>,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx
+            .new(agent_type_name, constructor, phantom_id)
+            .await
     }
 
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Result<WitValue, RpcError>> {
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>
+    {
         self.durable_ctx
-            .invoke_and_await(self_, function_name, function_params)
+            .invoke_and_await(self_, method_name, input)
             .await
     }
 
     async fn invoke(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
-        self.durable_ctx
-            .invoke(self_, function_name, function_params)
-            .await
+        self.durable_ctx.invoke(self_, method_name, input).await
     }
 
     async fn async_invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         self.durable_ctx
-            .async_invoke_and_await(self_, function_name, function_params)
+            .async_invoke_and_await(self_, method_name, input)
             .await
     }
 
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: Datetime,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
     ) -> anyhow::Result<()> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, function_name, function_params)
+            .schedule_invocation(self_, scheduled_time, method_name, input)
             .await
     }
 
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        scheduled_time: Datetime,
-        function_name: String,
-        function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<CancellationTokenEntry>> {
+        scheduled_time: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+        method_name: String,
+        input: golem_wasm::golem_core_1_5_x::types::UntypedDataValue,
+    ) -> anyhow::Result<Resource<CancellationToken>> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, function_name, function_params)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
             .await
     }
 
@@ -451,19 +456,82 @@ impl HostFutureInvokeResult for Context {
     async fn subscribe(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         HostFutureInvokeResult::subscribe(&mut self.durable_ctx, self_).await
     }
 
     async fn get(
         &mut self,
         self_: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Option<Result<WitValue, RpcError>>> {
+    ) -> anyhow::Result<
+        Option<Result<golem_wasm::golem_core_1_5_x::types::UntypedDataValue, RpcError>>,
+    > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
 
     async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
+    }
+}
+
+impl HostCancellationToken for Context {
+    async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        HostCancellationToken::cancel(&mut self.durable_ctx, this).await
+    }
+
+    async fn drop(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
+        HostCancellationToken::drop(&mut self.durable_ctx, this).await
+    }
+}
+
+impl AgentHost for Context {
+    async fn get_all_agent_types(
+        &mut self,
+    ) -> anyhow::Result<Vec<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>>
+    {
+        AgentHost::get_all_agent_types(&mut self.durable_ctx).await
+    }
+
+    async fn get_agent_type(
+        &mut self,
+        agent_type_name: String,
+    ) -> anyhow::Result<Option<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>>
+    {
+        AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
+    }
+
+    async fn make_agent_id(
+        &mut self,
+        agent_type_name: String,
+        input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
+        phantom_id: Option<golem_wasm::Uuid>,
+    ) -> anyhow::Result<
+        Result<String, golem_common::model::agent::bindings::golem::agent::common::AgentError>,
+    > {
+        AgentHost::make_agent_id(&mut self.durable_ctx, agent_type_name, input, phantom_id).await
+    }
+
+    async fn parse_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<
+        Result<
+            (
+                String,
+                golem_common::model::agent::bindings::golem::agent::common::DataValue,
+                Option<golem_wasm::Uuid>,
+            ),
+            golem_common::model::agent::bindings::golem::agent::common::AgentError,
+        >,
+    > {
+        AgentHost::parse_agent_id(&mut self.durable_ctx, agent_id).await
+    }
+
+    async fn create_webhook(
+        &mut self,
+        promise_id: crate::preview2::golem_api_1_x::host::PromiseId,
+    ) -> anyhow::Result<String> {
+        AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
 }
 

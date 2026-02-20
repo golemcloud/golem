@@ -30,7 +30,7 @@ pub mod bindings {
           async: true,
           trappable_imports: true,
           with: {
-            "golem:rpc/types": golem_wasm::golem_rpc_0_2_x::types,
+            "golem:core/types": golem_wasm::golem_core_1_5_x::types,
           },
           wasmtime_crate: ::wasmtime
     });

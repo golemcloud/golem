@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::preview2::golem_api_1_x::oplog;
-use crate::preview2::wasi::clocks::wall_clock::Datetime;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
@@ -113,7 +112,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 consumed_fuel,
             }) => Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
                 timestamp: timestamp.into(),
-                response: response.map(golem_wasm::golem_rpc_0_2_x::types::ValueAndType::from),
+                response: response.map(golem_wasm::golem_core_1_5_x::types::ValueAndType::from),
                 consumed_fuel,
             }),
             PublicOplogEntry::Suspend(SuspendParams { timestamp }) => {
@@ -370,16 +369,6 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                     mime_type,
                 })
             }
-        }
-    }
-}
-
-impl From<Timestamp> for Datetime {
-    fn from(value: Timestamp) -> Self {
-        let ms = value.to_millis();
-        Self {
-            seconds: ms / 1000,
-            nanoseconds: ((ms % 1000) * 1_000_000) as u32,
         }
     }
 }

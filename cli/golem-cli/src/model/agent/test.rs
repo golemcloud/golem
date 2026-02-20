@@ -21,7 +21,7 @@ use golem_common::model::agent::{
 use golem_common::model::Empty;
 use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, str, u32, u8, unit_case, variant,
+    case, field, list, option, r#enum, record, str, u32, unit_case, variant,
 };
 use std::path::Path;
 

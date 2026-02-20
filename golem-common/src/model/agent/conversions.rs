@@ -544,8 +544,8 @@ impl From<BinaryReference> for super::bindings::golem::agent::common::BinaryRefe
     }
 }
 
-impl From<super::bindings::golem::agent::common::BinarySource> for BinarySource {
-    fn from(value: crate::model::agent::bindings::golem::agent::common::BinarySource) -> Self {
+impl From<golem_wasm::golem_core_1_5_x::types::BinarySource> for BinarySource {
+    fn from(value: golem_wasm::golem_core_1_5_x::types::BinarySource) -> Self {
         Self {
             data: value.data,
             binary_type: value.binary_type.into(),
@@ -553,7 +553,7 @@ impl From<super::bindings::golem::agent::common::BinarySource> for BinarySource 
     }
 }
 
-impl From<BinarySource> for super::bindings::golem::agent::common::BinarySource {
+impl From<BinarySource> for golem_wasm::golem_core_1_5_x::types::BinarySource {
     fn from(value: BinarySource) -> Self {
         Self {
             data: value.data,
@@ -626,8 +626,8 @@ impl From<TextReference> for super::bindings::golem::agent::common::TextReferenc
     }
 }
 
-impl From<super::bindings::golem::agent::common::TextSource> for TextSource {
-    fn from(value: crate::model::agent::bindings::golem::agent::common::TextSource) -> Self {
+impl From<golem_wasm::golem_core_1_5_x::types::TextSource> for TextSource {
+    fn from(value: golem_wasm::golem_core_1_5_x::types::TextSource) -> Self {
         Self {
             data: value.data,
             text_type: value.text_type.map(TextType::from),
@@ -635,13 +635,13 @@ impl From<super::bindings::golem::agent::common::TextSource> for TextSource {
     }
 }
 
-impl From<TextSource> for super::bindings::golem::agent::common::TextSource {
+impl From<TextSource> for golem_wasm::golem_core_1_5_x::types::TextSource {
     fn from(value: TextSource) -> Self {
         Self {
             data: value.data,
             text_type: value
                 .text_type
-                .map(super::bindings::golem::agent::common::TextType::from),
+                .map(golem_wasm::golem_core_1_5_x::types::TextType::from),
         }
     }
 }
