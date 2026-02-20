@@ -173,10 +173,13 @@ impl ErrorHandler {
                             None,
                         )?;
 
-                    log_text_view(&AvailableFunctionNamesHelp::new(
-                        &component,
-                        agent_id.as_ref(),
-                    ));
+                    if let Some((agent_id, agent_type)) = agent_id.as_ref() {
+                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                            &component,
+                            agent_id,
+                            agent_type,
+                        ));
+                    }
                     logln("");
                 }
                 Ok(())

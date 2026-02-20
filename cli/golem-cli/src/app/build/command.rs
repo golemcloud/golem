@@ -21,9 +21,7 @@ use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
 use crate::composition::{compose, Plug};
 use crate::fs;
-use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent,
-};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app_raw;
 use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
 use crate::process::{with_hidden_output_unless_error, CommandExt};

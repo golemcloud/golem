@@ -16,9 +16,7 @@ use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash
 use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app_raw;
-use crate::model::app_raw::{
-    GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs,
-};
+use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
