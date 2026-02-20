@@ -14,7 +14,7 @@
 
 mod invocation;
 
-use crate::grpc::invocation::{from_proto_invocation_context, CanStartWorker, GrpcInvokeRequest};
+use crate::grpc::invocation::{from_proto_invocation_context, CanStartWorker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
@@ -43,9 +43,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
     GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAgentRequest, InvokeAgentResponse, InvokeAndAwaitWorkerJsonRequest,
-    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
-    InvokeJsonWorkerRequest, InvokeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    InvokeAgentRequest, InvokeAgentResponse, RevertWorkerRequest, RevertWorkerResponse,
     SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
@@ -68,8 +66,7 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::protobuf::Val;
-use golem_wasm::{FromValue, IntoValue, ValueAndType};
+use golem_wasm::{FromValue, IntoValue};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -729,51 +726,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    async fn invoke_and_await_worker_internal_proto<Req: GrpcInvokeRequest>(
-        &self,
-        request: &Req,
-    ) -> Result<Option<Val>, WorkerExecutorError> {
-        let result = self.invoke_and_await_worker_internal_typed(request).await?;
-        let value = result
-            .map(golem_wasm::Value::try_from)
-            .transpose()
-            .map_err(|e| WorkerExecutorError::unknown(e.to_string()))?
-            .map(|value| value.into());
-        Ok(value)
-    }
-
-    async fn invoke_and_await_worker_internal_typed<Req: GrpcInvokeRequest>(
-        &self,
-        request: &Req,
-    ) -> Result<Option<ValueAndType>, WorkerExecutorError> {
-        let full_function_name = request.name();
-
-        let worker = self.get_or_create(request).await?;
-
-        let idempotency_key = request
-            .idempotency_key()?
-            .unwrap_or(IdempotencyKey::fresh());
-
-        let params_val = request.input(&worker).await?;
-
-        let function_input = params_val
-            .into_iter()
-            .map(|val| val.clone().try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
-
-        let value = worker
-            .invoke_and_await(
-                idempotency_key,
-                full_function_name,
-                function_input,
-                request.invocation_context(),
-            )
-            .await?;
-
-        Ok(value)
-    }
-
     async fn get_or_create<Req: CanStartWorker>(
         &self,
         request: &Req,
@@ -816,38 +768,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
         )
         .await
-    }
-
-    async fn invoke_worker_internal<Req: GrpcInvokeRequest>(
-        &self,
-        request: &Req,
-    ) -> Result<(), WorkerExecutorError> {
-        let full_function_name = request.name();
-
-        let worker = self.get_or_create(request).await?;
-
-        let idempotency_key = request
-            .idempotency_key()?
-            .unwrap_or(IdempotencyKey::fresh());
-
-        let function_input = request
-            .input(&worker)
-            .await?
-            .iter()
-            .map(|val| val.clone().try_into())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
-
-        worker
-            .invoke(
-                idempotency_key,
-                full_function_name,
-                function_input,
-                request.invocation_context(),
-            )
-            .await?;
-
-        Ok(())
     }
 
     async fn revoke_shards_internal(
@@ -1779,6 +1699,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
+                // TODO: scheduled invocation support (this is trigger)
                 worker
                     .invoke(ik, function_name, function_input, invocation_context)
                     .await?;
@@ -1933,206 +1854,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::CreateWorkerResponse {
                         result: Some(
                             golem::workerexecutor::v1::create_worker_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_and_await_worker(
-        &self,
-        request: Request<InvokeAndAwaitWorkerRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self.invoke_and_await_worker_internal_proto(&request).instrument(record.span.clone()).await {
-            Ok(output) => {
-                let result = InvokeAndAwaitWorkerSuccess { output };
-
-                record.succeed(Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response::Result::Success(result),
-                        ),
-                    },
-                )))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_and_await_worker_typed(
-        &self,
-        request: Request<InvokeAndAwaitWorkerRequest>,
-    ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker_typed",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(value_and_type) => {
-                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                    output: value_and_type.map(|vnt| vnt.into())
-                };
-
-                record.succeed(Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result),
-                        ),
-                    },
-                )))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_worker(
-        &self,
-        request: Request<golem::workerexecutor::v1::InvokeWorkerRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::InvokeWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            function = request.name,
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self
-            .invoke_worker_internal(&request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::invoke_worker_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_worker_response::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_and_await_worker_json(
-        &self,
-        request: Request<InvokeAndAwaitWorkerJsonRequest>,
-    ) -> Result<Response<InvokeAndAwaitWorkerResponseTyped>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_and_await_worker_json",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
-            Ok(value_and_type) => {
-                let result = golem::workerexecutor::v1::InvokeAndAwaitWorkerSuccessTyped {
-                    output: value_and_type.map(|vnt| vnt.into())
-                };
-
-                record.succeed(Ok(Response::new(
-                    InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result),
-                        ),
-                    },
-                )))
-            }
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
-                                err.clone().into(),
-                            ),
-                        ),
-                    },
-                )),
-                &mut err,
-            ),
-        }
-    }
-
-    async fn invoke_worker_json(
-        &self,
-        request: Request<InvokeJsonWorkerRequest>,
-    ) -> Result<Response<InvokeWorkerResponse>, Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "invoke_worker_json",
-            worker_id = proto_worker_id_string(&request.worker_id),
-            function = request.name,
-            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-        );
-
-        match self
-            .invoke_worker_internal(&request)
-            .instrument(record.span.clone())
-            .await
-        {
-            Ok(_) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::invoke_worker_response::Result::Success(
-                            golem::common::Empty {},
-                        ),
-                    ),
-                },
-            ))),
-            Err(mut err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::InvokeWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::invoke_worker_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),
