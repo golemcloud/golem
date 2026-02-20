@@ -127,7 +127,7 @@ async fn execute_agent_wrapper(
                 );
 
                 with_hidden_output_unless_error(
-                    HiddenOutput::hide_stderr_if(!enabled!(Level::INFO)),
+                    HiddenOutput::hide_stderr_if(!enabled!(Level::WARN)),
                     || {
                         crate::model::agent::moonbit::generate_moonbit_wrapper(
                             wrapper_context,
@@ -244,7 +244,7 @@ async fn execute_inject_to_prebuilt_quick_js(
                 let _indent = LogIndent::new();
 
                 with_hidden_output_unless_error(
-                    HiddenOutput::hide_stderr_if(!enabled!(Level::INFO)),
+                    HiddenOutput::hide_stderr_if(!enabled!(Level::WARN)),
                     || {
                         moonbit_component_generator::get_script::generate_get_script_component(
                             &js_module_contents,
