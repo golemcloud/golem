@@ -33,13 +33,14 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentInvocationMode, UntypedDataValue};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{ValueAndType, WitValue};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -62,21 +63,21 @@ pub trait Rpc: Send + Sync {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, RpcError>;
+    ) -> Result<UntypedDataValue, RpcError>;
 
     async fn invoke(
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
@@ -277,56 +278,65 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, RpcError> {
-        Ok(self
+    ) -> Result<UntypedDataValue, RpcError> {
+        let result = self
             .worker_proxy
-            .invoke_and_await(
-                owned_worker_id,
+            .invoke_agent(
+                &owned_worker_id.worker_id(),
+                method_name,
+                method_parameters,
+                AgentInvocationMode::Await,
+                None,
                 idempotency_key,
-                function_name,
-                function_params,
                 self_worker_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
                 self_created_by,
             )
-            .await?)
+            .await?;
+
+        result.ok_or_else(|| RpcError::RemoteInternalError {
+            details: "Expected a result from agent invoke_and_await but got None".to_string(),
+        })
     }
 
     async fn invoke(
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        Ok(self
-            .worker_proxy
-            .invoke(
-                owned_worker_id,
+        self.worker_proxy
+            .invoke_agent(
+                &owned_worker_id.worker_id(),
+                method_name,
+                method_parameters,
+                AgentInvocationMode::Schedule,
+                None,
                 idempotency_key,
-                function_name,
-                function_params,
                 self_worker_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
                 self_created_by,
             )
-            .await?)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -626,13 +636,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         }
     }
 
-    async fn enrich_function_name(
-        &self,
-        target_worker_id: &OwnedWorkerId,
-        function_name: String,
-    ) -> String {
-        enrich_function_name(&self.component_service, target_worker_id, function_name).await
-    }
 }
 
 /// As we know the target component's metadata, and it includes the root package name, we can
@@ -774,55 +777,28 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-        let function_name = self
-            .enrich_function_name(owned_worker_id, function_name)
-            .await;
-
+    ) -> Result<UntypedDataValue, RpcError> {
         if self
             .shard_service()
             .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            debug!("Invoking local worker function {function_name} with parameters {function_params:?}");
-
-            let input_values = function_params
-                .into_iter()
-                .map(|wit_value| wit_value.into())
-                .collect();
-
-            let worker = Worker::get_or_create_running(
-                self,
-                self_created_by,
-                owned_worker_id,
-                Some(self_env.to_vec()),
-                Some(self_config),
-                None,
-                Some(self_worker_id.clone()),
-                &self_stack,
-            )
-            .await?;
-
-            let result_value = worker
-                .invoke_and_await(idempotency_key, function_name, input_values, self_stack)
-                .await?;
-
-            Ok(result_value)
+            // TODO: implement local direct invocation path for agent-based invocation, use Worker::get_or_create_running
+            unimplemented!()
         } else {
             self.remote_rpc
                 .invoke_and_await(
                     owned_worker_id,
-                    Some(idempotency_key),
-                    function_name,
-                    function_params,
+                    Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
+                    method_name,
+                    method_parameters,
                     self_created_by,
                     self_worker_id,
                     self_env,
@@ -837,54 +813,28 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-        let function_name = self
-            .enrich_function_name(owned_worker_id, function_name)
-            .await;
-
         if self
             .shard_service()
-            .check_worker(&owned_worker_id.worker_id())
+            .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            debug!("Invoking local worker function {function_name} with parameters {function_params:?} without awaiting for the result");
-
-            let input_values = function_params
-                .into_iter()
-                .map(|wit_value| wit_value.into())
-                .collect();
-
-            let worker = Worker::get_or_create_running(
-                self,
-                self_created_by,
-                owned_worker_id,
-                Some(self_env.to_vec()),
-                Some(self_config),
-                None,
-                Some(self_worker_id.clone()),
-                &self_stack,
-            )
-            .await?;
-
-            worker
-                .invoke(idempotency_key, function_name, input_values, self_stack)
-                .await?;
-            Ok(())
+            // TODO: implement local direct invocation path for agent-based invocation, use Worker::get_or_create_running
+            unimplemented!()
         } else {
             self.remote_rpc
                 .invoke(
                     owned_worker_id,
-                    Some(idempotency_key),
-                    function_name,
-                    function_params,
+                    Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
+                    method_name,
+                    method_parameters,
                     self_created_by,
                     self_worker_id,
                     self_env,

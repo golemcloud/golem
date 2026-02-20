@@ -1,6 +1,6 @@
 use super::{
-    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentMode,
-    AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
+    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentInvocationMode, AgentMethod,
+    AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, CorsOptions,
     CustomHttpMethod, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
@@ -33,6 +33,68 @@ impl From<AgentMode> for golem_api_grpc::proto::golem::component::AgentMode {
         match value {
             AgentMode::Durable => golem_api_grpc::proto::golem::component::AgentMode::Durable,
             AgentMode::Ephemeral => golem_api_grpc::proto::golem::component::AgentMode::Ephemeral,
+        }
+    }
+}
+
+// worker_service proto AgentInvocationMode conversions
+
+impl From<golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode> for AgentInvocationMode {
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Await => {
+                AgentInvocationMode::Await
+            }
+            golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Schedule => {
+                AgentInvocationMode::Schedule
+            }
+        }
+    }
+}
+
+impl From<AgentInvocationMode> for golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode {
+    fn from(value: AgentInvocationMode) -> Self {
+        match value {
+            AgentInvocationMode::Await => {
+                golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Await
+            }
+            AgentInvocationMode::Schedule => {
+                golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Schedule
+            }
+        }
+    }
+}
+
+// workerexecutor proto AgentInvocationMode conversions
+
+impl From<golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode>
+    for AgentInvocationMode
+{
+    fn from(
+        value: golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode,
+    ) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
+                AgentInvocationMode::Await
+            }
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
+                AgentInvocationMode::Schedule
+            }
+        }
+    }
+}
+
+impl From<AgentInvocationMode>
+    for golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode
+{
+    fn from(value: AgentInvocationMode) -> Self {
+        match value {
+            AgentInvocationMode::Await => {
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await
+            }
+            AgentInvocationMode::Schedule => {
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule
+            }
         }
     }
 }

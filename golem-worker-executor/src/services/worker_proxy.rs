@@ -14,19 +14,20 @@
 
 use super::golem_config::WorkerServiceGrpcConfig;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, fork_worker_response, invoke_and_await_response, invoke_response,
+    complete_promise_response, fork_worker_response, invoke_agent_response,
     launch_new_worker_response, resume_worker_response, revert_worker_response,
     update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError,
+    ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest,
+    LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
-use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentInvocationMode, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -35,7 +36,6 @@ use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
 use golem_service_base::model::auth::AuthCtx;
-use golem_wasm::{Value, ValueAndType, WitValue};
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -54,31 +54,20 @@ pub trait WorkerProxy: Send + Sync {
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
-    async fn invoke_and_await(
+    async fn invoke_agent(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
+        method_name: String,
+        method_parameters: UntypedDataValue,
+        mode: AgentInvocationMode,
+        schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
-    ) -> Result<Option<ValueAndType>, WorkerProxyError>;
-
-    async fn invoke(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
-        caller_worker_id: WorkerId,
-        caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
-        caller_stack: InvocationContextStack,
-        caller_account_id: AccountId,
-    ) -> Result<(), WorkerProxyError>;
+    ) -> Result<Option<UntypedDataValue>, WorkerProxyError>;
 
     async fn update(
         &self,
@@ -277,43 +266,46 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn invoke_and_await(
+    async fn invoke_agent(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
+        method_name: String,
+        method_parameters: UntypedDataValue,
+        mode: AgentInvocationMode,
+        schedule_at: Option<DateTime<Utc>>,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
-    ) -> Result<Option<ValueAndType>, WorkerProxyError> {
-        debug!(
-            "Invoking remote worker function {function_name} with parameters {function_params:?}"
-        );
+    ) -> Result<Option<UntypedDataValue>, WorkerProxyError> {
+        debug!("Invoking remote agent method {method_name} on worker {worker_id}");
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
 
-        let proto_params = function_params
-            .into_iter()
-            .map(|param| {
-                let value: Value = param.into();
-                value.into()
-            })
-            .collect();
-        let invoke_parameters = Some(InvokeParameters {
-            params: proto_params,
+        let proto_mode: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode =
+            mode.into();
+        let proto_mode = proto_mode as i32;
+
+        let proto_schedule_at = schedule_at.map(|dt| prost_types::Timestamp {
+            seconds: dt.timestamp(),
+            nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
-        let response: InvokeAndAwaitResponse = self
+        let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
+            method_parameters.into();
+
+        let response: InvokeAgentResponse = self
             .worker_service_client
-            .call("invoke_and_await", move |client| {
-                Box::pin(client.invoke_and_await(InvokeAndAwaitRequest {
-                    worker_id: Some(owned_worker_id.worker_id().into()),
+            .call("invoke_agent", move |client| {
+                Box::pin(client.invoke_agent(InvokeAgentRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    method_name: method_name.clone(),
+                    method_parameters: Some(proto_method_parameters.clone()),
+                    mode: proto_mode,
+                    schedule_at: proto_schedule_at,
                     idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                    function: function_name.clone(),
-                    invoke_parameters: invoke_parameters.clone(),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env.clone(),
@@ -327,76 +319,20 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(invoke_and_await_response::Result::Success(result)) => {
-                let result = result
+            Some(invoke_agent_response::Result::Success(success)) => {
+                let result = success
                     .result
-                    .map(|proto_vnt| {
-                        ValueAndType::try_from(proto_vnt).map_err(|e| {
+                    .map(|proto_val| {
+                        UntypedDataValue::try_from(proto_val).map_err(|e| {
                             WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
-                                "Failed to parse invocation result value: {e}"
+                                "Failed to parse agent invocation result: {e}"
                             )))
                         })
                     })
                     .transpose()?;
                 Ok(result)
             }
-            Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
-            None => Err(WorkerProxyError::InternalError(
-                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
-            )),
-        }
-    }
-
-    async fn invoke(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
-        caller_worker_id: WorkerId,
-        caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
-        caller_stack: InvocationContextStack,
-        caller_account_id: AccountId,
-    ) -> Result<(), WorkerProxyError> {
-        debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
-
-        let auth_ctx = self.get_auth_ctx(caller_account_id);
-
-        let proto_params = function_params
-            .into_iter()
-            .map(|param| {
-                let value: Value = param.into();
-                value.into()
-            })
-            .collect();
-        let invoke_parameters = Some(InvokeParameters {
-            params: proto_params,
-        });
-
-        let response: InvokeResponse = self
-            .worker_service_client
-            .call("invoke", move |client| {
-                Box::pin(client.invoke(InvokeRequest {
-                    worker_id: Some(owned_worker_id.worker_id().into()),
-                    idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                    function: function_name.clone(),
-                    invoke_parameters: invoke_parameters.clone(),
-                    context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_worker_id.clone().into()),
-                        env: caller_env.clone(),
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
-                        tracing: Some(caller_stack.clone().into()),
-                    }),
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                }))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            Some(invoke_response::Result::Success(_)) => Ok(()),
-            Some(invoke_response::Result::Error(error)) => Err(error.into()),
+            Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),

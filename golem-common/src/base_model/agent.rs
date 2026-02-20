@@ -115,6 +115,12 @@ pub enum AgentMode {
     Ephemeral = 1,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AgentInvocationMode {
+    Await,
+    Schedule,
+}
+
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, IntoValue, FromValue,
 )]
