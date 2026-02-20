@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::agent_definition_attributes::{
+    parse_agent_definition_attributes, AgentDefinitionAttributes,
+};
+use crate::agentic::agent_definition_http_endpoint::{
+    extract_http_endpoints, ParsedHttpEndpointDetails,
+};
 use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, is_static_method};
 use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
@@ -21,20 +27,9 @@ use crate::agentic::{
     no_constructor_method_error,
 };
 use proc_macro::TokenStream;
-use proc_macro2::Ident;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::ItemTrait;
-
-use crate::agentic::agent_definition_attributes::{
-    parse_agent_definition_attributes, AgentDefinitionAttributes,
-};
-use crate::agentic::agent_definition_http_endpoint::{
-    extract_http_endpoints, ParsedHttpEndpointDetails,
-};
-use proc_macro::TokenStream;
-use quote::quote;
-
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
@@ -43,6 +38,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         agent_mode,
         http_mount,
         snapshotting,
+        config,
     } = match parse_agent_definition_attributes(attrs) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
@@ -67,6 +63,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         http_mount,
         snapshotting,
         &type_parameters,
+        config.as_ref(),
     ) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
@@ -110,8 +107,8 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             agent_definition_trait.items.push(save_snapshot_item);
             agent_definition_trait.items.push(registration_function);
 
-            if let Some(config_type_name) = extract_config_type_argument(&agent_definition_trait) {
-                let config_item = get_config_item(&config_type_name);
+            if let Some(config_type) = config {
+                let config_item = get_config_item(&config_type);
                 agent_definition_trait.items.push(config_item);
             }
 
@@ -144,32 +141,12 @@ fn get_save_snapshot_item() -> syn::TraitItem {
     }
 }
 
-fn get_config_item(config_type_name: &syn::Type) -> syn::TraitItem {
+fn get_config_item(config_type: &syn::Type) -> syn::TraitItem {
     syn::parse_quote! {
-        fn get_config() -> Result<golem_rust::agentic::AgentConfig<#config_type_name>, String> {
-            Err("get_config not implemented".to_string())
+        fn get_config() -> Result<#config_type, String> {
+            <#config_type as ConfigSchema>::load()
         }
     }
-}
-
-/// if they write `trait MyAgent: Agent<Abc>`, extract `Abc`
-fn extract_config_type_argument(trait_item: &ItemTrait) -> Option<syn::Type> {
-    for bound in &trait_item.supertraits {
-        if let syn::TypeParamBound::Trait(trait_bound) = bound {
-            if trait_bound.path.segments.len() == 1
-                && trait_bound.path.segments[0].ident == "Agent"
-            {
-                if let syn::PathArguments::AngleBracketed(args) =
-                    &trait_bound.path.segments[0].arguments
-                {
-                    if let Some(syn::GenericArgument::Type(ty)) = args.args.first() {
-                        return Some(ty.clone());
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 struct AgentTypeWithRemoteClient {
@@ -183,6 +160,7 @@ fn get_agent_type_with_remote_client(
     http_options: Option<proc_macro2::TokenStream>,
     snapshotting_value: proc_macro2::TokenStream,
     type_parameters: &[String],
+    config: Option<&syn::Type>,
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
     let agent_def_trait_ident = &agent_definition_trait.ident;
     let agent_trait_name = agent_def_trait_ident.to_string();
@@ -561,6 +539,10 @@ fn get_agent_type_with_remote_client(
         quote! { #high_level_description }
     };
 
+    let config_impl = config
+        .map(|ct| quote! { <#ct as ::golem_rust::agentic::ConfigSchema>::describe_config() })
+        .unwrap_or_else(|| quote! { Vec::new() });
+
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
             golem_rust::agentic::ExtendedAgentType {
@@ -572,6 +554,7 @@ fn get_agent_type_with_remote_client(
                 mode: #mode_value,
                 http_mount: #http_options,
                 snapshotting: #snapshotting_value,
+                config: #config_impl
             }
         },
         remote_client,

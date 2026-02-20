@@ -18,6 +18,8 @@ use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBin
 use golem_wasm::golem_core_1_5_x::types::{BinaryReference, BinarySource, BinaryType};
 
 impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
+    const IS_COMPONENT_MODEL_SCHEMA: bool = false;
+
     fn get_type() -> StructuredSchema {
         let restrictions = if T::all().is_empty() {
             None

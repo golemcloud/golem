@@ -24,30 +24,13 @@ pub struct SnapshotData {
 }
 
 #[async_trait::async_trait(?Send)]
-<<<<<<< HEAD
-pub trait BaseAgent<T = ()>: 'static {
-||||||| parent of 7ae55aca0 (push config)
-pub trait Agent<T = ()>: 'static {
-=======
-pub trait Agent<T = ()> {
->>>>>>> 7ae55aca0 (push config)
+pub trait BaseAgent {
     /// Gets the agent ID string of this agent.
     ///
     /// The agent ID consists of the agent type name, constructor parameter values and optional
     /// phantom ID.
     fn get_agent_id(&self) -> String;
 
-<<<<<<< HEAD
-    // Get config of the current agent
-    fn get_config() -> T where Self: Sized;
-
-||||||| parent of 7ae55aca0 (push config)
-    
-    // Get config of the current agent
-    fn get_config() -> T where Self: Sized;
-    
-=======
->>>>>>> 7ae55aca0 (push config)
     /// Dynamically performs a method invocation on this agent
     async fn invoke(
         &mut self,

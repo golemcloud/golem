@@ -17,7 +17,8 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::{create_webhook, Principal};
+    use golem_rust::agentic::ConfigSchema;
+    use golem_rust::agentic::{create_webhook, Principal, Secret};
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
@@ -30,7 +31,6 @@ mod tests {
     use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
     use wstd::wasi::clocks::wall_clock::Datetime;
-
     use test_r::test;
 
     #[derive(Clone, Debug, Schema)]
@@ -567,6 +567,35 @@ mod tests {
 
         fn increment(&mut self) -> u32 {
             1
+        }
+    }
+
+    #[derive(Schema)]
+    struct ConfigAgentConfigNested {
+        foo: String,
+        bar: i32,
+    }
+
+    #[derive(ConfigSchema)]
+    #[allow(unused)]
+    struct ConfigAgentConfig {
+        url: String,
+        port: u32,
+        nested: ConfigAgentConfigNested,
+        api_key: Secret<String>,
+    }
+
+    #[agent_definition(config = "ConfigAgentConfig")]
+    trait ConfigAgent: BaseAgent {
+        fn new() -> Self;
+    }
+
+    struct ConfigAgentImpl;
+
+    #[agent_implementation]
+    impl ConfigAgent for ConfigAgentImpl {
+        fn new() -> Self {
+            Self
         }
     }
 
@@ -1257,5 +1286,58 @@ mod tests {
         let load_result = wstd::runtime::block_on(agent.load_snapshot_base(b"new-data".to_vec()));
         assert!(load_result.is_ok());
         assert_eq!(agent.data, "new-data");
+    }
+
+    #[test]
+    fn test_agent_config_entries() {
+        ConfigAgentImpl::__register_agent_type();
+        let agent_name = AgentTypeName("ConfigAgent".to_string());
+        let agent =
+            golem_rust::agentic::get_agent_type_by_name(&agent_name).expect("Agent type not found");
+
+        fn project_for_comparsion(value: ConfigKeyValueType) -> (Vec<String>, bool, String) {
+            match value.value {
+                ConfigValueType::Local(mut inner) => (
+                    value.key,
+                    false,
+                    format!("{:?}", inner.nodes.swap_remove(0).type_),
+                ),
+                ConfigValueType::Shared(mut inner) => (
+                    value.key,
+                    true,
+                    format!("{:?}", inner.nodes.swap_remove(0).type_),
+                ),
+            }
+        }
+
+        assert_eq!(
+            agent
+                .config
+                .into_iter()
+                .map(project_for_comparsion)
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    vec!["url".to_string()],
+                    false,
+                    "WitTypeNode::PrimStringType".to_string()
+                ),
+                (
+                    vec!["port".to_string()],
+                    false,
+                    "WitTypeNode::PrimU32Type".to_string()
+                ),
+                (
+                    vec!["nested".to_string()],
+                    false,
+                    "WitTypeNode::RecordType([(\"foo\", 1), (\"bar\", 2)])".to_string()
+                ),
+                (
+                    vec!["api_key".to_string()],
+                    true,
+                    "WitTypeNode::PrimStringType".to_string()
+                )
+            ]
+        );
     }
 }

@@ -20,6 +20,9 @@ use crate::value_and_type::IntoValue;
 use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 
 pub trait Schema {
+    /// Has to be consistent with the data returned by get_type
+    const IS_COMPONENT_MODEL_SCHEMA: bool;
+
     fn get_type() -> StructuredSchema;
     fn to_structured_value(self) -> Result<StructuredValue, String>;
     fn from_structured_value(
@@ -122,6 +125,8 @@ impl StructuredValue {
 }
 
 impl Schema for Principal {
+    const IS_COMPONENT_MODEL_SCHEMA: bool = false;
+
     fn get_type() -> StructuredSchema {
         StructuredSchema::AutoInject(AutoInjectedParamType::Principal)
     }
@@ -160,6 +165,8 @@ impl Schema for Principal {
 // Handles the component model types via the IntoValue and FromValueAndType traits
 // This doesn't cover UnstructuredText, UnstructuredBinary
 impl<T: IntoValue + FromValueAndType> Schema for T {
+    const IS_COMPONENT_MODEL_SCHEMA: bool = true;
+
     fn get_type() -> StructuredSchema {
         StructuredSchema::Default(ElementSchema::ComponentModel(T::get_type()))
     }
