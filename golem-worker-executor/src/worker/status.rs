@@ -247,7 +247,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Create { .. } => {
                 current_status = WorkerStatus::Idle;
             }
-            OplogEntry::ImportedFunctionInvoked { .. } => {
+            OplogEntry::HostCall { .. } => {
                 current_status = WorkerStatus::Running;
             }
             OplogEntry::ExportedFunctionInvoked { .. } => {
@@ -907,13 +907,13 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -940,13 +940,13 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -976,7 +976,7 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -985,7 +985,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1014,7 +1014,7 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1023,7 +1023,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1052,7 +1052,7 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1082,13 +1082,13 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1119,7 +1119,7 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1128,7 +1128,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1163,7 +1163,7 @@ mod test {
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1172,7 +1172,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
-            .imported_function_invoked(
+            .host_call(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
                 HostResponse::Custom(1.into_value_and_type()),
@@ -1403,7 +1403,7 @@ mod test {
             )
         }
 
-        pub fn imported_function_invoked(
+        pub fn host_call(
             self,
             name: &str,
             i: HostRequest,
@@ -1411,7 +1411,7 @@ mod test {
             func_type: DurableFunctionType,
         ) -> Self {
             self.add(
-                OplogEntry::ImportedFunctionInvoked {
+                OplogEntry::HostCall {
                     timestamp: Timestamp::now_utc(),
                     function_name: HostFunctionName::Custom(name.to_string()),
                     request: OplogPayload::Inline(Box::new(i)),

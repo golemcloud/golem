@@ -98,9 +98,9 @@ impl PublicOplogEntry {
             PublicOplogEntry::Create(_params) => {
                 Self::string_match("create", &[], query_path, query)
             }
-            PublicOplogEntry::ImportedFunctionInvoked(params) => {
-                Self::string_match("importedfunctioninvoked", &[], query_path, query)
-                    || Self::string_match("imported-function-invoked", &[], query_path, query)
+            PublicOplogEntry::HostCall(params) => {
+                Self::string_match("HostCall", &[], query_path, query)
+                    || Self::string_match("host-call", &[], query_path, query)
                     || Self::string_match("imported-function", &[], query_path, query)
                     || Self::string_match(&params.function_name, &[], query_path, query)
                     || Self::match_value(&params.request, &[], query_path, query)

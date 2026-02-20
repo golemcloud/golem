@@ -17,7 +17,7 @@ import "golem/worker/wasi_config_vars.proto";
 message OplogEntry {
   oneof entry {
     CreateParameters Create = 1;
-    ImportedFunctionInvokedParameters ImportedFunctionInvoked = 2;
+    HostCallParameters HostCall = 2;
     ExportedFunctionInvokedParameters ExportedFunctionInvoked = 3;
     ExportedFunctionCompletedParameters ExportedFunctionCompleted = 4;
     TimestampParameter Suspend = 5;
@@ -93,7 +93,7 @@ message CreateParameters {
   optional golem.common.UUID original_phantom_id = 13;
 }
 
-message ImportedFunctionInvokedParameters {
+message HostCallParameters {
   google.protobuf.Timestamp timestamp = 1;
   string function_name = 2;
   wasm.rpc.ValueAndType request = 3;

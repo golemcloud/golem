@@ -3694,19 +3694,19 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
-            pub struct ImportedFunctionInvokedParameters {
+            pub struct HostCallParameters {
                 pub timestamp: Datetime,
                 pub function_name: _rt::String,
                 pub request: ValueAndType,
                 pub response: ValueAndType,
                 pub wrapped_function_type: WrappedFunctionType,
             }
-            impl ::core::fmt::Debug for ImportedFunctionInvokedParameters {
+            impl ::core::fmt::Debug for HostCallParameters {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("ImportedFunctionInvokedParameters")
+                    f.debug_struct("HostCallParameters")
                         .field("timestamp", &self.timestamp)
                         .field("function-name", &self.function_name)
                         .field("request", &self.request)
@@ -4410,7 +4410,7 @@ pub mod golem {
                 /// The initial agent oplog entry
                 Create(CreateParameters),
                 /// The agent invoked a host function
-                ImportedFunctionInvoked(ImportedFunctionInvokedParameters),
+                HostCall(HostCallParameters),
                 /// The agent has been invoked
                 ExportedFunctionInvoked(ExportedFunctionInvokedParameters),
                 /// The agent has completed an invocation
@@ -4503,8 +4503,8 @@ pub mod golem {
                         OplogEntry::Create(e) => {
                             f.debug_tuple("OplogEntry::Create").field(e).finish()
                         }
-                        OplogEntry::ImportedFunctionInvoked(e) => {
-                            f.debug_tuple("OplogEntry::ImportedFunctionInvoked")
+                        OplogEntry::HostCall(e) => {
+                            f.debug_tuple("OplogEntry::HostCall")
                                 .field(e)
                                 .finish()
                         }
@@ -6542,7 +6542,7 @@ pub mod golem {
                                                                 WrappedFunctionType::WriteRemoteTransaction(e276)
                                                             }
                                                         };
-                                                        ImportedFunctionInvokedParameters {
+                                                        HostCallParameters {
                                                             timestamp: super::super::super::wasi::clocks::wall_clock::Datetime {
                                                                 seconds: l68 as u64,
                                                                 nanoseconds: l69 as u32,
@@ -6567,7 +6567,7 @@ pub mod golem {
                                                             wrapped_function_type: v276,
                                                         }
                                                     };
-                                                    OplogEntry::ImportedFunctionInvoked(e912)
+                                                    OplogEntry::HostCall(e912)
                                                 }
                                                 2 => {
                                                     let e912 = {
@@ -12201,7 +12201,7 @@ pub mod golem {
                                                                 WrappedFunctionType::WriteRemoteTransaction(e277)
                                                             }
                                                         };
-                                                        ImportedFunctionInvokedParameters {
+                                                        HostCallParameters {
                                                             timestamp: super::super::super::wasi::clocks::wall_clock::Datetime {
                                                                 seconds: l69 as u64,
                                                                 nanoseconds: l70 as u32,
@@ -12226,7 +12226,7 @@ pub mod golem {
                                                             wrapped_function_type: v277,
                                                         }
                                                     };
-                                                    OplogEntry::ImportedFunctionInvoked(e913)
+                                                    OplogEntry::HostCall(e913)
                                                 }
                                                 2 => {
                                                     let e913 = {
@@ -21710,7 +21710,7 @@ pub mod exports {
                                                 V324::WriteRemoteTransaction(e324)
                                             }
                                         };
-                                        super::super::super::super::golem::api::oplog::ImportedFunctionInvokedParameters {
+                                        super::super::super::super::golem::api::oplog::HostCallParameters {
                                             timestamp: super::super::super::super::wasi::clocks::wall_clock::Datetime {
                                                 seconds: l116 as u64,
                                                 nanoseconds: l117 as u32,
@@ -21735,7 +21735,7 @@ pub mod exports {
                                             wrapped_function_type: v324,
                                         }
                                     };
-                                    V960::ImportedFunctionInvoked(e960)
+                                    V960::HostCall(e960)
                                 }
                                 2 => {
                                     let e960 = {
@@ -26228,7 +26228,7 @@ rs\"\x04\0\x1fplugin-installation-description\x03\0#\x01ps\x01k\x13\x01p$\x01r\x
 created-by\x05\x0eenvironment-id\x0d\x06parent&\x0ecomponent-sizew\x20initial-to\
 tal-linear-memory-sizew\x16initial-active-plugins'\x0bconfig-vars\"\x04\0\x11cre\
 ate-parameters\x03\0(\x01r\x05\x09timestamp\x01\x0dfunction-names\x07request\x03\
-\x08response\x03\x15wrapped-function-type\x20\x04\0$imported-function-invoked-pa\
+\x08response\x03\x15wrapped-function-type\x20\x04\0$host-call-pa\
 rameters\x03\0*\x01k\x1b\x01kw\x01p\x17\x01r\x06\x07span-id\x1b\x05start\x01\x06\
 parent,\x0elinked-context-\x0aattributes.\x09inherited\x7f\x04\0\x0flocal-span-d\
 ata\x03\0/\x01r\x01\x07span-id\x1b\x04\0\x12external-span-data\x03\01\x01q\x02\x0a\
@@ -26273,7 +26273,7 @@ ters\x03\0s\x01r\x02\x09timestamp\x01\x0etransaction-ids\x04\0#begin-remote-tran
 saction-parameters\x03\0u\x01r\x02\x09timestamp\x01\x0bbegin-index\x09\x04\0\x1d\
 remote-transaction-parameters\x03\0w\x01p}\x01r\x03\x09timestamp\x01\x04data\xf9\
 \0\x09mime-types\x04\0\x13snapshot-parameters\x03\0z\x01r\x01\x09timestamp\x01\x04\
-\0\x09timestamp\x03\0|\x01q&\x06create\x01)\0\x19imported-function-invoked\x01+\0\
+\0\x09timestamp\x03\0|\x01q&\x06create\x01)\0\x19host-call\x01+\0\
 \x19exported-function-invoked\x019\0\x1bexported-function-completed\x01<\0\x07su\
 spend\x01\xfd\0\0\x05error\x01>\0\x05no-op\x01\xfd\0\0\x04jump\x01\xc2\0\0\x0bin\
 terrupted\x01\xfd\0\0\x06exited\x01\xfd\0\0\x13change-retry-policy\x01\xc4\0\0\x13\

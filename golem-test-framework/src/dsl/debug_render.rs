@@ -53,7 +53,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 log_plugin_description(&mut result, &inner_pad, plugin);
             }
         }
-        PublicOplogEntry::ImportedFunctionInvoked(params) => {
+        PublicOplogEntry::HostCall(params) => {
             let _ = writeln!(result, "CALL {}", &params.function_name,);
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(

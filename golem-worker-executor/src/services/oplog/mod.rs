@@ -273,7 +273,7 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    async fn add_imported_function_invoked(
+    async fn add_host_call(
         &self,
         function_name: HostFunctionName,
         request: &HostRequest,
@@ -282,7 +282,7 @@ pub trait OplogOps: Oplog {
     ) -> Result<OplogEntry, String> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
-        let entry = OplogEntry::ImportedFunctionInvoked {
+        let entry = OplogEntry::HostCall {
             timestamp: Timestamp::now_utc(),
             function_name,
             request: request_payload,

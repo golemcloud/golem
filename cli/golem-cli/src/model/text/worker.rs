@@ -339,7 +339,7 @@ impl TextView for PublicOplogEntry {
                     log_plugin_description(&inner_pad, plugin);
                 }
             }
-            PublicOplogEntry::ImportedFunctionInvoked(params) => {
+            PublicOplogEntry::HostCall(params) => {
                 logln(format!(
                     "{} {}",
                     format_message_highlight("CALL"),

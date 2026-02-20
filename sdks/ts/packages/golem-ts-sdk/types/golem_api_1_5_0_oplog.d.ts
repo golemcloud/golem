@@ -84,7 +84,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: PluginInstallationDescription[];
     configVars: [string, string][];
   };
-  export type ImportedFunctionInvokedParameters = {
+  export type HostCallParameters = {
     timestamp: Datetime;
     functionName: string;
     request: ValueAndType;
@@ -292,8 +292,8 @@ declare module 'golem:api/oplog@1.5.0' {
   } |
   /** The agent invoked a host function */
   {
-    tag: 'imported-function-invoked'
-    val: ImportedFunctionInvokedParameters
+    tag: 'host-call'
+    val: HostCallParameters
   } |
   /** The agent has been invoked */
   {

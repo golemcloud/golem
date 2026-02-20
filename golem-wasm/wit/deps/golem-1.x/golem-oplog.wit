@@ -50,7 +50,7 @@ interface oplog {
         config-vars: list<tuple<string, string>>
     }
 
-    record imported-function-invoked-parameters {
+    record host-call-parameters {
         timestamp: datetime,
         function-name: string,
         request: value-and-type,
@@ -282,7 +282,7 @@ interface oplog {
         /// The initial agent oplog entry
         create(create-parameters),
         /// The agent invoked a host function
-        imported-function-invoked(imported-function-invoked-parameters),
+        host-call(host-call-parameters),
         /// The agent has been invoked
         exported-function-invoked(exported-function-invoked-parameters),
         /// The agent has completed an invocation

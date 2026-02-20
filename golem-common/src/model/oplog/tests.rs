@@ -17,7 +17,7 @@ use crate::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams,
     CreateResourceParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
     ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, InterruptedParams,
+    FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams,
     JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
     RestartParams, SuccessfulUpdateParams, SuspendParams,
 };
@@ -80,8 +80,8 @@ fn create_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn imported_function_invoked_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
+fn host_call_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::HostCall(HostCallParams {
         timestamp: Timestamp::now_utc().rounded(),
         function_name: "test".to_string(),
         request: ValueAndType {

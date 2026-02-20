@@ -343,7 +343,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .oplog()
-            .add_imported_function_invoked(function_name, request, response, function_type)
+            .add_host_call(function_name, request, response, function_type)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -360,10 +360,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         } else {
             let (_, oplog_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked
+                OplogEntry::HostCall
             )?;
             match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked {
+                OplogEntry::HostCall {
                     timestamp,
                     function_name,
                     durable_function_type,
@@ -378,7 +378,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         .await
                         .map_err(|err| {
                             WorkerExecutorError::runtime(format!(
-                                "ImportedFunctionInvoked payload cannot be downloaded: {err}"
+                                "HostCall payload cannot be downloaded: {err}"
                             ))
                         })?;
                     Ok(PersistedDurableFunctionInvocation {
@@ -390,7 +390,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                     })
                 }
                 _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "ImportedFunctionInvoked",
+                    "HostCall",
                     format!("{oplog_entry:?}"),
                 )),
             }

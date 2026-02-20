@@ -97,7 +97,7 @@ impl OplogEntry {
             true
         } else {
             match self {
-                OplogEntry::ImportedFunctionInvoked {
+                OplogEntry::HostCall {
                     durable_function_type,
                     ..
                 } => match durable_function_type {

@@ -2559,7 +2559,7 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
@@ -2600,7 +2600,7 @@ components:
         propertyName: type
         mapping:
           Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+          HostCall: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
           ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
           ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
@@ -2901,7 +2901,7 @@ components:
             - GrowMemory
             example: GrowMemory
       - $ref: '#/components/schemas/r#GrowMemoryParams'
-    PublicOplogEntry_r#ImportedFunctionInvokedParams:
+    PublicOplogEntry_r#HostCallParams:
       allOf:
       - type: object
         required:
@@ -2910,9 +2910,9 @@ components:
           type:
             type: string
             enum:
-            - ImportedFunctionInvoked
-            example: ImportedFunctionInvoked
-      - $ref: '#/components/schemas/r#ImportedFunctionInvokedParams'
+            - HostCall
+            example: HostCall
+      - $ref: '#/components/schemas/r#HostCallParams'
     PublicOplogEntry_r#InterruptedParams:
       allOf:
       - type: object
@@ -4616,9 +4616,9 @@ components:
         delta:
           type: integer
           format: uint64
-    r#ImportedFunctionInvokedParams:
+    r#HostCallParams:
       type: object
-      title: r#ImportedFunctionInvokedParams
+      title: r#HostCallParams
       required:
       - timestamp
       - functionName

@@ -1236,7 +1236,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
                 self.state
                     .oplog
-                    .add_imported_function_invoked(
+                    .add_host_call(
                         GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
                         &HostRequest::GolemRpcInvoke(serializable_invoke_request),
                         &HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
@@ -1290,7 +1290,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             .into())
         } else {
             let (_, oplog_entry) =
-                get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
+                get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)
                     .map_err(|golem_err| {
                         anyhow!(
                     "failed to get golem::rpc::future-invoke-result::get oplog entry: {golem_err}"
@@ -1298,7 +1298,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     })?;
 
             let serialized_invoke_result = match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                OplogEntry::HostCall { response, .. } => {
                     let response = self
                         .state
                         .oplog

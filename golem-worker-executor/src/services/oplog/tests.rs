@@ -325,7 +325,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 
     let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = oplog
-        .add_imported_function_invoked(
+        .add_host_call(
             HostFunctionName::Custom("f1".to_string()),
             &HostRequest::Custom("request".into_value_and_type()),
             &HostResponse::Custom("response".into_value_and_type()),
@@ -400,7 +400,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     );
 
     let p1 = match entry1 {
-        OplogEntry::ImportedFunctionInvoked { response, .. } => {
+        OplogEntry::HostCall { response, .. } => {
             let response = oplog_service
                 .download_payload(&owned_worker_id, response)
                 .await
@@ -481,7 +481,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 
     let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = oplog
-        .add_imported_function_invoked(
+        .add_host_call(
             HostFunctionName::Custom("f1".to_string()),
             &HostRequest::Custom("request".into_value_and_type()),
             &HostResponse::Custom(large_payload1.clone().into_value_and_type()),
@@ -556,7 +556,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     );
 
     let p1 = match entry1 {
-        OplogEntry::ImportedFunctionInvoked { response, .. } => {
+        OplogEntry::HostCall { response, .. } => {
             let response = oplog_service
                 .download_payload(&owned_worker_id, response)
                 .await
@@ -703,7 +703,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
 
     for i in 0..n {
         let entry = oplog
-            .add_imported_function_invoked(
+            .add_host_call(
                 HostFunctionName::Custom("test-function".to_string()),
                 &HostRequest::Custom(i.into_value_and_type()),
                 &HostResponse::Custom("response".into_value_and_type()),

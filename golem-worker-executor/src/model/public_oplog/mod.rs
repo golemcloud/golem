@@ -27,7 +27,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
     ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, ImportedFunctionInvokedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
     InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
     PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
@@ -259,7 +259,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     original_phantom_id,
                 }))
             }
-            OplogEntry::ImportedFunctionInvoked {
+            OplogEntry::HostCall {
                 timestamp,
                 function_name,
                 request,
@@ -286,8 +286,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     other => other,
                 };
 
-                Ok(PublicOplogEntry::ImportedFunctionInvoked(
-                    ImportedFunctionInvokedParams {
+                Ok(PublicOplogEntry::HostCall(
+                    HostCallParams {
                         timestamp,
                         function_name: function_name.to_string(),
                         request: host_request.into_value_and_type(),

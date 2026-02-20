@@ -30,7 +30,7 @@ use crate::model::oplog::public_oplog_entry::{
     ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
     ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, ImportedFunctionInvokedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams,
     InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
     PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
@@ -238,22 +238,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 ),
                 original_phantom_id: create.original_phantom_id.map(|id| id.into()),
             })),
-            oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
-                PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
-                    timestamp: imported_function_invoked
+            oplog_entry::Entry::HostCall(host_call) => Ok(
+                PublicOplogEntry::HostCall(HostCallParams {
+                    timestamp: host_call
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    function_name: imported_function_invoked.function_name,
-                    request: imported_function_invoked
+                    function_name: host_call.function_name,
+                    request: host_call
                         .request
                         .ok_or("Missing request field")?
                         .try_into()?,
-                    response: imported_function_invoked
+                    response: host_call
                         .response
                         .ok_or("Missing response field")?
                         .try_into()?,
-                    durable_function_type: imported_function_invoked
+                    durable_function_type: host_call
                         .wrapped_function_type
                         .ok_or("Missing wrapped_function_type field")?
                         .try_into()?,
@@ -641,16 +641,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::ImportedFunctionInvoked(imported_function_invoked) => {
+            PublicOplogEntry::HostCall(host_call) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ImportedFunctionInvoked(
-                        golem_api_grpc::proto::golem::worker::ImportedFunctionInvokedParameters {
-                            timestamp: Some(imported_function_invoked.timestamp.into()),
-                            function_name: imported_function_invoked.function_name.clone(),
-                            request: Some(imported_function_invoked.request.into()),
-                            response: Some(imported_function_invoked.response.into()),
+                    entry: Some(oplog_entry::Entry::HostCall(
+                        golem_api_grpc::proto::golem::worker::HostCallParameters {
+                            timestamp: Some(host_call.timestamp.into()),
+                            function_name: host_call.function_name.clone(),
+                            request: Some(host_call.request.into()),
+                            response: Some(host_call.response.into()),
                             wrapped_function_type: Some(
-                                imported_function_invoked.durable_function_type.into(),
+                                host_call.durable_function_type.into(),
                             ),
                         },
                     )),

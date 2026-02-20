@@ -20,7 +20,7 @@ use golem_common::model::oplog::host_functions::{
 };
 use golem_common::model::oplog::public_oplog_entry::{
     CreateParams, CreateResourceParams, DropResourceParams, ExportedFunctionCompletedParams,
-    FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, LogParams,
+    FailedUpdateParams, GrowMemoryParams, HostCallParams, LogParams,
 };
 use golem_common::model::oplog::types::decode_span_data;
 use golem_common::model::oplog::{
@@ -254,7 +254,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .collect(),
             original_phantom_id,
         }),
-        PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
+        PublicOplogEntry::HostCall(HostCallParams {
             timestamp,
             function_name,
             response,
@@ -283,7 +283,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 response,
             )?));
 
-            Ok(OplogEntry::ImportedFunctionInvoked {
+            Ok(OplogEntry::HostCall {
                 timestamp,
                 function_name: HostFunctionName::from(function_name.as_str()),
                 request,

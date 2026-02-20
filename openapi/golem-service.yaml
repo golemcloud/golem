@@ -8626,7 +8626,7 @@ components:
         propertyName: type
         mapping:
           Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+          HostCall: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
           ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
           ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
@@ -8666,7 +8666,7 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
@@ -8967,18 +8967,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#GrowMemoryParams'
-    PublicOplogEntry_r#ImportedFunctionInvokedParams:
+    PublicOplogEntry_r#HostCallParams:
       allOf:
       - type: object
         properties:
           type:
-            example: ImportedFunctionInvoked
+            example: HostCall
             type: string
             enum:
-            - ImportedFunctionInvoked
+            - HostCall
         required:
         - type
-      - $ref: '#/components/schemas/r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/r#HostCallParams'
     PublicOplogEntry_r#InterruptedParams:
       allOf:
       - type: object
@@ -10682,8 +10682,8 @@ components:
       required:
       - timestamp
       - delta
-    r#ImportedFunctionInvokedParams:
-      title: r#ImportedFunctionInvokedParams
+    r#HostCallParams:
+      title: r#HostCallParams
       type: object
       properties:
         timestamp:

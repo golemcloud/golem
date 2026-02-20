@@ -350,7 +350,7 @@ impl ReplayState {
             })
             .await
         }
-        if let OplogEntry::ImportedFunctionInvoked {
+        if let OplogEntry::HostCall {
             function_name,
             response,
             ..

@@ -92,7 +92,7 @@ oplog_entry! {
         }
     },
     /// The worker invoked a host function
-    ImportedFunctionInvoked {
+    HostCall {
         hint: false
         raw {
             function_name: payload::host_functions::HostFunctionName,

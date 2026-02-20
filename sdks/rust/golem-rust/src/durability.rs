@@ -139,7 +139,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     {
         let (value_and_type, _) = self.replay_raw();
         let result: Result<SOk, SErr> = FromValueAndType::from_value_and_type(value_and_type)
-            .unwrap_or_else(|err| panic!("Unexpected ImportedFunctionInvoked payload: {err}"));
+            .unwrap_or_else(|err| panic!("Unexpected HostCall payload: {err}"));
         result
     }
 
