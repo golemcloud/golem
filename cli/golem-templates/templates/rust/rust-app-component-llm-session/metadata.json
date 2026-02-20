@@ -1,4 +1,5 @@
 {
   "description": "LLM chat with durable history",
-  "appComponentGroup": "default"
+  "appComponentGroup": "default",
+  "devOnly": true
 }

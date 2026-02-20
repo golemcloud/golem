@@ -12,13 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
-use golem_common::model::plugin_registration::WasmContentHash;
-use golem_common::model::plugin_registration::{
-    ComponentTransformerPluginSpec, OplogProcessorPluginSpec,
-};
+use golem_common::model::plugin_registration::OplogProcessorPluginSpec;
 use golem_common::model::plugin_registration::{
     PluginRegistrationDto, PluginRegistrationId, PluginSpecDto,
 };
@@ -51,29 +47,13 @@ impl From<PluginRegistration> for PluginRegistrationDto {
 }
 
 #[derive(Debug, Clone)]
-pub struct AppPluginSpec {
-    pub wasm_content_hash: WasmContentHash,
-}
-
-#[derive(Debug, Clone)]
-pub struct LibraryPluginSpec {
-    pub wasm_content_hash: WasmContentHash,
-}
-
-#[derive(Debug, Clone)]
 pub enum PluginSpec {
-    ComponentTransformer(ComponentTransformerPluginSpec),
     OplogProcessor(OplogProcessorPluginSpec),
-    App(AppPluginSpec),
-    Library(LibraryPluginSpec),
 }
 
 impl From<PluginSpec> for PluginSpecDto {
     fn from(value: PluginSpec) -> Self {
         match value {
-            PluginSpec::App(_inner) => Self::App(Empty {}),
-            PluginSpec::Library(_inner) => Self::Library(Empty {}),
-            PluginSpec::ComponentTransformer(inner) => Self::ComponentTransformer(inner),
             PluginSpec::OplogProcessor(inner) => Self::OplogProcessor(inner),
         }
     }

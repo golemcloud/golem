@@ -42,7 +42,6 @@ use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::RevertWorkerTarget;
@@ -130,7 +129,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
@@ -142,11 +140,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         } else {
             ComponentName(name.to_string())
         };
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
 
         let source_path = if !unverified {
             rename_component_if_needed(
@@ -188,7 +181,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &ComponentCreation {
                     component_name,
                     file_options,
-                    dynamic_linking,
                     env,
                     plugins,
                     agent_types,
@@ -234,7 +226,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -285,7 +276,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     current_revision: previous_revision,
                     new_file_options,
                     removed_files,
-                    dynamic_linking,
                     env,
                     agent_types: updated_wasm
                         .as_ref()

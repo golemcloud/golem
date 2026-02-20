@@ -40,7 +40,6 @@ golem-temp/                      # Build artifacts (gitignored)
 ## Prerequisites
 
 - Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
-- `cargo-component` version 0.21.1: `cargo install --force cargo-component@0.21.1`
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
 ## Building

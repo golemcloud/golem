@@ -3,6 +3,5 @@
   "appCommonGroup": "default",
   "appCommonSkipIfExists": "common-ts/golem.yaml",
   "requiresGolemHostWIT": false,
-  "requiresWASI": false,
-  "witDepsPaths": []
+  "requiresWASI": false
 }

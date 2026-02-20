@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
-use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{Timestamp, WorkerId};
@@ -380,9 +379,6 @@ pub enum BlobStorageNamespace {
     },
     Components {
         environment_id: EnvironmentId,
-    },
-    PluginWasmFiles {
-        account_id: AccountId,
     },
 }
 

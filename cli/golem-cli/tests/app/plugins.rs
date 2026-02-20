@@ -14,7 +14,7 @@
 
 use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
-use assert2::assert;
+
 use axum::extract::{DefaultBodyLimit, Multipart};
 use axum::routing::post;
 use axum::Router;

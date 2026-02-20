@@ -14,7 +14,6 @@
 
 use crate::app::context::ApplicationContext;
 use crate::command::shared_args::PostDeployArgs;
-use crate::command_handler::repl::rib::CliRibRepl;
 use crate::command_handler::repl::rust::RustRepl;
 use crate::command_handler::repl::typescript::TypeScriptRepl;
 use crate::command_handler::Handlers;
@@ -26,16 +25,13 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
-use ::rib::{ComponentDependency, ComponentDependencyKey, CustomInstanceSpec, InterfaceName};
-use anyhow::{anyhow, bail};
-use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_rib_repl::ReplComponentDependencies;
+use anyhow::bail;
+use golem_common::model::component::ComponentName;
 use golem_templates::model::GuestLanguage;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod rib;
 mod rust;
 mod typescript;
 
@@ -52,8 +48,8 @@ impl ReplHandler {
     pub async fn cmd_repl(
         &self,
         language: Option<ReplLanguage>,
-        component_name: Option<ComponentName>,
-        component_revision: Option<ComponentRevision>,
+        _component_name: Option<ComponentName>,
+        _component_revision: Option<golem_common::model::component::ComponentRevision>,
         post_deploy_args: Option<&PostDeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
@@ -72,29 +68,14 @@ impl ReplHandler {
             }
         };
 
-        if language.is_some_and(|l| l.is_rib()) {
-            self.rib_repl(
-                component_name,
-                component_revision,
-                post_deploy_args,
-                script,
-                stream_logs,
-            )
-            .await
-        } else {
-            if component_name.is_some() {
-                bail!("Component name and revision is only supported for Rib REPL.");
-            }
-
-            self.bridge_repl(
-                language.and_then(|l| l.to_guest_language()),
-                script,
-                stream_logs,
-                disable_auto_imports,
-                post_deploy_args,
-            )
-            .await
-        }
+        self.bridge_repl(
+            language.map(|l| l.to_guest_language()),
+            script,
+            stream_logs,
+            disable_auto_imports,
+            post_deploy_args,
+        )
+        .await
     }
 
     async fn bridge_repl(
@@ -247,101 +228,6 @@ impl ReplHandler {
             GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,
             GuestLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
         }
-    }
-
-    async fn rib_repl(
-        &self,
-        component_name: Option<ComponentName>,
-        component_revision: Option<ComponentRevision>,
-        post_deploy_args: Option<&PostDeployArgs>,
-        script: Option<ReplScriptSource>,
-        stream_logs: bool,
-    ) -> anyhow::Result<()> {
-        let selected_components = self
-            .ctx
-            .component_handler()
-            .must_select_components_by_app_dir_or_name(component_name.as_ref())
-            .await?;
-
-        let component_name = {
-            if selected_components.component_names.len() == 1 {
-                selected_components.component_names[0].clone()
-            } else {
-                self.ctx
-                    .interactive_handler()
-                    .select_component_for_repl(selected_components.component_names.clone())?
-            }
-        };
-
-        // NOTE: we pre-create the ReplDependencies, because trying to do it in RibDependencyManager::get_dependencies
-        //       results in thread safety errors on the path when cargo component could be called for client building
-        let component = self
-            .ctx
-            .component_handler()
-            .component_by_name_with_auto_deploy(
-                &selected_components.environment,
-                ComponentNameMatchKind::App,
-                &component_name,
-                component_revision.map(|r| r.into()),
-                post_deploy_args,
-                None,
-                false,
-            )
-            .await?;
-
-        let component_dependency_key = ComponentDependencyKey {
-            component_name: component.component_name.0.clone(),
-            component_id: component.id.0,
-            component_revision: component.revision.into(),
-            root_package_name: component.metadata.root_package_name().clone(),
-            root_package_version: component.metadata.root_package_version().clone(),
-        };
-
-        // The REPL has to know about the custom instance parameters
-        // to support creating instances using agent interface names.
-        let mut custom_instance_spec = Vec::new();
-
-        for agent_type in component.metadata.agent_types() {
-            let wrapper_function = component
-                .metadata
-                .find_wrapper_function_by_agent_constructor(&agent_type.type_name)
-                .map_err(|err| anyhow!(err))?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Missing static WIT wrapper for constructor of agent type {}",
-                        agent_type.type_name
-                    )
-                })?;
-
-            custom_instance_spec.push(CustomInstanceSpec {
-                instance_name: agent_type.wrapper_type_name(),
-                parameter_types: wrapper_function
-                    .analysed_export
-                    .parameters
-                    .iter()
-                    .map(|p| p.typ.clone())
-                    .collect(),
-                interface_name: Some(InterfaceName {
-                    name: agent_type.wrapper_type_name(),
-                    version: None,
-                }),
-            });
-        }
-
-        CliRibRepl::new(
-            self.ctx.clone(),
-            stream_logs,
-            ReplComponentDependencies {
-                component_dependencies: vec![ComponentDependency::new(
-                    component_dependency_key,
-                    component.metadata.exports().to_vec(),
-                )],
-                custom_instance_spec,
-            },
-            component,
-        )
-        .run(script)
-        .await
     }
 
     async fn repl_server_env_vars(&self) -> anyhow::Result<HashMap<String, String>> {

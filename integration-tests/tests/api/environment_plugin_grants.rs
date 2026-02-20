@@ -69,7 +69,6 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
                     component_revision: plugin_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -213,7 +212,6 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
                     component_revision: plugin_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -278,7 +276,6 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
                     component_revision: plugin_component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -349,7 +346,6 @@ async fn cannot_grant_deleted_plugin(deps: &EnvBasedTestDependencies) -> anyhow:
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -407,7 +403,6 @@ async fn environment_owner_cannot_grant_foreign_plugin(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -469,7 +464,6 @@ async fn shared_user_with_readonly_role_cannot_grant_plugin(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -528,7 +522,6 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
                     component_revision: comp.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -594,7 +587,6 @@ async fn environment_owner_can_fetch_deleted_grant_with_include_deleted(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -650,7 +642,6 @@ async fn shared_user_can_fetch_deleted_grant_with_include_deleted(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -700,7 +691,6 @@ async fn fetch_deleted_grant_with_deleted_plugin_and_account(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -755,7 +745,6 @@ async fn revoked_user_cannot_fetch_grant(deps: &EnvBasedTestDependencies) -> any
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 

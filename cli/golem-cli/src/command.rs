@@ -1674,7 +1674,6 @@ mod test {
         builtin_exec_subcommands, help_target_to_subcommand_names, GolemCliCommand,
     };
     use crate::error::ShowClapHelpTarget;
-    use assert2::assert;
     use clap::builder::StyledStr;
     use clap::{Command, CommandFactory};
     use itertools::Itertools;

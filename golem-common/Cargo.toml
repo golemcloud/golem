@@ -22,7 +22,6 @@ full = [
     "client",
     "golem-wasm/host",
     "dep:golem-api-grpc",
-    "dep:golem-rib",
     "dep:applying",
     "dep:combine",
     "dep:console-subscriber",
@@ -34,7 +33,6 @@ full = [
     "dep:lazy_static",
     "dep:mac_address",
     "dep:nonempty-collections",
-    "dep:openapiv3",
     "dep:openidconnect",
     "dep:opentelemetry",
     "dep:opentelemetry_sdk",
@@ -59,12 +57,12 @@ full = [
     "dep:wasmtime-wasi-http",
     "dep:wasmparser",
     "dep:wit-parser",
-    "dep:wasm-wave"
+    "dep:wasm-wave",
+    "dep:semver"
 ]
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
-golem-rib = { workspace = true, optional = true  }
 golem-wasm = { workspace = true, default-features = false }
 golem-wasm-derive = { workspace = true }
 
@@ -92,7 +90,6 @@ itertools = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
-openapiv3 = { workspace = true, optional = true }
 openidconnect = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
@@ -130,6 +127,7 @@ wasmtime-wasi-http = { workspace = true, optional = true }
 wasmparser = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
 wasm-wave = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

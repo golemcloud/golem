@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component_metadata::dynamic_linking_to_diffable;
 use crate::model::diff;
 use uuid::Uuid;
 
@@ -28,9 +27,6 @@ impl ComponentDto {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
-                    self.metadata.dynamic_linking(),
-                ),
             }
             .into(),
             wasm_hash: self.wasm_hash,

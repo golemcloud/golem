@@ -102,16 +102,6 @@ fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, St
         .field("Homepage", &plugin.homepage)
         .field("Type", &plugin.typ_as_str())
         .fmt_field_option(
-            "Validate URL",
-            &plugin.component_transformer_validate_url(),
-            |u| u.to_string(),
-        )
-        .fmt_field_option(
-            "Transform URL",
-            &plugin.component_transformer_validate_url(),
-            |u| u.to_string(),
-        )
-        .fmt_field_option(
             "Component ID",
             &plugin.oplog_processor_component_id(),
             format_id,
