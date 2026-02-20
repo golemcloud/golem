@@ -393,7 +393,7 @@ mod tests {
             };
             let typ = chrono::Weekday::get_type();
             let value_and_type = ValueAndType {
-                value: value.clone().into_value(),
+                value: value.into_value(),
                 typ,
             };
             let recovered = chrono::Weekday::from_value_and_type(value_and_type)

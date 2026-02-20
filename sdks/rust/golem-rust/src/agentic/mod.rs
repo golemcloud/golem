@@ -30,6 +30,7 @@ pub use webhook::*;
 pub use wit_utils::*;
 
 mod agent;
+mod agent_config;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
@@ -46,4 +47,3 @@ mod unstructured_binary;
 mod unstructured_text;
 mod webhook;
 mod wit_utils;
-mod agent_config;
