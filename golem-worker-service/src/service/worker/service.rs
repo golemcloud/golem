@@ -21,12 +21,10 @@ use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
@@ -38,7 +36,7 @@ use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_wasm::ValueAndType;
 use golem_wasm::protobuf::Val as ProtoVal;
 use golem_wasm::protobuf::Val;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
@@ -252,47 +250,6 @@ impl WorkerService {
                 invocation_context,
                 component.environment_id,
                 environment_auth_details.account_id_owning_environment,
-                auth_ctx,
-            )
-            .await?;
-
-        Ok(result)
-    }
-
-    // like invoke_and_await but skips full authorization.
-    // Should only be called when it is statically known that the caller owns the agent.
-    pub async fn invoke_and_await_owned_agent(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<Val>,
-        invocation_context: Option<InvocationContext>,
-        environment_id: EnvironmentId,
-        account_id_owning_environment: AccountId,
-        auth_ctx: AuthCtx,
-    ) -> WorkerResult<Option<ValueAndType>> {
-        // sanity check for consistency of auth and owner information
-        assert!(
-            auth_ctx
-                .authorize_environment_action(
-                    account_id_owning_environment,
-                    &BTreeSet::new(),
-                    EnvironmentAction::UpdateWorker,
-                )
-                .is_ok()
-        );
-
-        let result = self
-            .worker_client
-            .invoke_and_await_typed(
-                worker_id,
-                idempotency_key,
-                function_name,
-                params,
-                invocation_context,
-                environment_id,
-                account_id_owning_environment,
                 auth_ctx,
             )
             .await?;
