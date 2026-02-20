@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use super::schema::Schema;
-use crate::golem_agentic::golem::agent::common::{
-    ConfigKeyValueType, ConfigValueType,
-};
+use crate::golem_agentic::golem::agent::common::{ConfigKeyValueType, ConfigValueType};
 use crate::golem_agentic::golem::agent::host::get_config_value;
 use golem_wasm::WitType;
 use std::marker::PhantomData;
