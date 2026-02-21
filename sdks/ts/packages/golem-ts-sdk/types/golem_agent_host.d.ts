@@ -31,9 +31,19 @@ declare module 'golem:agent/host' {
    *   from a different agent type will trap.
    */
   export function createWebhook(promiseId: PromiseId): string;
+  /**
+   * Get the current value of the config key.
+   * Only keys that are declared by the agent-type are allowed to be accessed. Trying
+   * to access an undeclared key will trap.
+   * Getting a local key will get values defined as part of the current
+   * component revision + overrides declared during agent creation.
+   * Getting a shared key will get the current value of the key in the environment.
+   */
+  export function getConfigValue(key: string[]): WitValue;
   export type ComponentId = golemRpc022Types.ComponentId;
   export type Uuid = golemRpc022Types.Uuid;
   export type PromiseId = golemRpc022Types.PromiseId;
+  export type WitValue = golemRpc022Types.WitValue;
   export type AgentError = golemAgentCommon.AgentError;
   export type AgentType = golemAgentCommon.AgentType;
   export type DataValue = golemAgentCommon.DataValue;

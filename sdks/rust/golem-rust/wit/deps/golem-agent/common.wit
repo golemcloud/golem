@@ -20,6 +20,7 @@ interface common {
     mode:         agent-mode,
     http-mount:   option<http-mount-details>,
     snapshotting: snapshotting,
+    config:       list<config-key-value-type>,
   }
 
   /// Associates an agent type with a component that implements it
@@ -226,5 +227,15 @@ interface common {
     default, // current default in the server
     periodic(duration),
     every-n-invocation(u16)
+  }
+
+  record config-key-value-type {
+    key:   list<string>,
+    value: config-value-type,
+  }
+
+  variant config-value-type {
+    local(wit-type),
+    shared(wit-type),
   }
 }

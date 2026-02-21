@@ -197,6 +197,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
             mode: value.mode.into(),
             http_mount: value.http_mount.map(|v| v.into()),
             snapshotting: value.snapshotting.into(),
+            config: Vec::new(),
         }
     }
 }

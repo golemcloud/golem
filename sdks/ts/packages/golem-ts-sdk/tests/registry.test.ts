@@ -63,6 +63,7 @@ describe('AgentType look up', () => {
       dependencies: [],
       mode: 'durable',
       snapshotting: { tag: 'disabled' },
+      config: [],
     };
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);
