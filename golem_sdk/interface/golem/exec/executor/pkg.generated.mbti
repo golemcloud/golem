@@ -1,0 +1,30 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/exec/executor"
+
+import(
+  "vigoo/golem_sdk/interface/golem/exec/types"
+)
+
+// Values
+fn run(@types.Language, Array[@types.File], String, @types.RunOptions) -> Result[@types.ExecResult, @types.Error_]
+
+// Errors
+
+// Types and methods
+pub(all) struct Session(Int)
+fn Session::download(Self, String) -> Result[FixedArray[Byte], @types.Error_]
+fn Session::drop(Self) -> Unit
+#deprecated
+fn Session::inner(Self) -> Int
+fn Session::list_files(Self, String) -> Result[Array[String], @types.Error_]
+fn Session::run(Self, String, @types.RunOptions) -> Result[@types.ExecResult, @types.Error_]
+fn Session::session(@types.Language, Array[@types.File]) -> Self
+fn Session::set_working_dir(Self, String) -> Result[Unit, @types.Error_]
+fn Session::upload(Self, @types.File) -> Result[Unit, @types.Error_]
+impl Eq for Session
+impl Show for Session
+
+// Type aliases
+
+// Traits
+

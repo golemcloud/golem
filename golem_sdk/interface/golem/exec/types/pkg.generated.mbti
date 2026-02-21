@@ -1,0 +1,92 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/exec/types"
+
+// Values
+
+// Errors
+pub(all) suberror Error_ {
+  UnsupportedLanguage
+  CompilationFailed(StageResult)
+  RuntimeFailed(StageResult)
+  Timeout
+  ResourceExceeded
+  Internal(String)
+}
+impl Eq for Error_
+impl Show for Error_
+
+// Types and methods
+pub(all) enum Encoding {
+  UTF8
+  BASE64
+  HEX
+}
+fn Encoding::from(Int) -> Self
+fn Encoding::ordinal(Self) -> Int
+impl Eq for Encoding
+impl Show for Encoding
+
+pub(all) struct ExecResult {
+  compile : StageResult?
+  run : StageResult
+  time_ms : UInt64?
+  memory_bytes : UInt64?
+}
+impl Eq for ExecResult
+impl Show for ExecResult
+
+pub(all) struct File {
+  name : String
+  content : FixedArray[Byte]
+  encoding : Encoding?
+}
+impl Eq for File
+impl Show for File
+
+pub(all) struct Language {
+  kind : LanguageKind
+  version : String?
+}
+impl Eq for Language
+impl Show for Language
+
+pub(all) enum LanguageKind {
+  JAVASCRIPT
+  PYTHON
+}
+fn LanguageKind::from(Int) -> Self
+fn LanguageKind::ordinal(Self) -> Int
+impl Eq for LanguageKind
+impl Show for LanguageKind
+
+pub(all) struct Limits {
+  time_ms : UInt64?
+  memory_bytes : UInt64?
+  file_size_bytes : UInt64?
+  max_processes : UInt?
+}
+impl Eq for Limits
+impl Show for Limits
+
+pub(all) struct RunOptions {
+  stdin : String?
+  args : Array[String]?
+  env : Array[(String, String)]?
+  limits : Limits?
+}
+impl Eq for RunOptions
+impl Show for RunOptions
+
+pub(all) struct StageResult {
+  stdout : String
+  stderr : String
+  exit_code : Int?
+  signal : String?
+}
+impl Eq for StageResult
+impl Show for StageResult
+
+// Type aliases
+
+// Traits
+

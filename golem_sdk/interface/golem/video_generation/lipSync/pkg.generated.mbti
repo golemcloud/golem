@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/video_generation/lipSync"
+
+import(
+  "vigoo/golem_sdk/interface/golem/video_generation/types"
+)
+
+// Values
+fn generate_lip_sync(@types.LipSyncVideo, @types.AudioSource) -> Result[String, @types.VideoError]
+
+fn list_voices(String?) -> Result[Array[@types.VoiceInfo], @types.VideoError]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

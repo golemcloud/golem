@@ -1,0 +1,145 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/agent/common"
+
+import(
+  "vigoo/golem_sdk/interface/golem/rpc/types"
+)
+
+// Values
+
+// Errors
+pub(all) suberror AgentError {
+  InvalidInput(String)
+  InvalidMethod(String)
+  InvalidType(String)
+  InvalidAgentId(String)
+  CustomError(@types.ValueAndType)
+}
+impl Eq for AgentError
+impl Show for AgentError
+
+// Types and methods
+pub(all) struct AgentConstructor {
+  name : String?
+  description : String
+  prompt_hint : String?
+  input_schema : DataSchema
+}
+impl Eq for AgentConstructor
+impl Show for AgentConstructor
+
+pub(all) struct AgentDependency {
+  type_name : String
+  description : String?
+  constructor_ : AgentConstructor
+  methods : Array[AgentMethod]
+}
+impl Eq for AgentDependency
+impl Show for AgentDependency
+
+pub(all) struct AgentMethod {
+  name : String
+  description : String
+  prompt_hint : String?
+  input_schema : DataSchema
+  output_schema : DataSchema
+}
+impl Eq for AgentMethod
+impl Show for AgentMethod
+
+pub(all) struct AgentType {
+  type_name : String
+  description : String
+  constructor_ : AgentConstructor
+  methods : Array[AgentMethod]
+  dependencies : Array[AgentDependency]
+}
+impl Eq for AgentType
+impl Show for AgentType
+
+pub(all) struct BinaryDescriptor {
+  restrictions : Array[BinaryType]?
+}
+impl Eq for BinaryDescriptor
+impl Show for BinaryDescriptor
+
+pub(all) enum BinaryReference {
+  Url(String)
+  Inline(BinarySource)
+}
+impl Eq for BinaryReference
+impl Show for BinaryReference
+
+pub(all) struct BinarySource {
+  data : FixedArray[Byte]
+  binary_type : BinaryType
+}
+impl Eq for BinarySource
+impl Show for BinarySource
+
+pub(all) struct BinaryType {
+  mime_type : String
+}
+impl Eq for BinaryType
+impl Show for BinaryType
+
+pub(all) enum DataSchema {
+  Tuple(Array[(String, ElementSchema)])
+  Multimodal(Array[(String, ElementSchema)])
+}
+impl Eq for DataSchema
+impl Show for DataSchema
+
+pub(all) enum DataValue {
+  Tuple(Array[ElementValue])
+  Multimodal(Array[(String, ElementValue)])
+}
+impl Eq for DataValue
+impl Show for DataValue
+
+pub(all) enum ElementSchema {
+  ComponentModel(@types.WitType)
+  UnstructuredText(TextDescriptor)
+  UnstructuredBinary(BinaryDescriptor)
+}
+impl Eq for ElementSchema
+impl Show for ElementSchema
+
+pub(all) enum ElementValue {
+  ComponentModel(@types.WitValue)
+  UnstructuredText(TextReference)
+  UnstructuredBinary(BinaryReference)
+}
+impl Eq for ElementValue
+impl Show for ElementValue
+
+pub(all) struct TextDescriptor {
+  restrictions : Array[TextType]?
+}
+impl Eq for TextDescriptor
+impl Show for TextDescriptor
+
+pub(all) enum TextReference {
+  Url(String)
+  Inline(TextSource)
+}
+impl Eq for TextReference
+impl Show for TextReference
+
+pub(all) struct TextSource {
+  data : String
+  text_type : TextType?
+}
+impl Eq for TextSource
+impl Show for TextSource
+
+pub(all) struct TextType {
+  language_code : String
+}
+impl Eq for TextType
+impl Show for TextType
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,5 @@
+import {
+  "vigoo/golem_sdk/ffi" @ffi,
+  "vigoo/golem_sdk/interface/wasi/keyvalue/types" @types,
+  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError" @wasiKeyvalueError,
+}

@@ -1,0 +1,224 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/llm/llm"
+
+// Values
+fn send(Array[Event], Config) -> Result[Response, Error_]
+
+fn stream(Array[Event], Config) -> ChatStream
+
+// Errors
+pub(all) suberror ErrorCode {
+  INVALID_REQUEST
+  AUTHENTICATION_FAILED
+  RATE_LIMIT_EXCEEDED
+  INTERNAL_ERROR
+  UNSUPPORTED
+  UNKNOWN
+}
+fn ErrorCode::from(Int) -> Self
+fn ErrorCode::ordinal(Self) -> Int
+impl Eq for ErrorCode
+impl Show for ErrorCode
+
+// Types and methods
+pub(all) struct ChatStream(Int)
+fn ChatStream::drop(Self) -> Unit
+fn ChatStream::get_next(Self) -> Array[Result[StreamEvent, Error_]]
+#deprecated
+fn ChatStream::inner(Self) -> Int
+fn ChatStream::poll_next(Self) -> Array[Result[StreamEvent, Error_]]?
+impl Eq for ChatStream
+impl Show for ChatStream
+
+pub(all) struct Config {
+  model : String
+  temperature : Float?
+  max_tokens : UInt?
+  stop_sequences : Array[String]?
+  tools : Array[ToolDefinition]?
+  tool_choice : String?
+  provider_options : Array[Kv]?
+}
+impl Eq for Config
+impl Show for Config
+
+pub(all) enum ContentPart {
+  Text(String)
+  Image(ImageReference)
+}
+impl Eq for ContentPart
+impl Show for ContentPart
+
+pub(all) struct Error_ {
+  code : ErrorCode
+  message : String
+  provider_error_json : String?
+}
+impl Eq for Error_
+impl Show for Error_
+
+pub(all) enum Event {
+  Message(Message)
+  Response(Response)
+  ToolResults(Array[ToolResult])
+}
+impl Eq for Event
+impl Show for Event
+
+pub(all) enum FinishReason {
+  STOP
+  LENGTH
+  TOOL_CALLS
+  CONTENT_FILTER
+  ERROR
+  OTHER
+}
+fn FinishReason::from(Int) -> Self
+fn FinishReason::ordinal(Self) -> Int
+impl Eq for FinishReason
+impl Show for FinishReason
+
+pub(all) enum ImageDetail {
+  LOW
+  HIGH
+  AUTO
+}
+fn ImageDetail::from(Int) -> Self
+fn ImageDetail::ordinal(Self) -> Int
+impl Eq for ImageDetail
+impl Show for ImageDetail
+
+pub(all) enum ImageReference {
+  Url(ImageUrl)
+  Inline(ImageSource)
+}
+impl Eq for ImageReference
+impl Show for ImageReference
+
+pub(all) struct ImageSource {
+  data : FixedArray[Byte]
+  mime_type : String
+  detail : ImageDetail?
+}
+impl Eq for ImageSource
+impl Show for ImageSource
+
+pub(all) struct ImageUrl {
+  url : String
+  detail : ImageDetail?
+}
+impl Eq for ImageUrl
+impl Show for ImageUrl
+
+pub(all) struct Kv {
+  key : String
+  value : String
+}
+impl Eq for Kv
+impl Show for Kv
+
+pub(all) struct Message {
+  role : Role
+  name : String?
+  content : Array[ContentPart]
+}
+impl Eq for Message
+impl Show for Message
+
+pub(all) struct Response {
+  id : String
+  content : Array[ContentPart]
+  tool_calls : Array[ToolCall]
+  metadata : ResponseMetadata
+}
+impl Eq for Response
+impl Show for Response
+
+pub(all) struct ResponseMetadata {
+  finish_reason : FinishReason?
+  usage : Usage?
+  provider_id : String?
+  timestamp : String?
+  provider_metadata_json : String?
+}
+impl Eq for ResponseMetadata
+impl Show for ResponseMetadata
+
+pub(all) enum Role {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+fn Role::from(Int) -> Self
+fn Role::ordinal(Self) -> Int
+impl Eq for Role
+impl Show for Role
+
+pub(all) struct StreamDelta {
+  content : Array[ContentPart]?
+  tool_calls : Array[ToolCall]?
+}
+impl Eq for StreamDelta
+impl Show for StreamDelta
+
+pub(all) enum StreamEvent {
+  Delta(StreamDelta)
+  Finish(ResponseMetadata)
+}
+impl Eq for StreamEvent
+impl Show for StreamEvent
+
+pub(all) struct ToolCall {
+  id : String
+  name : String
+  arguments_json : String
+}
+impl Eq for ToolCall
+impl Show for ToolCall
+
+pub(all) struct ToolDefinition {
+  name : String
+  description : String?
+  parameters_schema : String
+}
+impl Eq for ToolDefinition
+impl Show for ToolDefinition
+
+pub(all) struct ToolFailure {
+  id : String
+  name : String
+  error_message : String
+  error_code : String?
+}
+impl Eq for ToolFailure
+impl Show for ToolFailure
+
+pub(all) enum ToolResult {
+  Success(ToolSuccess)
+  Error(ToolFailure)
+}
+impl Eq for ToolResult
+impl Show for ToolResult
+
+pub(all) struct ToolSuccess {
+  id : String
+  name : String
+  result_json : String
+  execution_time_ms : UInt?
+}
+impl Eq for ToolSuccess
+impl Show for ToolSuccess
+
+pub(all) struct Usage {
+  input_tokens : UInt?
+  output_tokens : UInt?
+  total_tokens : UInt?
+}
+impl Eq for Usage
+impl Show for Usage
+
+// Type aliases
+
+// Traits
+

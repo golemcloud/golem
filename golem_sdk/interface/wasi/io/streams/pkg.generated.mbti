@@ -1,0 +1,52 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/wasi/io/streams"
+
+import(
+  "vigoo/golem_sdk/interface/wasi/io/error"
+  "vigoo/golem_sdk/interface/wasi/io/poll"
+)
+
+// Values
+
+// Errors
+pub(all) suberror StreamError {
+  LastOperationFailed(@error.Error_)
+  Closed
+}
+impl Eq for StreamError
+impl Show for StreamError
+
+// Types and methods
+pub(all) struct InputStream(Int)
+fn InputStream::blocking_read(Self, UInt64) -> Result[FixedArray[Byte], StreamError]
+fn InputStream::blocking_skip(Self, UInt64) -> Result[UInt64, StreamError]
+fn InputStream::drop(Self) -> Unit
+#deprecated
+fn InputStream::inner(Self) -> Int
+fn InputStream::read(Self, UInt64) -> Result[FixedArray[Byte], StreamError]
+fn InputStream::skip(Self, UInt64) -> Result[UInt64, StreamError]
+fn InputStream::subscribe(Self) -> @poll.Pollable
+impl Eq for InputStream
+impl Show for InputStream
+
+pub(all) struct OutputStream(Int)
+fn OutputStream::blocking_flush(Self) -> Result[Unit, StreamError]
+fn OutputStream::blocking_splice(Self, InputStream, UInt64) -> Result[UInt64, StreamError]
+fn OutputStream::blocking_write_and_flush(Self, FixedArray[Byte]) -> Result[Unit, StreamError]
+fn OutputStream::blocking_write_zeroes_and_flush(Self, UInt64) -> Result[Unit, StreamError]
+fn OutputStream::check_write(Self) -> Result[UInt64, StreamError]
+fn OutputStream::drop(Self) -> Unit
+fn OutputStream::flush(Self) -> Result[Unit, StreamError]
+#deprecated
+fn OutputStream::inner(Self) -> Int
+fn OutputStream::splice(Self, InputStream, UInt64) -> Result[UInt64, StreamError]
+fn OutputStream::subscribe(Self) -> @poll.Pollable
+fn OutputStream::write(Self, FixedArray[Byte]) -> Result[Unit, StreamError]
+fn OutputStream::write_zeroes(Self, UInt64) -> Result[Unit, StreamError]
+impl Eq for OutputStream
+impl Show for OutputStream
+
+// Type aliases
+
+// Traits
+

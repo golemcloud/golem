@@ -1,0 +1,1 @@
+Core types and error handling for universal search interfaces

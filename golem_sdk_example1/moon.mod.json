@@ -1,0 +1,15 @@
+{
+  "name": "vigoo/golem_sdk_example1",
+  "version": "0.1.0",
+  "readme": "README.mbt.md",
+  "repository": "",
+  "license": "Apache-2.0",
+  "keywords": [],
+  "description": "",
+  "preferred-target": "wasm",
+  "deps": {
+    "vigoo/golem_sdk": {
+      "path": "../golem_sdk"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+import {
+  "vigoo/golem_sdk/ffi" @ffi,
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
+  "vigoo/golem_sdk/interface/wasi/io/poll" @poll,
+}

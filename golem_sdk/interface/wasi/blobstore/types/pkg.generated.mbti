@@ -1,0 +1,58 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/wasi/blobstore/types"
+
+import(
+  "vigoo/golem_sdk/interface/wasi/io/streams"
+)
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct ContainerMetadata {
+  name : String
+  created_at : UInt64
+}
+impl Eq for ContainerMetadata
+impl Show for ContainerMetadata
+
+pub(all) struct IncomingValue(Int)
+fn IncomingValue::drop(Self) -> Unit
+fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, String]
+fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], String]
+#deprecated
+fn IncomingValue::inner(Self) -> Int
+fn IncomingValue::size(Self) -> UInt64
+impl Eq for IncomingValue
+impl Show for IncomingValue
+
+pub(all) struct ObjectId {
+  container : String
+  object : String
+}
+impl Eq for ObjectId
+impl Show for ObjectId
+
+pub(all) struct ObjectMetadata {
+  name : String
+  container : String
+  created_at : UInt64
+  size : UInt64
+}
+impl Eq for ObjectMetadata
+impl Show for ObjectMetadata
+
+pub(all) struct OutgoingValue(Int)
+fn OutgoingValue::drop(Self) -> Unit
+#deprecated
+fn OutgoingValue::inner(Self) -> Int
+fn OutgoingValue::new_outgoing_value() -> Self
+fn OutgoingValue::outgoing_value_write_body(Self) -> Result[@streams.OutputStream, Unit]
+impl Eq for OutgoingValue
+impl Show for OutgoingValue
+
+// Type aliases
+
+// Traits
+

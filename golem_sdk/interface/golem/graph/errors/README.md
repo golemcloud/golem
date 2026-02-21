@@ -1,0 +1,1 @@
+Error handling unified across all graph database providers

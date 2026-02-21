@@ -1,0 +1,343 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/graph/types"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) enum ComparisonOperator {
+  EQUAL
+  NOT_EQUAL
+  LESS_THAN
+  LESS_THAN_OR_EQUAL
+  GREATER_THAN
+  GREATER_THAN_OR_EQUAL
+  CONTAINS
+  STARTS_WITH
+  ENDS_WITH
+  REGEX_MATCH
+  IN_LIST
+  NOT_IN_LIST
+}
+fn ComparisonOperator::from(Int) -> Self
+fn ComparisonOperator::ordinal(Self) -> Int
+impl Eq for ComparisonOperator
+impl Show for ComparisonOperator
+
+pub(all) struct CreateEdgeOptions {
+  edge_type : String
+  from_vertex : ElementId
+  to_vertex : ElementId
+  properties : Array[(String, PropertyValue)]?
+}
+impl Eq for CreateEdgeOptions
+impl Show for CreateEdgeOptions
+
+pub(all) struct CreateMissingEdgeOptions {
+  edge_type : String
+  from_vertex : ElementId
+  to_vertex : ElementId
+}
+impl Eq for CreateMissingEdgeOptions
+impl Show for CreateMissingEdgeOptions
+
+pub(all) struct CreateVertexOptions {
+  vertex_type : String
+  properties : Array[(String, PropertyValue)]?
+  labels : Array[String]?
+}
+impl Eq for CreateVertexOptions
+impl Show for CreateVertexOptions
+
+pub(all) struct Date {
+  year : UInt
+  month : Byte
+  day : Byte
+}
+impl Eq for Date
+impl Show for Date
+
+pub(all) struct Datetime {
+  date : Date
+  time : Time
+  timezone_offset_minutes : Int?
+}
+impl Eq for Datetime
+impl Show for Datetime
+
+pub(all) enum Direction {
+  OUTGOING
+  INCOMING
+  BOTH
+}
+fn Direction::from(Int) -> Self
+fn Direction::ordinal(Self) -> Int
+impl Eq for Direction
+impl Show for Direction
+
+pub(all) struct Duration {
+  seconds : Int64
+  nanoseconds : UInt
+}
+impl Eq for Duration
+impl Show for Duration
+
+pub(all) struct Edge {
+  id : ElementId
+  edge_type : String
+  from_vertex : ElementId
+  to_vertex : ElementId
+  properties : Array[(String, PropertyValue)]
+}
+impl Eq for Edge
+impl Show for Edge
+
+pub(all) enum ElementId {
+  StringValue(String)
+  Int64(Int64)
+  Uuid(String)
+}
+impl Eq for ElementId
+impl Show for ElementId
+
+pub(all) struct ExecuteQueryOptions {
+  query : String
+  parameters : Array[(String, PropertyValue)]?
+  timeout_seconds : UInt?
+  max_results : UInt?
+  explain : Bool?
+  profile : Bool?
+}
+impl Eq for ExecuteQueryOptions
+impl Show for ExecuteQueryOptions
+
+pub(all) struct FilterCondition {
+  property : String
+  operator : ComparisonOperator
+  value : PropertyValue
+}
+impl Eq for FilterCondition
+impl Show for FilterCondition
+
+pub(all) struct FindAllPathsOptions {
+  from_vertex : ElementId
+  to_vertex : ElementId
+  path : PathOptions?
+  limit : UInt?
+}
+impl Eq for FindAllPathsOptions
+impl Show for FindAllPathsOptions
+
+pub(all) struct FindEdgesOptions {
+  edge_types : Array[String]?
+  filters : Array[FilterCondition]?
+  sort : Array[SortSpec]?
+  limit : UInt?
+  offset : UInt?
+}
+impl Eq for FindEdgesOptions
+impl Show for FindEdgesOptions
+
+pub(all) struct FindShortestPathOptions {
+  from_vertex : ElementId
+  to_vertex : ElementId
+  path : PathOptions?
+}
+impl Eq for FindShortestPathOptions
+impl Show for FindShortestPathOptions
+
+pub(all) struct FindVerticesOptions {
+  vertex_type : String?
+  filters : Array[FilterCondition]?
+  sort : Array[SortSpec]?
+  limit : UInt?
+  offset : UInt?
+}
+impl Eq for FindVerticesOptions
+impl Show for FindVerticesOptions
+
+pub(all) struct GetAdjacentVerticesOptions {
+  vertex_id : ElementId
+  direction : Direction
+  edge_types : Array[String]?
+  limit : UInt?
+}
+impl Eq for GetAdjacentVerticesOptions
+impl Show for GetAdjacentVerticesOptions
+
+pub(all) struct GetConnectedEdgesOptions {
+  vertex_id : ElementId
+  direction : Direction
+  edge_types : Array[String]?
+  limit : UInt?
+}
+impl Eq for GetConnectedEdgesOptions
+impl Show for GetConnectedEdgesOptions
+
+pub(all) struct GetNeighborhoodOptions {
+  center : ElementId
+  depth : UInt
+  direction : Direction
+  edge_types : Array[String]?
+  max_vertices : UInt?
+}
+impl Eq for GetNeighborhoodOptions
+impl Show for GetNeighborhoodOptions
+
+pub(all) struct GetVerticesAtDistanceOptions {
+  source : ElementId
+  distance : UInt
+  direction : Direction
+  edge_types : Array[String]?
+}
+impl Eq for GetVerticesAtDistanceOptions
+impl Show for GetVerticesAtDistanceOptions
+
+pub(all) struct Linestring {
+  coordinates : Array[Point]
+}
+impl Eq for Linestring
+impl Show for Linestring
+
+pub(all) struct Path {
+  vertices : Array[Vertex]
+  edges : Array[Edge]
+  length : UInt
+}
+impl Eq for Path
+impl Show for Path
+
+pub(all) struct PathExistsOptions {
+  from_vertex : ElementId
+  to_vertex : ElementId
+  path : PathOptions?
+}
+impl Eq for PathExistsOptions
+impl Show for PathExistsOptions
+
+pub(all) struct PathOptions {
+  max_depth : UInt?
+  edge_types : Array[String]?
+  vertex_types : Array[String]?
+  vertex_filters : Array[FilterCondition]?
+  edge_filters : Array[FilterCondition]?
+}
+impl Eq for PathOptions
+impl Show for PathOptions
+
+pub(all) struct Point {
+  longitude : Double
+  latitude : Double
+  altitude : Double?
+}
+impl Eq for Point
+impl Show for Point
+
+pub(all) struct Polygon {
+  exterior : Array[Point]
+  holes : Array[Array[Point]]?
+}
+impl Eq for Polygon
+impl Show for Polygon
+
+pub(all) enum PropertyValue {
+  NullValue
+  Boolean(Bool)
+  Int8(Int)
+  Int16(Int)
+  Int32(Int)
+  Int64(Int64)
+  Uint8(Byte)
+  Uint16(UInt)
+  Uint32(UInt)
+  Uint64(UInt64)
+  Float32Value(Float)
+  Float64Value(Double)
+  StringValue(String)
+  Bytes(FixedArray[Byte])
+  Date(Date)
+  Time(Time)
+  Datetime(Datetime)
+  Duration(Duration)
+  Point(Point)
+  Linestring(Linestring)
+  Polygon(Polygon)
+}
+impl Eq for PropertyValue
+impl Show for PropertyValue
+
+pub(all) struct QueryExecutionResult {
+  query_result_value : QueryResult
+  execution_time_ms : UInt?
+  rows_affected : UInt?
+  explanation : String?
+  profile_data : String?
+}
+impl Eq for QueryExecutionResult
+impl Show for QueryExecutionResult
+
+pub(all) enum QueryResult {
+  Vertices(Array[Vertex])
+  Edges(Array[Edge])
+  Paths(Array[Path])
+  Values(Array[PropertyValue])
+  Maps(Array[Array[(String, PropertyValue)]])
+}
+impl Eq for QueryResult
+impl Show for QueryResult
+
+pub(all) struct SortSpec {
+  property : String
+  ascending : Bool
+}
+impl Eq for SortSpec
+impl Show for SortSpec
+
+pub(all) struct Subgraph {
+  vertices : Array[Vertex]
+  edges : Array[Edge]
+}
+impl Eq for Subgraph
+impl Show for Subgraph
+
+pub(all) struct Time {
+  hour : Byte
+  minute : Byte
+  second : Byte
+  nanosecond : UInt
+}
+impl Eq for Time
+impl Show for Time
+
+pub(all) struct UpdateEdgeOptions {
+  id : ElementId
+  properties : Array[(String, PropertyValue)]
+  partial : Bool?
+  create_missing_with : CreateMissingEdgeOptions?
+}
+impl Eq for UpdateEdgeOptions
+impl Show for UpdateEdgeOptions
+
+pub(all) struct UpdateVertexOptions {
+  id : ElementId
+  properties : Array[(String, PropertyValue)]
+  partial : Bool?
+  create_missing : Bool?
+}
+impl Eq for UpdateVertexOptions
+impl Show for UpdateVertexOptions
+
+pub(all) struct Vertex {
+  id : ElementId
+  vertex_type : String
+  additional_labels : Array[String]
+  properties : Array[(String, PropertyValue)]
+}
+impl Eq for Vertex
+impl Show for Vertex
+
+// Type aliases
+
+// Traits
+

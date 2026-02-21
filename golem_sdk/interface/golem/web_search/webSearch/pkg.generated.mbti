@@ -1,0 +1,28 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/web_search/webSearch"
+
+import(
+  "vigoo/golem_sdk/interface/golem/web_search/types"
+)
+
+// Values
+fn search_once(@types.SearchParams) -> Result[(Array[@types.SearchResult], @types.SearchMetadata?), @types.SearchError]
+
+fn start_search(@types.SearchParams) -> Result[SearchSession, @types.SearchError]
+
+// Errors
+
+// Types and methods
+pub(all) struct SearchSession(Int)
+fn SearchSession::drop(Self) -> Unit
+fn SearchSession::get_metadata(Self) -> @types.SearchMetadata?
+#deprecated
+fn SearchSession::inner(Self) -> Int
+fn SearchSession::next_page(Self) -> Result[Array[@types.SearchResult], @types.SearchError]
+impl Eq for SearchSession
+impl Show for SearchSession
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,14 @@
+{
+  "name": "vigoo/golem_sdk",
+  "version": "0.1.0",
+  "readme": "README.mbt.md",
+  "repository": "",
+  "license": "Apache-2.0",
+  "keywords": [],
+  "description": "",
+  "preferred-target": "wasm",
+  "scripts": {
+    "bindgen": "wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --ignore-stub",
+    "componentize": "wasm-tools component embed ./wit target/wasm/release/build/gen/gen.wasm --encoding utf16 --output target/wasm/release/embed.wasm && wasm-tools component new target/wasm/release/embed.wasm --output target/wasm/release/golem_sdk-component.wasm"
+  }
+}

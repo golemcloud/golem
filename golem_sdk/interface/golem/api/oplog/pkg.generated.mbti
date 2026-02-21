@@ -1,0 +1,384 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/api/oplog"
+
+import(
+  "vigoo/golem_sdk/interface/golem/api/context"
+  "vigoo/golem_sdk/interface/golem/api/host"
+  "vigoo/golem_sdk/interface/golem/rpc/types"
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock"
+)
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct ActivatePluginParameters {
+  timestamp : @wallClock.Datetime
+  plugin : PluginInstallationDescription
+}
+impl Eq for ActivatePluginParameters
+impl Show for ActivatePluginParameters
+
+pub(all) enum AgentInvocation {
+  ExportedFunction(ExportedFunctionInvocationParameters)
+  ManualUpdate(UInt64)
+}
+impl Eq for AgentInvocation
+impl Show for AgentInvocation
+
+pub(all) struct BeginRemoteTransactionParameters {
+  timestamp : @wallClock.Datetime
+  transaction_id : String
+}
+impl Eq for BeginRemoteTransactionParameters
+impl Show for BeginRemoteTransactionParameters
+
+pub(all) struct CancelInvocationParameters {
+  timestamp : @wallClock.Datetime
+  idempotency_key : String
+}
+impl Eq for CancelInvocationParameters
+impl Show for CancelInvocationParameters
+
+pub(all) struct ChangePersistenceLevelParameters {
+  timestamp : @wallClock.Datetime
+  persistence_level : @host.PersistenceLevel
+}
+impl Eq for ChangePersistenceLevelParameters
+impl Show for ChangePersistenceLevelParameters
+
+pub(all) struct ChangeRetryPolicyParameters {
+  timestamp : @wallClock.Datetime
+  retry_policy : @host.RetryPolicy
+}
+impl Eq for ChangeRetryPolicyParameters
+impl Show for ChangeRetryPolicyParameters
+
+pub(all) struct CreateParameters {
+  timestamp : @wallClock.Datetime
+  agent_id : @types.AgentId
+  component_version : UInt64
+  args : Array[String]
+  env : Array[(String, String)]
+  created_by : @host.AccountId
+  project_id : @host.ProjectId
+  parent : @types.AgentId?
+  component_size : UInt64
+  initial_total_linear_memory_size : UInt64
+  initial_active_plugins : Array[PluginInstallationDescription]
+}
+impl Eq for CreateParameters
+impl Show for CreateParameters
+
+pub(all) struct CreateResourceParameters {
+  timestamp : @wallClock.Datetime
+  resource_id : UInt64
+  name : String
+  owner : String
+}
+impl Eq for CreateResourceParameters
+impl Show for CreateResourceParameters
+
+pub(all) struct DeactivatePluginParameters {
+  timestamp : @wallClock.Datetime
+  plugin : PluginInstallationDescription
+}
+impl Eq for DeactivatePluginParameters
+impl Show for DeactivatePluginParameters
+
+pub(all) struct DropResourceParameters {
+  timestamp : @wallClock.Datetime
+  resource_id : UInt64
+  name : String
+  owner : String
+}
+impl Eq for DropResourceParameters
+impl Show for DropResourceParameters
+
+pub(all) struct EndAtomicRegionParameters {
+  timestamp : @wallClock.Datetime
+  begin_index : UInt64
+}
+impl Eq for EndAtomicRegionParameters
+impl Show for EndAtomicRegionParameters
+
+pub(all) struct EndRemoteWriteParameters {
+  timestamp : @wallClock.Datetime
+  begin_index : UInt64
+}
+impl Eq for EndRemoteWriteParameters
+impl Show for EndRemoteWriteParameters
+
+pub(all) struct ErrorParameters {
+  timestamp : @wallClock.Datetime
+  error : String
+}
+impl Eq for ErrorParameters
+impl Show for ErrorParameters
+
+pub(all) struct ExportedFunctionCompletedParameters {
+  timestamp : @wallClock.Datetime
+  response : @types.WitValue?
+  consumed_fuel : Int64
+}
+impl Eq for ExportedFunctionCompletedParameters
+impl Show for ExportedFunctionCompletedParameters
+
+pub(all) struct ExportedFunctionInvocationParameters {
+  idempotency_key : String
+  function_name : String
+  input : Array[@types.WitValue]?
+}
+impl Eq for ExportedFunctionInvocationParameters
+impl Show for ExportedFunctionInvocationParameters
+
+pub(all) struct ExportedFunctionInvokedParameters {
+  timestamp : @wallClock.Datetime
+  function_name : String
+  request : Array[@types.WitValue]
+  idempotency_key : String
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+}
+impl Eq for ExportedFunctionInvokedParameters
+impl Show for ExportedFunctionInvokedParameters
+
+pub(all) struct ExternalSpanData {
+  span_id : String
+}
+impl Eq for ExternalSpanData
+impl Show for ExternalSpanData
+
+pub(all) struct FailedUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_version : UInt64
+  details : String?
+}
+impl Eq for FailedUpdateParameters
+impl Show for FailedUpdateParameters
+
+pub(all) struct FinishSpanParameters {
+  timestamp : @wallClock.Datetime
+  span_id : String
+}
+impl Eq for FinishSpanParameters
+impl Show for FinishSpanParameters
+
+pub(all) struct GetOplog(Int)
+fn GetOplog::drop(Self) -> Unit
+fn GetOplog::get_next(Self) -> Array[OplogEntry]?
+fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
+#deprecated
+fn GetOplog::inner(Self) -> Int
+impl Eq for GetOplog
+impl Show for GetOplog
+
+pub(all) struct GrowMemoryParameters {
+  timestamp : @wallClock.Datetime
+  delta : UInt64
+}
+impl Eq for GrowMemoryParameters
+impl Show for GrowMemoryParameters
+
+pub(all) struct ImportedFunctionInvokedParameters {
+  timestamp : @wallClock.Datetime
+  function_name : String
+  request : @types.WitValue
+  response : @types.WitValue
+  wrapped_function_type : WrappedFunctionType
+}
+impl Eq for ImportedFunctionInvokedParameters
+impl Show for ImportedFunctionInvokedParameters
+
+pub(all) struct JumpParameters {
+  timestamp : @wallClock.Datetime
+  start : UInt64
+  end : UInt64
+}
+impl Eq for JumpParameters
+impl Show for JumpParameters
+
+pub(all) struct LocalSpanData {
+  span_id : String
+  start : @wallClock.Datetime
+  parent : String?
+  linked_context : UInt64?
+  attributes : Array[@context.Attribute]
+  inherited : Bool
+}
+impl Eq for LocalSpanData
+impl Show for LocalSpanData
+
+pub(all) enum LogLevel {
+  STDOUT
+  STDERR
+  TRACE
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+fn LogLevel::from(Int) -> Self
+fn LogLevel::ordinal(Self) -> Int
+impl Eq for LogLevel
+impl Show for LogLevel
+
+pub(all) struct LogParameters {
+  timestamp : @wallClock.Datetime
+  level : LogLevel
+  context : String
+  message : String
+}
+impl Eq for LogParameters
+impl Show for LogParameters
+
+pub(all) enum OplogEntry {
+  Create(CreateParameters)
+  ImportedFunctionInvoked(ImportedFunctionInvokedParameters)
+  ExportedFunctionInvoked(ExportedFunctionInvokedParameters)
+  ExportedFunctionCompleted(ExportedFunctionCompletedParameters)
+  Suspend(@wallClock.Datetime)
+  Error(ErrorParameters)
+  NoOp(@wallClock.Datetime)
+  Jump(JumpParameters)
+  Interrupted(@wallClock.Datetime)
+  Exited(@wallClock.Datetime)
+  ChangeRetryPolicy(ChangeRetryPolicyParameters)
+  BeginAtomicRegion(@wallClock.Datetime)
+  EndAtomicRegion(EndAtomicRegionParameters)
+  BeginRemoteWrite(@wallClock.Datetime)
+  EndRemoteWrite(EndRemoteWriteParameters)
+  PendingAgentInvocation(PendingAgentInvocationParameters)
+  PendingUpdate(PendingUpdateParameters)
+  SuccessfulUpdate(SuccessfulUpdateParameters)
+  FailedUpdate(FailedUpdateParameters)
+  GrowMemory(GrowMemoryParameters)
+  CreateResource(CreateResourceParameters)
+  DropResource(DropResourceParameters)
+  Log(LogParameters)
+  Restart(@wallClock.Datetime)
+  ActivatePlugin(ActivatePluginParameters)
+  DeactivatePlugin(DeactivatePluginParameters)
+  Revert(RevertParameters)
+  CancelInvocation(CancelInvocationParameters)
+  StartSpan(StartSpanParameters)
+  FinishSpan(FinishSpanParameters)
+  SetSpanAttribute(SetSpanAttributeParameters)
+  ChangePersistenceLevel(ChangePersistenceLevelParameters)
+  BeginRemoteTransaction(BeginRemoteTransactionParameters)
+  PreCommitRemoteTransaction(RemoteTransactionParameters)
+  PreRollbackRemoteTransaction(RemoteTransactionParameters)
+  CommittedRemoteTransaction(RemoteTransactionParameters)
+  RolledBackRemoteTransaction(RemoteTransactionParameters)
+}
+impl Eq for OplogEntry
+impl Show for OplogEntry
+
+pub(all) struct PendingAgentInvocationParameters {
+  timestamp : @wallClock.Datetime
+  invocation : AgentInvocation
+}
+impl Eq for PendingAgentInvocationParameters
+impl Show for PendingAgentInvocationParameters
+
+pub(all) struct PendingUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_version : UInt64
+  update_description : UpdateDescription
+}
+impl Eq for PendingUpdateParameters
+impl Show for PendingUpdateParameters
+
+pub(all) struct PluginInstallationDescription {
+  installation_id : @types.Uuid
+  name : String
+  version : String
+  parameters : Array[(String, String)]
+}
+impl Eq for PluginInstallationDescription
+impl Show for PluginInstallationDescription
+
+pub(all) struct RemoteTransactionParameters {
+  timestamp : @wallClock.Datetime
+  begin_index : UInt64
+}
+impl Eq for RemoteTransactionParameters
+impl Show for RemoteTransactionParameters
+
+pub(all) struct RevertParameters {
+  timestamp : @wallClock.Datetime
+  start : UInt64
+  end : UInt64
+}
+impl Eq for RevertParameters
+impl Show for RevertParameters
+
+pub(all) struct SearchOplog(Int)
+fn SearchOplog::drop(Self) -> Unit
+fn SearchOplog::get_next(Self) -> Array[(UInt64, OplogEntry)]?
+#deprecated
+fn SearchOplog::inner(Self) -> Int
+fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
+impl Eq for SearchOplog
+impl Show for SearchOplog
+
+pub(all) struct SetSpanAttributeParameters {
+  timestamp : @wallClock.Datetime
+  span_id : String
+  key : String
+  value : @context.AttributeValue
+}
+impl Eq for SetSpanAttributeParameters
+impl Show for SetSpanAttributeParameters
+
+pub(all) enum SpanData {
+  LocalSpan(LocalSpanData)
+  ExternalSpan(ExternalSpanData)
+}
+impl Eq for SpanData
+impl Show for SpanData
+
+pub(all) struct StartSpanParameters {
+  timestamp : @wallClock.Datetime
+  span_id : String
+  parent : String?
+  linked_context : String?
+  attributes : Array[@context.Attribute]
+}
+impl Eq for StartSpanParameters
+impl Show for StartSpanParameters
+
+pub(all) struct SuccessfulUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_version : UInt64
+  new_component_size : UInt64
+  new_active_plugins : Array[PluginInstallationDescription]
+}
+impl Eq for SuccessfulUpdateParameters
+impl Show for SuccessfulUpdateParameters
+
+pub(all) enum UpdateDescription {
+  AutoUpdate
+  SnapshotBased(FixedArray[Byte])
+}
+impl Eq for UpdateDescription
+impl Show for UpdateDescription
+
+pub(all) enum WrappedFunctionType {
+  ReadLocal
+  WriteLocal
+  ReadRemote
+  WriteRemote
+  WriteRemoteBatched(UInt64?)
+  WriteRemoteTransaction(UInt64?)
+}
+impl Eq for WrappedFunctionType
+impl Show for WrappedFunctionType
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,3 @@
+import {
+  "vigoo/golem_sdk/interface/golem/graph/types" @types,
+}

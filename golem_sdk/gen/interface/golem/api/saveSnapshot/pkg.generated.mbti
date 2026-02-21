@@ -1,0 +1,14 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/gen/interface/golem/api/saveSnapshot"
+
+// Values
+fn save() -> FixedArray[Byte]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

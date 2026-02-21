@@ -1,0 +1,277 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/video_generation/types"
+
+// Values
+
+// Errors
+pub(all) suberror VideoError {
+  InvalidInput(String)
+  UnsupportedFeature(String)
+  QuotaExceeded
+  GenerationFailed(String)
+  Cancelled
+  InternalError(String)
+}
+impl Eq for VideoError
+impl Show for VideoError
+
+// Types and methods
+pub(all) enum AspectRatio {
+  SQUARE
+  PORTRAIT
+  LANDSCAPE
+  CINEMA
+}
+fn AspectRatio::from(Int) -> Self
+fn AspectRatio::ordinal(Self) -> Int
+impl Eq for AspectRatio
+impl Show for AspectRatio
+
+pub(all) enum AudioSource {
+  FromText(TextToSpeech)
+  FromAudio(Narration)
+}
+impl Eq for AudioSource
+impl Show for AudioSource
+
+pub(all) struct BaseVideo {
+  data : MediaData
+}
+impl Eq for BaseVideo
+impl Show for BaseVideo
+
+pub(all) struct CameraConfig {
+  horizontal : Float
+  vertical : Float
+  pan : Float
+  tilt : Float
+  zoom : Float
+  roll : Float
+}
+impl Eq for CameraConfig
+impl Show for CameraConfig
+
+pub(all) enum CameraMovement {
+  Simple(CameraConfig)
+  DownBack
+  ForwardUp
+  RightTurnForward
+  LeftTurnForward
+}
+impl Eq for CameraMovement
+impl Show for CameraMovement
+
+pub(all) struct DualEffect {
+  effect : DualImageEffects
+  second_image : InputImage
+}
+impl Eq for DualEffect
+impl Show for DualEffect
+
+pub(all) enum DualImageEffects {
+  HUG
+  KISS
+  HEART_GESTURE
+}
+fn DualImageEffects::from(Int) -> Self
+fn DualImageEffects::ordinal(Self) -> Int
+impl Eq for DualImageEffects
+impl Show for DualImageEffects
+
+pub(all) struct DynamicMask {
+  mask : InputImage
+  trajectories : Array[Position]
+}
+impl Eq for DynamicMask
+impl Show for DynamicMask
+
+pub(all) enum EffectType {
+  Single(SingleImageEffects)
+  Dual(DualEffect)
+}
+impl Eq for EffectType
+impl Show for EffectType
+
+pub(all) struct GenerationConfig {
+  negative_prompt : String?
+  seed : UInt64?
+  scheduler : String?
+  guidance_scale : Float?
+  aspect_ratio : AspectRatio?
+  duration_seconds : Float?
+  resolution : Resolution?
+  model : String?
+  enable_audio : Bool?
+  enhance_prompt : Bool?
+  provider_options : Array[Kv]?
+  lastframe : InputImage?
+  static_mask : StaticMask?
+  dynamic_mask : DynamicMask?
+  camera_control : CameraMovement?
+}
+impl Eq for GenerationConfig
+impl Show for GenerationConfig
+
+pub(all) enum ImageRole {
+  FIRST
+  LAST
+}
+fn ImageRole::from(Int) -> Self
+fn ImageRole::ordinal(Self) -> Int
+impl Eq for ImageRole
+impl Show for ImageRole
+
+pub(all) struct InputImage {
+  data : MediaData
+}
+impl Eq for InputImage
+impl Show for InputImage
+
+pub(all) enum JobStatus {
+  Pending
+  Running
+  Succeeded
+  Failed(String)
+}
+impl Eq for JobStatus
+impl Show for JobStatus
+
+pub(all) struct Kv {
+  key : String
+  value : String
+}
+impl Eq for Kv
+impl Show for Kv
+
+pub(all) enum LipSyncVideo {
+  Video(BaseVideo)
+  VideoId(String)
+}
+impl Eq for LipSyncVideo
+impl Show for LipSyncVideo
+
+pub(all) enum MediaData {
+  Url(String)
+  Bytes(RawBytes)
+}
+impl Eq for MediaData
+impl Show for MediaData
+
+pub(all) enum MediaInput {
+  Text(String)
+  Image(Reference)
+  Video(BaseVideo)
+}
+impl Eq for MediaInput
+impl Show for MediaInput
+
+pub(all) struct Narration {
+  data : MediaData
+}
+impl Eq for Narration
+impl Show for Narration
+
+pub(all) struct Position {
+  x : UInt
+  y : UInt
+}
+impl Eq for Position
+impl Show for Position
+
+pub(all) struct RawBytes {
+  bytes : FixedArray[Byte]
+  mime_type : String
+}
+impl Eq for RawBytes
+impl Show for RawBytes
+
+pub(all) struct Reference {
+  data : InputImage
+  prompt : String?
+  role : ImageRole?
+}
+impl Eq for Reference
+impl Show for Reference
+
+pub(all) enum Resolution {
+  SD
+  HD
+  FHD
+  UHD
+}
+fn Resolution::from(Int) -> Self
+fn Resolution::ordinal(Self) -> Int
+impl Eq for Resolution
+impl Show for Resolution
+
+pub(all) enum SingleImageEffects {
+  BLOOMBLOOM
+  DIZZYDIZZY
+  FUZZYFUZZY
+  SQUISH
+  EXPANSION
+  ANIME_FIGURE
+  ROCKETROCKET
+}
+fn SingleImageEffects::from(Int) -> Self
+fn SingleImageEffects::ordinal(Self) -> Int
+impl Eq for SingleImageEffects
+impl Show for SingleImageEffects
+
+pub(all) struct StaticMask {
+  mask : InputImage
+}
+impl Eq for StaticMask
+impl Show for StaticMask
+
+pub(all) struct TextToSpeech {
+  text : String
+  voice_id : String
+  language : VoiceLanguage
+  speed : Float
+}
+impl Eq for TextToSpeech
+impl Show for TextToSpeech
+
+pub(all) struct Video {
+  uri : String?
+  base64_bytes : FixedArray[Byte]?
+  mime_type : String
+  width : UInt?
+  height : UInt?
+  fps : Float?
+  duration_seconds : Float?
+  generation_id : String?
+}
+impl Eq for Video
+impl Show for Video
+
+pub(all) struct VideoResult {
+  status : JobStatus
+  videos : Array[Video]?
+}
+impl Eq for VideoResult
+impl Show for VideoResult
+
+pub(all) struct VoiceInfo {
+  voice_id : String
+  name : String
+  language : VoiceLanguage
+  preview_url : String?
+}
+impl Eq for VoiceInfo
+impl Show for VoiceInfo
+
+pub(all) enum VoiceLanguage {
+  EN
+  ZH
+}
+fn VoiceLanguage::from(Int) -> Self
+fn VoiceLanguage::ordinal(Self) -> Int
+impl Eq for VoiceLanguage
+impl Show for VoiceLanguage
+
+// Type aliases
+
+// Traits
+

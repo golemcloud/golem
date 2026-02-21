@@ -1,0 +1,105 @@
+package golem:web-search@1.0.0;
+
+interface types {
+  /// Core structure for a single search result
+  record search-result {
+    title: string,
+    url: string,
+    snippet: string,
+    display-url: option<string>,
+    source: option<string>,
+    score: option<f64>,
+    html-snippet: option<string>,
+    date-published: option<string>,
+    images: option<list<image-result>>,
+    content-chunks: option<list<string>>,
+  }
+
+  /// Optional image-related result data
+  record image-result {
+    url: string,
+    description: option<string>,
+  }
+
+  /// Optional metadata for a search session
+  record search-metadata {
+    query: string,
+    total-results: option<u64>,
+    search-time-ms: option<f64>,
+    safe-search: option<safe-search-level>,
+    language: option<string>,
+    region: option<string>,
+    next-page-token: option<string>,
+    rate-limits: option<rate-limit-info>,
+    current-page: u32,
+  }
+
+  /// Safe search settings
+  enum safe-search-level {
+    off,
+    medium,
+    high,
+  }
+
+  /// Rate limiting metadata
+  record rate-limit-info {
+    limit: u32,
+    remaining: u32,
+    reset-timestamp: u64,
+  }
+
+  /// Query parameters accepted by the unified search API
+  record search-params {
+    query: string,
+    safe-search: option<safe-search-level>,
+    language: option<string>,
+    region: option<string>,
+    max-results: option<u32>,
+    time-range: option<time-range>,
+    include-domains: option<list<string>>,
+    exclude-domains: option<list<string>>,
+    include-images: option<bool>,
+    include-html: option<bool>,
+    advanced-answer: option<bool>,
+  }
+
+  /// Supported time range filtering
+  enum time-range {
+    day,
+    week,
+    month,
+    year,
+  }
+
+  /// Structured search error
+  variant search-error {
+    invalid-query,
+    rate-limited(u32),
+    unsupported-feature(string),
+    backend-error(string),
+  }
+}
+
+interface web-search {
+  use types.{search-params, search-result, search-metadata, search-error};
+
+  /// Represents an ongoing search session for pagination or streaming
+  resource search-session {
+    /// Get the next page of results
+    next-page: func() -> result<list<search-result>, search-error>;
+
+    /// Retrieve session metadata (after any query)
+    get-metadata: func() -> option<search-metadata>;
+  }
+
+  /// Start a search session, returning a search context
+  start-search: func(params: search-params) -> result<search-session, search-error>;
+
+  /// One-shot search that returns results immediately (limited result count)
+  search-once: func(params: search-params) -> result<tuple<list<search-result>, option<search-metadata>>, search-error>;
+}
+
+world websearch-library {
+    export web-search;
+    export types;
+}

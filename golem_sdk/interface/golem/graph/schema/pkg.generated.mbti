@@ -1,0 +1,134 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/graph/schema"
+
+import(
+  "vigoo/golem_sdk/interface/golem/graph/connection"
+  "vigoo/golem_sdk/interface/golem/graph/errors"
+  "vigoo/golem_sdk/interface/golem/graph/types"
+)
+
+// Values
+fn get_schema_manager(@connection.ConnectionConfig?) -> Result[SchemaManager, @errors.GraphError]
+
+// Errors
+
+// Types and methods
+pub(all) struct ContainerInfo {
+  name : String
+  container_type : ContainerType
+  element_count : UInt64?
+}
+impl Eq for ContainerInfo
+impl Show for ContainerInfo
+
+pub(all) enum ContainerType {
+  VERTEX_CONTAINER
+  EDGE_CONTAINER
+}
+fn ContainerType::from(Int) -> Self
+fn ContainerType::ordinal(Self) -> Int
+impl Eq for ContainerType
+impl Show for ContainerType
+
+pub(all) struct EdgeLabelSchema {
+  label : String
+  properties : Array[PropertyDefinition]
+  from_labels : Array[String]?
+  to_labels : Array[String]?
+  container : String?
+}
+impl Eq for EdgeLabelSchema
+impl Show for EdgeLabelSchema
+
+pub(all) struct EdgeTypeDefinition {
+  collection : String
+  from_collections : Array[String]
+  to_collections : Array[String]
+}
+impl Eq for EdgeTypeDefinition
+impl Show for EdgeTypeDefinition
+
+pub(all) struct IndexDefinition {
+  name : String
+  label : String
+  properties : Array[String]
+  index_type : IndexType
+  unique : Bool
+  container : String?
+}
+impl Eq for IndexDefinition
+impl Show for IndexDefinition
+
+pub(all) enum IndexType {
+  EXACT
+  RANGE
+  TEXT
+  GEOSPATIAL
+}
+fn IndexType::from(Int) -> Self
+fn IndexType::ordinal(Self) -> Int
+impl Eq for IndexType
+impl Show for IndexType
+
+pub(all) struct PropertyDefinition {
+  name : String
+  property_type : PropertyType
+  required : Bool
+  unique : Bool
+  default_value : @types.PropertyValue?
+}
+impl Eq for PropertyDefinition
+impl Show for PropertyDefinition
+
+pub(all) enum PropertyType {
+  BOOLEAN
+  INT32
+  INT64
+  FLOAT32_TYPE
+  FLOAT64_TYPE
+  STRING_TYPE
+  BYTES
+  DATE
+  DATETIME
+  POINT
+  LIST_TYPE
+  MAP_TYPE
+}
+fn PropertyType::from(Int) -> Self
+fn PropertyType::ordinal(Self) -> Int
+impl Eq for PropertyType
+impl Show for PropertyType
+
+pub(all) struct SchemaManager(Int)
+fn SchemaManager::create_container(Self, String, ContainerType) -> Result[Unit, @errors.GraphError]
+fn SchemaManager::create_index(Self, IndexDefinition) -> Result[Unit, @errors.GraphError]
+fn SchemaManager::define_edge_label(Self, EdgeLabelSchema) -> Result[Unit, @errors.GraphError]
+fn SchemaManager::define_edge_type(Self, EdgeTypeDefinition) -> Result[Unit, @errors.GraphError]
+fn SchemaManager::define_vertex_label(Self, VertexLabelSchema) -> Result[Unit, @errors.GraphError]
+fn SchemaManager::drop(Self) -> Unit
+fn SchemaManager::drop_index(Self, String) -> Result[Unit, @errors.GraphError]
+fn SchemaManager::get_edge_label_schema(Self, String) -> Result[EdgeLabelSchema?, @errors.GraphError]
+fn SchemaManager::get_index(Self, String) -> Result[IndexDefinition?, @errors.GraphError]
+fn SchemaManager::get_vertex_label_schema(Self, String) -> Result[VertexLabelSchema?, @errors.GraphError]
+#deprecated
+fn SchemaManager::inner(Self) -> Int
+fn SchemaManager::list_containers(Self) -> Result[Array[ContainerInfo], @errors.GraphError]
+fn SchemaManager::list_edge_labels(Self) -> Result[Array[String], @errors.GraphError]
+fn SchemaManager::list_edge_types(Self) -> Result[Array[EdgeTypeDefinition], @errors.GraphError]
+fn SchemaManager::list_indexes(Self) -> Result[Array[IndexDefinition], @errors.GraphError]
+fn SchemaManager::list_vertex_labels(Self) -> Result[Array[String], @errors.GraphError]
+impl Eq for SchemaManager
+impl Show for SchemaManager
+
+pub(all) struct VertexLabelSchema {
+  label : String
+  properties : Array[PropertyDefinition]
+  container : String?
+}
+impl Eq for VertexLabelSchema
+impl Show for VertexLabelSchema
+
+// Type aliases
+
+// Traits
+

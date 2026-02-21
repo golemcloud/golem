@@ -1,0 +1,1 @@
+/tmp/amp-skill-ee5ec44349bb7c69/moonbit-agent-guide/SKILL.mbt.md

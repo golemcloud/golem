@@ -1,0 +1,40 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk_example1/counter"
+
+// Values
+fn cabi_realloc(Int, Int, Int, Int) -> Int
+
+fn wasmExportDiscoverAgentTypes() -> Int
+
+fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+fn wasmExportGetDefinition() -> Int
+
+fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+fn wasmExportInitialize(Int, Int, Int, Int, Int) -> Int
+
+fn wasmExportInitializePostReturn(Int) -> Unit
+
+fn wasmExportInvoke(Int, Int, Int, Int, Int) -> Int
+
+fn wasmExportInvokePostReturn(Int) -> Unit
+
+fn wasmExportLoad(Int, Int) -> Int
+
+fn wasmExportLoadPostReturn(Int) -> Unit
+
+fn wasmExportSave() -> Int
+
+fn wasmExportSavePostReturn(Int) -> Unit
+
+// Errors
+
+// Types and methods
+type Counter
+fn Counter::increment(Self) -> Unit
+
+// Type aliases
+
+// Traits
+

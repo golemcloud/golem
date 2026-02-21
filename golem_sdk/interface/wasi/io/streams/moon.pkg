@@ -1,0 +1,5 @@
+import {
+  "vigoo/golem_sdk/ffi" @ffi,
+  "vigoo/golem_sdk/interface/wasi/io/error" @error,
+  "vigoo/golem_sdk/interface/wasi/io/poll" @poll,
+}

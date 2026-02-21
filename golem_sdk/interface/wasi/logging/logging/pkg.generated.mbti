@@ -1,0 +1,26 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/wasi/logging/logging"
+
+// Values
+fn log(Level, String, String) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) enum Level {
+  TRACE
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+fn Level::from(Int) -> Self
+fn Level::ordinal(Self) -> Int
+impl Eq for Level
+impl Show for Level
+
+// Type aliases
+
+// Traits
+

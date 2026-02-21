@@ -1,0 +1,22 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/wasi/clocks/wallClock"
+
+// Values
+fn now() -> Datetime
+
+fn resolution() -> Datetime
+
+// Errors
+
+// Types and methods
+pub(all) struct Datetime {
+  seconds : UInt64
+  nanoseconds : UInt
+}
+impl Eq for Datetime
+impl Show for Datetime
+
+// Type aliases
+
+// Traits
+

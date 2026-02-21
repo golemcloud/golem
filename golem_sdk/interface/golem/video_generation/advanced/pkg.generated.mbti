@@ -1,0 +1,51 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/video_generation/advanced"
+
+import(
+  "vigoo/golem_sdk/interface/golem/video_generation/types"
+)
+
+// Values
+fn extend_video(ExtendVideoOptions) -> Result[String, @types.VideoError]
+
+fn generate_video_effects(GenerateVideoEffectsOptions) -> Result[String, @types.VideoError]
+
+fn multi_image_generation(MultImageGenerationOptions) -> Result[String, @types.VideoError]
+
+fn upscale_video(@types.BaseVideo) -> Result[String, @types.VideoError]
+
+// Errors
+
+// Types and methods
+pub(all) struct ExtendVideoOptions {
+  video_id : String
+  prompt : String?
+  negative_prompt : String?
+  cfg_scale : Float?
+  provider_options : Array[@types.Kv]?
+}
+impl Eq for ExtendVideoOptions
+impl Show for ExtendVideoOptions
+
+pub(all) struct GenerateVideoEffectsOptions {
+  input : @types.InputImage
+  effect : @types.EffectType
+  model : String?
+  duration : Float?
+  mode : String?
+}
+impl Eq for GenerateVideoEffectsOptions
+impl Show for GenerateVideoEffectsOptions
+
+pub(all) struct MultImageGenerationOptions {
+  input_images : Array[@types.InputImage]
+  prompt : String?
+  config : @types.GenerationConfig
+}
+impl Eq for MultImageGenerationOptions
+impl Show for MultImageGenerationOptions
+
+// Type aliases
+
+// Traits
+

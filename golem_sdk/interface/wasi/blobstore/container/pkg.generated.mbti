@@ -1,0 +1,42 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/wasi/blobstore/container"
+
+import(
+  "vigoo/golem_sdk/interface/wasi/blobstore/types"
+)
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) struct Container(Int)
+fn Container::clear(Self) -> Result[Unit, String]
+fn Container::delete_object(Self, String) -> Result[Unit, String]
+fn Container::delete_objects(Self, Array[String]) -> Result[Unit, String]
+fn Container::drop(Self) -> Unit
+fn Container::get_data(Self, String, UInt64, UInt64) -> Result[@types.IncomingValue, String]
+fn Container::has_object(Self, String) -> Result[Bool, String]
+fn Container::info(Self) -> Result[@types.ContainerMetadata, String]
+#deprecated
+fn Container::inner(Self) -> Int
+fn Container::list_objects(Self) -> Result[StreamObjectNames, String]
+fn Container::name(Self) -> Result[String, String]
+fn Container::object_info(Self, String) -> Result[@types.ObjectMetadata, String]
+fn Container::write_data(Self, String, @types.OutgoingValue) -> Result[Unit, String]
+impl Eq for Container
+impl Show for Container
+
+pub(all) struct StreamObjectNames(Int)
+fn StreamObjectNames::drop(Self) -> Unit
+#deprecated
+fn StreamObjectNames::inner(Self) -> Int
+fn StreamObjectNames::read_stream_object_names(Self, UInt64) -> Result[(Array[String], Bool), String]
+fn StreamObjectNames::skip_stream_object_names(Self, UInt64) -> Result[(UInt64, Bool), String]
+impl Eq for StreamObjectNames
+impl Show for StreamObjectNames
+
+// Type aliases
+
+// Traits
+

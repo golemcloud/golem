@@ -1,0 +1,52 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/graph/connection"
+
+import(
+  "vigoo/golem_sdk/interface/golem/graph/errors"
+  "vigoo/golem_sdk/interface/golem/graph/transactions"
+)
+
+// Values
+fn connect(ConnectionConfig) -> Result[Graph, @errors.GraphError]
+
+// Errors
+
+// Types and methods
+pub(all) struct ConnectionConfig {
+  hosts : Array[String]?
+  port : UInt?
+  database_name : String?
+  username : String?
+  password : String?
+  timeout_seconds : UInt?
+  max_connections : UInt?
+  provider_config : Array[(String, String)]
+}
+impl Eq for ConnectionConfig
+impl Show for ConnectionConfig
+
+pub(all) struct Graph(Int)
+fn Graph::begin_read_transaction(Self) -> Result[@transactions.Transaction, @errors.GraphError]
+fn Graph::begin_transaction(Self) -> Result[@transactions.Transaction, @errors.GraphError]
+fn Graph::close(Self) -> Result[Unit, @errors.GraphError]
+fn Graph::drop(Self) -> Unit
+fn Graph::get_statistics(Self) -> Result[GraphStatistics, @errors.GraphError]
+#deprecated
+fn Graph::inner(Self) -> Int
+fn Graph::ping(Self) -> Result[Unit, @errors.GraphError]
+impl Eq for Graph
+impl Show for Graph
+
+pub(all) struct GraphStatistics {
+  vertex_count : UInt64?
+  edge_count : UInt64?
+  label_count : UInt?
+  property_count : UInt64?
+}
+impl Eq for GraphStatistics
+impl Show for GraphStatistics
+
+// Type aliases
+
+// Traits
+

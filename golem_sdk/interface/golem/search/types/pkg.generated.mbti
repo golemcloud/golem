@@ -1,0 +1,123 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/search/types"
+
+// Values
+
+// Errors
+pub(all) suberror SearchError {
+  IndexNotFound
+  InvalidQuery(String)
+  Unsupported
+  Internal(String)
+  Timeout
+  RateLimited
+}
+impl Eq for SearchError
+impl Show for SearchError
+
+// Types and methods
+pub(all) struct CreateIndexOptions {
+  index_name : String
+  schema : Schema?
+}
+impl Eq for CreateIndexOptions
+impl Show for CreateIndexOptions
+
+pub(all) struct Doc {
+  id : String
+  content : String
+}
+impl Eq for Doc
+impl Show for Doc
+
+pub(all) enum FieldType {
+  TEXT
+  KEYWORD
+  INTEGER
+  FLOAT
+  BOOLEAN
+  DATE
+  GEO_POINT
+}
+fn FieldType::from(Int) -> Self
+fn FieldType::ordinal(Self) -> Int
+impl Eq for FieldType
+impl Show for FieldType
+
+pub(all) struct HighlightConfig {
+  fields : Array[String]
+  pre_tag : String?
+  post_tag : String?
+  max_length : UInt?
+}
+impl Eq for HighlightConfig
+impl Show for HighlightConfig
+
+pub(all) struct Schema {
+  fields : Array[SchemaField]
+  primary_key : String?
+}
+impl Eq for Schema
+impl Show for Schema
+
+pub(all) struct SchemaField {
+  name : String
+  field_type : FieldType
+  required : Bool
+  facet : Bool
+  sort : Bool
+  index : Bool
+}
+impl Eq for SchemaField
+impl Show for SchemaField
+
+pub(all) struct SearchConfig {
+  timeout_ms : UInt?
+  boost_fields : Array[(String, Float)]
+  attributes_to_retrieve : Array[String]
+  language : String?
+  typo_tolerance : Bool?
+  exact_match_boost : Float?
+  provider_params : String?
+}
+impl Eq for SearchConfig
+impl Show for SearchConfig
+
+pub(all) struct SearchHit {
+  id : String
+  score : Double?
+  content : String?
+  highlights : String?
+}
+impl Eq for SearchHit
+impl Show for SearchHit
+
+pub(all) struct SearchQuery {
+  q : String?
+  filters : Array[String]
+  sort : Array[String]
+  facets : Array[String]
+  page : UInt?
+  per_page : UInt?
+  offset : UInt?
+  highlight : HighlightConfig?
+  config : SearchConfig?
+}
+impl Eq for SearchQuery
+impl Show for SearchQuery
+
+pub(all) struct SearchResults {
+  total : UInt?
+  page : UInt?
+  per_page : UInt?
+  hits : Array[SearchHit]
+  facets : String?
+  took_ms : UInt?
+}
+impl Eq for SearchResults
+impl Show for SearchResults
+
+// Type aliases
+
+// Traits
+

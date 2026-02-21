@@ -1,0 +1,99 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/interface/golem/stt/types"
+
+// Values
+
+// Errors
+pub(all) suberror SttError {
+  InvalidAudio(String)
+  UnsupportedFormat(String)
+  UnsupportedLanguage(String)
+  TranscriptionFailed(String)
+  Unauthorized(String)
+  AccessDenied(String)
+  RateLimited(String)
+  InsufficientCredits
+  UnsupportedOperation(String)
+  ServiceUnavailable(String)
+  NetworkError(String)
+  InternalError(String)
+}
+impl Eq for SttError
+impl Show for SttError
+
+// Types and methods
+pub(all) struct AudioConfig {
+  format : AudioFormat
+  sample_rate : UInt?
+  channels : Byte?
+}
+impl Eq for AudioConfig
+impl Show for AudioConfig
+
+pub(all) enum AudioFormat {
+  WAV
+  MP3
+  FLAC
+  OGG
+  AAC
+  PCM
+}
+fn AudioFormat::from(Int) -> Self
+fn AudioFormat::ordinal(Self) -> Int
+impl Eq for AudioFormat
+impl Show for AudioFormat
+
+pub(all) struct TimingInfo {
+  start_time_seconds : Float
+  end_time_seconds : Float
+}
+impl Eq for TimingInfo
+impl Show for TimingInfo
+
+pub(all) struct TranscriptionChannel {
+  id : String
+  transcript : String
+  segments : Array[TranscriptionSegment]
+}
+impl Eq for TranscriptionChannel
+impl Show for TranscriptionChannel
+
+pub(all) struct TranscriptionMetadata {
+  duration_seconds : Float
+  audio_size_bytes : UInt
+  request_id : String
+  model : String?
+  language : String
+}
+impl Eq for TranscriptionMetadata
+impl Show for TranscriptionMetadata
+
+pub(all) struct TranscriptionResult {
+  transcript_metadata : TranscriptionMetadata
+  channels : Array[TranscriptionChannel]
+}
+impl Eq for TranscriptionResult
+impl Show for TranscriptionResult
+
+pub(all) struct TranscriptionSegment {
+  transcript : String
+  timing_info : TimingInfo?
+  speaker_id : String?
+  words : Array[WordSegment]
+}
+impl Eq for TranscriptionSegment
+impl Show for TranscriptionSegment
+
+pub(all) struct WordSegment {
+  text : String
+  timing_info : TimingInfo?
+  confidence : Float?
+  speaker_id : String?
+}
+impl Eq for WordSegment
+impl Show for WordSegment
+
+// Type aliases
+
+// Traits
+

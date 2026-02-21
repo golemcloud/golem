@@ -1,0 +1,3 @@
+import {
+  "vigoo/golem_sdk/interface/wasi/io/poll" @poll,
+}

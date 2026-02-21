@@ -1,0 +1,34 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/agents"
+
+import(
+  "moonbitlang/core/hashmap"
+  "vigoo/golem_sdk/interface/golem/agent/common"
+)
+
+// Values
+let agent_instance : AgentInstance?
+
+fn panic_with_message(String, String) -> Unit
+
+fn register_agent(RegisteredAgent) -> Unit
+
+let registered_agents : @hashmap.HashMap[String, RegisteredAgent]
+
+// Errors
+
+// Types and methods
+pub struct AgentInstance {
+  name : String
+  agent_type : @common.AgentType
+}
+
+pub struct RegisteredAgent {
+  name : String
+  agent_type : @common.AgentType
+}
+
+// Type aliases
+
+// Traits
+
