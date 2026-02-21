@@ -21,26 +21,28 @@ path = "src/server.rs"
 harness = false
 test = false
 
-[features]
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-rib = { workspace = true }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
 async-lock = { workspace = true }
-async-mutex = { workspace = true }
-async-dropper-simple = { workspace = true, features = ["no-default-bound", "tokio"] }
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
@@ -53,6 +55,7 @@ fred = { workspace = true }
 fs-set-times = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
+half = { workspace = true }
 heck = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
@@ -68,11 +71,13 @@ mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
 nonempty-collections = { workspace = true }
+pgvector = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 ringbuf = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -98,6 +103,7 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
 axum = { workspace = true }
@@ -110,8 +116,3 @@ redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }
 system-interface = { workspace = true }
-
-[[test]]
-name = "integration"
-path = "tests/lib.rs"
-harness = false

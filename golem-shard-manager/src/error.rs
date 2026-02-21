@@ -14,7 +14,7 @@
 
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
-use golem_common::metrics::api::TraceErrorKind;
+use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::fmt::Debug;
@@ -143,7 +143,7 @@ impl Debug for ShardManagerTraceErrorKind<'_> {
     }
 }
 
-impl TraceErrorKind for ShardManagerTraceErrorKind<'_> {
+impl ApiErrorDetails for ShardManagerTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",
@@ -164,5 +164,9 @@ impl TraceErrorKind for ShardManagerTraceErrorKind<'_> {
                 shard_manager_error::Error::Unknown(_) => false,
             },
         }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        None
     }
 }

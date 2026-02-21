@@ -14,7 +14,6 @@
 
 pub mod additional_deps;
 pub mod api;
-pub mod auth;
 pub mod config;
 pub mod debug_context;
 pub mod debug_session;
@@ -24,19 +23,20 @@ pub mod oplog;
 pub mod services;
 
 use crate::additional_deps::AdditionalDeps;
-use crate::auth::{AuthService, GrpcAuthService};
 use crate::config::DebugConfig;
 use crate::debug_context::DebugContext;
 use crate::debug_session::{DebugSessions, DebugSessionsDefault};
 use crate::oplog::debug_oplog_service::DebugOplogService;
+use crate::services::auth::{AuthService, GrpcAuthService};
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use golem_service_base::clients::auth::AuthService as BaseAuthService;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
-use golem_worker_executor::preview2::{golem_agent, golem_api_1_x, golem_durability};
+use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
+use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
@@ -45,8 +45,6 @@ use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
-use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
-use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -95,17 +93,14 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
-        plugins: Arc<dyn PluginsObservations>,
-        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
-            &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
+            registry_service.clone(),
             blob_storage,
-            plugins,
-            project_service,
         )
     }
 
@@ -116,15 +111,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         _join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<u16> {
         Err(anyhow!("No grpc server in debugging service"))
-    }
-
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
-        let plugins =
-            golem_worker_executor::services::plugins::configured(&golem_config.plugin_service);
-        (plugins.clone(), plugins)
     }
 
     async fn create_services(
@@ -150,17 +136,13 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<DebugContext>> {
-        let remote_cloud_service_config = self.debug_config.cloud_service.clone();
-
-        let auth_service: Arc<dyn AuthService> = Arc::new(GrpcAuthService::new(
-            BaseAuthService::new(&remote_cloud_service_config),
-            self.debug_config.component_service.clone(),
-        ));
+        let auth_service: Arc<dyn AuthService> =
+            Arc::new(GrpcAuthService::new(registry_service.clone()));
 
         let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
 
@@ -169,9 +151,10 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             Arc::clone(&debug_sessions),
         ));
 
-        let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
+        let additional_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
+        let resource_limits =
+            resource_limits::configured(&golem_config.resource_limits, registry_service);
 
         // When it comes to fork, we need the original oplog service
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -202,12 +185,11 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            project_service.clone(),
             agent_types_service.clone(),
-            addition_deps.clone(),
+            agent_webhooks_service.clone(),
+            additional_deps.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -236,17 +218,17 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            project_service.clone(),
             agent_types_service.clone(),
-            addition_deps.clone(),
+            agent_webhooks_service.clone(),
+            additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
             agent_types_service,
+            agent_webhooks_service,
             engine,
             linker,
             runtime.clone(),
@@ -269,11 +251,9 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             worker_proxy.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
-            project_service.clone(),
-            addition_deps,
+            additional_deps,
         ))
     }
 
@@ -342,7 +322,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     Ok(RunDetails {
         http_port,
         // TODO: no grpc config running, this should not be exposed here
-        grpc_port: golem_config.port,
+        grpc_port: golem_config.grpc.port,
         epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
     })
 }
@@ -357,7 +337,10 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
     golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-    golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::agent::host::add_to_linker_get_host(
+        &mut linker,
+        get_durable_ctx,
+    )?;
     golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     Ok(linker)
 }

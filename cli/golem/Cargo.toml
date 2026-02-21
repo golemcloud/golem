@@ -18,11 +18,11 @@ test = false
 
 [dependencies]
 golem-cli = { workspace = true, features = ["server-commands"] }
-golem-common = { workspace = true }
+golem-client = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
-cloud-service = { workspace = true }
 golem-component-compilation-service = { workspace = true }
-golem-component-service = { workspace = true }
+golem-registry-service = { workspace = true }
 golem-shard-manager = { workspace = true }
 golem-worker-executor = { workspace = true }
 golem-worker-service = { workspace = true }

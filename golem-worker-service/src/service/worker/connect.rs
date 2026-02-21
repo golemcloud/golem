@@ -13,32 +13,32 @@
 // limitations under the License.
 
 use super::WorkerStream;
+use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::auth::Namespace;
 use golem_common::model::WorkerId;
-use golem_service_base::clients::limit::LimitService;
+use golem_common::model::account::AccountId;
 use std::sync::Arc;
 use tonic::Status;
 
 pub struct ConnectWorkerStream {
     stream: WorkerStream<LogEvent>,
     worker_id: WorkerId,
-    namespace: Namespace,
-    limit_service: Arc<dyn LimitService + Sync + Send>,
+    account_id: AccountId,
+    limit_service: Arc<dyn LimitService>,
 }
 
 impl ConnectWorkerStream {
     pub fn new(
         stream: WorkerStream<LogEvent>,
         worker_id: WorkerId,
-        namespace: Namespace,
-        limit_service: Arc<dyn LimitService + Sync + Send>,
+        account_id: AccountId,
+        limit_service: Arc<dyn LimitService>,
     ) -> Self {
         Self {
             stream,
             worker_id,
-            namespace,
+            account_id,
             limit_service,
         }
     }
@@ -58,20 +58,21 @@ impl Stream for ConnectWorkerStream {
 impl Drop for ConnectWorkerStream {
     fn drop(&mut self) {
         tracing::info!(
-            namespace = %self.namespace,
+            account_id = %self.account_id,
             "Dropping worker {} connections",
             self.worker_id
         );
         let limit_service = self.limit_service.clone();
-        let namespace = self.namespace.clone();
         let worker_id = self.worker_id.clone();
+        let account_id = self.account_id;
         tokio::spawn(async move {
             let result = limit_service
-                .update_worker_connection_limit(&namespace.account_id, &worker_id, -1)
+                .update_worker_connection_limit(account_id, &worker_id, false)
                 .await;
+
             if let Err(error) = result {
                 tracing::error!(
-                    namespace = %namespace,
+                    account_id = %account_id,
                     "Decrement active connections failed {error}",
                 );
             }

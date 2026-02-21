@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, PathExtra};
+use crate::app::error::AppValidationError;
+use crate::error::{NonSuccessfulExit, PipedExitCode};
+use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
+use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use terminal_size::terminal_size;
 use textwrap::WordSplitter;
 use tracing::debug;
@@ -173,7 +176,37 @@ pub fn set_log_output(output: Output) {
     LOG_STATE.write().unwrap().set_output(output);
 }
 
-pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
+pub fn log_anyhow_error(error: &anyhow::Error) {
+    if error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>() {
+        // NOP
+    } else if error
+        .downcast_ref::<Arc<anyhow::Error>>()
+        .and_then(|err| err.downcast_ref::<AppValidationError>())
+        .is_some()
+        || error.downcast_ref::<AppValidationError>().is_some()
+    {
+        // App validation errors are already formatted and usually contain multiple
+        // errors (and warns)
+        logln("");
+        logln(format!("{error:#}"));
+    } else {
+        log_error(format!("{error:#}"));
+    }
+}
+
+pub fn log_error<S: AsRef<str>>(message: S) {
+    logln(format!(
+        "{} {}",
+        "error:".log_color_error(),
+        message.as_ref()
+    ));
+}
+
+pub fn log_warn<S: AsRef<str>>(message: S) {
+    logln(format!("{} {}", "warn:".log_color_warn(), message.as_ref()));
+}
+
+pub fn log_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!(
         "{} {}",
         action.log_color_action(),
@@ -181,11 +214,57 @@ pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
     ));
 }
 
-pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
+pub fn log_finished_ok(subject: impl AsRef<str>) {
+    logln_internal(&format!(
+        "{} {} [{}]",
+        "Finished".log_color_action(),
+        subject.as_ref(),
+        "OK".log_color_ok_highlight(),
+    ));
+}
+
+pub fn log_finished_up_to_date(subject: impl AsRef<str>) {
+    logln_internal(&format!(
+        "{} {} [{}]",
+        "Finished".log_color_action(),
+        subject.as_ref(),
+        "UP-TO-DATE".log_color_ok_highlight(),
+    ));
+}
+
+pub fn log_failed_to(subject: impl AsRef<str>) {
+    log_error_action(
+        "Failed",
+        format!("to {} [{}]", subject.as_ref(), "ERROR".log_color_error(),),
+    );
+}
+
+pub fn logged_failed_to(error: anyhow::Error, subject: impl AsRef<str>) -> anyhow::Result<()> {
+    log_failed_to(subject);
+    let _indent = LogIndent::new();
+    log_anyhow_error(&error);
+    Err(anyhow!(NonSuccessfulExit))
+}
+
+pub fn logged_finished_or_failed_to(
+    result: anyhow::Result<()>,
+    finished_subject: impl AsRef<str>,
+    failed_to_subject: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    match result {
+        Ok(()) => {
+            log_finished_ok(finished_subject);
+            Ok(())
+        }
+        Err(err) => logged_failed_to(err, failed_to_subject),
+    }
+}
+
+pub fn log_warn_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!("{} {}", action.log_color_warn(), subject.as_ref(),));
 }
 
-pub fn log_error_action<T: AsRef<str>>(action: &str, subject: T) {
+pub fn log_error_action(action: &str, subject: impl AsRef<str>) {
     logln_internal(&format!(
         "{} {}",
         action.log_color_error(),
@@ -193,7 +272,7 @@ pub fn log_error_action<T: AsRef<str>>(action: &str, subject: T) {
     ));
 }
 
-pub fn logln<T: AsRef<str>>(message: T) {
+pub fn logln(message: impl AsRef<str>) {
     logln_internal(message.as_ref());
 }
 
@@ -235,11 +314,11 @@ pub fn logln_internal(message: &str) {
     }
 }
 
-pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {
+pub fn log_skipping_up_to_date(subject: impl AsRef<str>) {
     log_warn_action(
         "Skipping",
         format!(
-            "{}, {}",
+            "{} [{}]",
             subject.as_ref(),
             "UP-TO-DATE".log_color_ok_highlight()
         ),
@@ -397,11 +476,5 @@ impl LogColorize for PathBuf {
 impl LogColorize for Utf8PathBuf {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.to_string())
-    }
-}
-
-impl<P: AsRef<Path>> LogColorize for PathExtra<P> {
-    fn as_str(&self) -> impl Colorize {
-        ColoredString::from(self.display().to_string())
     }
 }

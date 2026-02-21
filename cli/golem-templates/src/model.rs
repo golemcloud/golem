@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{GOLEM_RUST_VERSION, GOLEM_TS_VERSION};
 use fancy_regex::{Match, Regex};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase, ToTitleCase};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,33 @@ use std::sync::LazyLock;
 use std::{fmt, io};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ApplicationName(String);
+
+impl ApplicationName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for ApplicationName {
+    fn from(name: &str) -> Self {
+        ApplicationName(name.to_string())
+    }
+}
+
+impl From<String> for ApplicationName {
+    fn from(name: String) -> Self {
+        ApplicationName(name)
+    }
+}
+
+impl fmt::Display for ApplicationName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ComponentName(String);
@@ -129,10 +157,10 @@ impl GuestLanguage {
         }
     }
 
-    pub fn id(&self) -> String {
+    pub fn id(&self) -> &'static str {
         match self {
-            GuestLanguage::Rust => "rust".to_string(),
-            GuestLanguage::TypeScript => "ts".to_string(),
+            GuestLanguage::Rust => "rust",
+            GuestLanguage::TypeScript => "ts",
         }
     }
 
@@ -381,6 +409,23 @@ pub enum TargetExistsResolveDecision {
     Merge(MergeContents),
 }
 
+pub struct DocDependencyGroup {
+    pub name: &'static str,
+    pub dependencies: Vec<DocDependency>,
+}
+
+pub struct DocDependency {
+    pub name: &'static str,
+    pub env_vars: Vec<DocDependencyEnvVar>,
+    pub url: String,
+}
+
+pub struct DocDependencyEnvVar {
+    pub name: &'static str,
+    pub value: &'static str,
+    pub comment: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Template {
     pub name: TemplateName,
@@ -396,6 +441,7 @@ pub struct Template {
 
 #[derive(Debug, Clone)]
 pub struct TemplateParameters {
+    pub application_name: ApplicationName,
     pub component_name: ComponentName,
     pub package_name: PackageName,
     pub target_path: PathBuf,
@@ -430,14 +476,46 @@ pub(crate) enum Transform {
     ManifestHints,
     TsSdk,
     RustSdk,
+    ApplicationName,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct SdkOverrides {
-    pub rust_path: Option<String>,
-    pub rust_version: Option<String>,
+    pub golem_rust_path: Option<String>,
+    pub golem_rust_version: Option<String>,
     pub ts_packages_path: Option<String>,
     pub ts_version: Option<String>,
+}
+
+impl SdkOverrides {
+    pub fn ts_package_version_or_path(&self, package_name: &str) -> String {
+        match &self.ts_packages_path {
+            Some(ts_packages_path) => {
+                format!("{}/{}", ts_packages_path, package_name)
+            }
+            None => self
+                .ts_version
+                .as_deref()
+                .unwrap_or(GOLEM_TS_VERSION)
+                .to_string(),
+        }
+    }
+
+    pub fn golem_rust_version_or_path(&self) -> String {
+        match &self.golem_rust_path {
+            Some(rust_path) => {
+                format!(r#"path = "{}""#, rust_path)
+            }
+            _ => {
+                format!(
+                    r#"version = "{}""#,
+                    self.golem_rust_version
+                        .as_deref()
+                        .unwrap_or(GOLEM_RUST_VERSION)
+                )
+            }
+        }
+    }
 }
 
 #[cfg(test)]

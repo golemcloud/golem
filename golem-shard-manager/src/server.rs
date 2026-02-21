@@ -20,11 +20,12 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 fn main() -> Result<(), anyhow::Error> {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install crypto provider");
     match make_config_loader().load_or_dump_config() {
         Some(config) => {
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .expect("Failed to install crypto provider");
+
             init_tracing_with_default_env_filter(&config.tracing);
             info!("Using configuration:\n{}", config.to_safe_string_indented());
 

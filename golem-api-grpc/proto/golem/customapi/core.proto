@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package golem.customapi;
+
+import "golem/rib/expr.proto";
+import "golem/rib/rib_input.proto";
+import "golem/rib/rib_output.proto";
+import "golem/rib/rib_byte_code.proto";
+import "golem/rib/worker_functions_in_rib.proto";
+import "golem/component/component_id.proto";
+import "golem/component/agent.proto";
+import "golem/common/empty.proto";
+import "golem/common/uuid.proto";
+import "golem/common/account_id.proto";
+import "golem/common/environment.proto";
+import "golem/registry/security_scheme.proto";
+import "google/protobuf/timestamp.proto";
+import "wasm/rpc/type.proto";
+
+message PathSegment {
+  oneof kind {
+    Literal literal = 1;
+    Variable variable = 2;
+    CatchAll catch_all = 3;
+  }
+
+  message Literal {
+    string value = 1;
+  }
+
+  message Variable {
+    string display_name = 1;
+  }
+
+  message CatchAll {
+    string display_name = 1;
+  }
+}
+
+message PathSegmentType {
+  oneof kind {
+    Primitive primitive = 1;
+    Enum enum_type = 2;
+  }
+
+  enum Primitive {
+    PRIMITIVE_UNSPECIFIED = 0;
+    STR  = 1;
+    CHR  = 2;
+    F64  = 3;
+    F32  = 4;
+    U64  = 5;
+    S64  = 6;
+    U32  = 7;
+    S32  = 8;
+    U16  = 9;
+    S16  = 10;
+    U8   = 11;
+    S8   = 12;
+    BOOL = 13;
+  }
+
+  message Enum {
+    wasm.rpc.TypeEnum inner = 1;
+  }
+}
+
+message QueryOrHeaderType {
+  oneof kind {
+    Primitive primitive = 1;
+    Option option = 2;
+    List list = 3;
+  }
+
+  message Primitive {
+    PathSegmentType inner = 1;
+  }
+
+  message Option {
+    optional string name = 1;
+    optional string owner = 2;
+    PathSegmentType inner = 3;
+  }
+
+  message List {
+    optional string name = 1;
+    optional string owner = 2;
+    PathSegmentType inner = 3;
+  }
+}
+
+message RequestBodySchema {
+  oneof kind {
+    Unused unused = 1;
+    JsonBody json_body = 2;
+    UnrestrictedBinary unrestricted_binary = 3;
+    RestrictedBinary restricted_binary = 4;
+  }
+
+  message Unused {}
+
+  message JsonBody {
+    wasm.rpc.Type expected_type = 1;
+  }
+
+  message UnrestrictedBinary { };
+
+  message RestrictedBinary {
+    repeated string allowed_mime_types = 1;
+  };
+}
+
+message ConstructorParameter {
+  oneof kind {
+    Path path = 1;
+  }
+
+  message Path {
+    uint32 path_segment_index = 1;
+    PathSegmentType parameter_type = 2;
+  }
+}
+
+message MethodParameter {
+  oneof kind {
+    Path path = 1;
+    Query query = 2;
+    Header header = 3;
+    JsonObjectBodyField json_object_body_field = 4;
+    UnstructuredBinaryBody unstructured_binary_body = 5;
+  }
+
+  message Path {
+    uint32 path_segment_index = 1;
+    PathSegmentType parameter_type = 2;
+  }
+
+  message Query {
+    string query_parameter_name = 1;
+    QueryOrHeaderType parameter_type = 2;
+  }
+
+  message Header {
+    string header_name = 1;
+    QueryOrHeaderType parameter_type = 2;
+  }
+
+  message JsonObjectBodyField {
+    uint32 field_index = 1;
+  }
+
+  message UnstructuredBinaryBody { }
+}
+
+message CompiledRoutes {
+  golem.common.AccountId account_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  uint64 deployment_revision = 3;
+  repeated SecuritySchemeDetails security_schemes = 4;
+  repeated CompiledRoute routes = 6;
+}
+
+message CompiledRoute {
+  int32 route_id = 1;
+  golem.component.HttpMethod method = 2;
+  repeated PathSegment path = 3;
+  RequestBodySchema body = 4;
+  RouteBehaviour behavior = 5;
+  RouteSecurity security = 6;
+  CorsOptions cors = 7;
+}
+
+message RouteBehaviour {
+  oneof kind {
+    CallAgent call_agent = 1;
+    CorsPreflight cors_preflight = 2;
+    WebhookCallback webhook_callback = 3;
+    OpenApiSpec open_api_spec = 4;
+  }
+
+  message CallAgent {
+    golem.component.ComponentId component_id = 1;
+    uint64 component_revision = 2;
+    string agent_type = 3;
+    repeated ConstructorParameter constructor_parameters = 4;
+    bool phantom = 5;
+    string method_name = 6;
+    repeated MethodParameter method_parameters = 7;
+    golem.component.DataSchema expected_agent_response = 8;
+  }
+
+  message CorsPreflight {
+    repeated string allowed_origins = 1;
+    repeated golem.component.HttpMethod allowed_methods = 2;
+  }
+
+  message WebhookCallback {
+    golem.component.ComponentId component_id = 1;
+  }
+
+  message OpenApiSpec { }
+}
+
+message RouteSecurity {
+  oneof kind {
+    None none = 1;
+    SessionFromHeader session_from_header = 2;
+    SecurityScheme security_scheme = 3;
+  }
+
+  message None {}
+
+  message SessionFromHeader {
+    string header_name = 1;
+  }
+
+  message SecurityScheme {
+    golem.registry.SecuritySchemeId security_scheme_id = 1;
+  }
+}
+
+message SecuritySchemeDetails {
+  golem.registry.SecuritySchemeId id = 1;
+  string name = 2;
+  golem.registry.SecuritySchemeProvider provider = 3;
+  string client_id = 4;
+  string client_secret = 5;
+  string redirect_url = 6;
+  repeated string scopes = 7;
+}
+
+message CorsOptions {
+  repeated string allowed_patterns = 1;
+}

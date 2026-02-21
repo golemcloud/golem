@@ -3,22 +3,31 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/common/account_id.proto";
-import "golem/common/project_id.proto";
+import "golem/common/environment.proto";
+import "golem/common/application.proto";
+import "golem/common/hash.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
-import "golem/component/plugin_installation.proto";
-import "golem/component/versioned_component_id.proto";
+import "golem/component/plugin.proto";
+import "golem/component/component_id.proto";
+import "golem/auth/environment_role.proto";
 import "google/protobuf/timestamp.proto";
 
 message Component {
-  VersionedComponentId versioned_component_id = 1;
-  string component_name = 4;
-  uint64 component_size = 5;
-  ComponentMetadata metadata = 6;
-  golem.common.ProjectId project_id = 7;
-  google.protobuf.Timestamp created_at = 8;
-  repeated golem.component.InitialComponentFile files = 10;
-  repeated golem.component.PluginInstallation installed_plugins = 11;
-  golem.common.AccountId account_id = 12;
-  map<string, string> env = 13;
+  ComponentId component_id = 1;
+  uint64 revision = 2;
+  string component_name = 3;
+  uint64 component_size = 4;
+  ComponentMetadata metadata = 5;
+  golem.common.EnvironmentId environment_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  repeated golem.component.InitialComponentFile files = 8;
+  repeated golem.component.InitialComponentFile original_files = 9;
+  repeated golem.component.PluginInstallation installed_plugins = 10;
+  golem.common.AccountId account_id = 11;
+  map<string, string> env = 12;
+  map<string, string> original_env = 13;
+  golem.common.Hash wasm_hash = 14;
+  golem.common.ApplicationId application_id = 15;
+  golem.common.Hash hash = 16;
 }

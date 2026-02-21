@@ -170,7 +170,7 @@ pub mod wasm {
     use prometheus::*;
     use tracing::debug;
 
-    use golem_common::metrics::api::TraceErrorKind;
+    use golem_common::metrics::api::ApiErrorDetails;
 
     use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -258,7 +258,7 @@ pub mod wasm {
         INVOCATION_TOTAL.with_label_values(&[mode, outcome]).inc();
     }
 
-    pub fn record_invocation_consumption(fuel: i64) {
+    pub fn record_invocation_consumption(fuel: u64) {
         INVOCATION_CONSUMPTION_TOTAL.observe(fuel as f64);
     }
 
@@ -313,11 +313,11 @@ pub mod resources {
             register_counter!("fuel_return_total", "Total amount of fuel returned").unwrap();
     }
 
-    pub fn record_fuel_borrow(amount: i64) {
+    pub fn record_fuel_borrow(amount: u64) {
         FUEL_BORROW_TOTAL.inc_by(amount as f64);
     }
 
-    pub fn record_fuel_return(amount: i64) {
+    pub fn record_fuel_return(amount: u64) {
         FUEL_RETURN_TOTAL.inc_by(amount as f64);
     }
 }

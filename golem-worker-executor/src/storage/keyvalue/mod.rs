@@ -13,13 +13,15 @@
 // limitations under the License.
 
 pub mod memory;
+pub mod multi_sqlite;
 pub mod redis;
 pub mod sqlite;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
-use golem_common::base_model::ProjectId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::WorkerId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 
@@ -619,13 +621,19 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     }
 }
 
+/// Various namespaces for key-value storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum KeyValueStorageNamespace {
-    Worker,
-    Promise,
+    RunningWorkers,
+    Worker {
+        worker_id: WorkerId,
+    },
+    Promise {
+        worker_id: WorkerId,
+    },
     Schedule,
     UserDefined {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
     },
 }

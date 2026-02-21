@@ -12,54 +12,182 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod account;
 pub mod agent;
+pub mod application;
 pub mod auth;
 pub mod base64;
+pub mod certificate;
 pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
+pub mod deployment;
+pub mod diff;
+pub mod domain_registration;
+pub mod environment;
+pub mod environment_plugin_grant;
+pub mod environment_share;
 pub mod error;
 pub mod exports;
+pub mod http_api_deployment;
 pub mod invocation_context;
+pub mod login;
 pub mod lucene;
 pub mod oplog;
-pub mod plugin;
-mod poem;
-pub mod project;
+pub mod optional_field_update;
+pub mod plan;
+pub mod plugin_registration;
+pub mod poem;
 pub mod protobuf;
 pub mod regions;
+pub mod reports;
+pub mod security_scheme;
+#[cfg(test)]
+mod tests;
 pub mod trim_date;
 pub mod worker;
 
-#[cfg(test)]
-mod tests;
-
 pub use crate::base_model::*;
+
+use self::component::ComponentId;
+use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
+use self::environment::EnvironmentId;
+use crate::base_model::agent::AgentId;
+use crate::model::account::AccountId;
+use crate::model::agent::AgentTypeResolver;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
-use crate::SafeDisplay;
+use crate::{grpc_uri, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm::Value;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
-use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use std::cmp::Ordering;
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
-use std::str::FromStr;
-use std::time::{Duration, SystemTime};
-use typed_path::Utf8UnixPathBuf;
+use std::time::Duration;
 use url::Url;
-use uuid::{uuid, Uuid};
+use uuid::Uuid;
+
+impl WorkerId {
+    const WORKER_ID_MAX_LENGTH: usize = 512;
+
+    pub fn from_agent_id(
+        component_id: ComponentId,
+        agent_id: &AgentId,
+    ) -> Result<WorkerId, String> {
+        let agent_id = agent_id.to_string();
+        if agent_id.len() > Self::WORKER_ID_MAX_LENGTH {
+            return Err(format!(
+                "Agent id is too long: {}, max length: {}, agent id: {}",
+                agent_id.len(),
+                Self::WORKER_ID_MAX_LENGTH,
+                agent_id,
+            ));
+        }
+        Ok(Self {
+            component_id,
+            worker_name: agent_id,
+        })
+    }
+
+    pub fn from_agent_id_literal<S: AsRef<str>>(
+        component_id: ComponentId,
+        agent_id: S,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<WorkerId, String> {
+        Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
+    }
+
+    pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(
+        component_id: ComponentId,
+        component_metadata: &component_metadata::ComponentMetadata,
+        id: S,
+    ) -> Result<WorkerId, String> {
+        if component_metadata.is_agent() {
+            Self::from_agent_id_literal(component_id, id, component_metadata)
+        } else {
+            let id = id.as_ref();
+            if id.len() > Self::WORKER_ID_MAX_LENGTH {
+                return Err(format!(
+                    "Legacy worker id is too long: {}, max length: {}, worker id: {}",
+                    id.len(),
+                    Self::WORKER_ID_MAX_LENGTH,
+                    id,
+                ));
+            }
+            if id.contains('/') {
+                return Err(format!(
+                    "Legacy worker id cannot contain '/', worker id: {}",
+                    id,
+                ));
+            }
+
+            Ok(WorkerId {
+                component_id,
+                worker_name: id.to_string(),
+            })
+        }
+    }
+
+    pub fn from_worker_name_string<S: AsRef<str>>(
+        component_id: ComponentId,
+        id: S,
+    ) -> Result<WorkerId, String> {
+        let id = id.as_ref();
+
+        match AgentId::normalize_text(id) {
+            Ok(normalized) => {
+                if normalized.len() > Self::WORKER_ID_MAX_LENGTH {
+                    return Err(format!(
+                        "Agent id is too long: {}, max length: {}, agent id: {}",
+                        normalized.len(),
+                        Self::WORKER_ID_MAX_LENGTH,
+                        normalized,
+                    ));
+                }
+                Ok(WorkerId {
+                    component_id,
+                    worker_name: normalized,
+                })
+            }
+            Err(_) => {
+                if id.len() > Self::WORKER_ID_MAX_LENGTH {
+                    return Err(format!(
+                        "Legacy worker id is too long: {}, max length: {}, worker id: {}",
+                        id.len(),
+                        Self::WORKER_ID_MAX_LENGTH,
+                        id,
+                    ));
+                }
+                if id.contains('/') {
+                    return Err(format!(
+                        "Legacy worker id cannot contain '/', worker id: {}",
+                        id,
+                    ));
+                }
+                Ok(WorkerId {
+                    component_id,
+                    worker_name: id.to_string(),
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
+pub struct Page<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> {
+    pub values: Vec<T>,
+}
 
 pub trait PoemTypeRequirements:
     poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON
@@ -78,10 +206,6 @@ pub trait PoemMultipartTypeRequirements: poem_openapi::types::ParseFromMultipart
 
 impl<T: poem_openapi::types::ParseFromMultipartField> PoemMultipartTypeRequirements for T {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[repr(transparent)]
-pub struct Timestamp(iso8601_timestamp::Timestamp);
-
 impl Timestamp {
     pub fn now_utc() -> Timestamp {
         Timestamp(iso8601_timestamp::Timestamp::now_utc())
@@ -95,50 +219,6 @@ impl Timestamp {
 
     pub fn rounded(self) -> Self {
         Self::from(self.to_millis())
-    }
-}
-
-impl Display for Timestamp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl FromStr for Timestamp {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match iso8601_timestamp::Timestamp::parse(s) {
-            Some(ts) => Ok(Self(ts)),
-            None => Err("Invalid timestamp".to_string()),
-        }
-    }
-}
-
-impl serde::Serialize for Timestamp {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Timestamp {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            iso8601_timestamp::Timestamp::deserialize(deserializer).map(Self)
-        } else {
-            // For non-human-readable formats we assume it was an i64 representing milliseconds from epoch
-            let timestamp = <i64 as Deserialize>::deserialize(deserializer)?;
-            Ok(Timestamp(
-                iso8601_timestamp::Timestamp::UNIX_EPOCH
-                    .add(Duration::from_millis(timestamp as u64)),
-            ))
-        }
     }
 }
 
@@ -166,60 +246,18 @@ impl BinaryDeserializer for Timestamp {
     }
 }
 
-impl From<u64> for Timestamp {
-    fn from(value: u64) -> Self {
-        Timestamp(iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(value)))
-    }
-}
-
-impl IntoValue for Timestamp {
-    fn into_value(self) -> Value {
-        let d = self
-            .0
-            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH);
-        Value::Record(vec![
-            Value::U64(d.whole_seconds() as u64),
-            Value::U32(d.subsec_nanoseconds() as u32),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![field("seconds", u64()), field("nanoseconds", u32())])
-    }
-}
-
-impl FromValue for Timestamp {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Record(fields) if fields.len() == 2 => {
-                let mut iter = fields.into_iter();
-                let seconds = u64::from_value(iter.next().unwrap())?;
-                let nanos = u32::from_value(iter.next().unwrap())?;
-                Ok(Self(
-                    iso8601_timestamp::Timestamp::UNIX_EPOCH
-                        .add(Duration::from_secs(seconds))
-                        .add(Duration::from_nanos(nanos as u64)),
-                ))
-            }
-            other => Err(format!(
-                "Expected a record with two fields for Timestamp, got {other:?}"
-            )),
-        }
-    }
-}
-
 /// Associates a worker-id with its owner project
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 #[desert(evolution())]
 pub struct OwnedWorkerId {
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
 }
 
 impl OwnedWorkerId {
-    pub fn new(project_id: &ProjectId, worker_id: &WorkerId) -> Self {
+    pub fn new(environment_id: EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            project_id: project_id.clone(),
+            environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -228,12 +266,12 @@ impl OwnedWorkerId {
         self.worker_id.clone()
     }
 
-    pub fn project_id(&self) -> ProjectId {
-        self.project_id.clone()
+    pub fn environment_id(&self) -> EnvironmentId {
+        self.environment_id
     }
 
     pub fn component_id(&self) -> ComponentId {
-        self.worker_id.component_id.clone()
+        self.worker_id.component_id
     }
 
     pub fn worker_name(&self) -> String {
@@ -243,7 +281,7 @@ impl OwnedWorkerId {
 
 impl Display for OwnedWorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.project_id, self.worker_id)
+        write!(f, "{}/{}", self.environment_id(), self.worker_id)
     }
 }
 
@@ -260,7 +298,7 @@ pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
         account_id: AccountId,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
     },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
@@ -288,10 +326,10 @@ impl ScheduledAction {
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
         match self {
             ScheduledAction::CompletePromise {
-                project_id,
+                environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(project_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(*environment_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -345,13 +383,14 @@ pub struct Pod {
 }
 
 impl Pod {
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build URI")
+    pub fn uri(&self, use_tls: bool) -> Uri {
+        grpc_uri(&self.host, self.port, use_tls)
+    }
+}
+
+impl Display for Pod {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
     }
 }
 
@@ -446,81 +485,11 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, BinaryCodec, Eq, Hash, PartialEq, IntoValue, FromValue)]
-#[desert(transparent)]
-#[wit_transparent]
-pub struct IdempotencyKey {
-    pub value: String,
-}
-
-impl IdempotencyKey {
-    const ROOT_NS: Uuid = uuid!("9C19B15A-C83D-46F7-9BC3-EAD7923733F4");
-
-    pub fn new(value: String) -> Self {
-        Self { value }
-    }
-
-    pub fn from_uuid(value: Uuid) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-
-    pub fn fresh() -> Self {
-        Self::from_uuid(Uuid::new_v4())
-    }
-
-    /// Generates a deterministic new idempotency key using a base idempotency key and an oplog index.
-    ///
-    /// The base idempotency key determines the "namespace" of the generated key UUIDv5. If
-    /// the base idempotency key is already an UUID, it is directly used as the namespace of the v5 algorithm,
-    /// while the name part is derived from the given oplog index.
-    ///
-    /// If the base idempotency key is not an UUID (as it can be an arbitrary user-provided string), then first
-    /// we generate a UUIDv5 in the ROOT_NS namespace and use that as unique namespace for generating
-    /// the new idempotency key.
-    pub fn derived(base: &IdempotencyKey, oplog_index: OplogIndex) -> Self {
-        let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
-            base_uuid
-        } else {
-            Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
-        };
-        let name = format!("oplog-index-{oplog_index}");
-        Self::from_uuid(Uuid::new_v5(&namespace, name.as_bytes()))
-    }
-}
-
-impl Serialize for IdempotencyKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        Serialize::serialize(&self.value, serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for IdempotencyKey {
-    fn deserialize<D>(deserializer: D) -> Result<IdempotencyKey, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = <String as Deserialize>::deserialize(deserializer)?;
-        Ok(IdempotencyKey { value })
-    }
-}
-
-impl Display for IdempotencyKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value)
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub wasi_config_vars: BTreeMap<String, String>,
     pub created_at: Timestamp,
@@ -533,13 +502,12 @@ impl WorkerMetadata {
     pub fn default(
         worker_id: WorkerId,
         created_by: AccountId,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
-            args: vec![],
             env: vec![],
-            project_id,
+            environment_id,
             created_by,
             wasi_config_vars: BTreeMap::new(),
             created_at: Timestamp::now_utc(),
@@ -550,589 +518,19 @@ impl WorkerMetadata {
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.project_id, &self.worker_id)
+        OwnedWorkerId::new(self.environment_id, &self.worker_id)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerResourceDescription {
-    pub created_at: Timestamp,
-    pub resource_owner: String,
-    pub resource_name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
-#[desert(evolution())]
-pub struct RetryConfig {
-    pub max_attempts: u32,
-    #[serde(with = "humantime_serde")]
-    pub min_delay: Duration,
-    #[serde(with = "humantime_serde")]
-    pub max_delay: Duration,
-    pub multiplier: f64,
-    pub max_jitter_factor: Option<f64>,
-}
-
-impl SafeDisplay for RetryConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-
-        let _ = writeln!(&mut result, "max attempts: {}", self.max_attempts);
-        let _ = writeln!(&mut result, "min delay: {:?}", self.min_delay);
-        let _ = writeln!(&mut result, "max delay: {:?}", self.max_delay);
-        let _ = writeln!(&mut result, "multiplier: {}", self.multiplier);
-        if let Some(max_jitter_factor) = &self.max_jitter_factor {
-            let _ = writeln!(&mut result, "max jitter factor: {max_jitter_factor:?}");
-        }
-
-        result
-    }
-}
-
-/// Contains status information about a worker according to a given oplog index.
-///
-/// This status is just cached information, all fields must be computable by the oplog alone.
-/// By having an associated oplog_idx, the cached information can be used together with the
-/// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
-pub struct WorkerStatusRecord {
-    pub status: WorkerStatus,
-    pub skipped_regions: DeletedRegions,
-    pub overridden_retry_config: Option<RetryConfig>,
-    pub pending_invocations: Vec<TimestampedWorkerInvocation>,
-    pub pending_updates: VecDeque<TimestampedUpdateDescription>,
-    pub failed_updates: Vec<FailedUpdateRecord>,
-    pub successful_updates: Vec<SuccessfulUpdateRecord>,
-    pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
-    pub current_idempotency_key: Option<IdempotencyKey>,
-    pub component_version: ComponentVersion,
-    pub component_size: u64,
-    pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
-    pub oplog_idx: OplogIndex,
-    pub active_plugins: HashSet<PluginInstallationId>,
-    pub deleted_regions: DeletedRegions,
-    /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
-    /// if only automatic updates were used or the version of the latest snapshot-based update
-    pub component_version_for_replay: ComponentVersion,
-    /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
-    /// the last invocation boundary.
-    pub current_retry_count: HashMap<OplogIndex, u32>,
-}
-
-impl Default for WorkerStatusRecord {
-    fn default() -> Self {
-        WorkerStatusRecord {
-            status: WorkerStatus::Idle,
-            skipped_regions: DeletedRegions::new(),
-            overridden_retry_config: None,
-            pending_invocations: Vec::new(),
-            pending_updates: VecDeque::new(),
-            failed_updates: Vec::new(),
-            successful_updates: Vec::new(),
-            invocation_results: HashMap::new(),
-            current_idempotency_key: None,
-            component_version: 0,
-            component_size: 0,
-            total_linear_memory_size: 0,
-            owned_resources: HashMap::new(),
-            oplog_idx: OplogIndex::default(),
-            active_plugins: HashSet::new(),
-            deleted_regions: DeletedRegions::new(),
-            component_version_for_replay: 0,
-            current_retry_count: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub struct FailedUpdateRecord {
-    pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
-    pub details: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub struct SuccessfulUpdateRecord {
-    pub timestamp: Timestamp,
-    pub target_version: ComponentVersion,
-}
-
-/// Represents last known status of a worker
-///
-/// This is always recorded together with the current oplog index, and it can only be used
-/// as a source of truth if there are no newer oplog entries since the record.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-    poem_openapi::Enum,
-)]
-#[desert(evolution())]
-pub enum WorkerStatus {
-    /// The worker is running an invoked function
-    Running,
-    /// The worker is ready to run an invoked function
-    Idle,
-    /// An invocation is active but waiting for something (sleeping, waiting for a promise)
-    Suspended,
-    /// The last invocation was interrupted but will be resumed
-    Interrupted,
-    /// The last invocation failed and a retry was scheduled
-    Retrying,
-    /// The last invocation failed and the worker can no longer be used
-    Failed,
-    /// The worker exited after a successful invocation and can no longer be invoked
-    Exited,
-}
-
-impl PartialOrd for WorkerStatus {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for WorkerStatus {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let v1: i32 = self.clone().into();
-        let v2: i32 = other.clone().into();
-        v1.cmp(&v2)
-    }
-}
-
-impl FromStr for WorkerStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "running" => Ok(WorkerStatus::Running),
-            "idle" => Ok(WorkerStatus::Idle),
-            "suspended" => Ok(WorkerStatus::Suspended),
-            "interrupted" => Ok(WorkerStatus::Interrupted),
-            "retrying" => Ok(WorkerStatus::Retrying),
-            "failed" => Ok(WorkerStatus::Failed),
-            "exited" => Ok(WorkerStatus::Exited),
-            _ => Err(format!("Unknown worker status: {s}")),
-        }
-    }
-}
-
-impl Display for WorkerStatus {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerStatus::Running => write!(f, "Running"),
-            WorkerStatus::Idle => write!(f, "Idle"),
-            WorkerStatus::Suspended => write!(f, "Suspended"),
-            WorkerStatus::Interrupted => write!(f, "Interrupted"),
-            WorkerStatus::Retrying => write!(f, "Retrying"),
-            WorkerStatus::Failed => write!(f, "Failed"),
-            WorkerStatus::Exited => write!(f, "Exited"),
-        }
-    }
-}
-
-impl TryFrom<i32> for WorkerStatus {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(WorkerStatus::Running),
-            1 => Ok(WorkerStatus::Idle),
-            2 => Ok(WorkerStatus::Suspended),
-            3 => Ok(WorkerStatus::Interrupted),
-            4 => Ok(WorkerStatus::Retrying),
-            5 => Ok(WorkerStatus::Failed),
-            6 => Ok(WorkerStatus::Exited),
-            _ => Err(format!("Unknown worker status: {value}")),
-        }
-    }
-}
-
-impl From<WorkerStatus> for i32 {
-    fn from(value: WorkerStatus) -> Self {
-        match value {
-            WorkerStatus::Running => 0,
-            WorkerStatus::Idle => 1,
-            WorkerStatus::Suspended => 2,
-            WorkerStatus::Interrupted => 3,
-            WorkerStatus::Retrying => 4,
-            WorkerStatus::Failed => 5,
-            WorkerStatus::Exited => 6,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
-pub enum WorkerInvocation {
-    ManualUpdate {
-        target_version: ComponentVersion,
-    },
-    ExportedFunction {
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
-    },
-}
-
-impl WorkerInvocation {
-    pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
-        match self {
-            Self::ExportedFunction {
-                idempotency_key, ..
-            } => idempotency_key == key,
-            _ => false,
-        }
-    }
-
-    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
-        match self {
-            Self::ExportedFunction {
-                idempotency_key, ..
-            } => Some(idempotency_key),
-            _ => None,
-        }
-    }
-
-    pub fn invocation_context(&self) -> InvocationContextStack {
-        match self {
-            Self::ExportedFunction {
-                invocation_context, ..
-            } => invocation_context.clone(),
-            _ => InvocationContextStack::fresh(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
-pub struct TimestampedWorkerInvocation {
-    pub timestamp: Timestamp,
-    pub invocation: WorkerInvocation,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialOrd,
-    Ord,
-    derive_more::FromStr,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
-)]
-#[serde(transparent)]
-#[desert(transparent)]
-pub struct AccountId {
-    pub value: String,
-}
-
-impl AccountId {
-    pub fn generate() -> Self {
-        Self {
-            value: Uuid::new_v4().to_string(),
-        }
-    }
-}
-
-impl From<&str> for AccountId {
-    fn from(value: &str) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-}
-
-impl Display for AccountId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerNameFilter {
-    pub comparator: StringFilterComparator,
-    pub value: String,
-}
-
-impl WorkerNameFilter {
-    pub fn new(comparator: StringFilterComparator, value: String) -> Self {
-        Self { comparator, value }
-    }
-}
-
-impl Display for WorkerNameFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "name {} {}", self.comparator, self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerStatusFilter {
-    pub comparator: FilterComparator,
-    pub value: WorkerStatus,
-}
-
-impl WorkerStatusFilter {
-    pub fn new(comparator: FilterComparator, value: WorkerStatus) -> Self {
-        Self { comparator, value }
-    }
-}
-
-impl Display for WorkerStatusFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "status == {:?}", self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(evolution())]
-pub struct WorkerVersionFilter {
-    pub comparator: FilterComparator,
-    pub value: ComponentVersion,
-}
-
-impl WorkerVersionFilter {
-    pub fn new(comparator: FilterComparator, value: ComponentVersion) -> Self {
-        Self { comparator, value }
-    }
-}
-
-impl Display for WorkerVersionFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "version {} {}", self.comparator, self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(evolution())]
-pub struct WorkerCreatedAtFilter {
-    pub comparator: FilterComparator,
-    pub value: Timestamp,
-}
-
-impl WorkerCreatedAtFilter {
-    pub fn new(comparator: FilterComparator, value: Timestamp) -> Self {
-        Self { comparator, value }
-    }
-}
-
-impl Display for WorkerCreatedAtFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "created_at {} {}", self.comparator, self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[desert(evolution())]
-pub struct WorkerEnvFilter {
-    pub name: String,
-    pub comparator: StringFilterComparator,
-    pub value: String,
-}
-
-impl WorkerEnvFilter {
-    pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
-        Self {
-            name,
-            comparator,
-            value,
-        }
-    }
-}
-
-impl Display for WorkerEnvFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "env.{} {} {}", self.name, self.comparator, self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerWasiConfigVarsFilter {
-    pub name: String,
-    pub comparator: StringFilterComparator,
-    pub value: String,
-}
-
-impl WorkerWasiConfigVarsFilter {
-    pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
-        Self {
-            name,
-            comparator,
-            value,
-        }
-    }
-}
-
-impl Display for WorkerWasiConfigVarsFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "wasi_config_vars.{} {} {}",
-            self.name, self.comparator, self.value
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerAndFilter {
-    pub filters: Vec<WorkerFilter>,
-}
-
-impl WorkerAndFilter {
-    pub fn new(filters: Vec<WorkerFilter>) -> Self {
-        Self { filters }
-    }
-}
-
-impl Display for WorkerAndFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "({})",
-            self.filters
-                .iter()
-                .map(|f| f.clone().to_string())
-                .collect::<Vec<String>>()
-                .join(" AND ")
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerOrFilter {
-    pub filters: Vec<WorkerFilter>,
-}
-
-impl WorkerOrFilter {
-    pub fn new(filters: Vec<WorkerFilter>) -> Self {
-        Self { filters }
-    }
-}
-
-impl Display for WorkerOrFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "({})",
-            self.filters
-                .iter()
-                .map(|f| f.clone().to_string())
-                .collect::<Vec<String>>()
-                .join(" OR ")
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerNotFilter {
-    filter: Box<WorkerFilter>,
-}
-
-impl WorkerNotFilter {
-    pub fn new(filter: WorkerFilter) -> Self {
-        Self {
-            filter: Box::new(filter),
-        }
-    }
-}
-
-impl Display for WorkerNotFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NOT ({})", self.filter)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Union)]
-#[desert(evolution())]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-pub enum WorkerFilter {
-    Name(WorkerNameFilter),
-    Status(WorkerStatusFilter),
-    Version(WorkerVersionFilter),
-    CreatedAt(WorkerCreatedAtFilter),
-    Env(WorkerEnvFilter),
-    And(WorkerAndFilter),
-    Or(WorkerOrFilter),
-    Not(WorkerNotFilter),
-    WasiConfigVars(WorkerWasiConfigVarsFilter),
 }
 
 impl WorkerFilter {
-    pub fn and(&self, filter: WorkerFilter) -> Self {
-        match self.clone() {
-            WorkerFilter::And(WorkerAndFilter { filters }) => {
-                Self::new_and([filters, vec![filter]].concat())
-            }
-            f => Self::new_and(vec![f, filter]),
-        }
-    }
-
-    pub fn or(&self, filter: WorkerFilter) -> Self {
-        match self.clone() {
-            WorkerFilter::Or(WorkerOrFilter { filters }) => {
-                Self::new_or([filters, vec![filter]].concat())
-            }
-            f => Self::new_or(vec![f, filter]),
-        }
-    }
-
-    pub fn not(&self) -> Self {
-        Self::new_not(self.clone())
-    }
-
     pub fn matches(&self, metadata: &WorkerMetadata) -> bool {
         match self.clone() {
             WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
                 comparator.matches(&metadata.worker_id.worker_name, &value)
             }
-            WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                let version: ComponentVersion = metadata.last_known_status.component_version;
-                comparator.matches(&version, &value)
+            WorkerFilter::Revision(WorkerRevisionFilter { comparator, value }) => {
+                let revision: ComponentRevision = metadata.last_known_status.component_revision;
+                comparator.matches(&revision, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {
                 name,
@@ -1192,355 +590,156 @@ impl WorkerFilter {
             }
         }
     }
-
-    pub fn new_and(filters: Vec<WorkerFilter>) -> Self {
-        WorkerFilter::And(WorkerAndFilter::new(filters))
-    }
-
-    pub fn new_or(filters: Vec<WorkerFilter>) -> Self {
-        WorkerFilter::Or(WorkerOrFilter::new(filters))
-    }
-
-    pub fn new_not(filter: WorkerFilter) -> Self {
-        WorkerFilter::Not(WorkerNotFilter::new(filter))
-    }
-
-    pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
-        WorkerFilter::Name(WorkerNameFilter::new(comparator, value))
-    }
-
-    pub fn new_env(name: String, comparator: StringFilterComparator, value: String) -> Self {
-        WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
-    }
-
-    pub fn new_wasi_config_vars(
-        name: String,
-        comparator: StringFilterComparator,
-        value: String,
-    ) -> Self {
-        WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter::new(name, comparator, value))
-    }
-
-    pub fn new_version(comparator: FilterComparator, value: ComponentVersion) -> Self {
-        WorkerFilter::Version(WorkerVersionFilter::new(comparator, value))
-    }
-
-    pub fn new_status(comparator: FilterComparator, value: WorkerStatus) -> Self {
-        WorkerFilter::Status(WorkerStatusFilter::new(comparator, value))
-    }
-
-    pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
-        WorkerFilter::CreatedAt(WorkerCreatedAtFilter::new(comparator, value))
-    }
-
-    pub fn from(filters: Vec<String>) -> Result<WorkerFilter, String> {
-        let mut fs = Vec::new();
-        for f in filters {
-            fs.push(WorkerFilter::from_str(&f)?);
-        }
-        Ok(WorkerFilter::new_and(fs))
-    }
 }
 
-impl Display for WorkerFilter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WorkerFilter::Name(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::Version(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::Status(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::CreatedAt(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::Env(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::WasiConfigVars(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::Not(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::And(filter) => {
-                write!(f, "{filter}")
-            }
-            WorkerFilter::Or(filter) => {
-                write!(f, "{filter}")
-            }
-        }
-    }
-}
-
-impl FromStr for WorkerFilter {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let elements = s.split_whitespace().collect::<Vec<&str>>();
-
-        if elements.len() == 3 {
-            let arg = elements[0];
-            let comparator = elements[1];
-            let value = elements[2];
-            match arg {
-                "name" => Ok(WorkerFilter::new_name(
-                    comparator.parse()?,
-                    value.to_string(),
-                )),
-                "version" => Ok(WorkerFilter::new_version(
-                    comparator.parse()?,
-                    value
-                        .parse()
-                        .map_err(|e| format!("Invalid filter value: {e}"))?,
-                )),
-                "status" => Ok(WorkerFilter::new_status(
-                    comparator.parse()?,
-                    value.parse()?,
-                )),
-                "created_at" | "createdAt" => Ok(WorkerFilter::new_created_at(
-                    comparator.parse()?,
-                    value.parse()?,
-                )),
-                _ if arg.starts_with("env.") => {
-                    let name = &arg[4..];
-                    Ok(WorkerFilter::new_env(
-                        name.to_string(),
-                        comparator.parse()?,
-                        value.to_string(),
-                    ))
-                }
-                _ => Err(format!("Invalid filter: {s}")),
-            }
-        } else {
-            Err(format!("Invalid filter: {s}"))
-        }
-    }
-}
-
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Enum,
-)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
-pub enum StringFilterComparator {
-    Equal,
-    NotEqual,
-    Like,
-    NotLike,
-    StartsWith,
+pub struct RetryConfig {
+    pub max_attempts: u32,
+    #[serde(with = "humantime_serde")]
+    pub min_delay: Duration,
+    #[serde(with = "humantime_serde")]
+    pub max_delay: Duration,
+    pub multiplier: f64,
+    pub max_jitter_factor: Option<f64>,
 }
 
-impl StringFilterComparator {
-    pub fn matches<T: Display>(&self, value1: &T, value2: &T) -> bool {
-        match self {
-            StringFilterComparator::Equal => value1.to_string() == value2.to_string(),
-            StringFilterComparator::NotEqual => value1.to_string() != value2.to_string(),
-            StringFilterComparator::Like => {
-                value1.to_string().contains(value2.to_string().as_str())
-            }
-            StringFilterComparator::NotLike => {
-                !value1.to_string().contains(value2.to_string().as_str())
-            }
-            StringFilterComparator::StartsWith => {
-                value1.to_string().starts_with(value2.to_string().as_str())
-            }
+impl SafeDisplay for RetryConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "max attempts: {}", self.max_attempts);
+        let _ = writeln!(&mut result, "min delay: {:?}", self.min_delay);
+        let _ = writeln!(&mut result, "max delay: {:?}", self.max_delay);
+        let _ = writeln!(&mut result, "multiplier: {}", self.multiplier);
+        if let Some(max_jitter_factor) = &self.max_jitter_factor {
+            let _ = writeln!(&mut result, "max jitter factor: {max_jitter_factor:?}");
         }
+
+        result
     }
 }
 
-impl FromStr for StringFilterComparator {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "==" | "=" | "equal" | "eq" => Ok(StringFilterComparator::Equal),
-            "!=" | "notequal" | "ne" => Ok(StringFilterComparator::NotEqual),
-            "like" => Ok(StringFilterComparator::Like),
-            "notlike" => Ok(StringFilterComparator::NotLike),
-            "startswith" => Ok(StringFilterComparator::StartsWith),
-            _ => Err(format!("Unknown String Filter Comparator: {s}")),
-        }
-    }
-}
-
-impl TryFrom<i32> for StringFilterComparator {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(StringFilterComparator::Equal),
-            1 => Ok(StringFilterComparator::NotEqual),
-            2 => Ok(StringFilterComparator::Like),
-            3 => Ok(StringFilterComparator::NotLike),
-            4 => Ok(StringFilterComparator::StartsWith),
-            _ => Err(format!("Unknown String Filter Comparator: {value}")),
-        }
-    }
-}
-
-impl From<StringFilterComparator> for i32 {
-    fn from(value: StringFilterComparator) -> Self {
-        match value {
-            StringFilterComparator::Equal => 0,
-            StringFilterComparator::NotEqual => 1,
-            StringFilterComparator::Like => 2,
-            StringFilterComparator::NotLike => 3,
-            StringFilterComparator::StartsWith => 4,
-        }
-    }
-}
-
-impl Display for StringFilterComparator {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            StringFilterComparator::Equal => "==",
-            StringFilterComparator::NotEqual => "!=",
-            StringFilterComparator::Like => "like",
-            StringFilterComparator::NotLike => "notlike",
-            StringFilterComparator::StartsWith => "startswith",
-        };
-        write!(f, "{s}")
-    }
-}
-
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Enum,
-)]
+/// Contains status information about a worker according to a given oplog index.
+///
+/// This status is just cached information, all fields must be computable by the oplog alone.
+/// By having an associated oplog_idx, the cached information can be used together with the
+/// tail of the oplog to determine the actual status of the worker.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub enum FilterComparator {
-    Equal,
-    NotEqual,
-    GreaterEqual,
-    Greater,
-    LessEqual,
-    Less,
+pub struct WorkerStatusRecord {
+    pub status: WorkerStatus,
+    pub skipped_regions: DeletedRegions,
+    pub overridden_retry_config: Option<RetryConfig>,
+    pub pending_invocations: Vec<TimestampedWorkerInvocation>,
+    pub pending_updates: VecDeque<TimestampedUpdateDescription>,
+    pub failed_updates: Vec<FailedUpdateRecord>,
+    pub successful_updates: Vec<SuccessfulUpdateRecord>,
+    pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    pub current_idempotency_key: Option<IdempotencyKey>,
+    pub component_revision: ComponentRevision,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
+    pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
+    pub oplog_idx: OplogIndex,
+    pub active_plugins: HashSet<PluginPriority>,
+    pub deleted_regions: DeletedRegions,
+    /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
+    /// if only automatic updates were used or the version of the latest snapshot-based update
+    pub component_revision_for_replay: ComponentRevision,
+    /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
+    /// the last invocation boundary.
+    pub current_retry_count: HashMap<OplogIndex, u32>,
 }
 
-impl Display for FilterComparator {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            FilterComparator::Equal => "==",
-            FilterComparator::NotEqual => "!=",
-            FilterComparator::GreaterEqual => ">=",
-            FilterComparator::Greater => ">",
-            FilterComparator::LessEqual => "<=",
-            FilterComparator::Less => "<",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FilterComparator {
-    pub fn matches<T: Ord>(&self, value1: &T, value2: &T) -> bool {
-        match self {
-            FilterComparator::Equal => value1 == value2,
-            FilterComparator::NotEqual => value1 != value2,
-            FilterComparator::Less => value1 < value2,
-            FilterComparator::LessEqual => value1 <= value2,
-            FilterComparator::Greater => value1 > value2,
-            FilterComparator::GreaterEqual => value1 >= value2,
+impl Default for WorkerStatusRecord {
+    fn default() -> Self {
+        WorkerStatusRecord {
+            status: WorkerStatus::Idle,
+            skipped_regions: DeletedRegions::new(),
+            overridden_retry_config: None,
+            pending_invocations: Vec::new(),
+            pending_updates: VecDeque::new(),
+            failed_updates: Vec::new(),
+            successful_updates: Vec::new(),
+            invocation_results: HashMap::new(),
+            current_idempotency_key: None,
+            component_revision: ComponentRevision::INITIAL,
+            component_size: 0,
+            total_linear_memory_size: 0,
+            owned_resources: HashMap::new(),
+            oplog_idx: OplogIndex::default(),
+            active_plugins: HashSet::new(),
+            deleted_regions: DeletedRegions::new(),
+            component_revision_for_replay: ComponentRevision::INITIAL,
+            current_retry_count: HashMap::new(),
         }
     }
 }
 
-impl FromStr for FilterComparator {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "==" | "=" | "equal" | "eq" => Ok(FilterComparator::Equal),
-            "!=" | "notequal" | "ne" => Ok(FilterComparator::NotEqual),
-            ">=" | "greaterequal" | "ge" => Ok(FilterComparator::GreaterEqual),
-            ">" | "greater" | "gt" => Ok(FilterComparator::Greater),
-            "<=" | "lessequal" | "le" => Ok(FilterComparator::LessEqual),
-            "<" | "less" | "lt" => Ok(FilterComparator::Less),
-            _ => Err(format!("Unknown Filter Comparator: {s}")),
-        }
-    }
-}
-
-impl TryFrom<i32> for FilterComparator {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(FilterComparator::Equal),
-            1 => Ok(FilterComparator::NotEqual),
-            2 => Ok(FilterComparator::Less),
-            3 => Ok(FilterComparator::LessEqual),
-            4 => Ok(FilterComparator::Greater),
-            5 => Ok(FilterComparator::GreaterEqual),
-            _ => Err(format!("Unknown Filter Comparator: {value}")),
-        }
-    }
-}
-
-impl From<FilterComparator> for i32 {
-    fn from(value: FilterComparator) -> Self {
-        match value {
-            FilterComparator::Equal => 0,
-            FilterComparator::NotEqual => 1,
-            FilterComparator::Less => 2,
-            FilterComparator::LessEqual => 3,
-            FilterComparator::Greater => 4,
-            FilterComparator::GreaterEqual => 5,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Default, Object)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ScanCursor {
-    pub cursor: u64,
-    pub layer: usize,
+pub struct FailedUpdateRecord {
+    pub timestamp: Timestamp,
+    pub target_revision: ComponentRevision,
+    pub details: Option<String>,
 }
 
-impl ScanCursor {
-    pub fn is_active_layer_finished(&self) -> bool {
-        self.cursor == 0
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SuccessfulUpdateRecord {
+    pub timestamp: Timestamp,
+    pub target_revision: ComponentRevision,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum WorkerInvocation {
+    ManualUpdate {
+        target_revision: ComponentRevision,
+    },
+    ExportedFunction {
+        idempotency_key: IdempotencyKey,
+        full_function_name: String,
+        function_input: Vec<Value>,
+        invocation_context: InvocationContextStack,
+    },
+}
+
+impl WorkerInvocation {
+    pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => idempotency_key == key,
+            _ => false,
+        }
     }
 
-    pub fn is_finished(&self) -> bool {
-        self.cursor == 0 && self.layer == 0
+    pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
+        match self {
+            Self::ExportedFunction {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            _ => None,
+        }
     }
 
-    pub fn into_option(self) -> Option<Self> {
-        if self.is_finished() {
-            None
-        } else {
-            Some(self)
+    pub fn invocation_context(&self) -> InvocationContextStack {
+        match self {
+            Self::ExportedFunction {
+                invocation_context, ..
+            } => invocation_context.clone(),
+            _ => InvocationContextStack::fresh(),
         }
     }
 }
 
-impl Display for ScanCursor {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.layer, self.cursor)
-    }
-}
-
-impl FromStr for ScanCursor {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts = s.split('/').collect::<Vec<&str>>();
-        if parts.len() == 2 {
-            Ok(ScanCursor {
-                layer: parts[0]
-                    .parse()
-                    .map_err(|e| format!("Invalid layer part: {e}"))?,
-                cursor: parts[1]
-                    .parse()
-                    .map_err(|e| format!("Invalid cursor part: {e}"))?,
-            })
-        } else {
-            Err("Invalid cursor, must have 'layer/cursor' format".to_string())
-        }
-    }
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct TimestampedWorkerInvocation {
+    pub timestamp: Timestamp,
+    pub invocation: WorkerInvocation,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize)]
@@ -1647,217 +846,51 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-#[derive(Default)]
-pub struct Empty {}
+impl poem_openapi::types::Type for UntypedJsonBody {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
 
-/// Key that can be used to identify a component file.
-/// All files with the same content will have the same key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, poem_openapi::NewType)]
-pub struct InitialComponentFileKey(pub String);
+    fn name() -> Cow<'static, str> {
+        "UntypedJsonBody".into()
+    }
 
-impl Display for InitialComponentFileKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
+            let mut schema = poem_openapi::registry::MetaSchema::new("object");
+            schema.description = Some("A json body without a static schema");
+            schema
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
     }
 }
 
-/// Path inside a component filesystem. Must be
-/// - absolute (start with '/')
-/// - not contain ".." components
-/// - not contain "." components
-/// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ComponentFilePath(Utf8UnixPathBuf);
-
-impl ComponentFilePath {
-    pub fn from_abs_str(s: &str) -> Result<Self, String> {
-        let buf: Utf8UnixPathBuf = s.into();
-        if !buf.is_absolute() {
-            return Err("Path must be absolute".to_string());
-        }
-
-        Ok(ComponentFilePath(buf.normalize()))
-    }
-
-    pub fn from_rel_str(s: &str) -> Result<Self, String> {
-        Self::from_abs_str(&format!("/{s}"))
-    }
-
-    pub fn from_either_str(s: &str) -> Result<Self, String> {
-        if s.starts_with('/') {
-            Self::from_abs_str(s)
-        } else {
-            Self::from_rel_str(s)
-        }
-    }
-
-    pub fn as_path(&self) -> &Utf8UnixPathBuf {
-        &self.0
-    }
-
-    pub fn to_rel_string(&self) -> String {
-        self.0.strip_prefix("/").unwrap().to_string()
-    }
-
-    pub fn extend(&mut self, path: &str) -> Result<(), String> {
-        self.0.push_checked(path).map_err(|e| e.to_string())
+impl poem_openapi::types::ToJSON for UntypedJsonBody {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(self.0.clone())
     }
 }
 
-impl Display for ComponentFilePath {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Serialize for ComponentFilePath {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        Serialize::serialize(&self.to_string(), serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ComponentFilePath {
-    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let str = <String as Deserialize>::deserialize(deserializer)?;
-        Self::from_abs_str(&str).map_err(de::Error::custom)
-    }
-}
-
-impl TryFrom<&str> for ComponentFilePath {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::from_either_str(value)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, poem_openapi::Enum)]
-#[serde(rename_all = "kebab-case")]
-#[oai(rename_all = "kebab-case")]
-pub enum ComponentFilePermissions {
-    ReadOnly,
-    ReadWrite,
-}
-
-impl ComponentFilePermissions {
-    pub fn as_compact_str(&self) -> &'static str {
-        match self {
-            ComponentFilePermissions::ReadOnly => "ro",
-            ComponentFilePermissions::ReadWrite => "rw",
-        }
-    }
-    pub fn from_compact_str(s: &str) -> Result<Self, String> {
-        match s {
-            "ro" => Ok(ComponentFilePermissions::ReadOnly),
-            "rw" => Ok(ComponentFilePermissions::ReadWrite),
-            _ => Err(format!("Unknown permissions: {s}")),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InitialComponentFile {
-    pub key: InitialComponentFileKey,
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-impl InitialComponentFile {
-    pub fn is_read_only(&self) -> bool {
-        self.permissions == ComponentFilePermissions::ReadOnly
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissions {
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
-
-impl ComponentFilePathWithPermissions {
-    pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
-        self.path.extend(path)
-    }
-}
-
-impl Display for ComponentFilePathWithPermissions {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissionsList {
-    pub values: Vec<ComponentFilePathWithPermissions>,
-}
-
-impl Display for ComponentFilePathWithPermissionsList {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).unwrap())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GetFileSystemNodeResult {
-    Ok(Vec<ComponentFileSystemNode>),
-    File(ComponentFileSystemNode),
-    NotFound,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ComponentFileSystemNodeDetails {
-    File {
-        permissions: ComponentFilePermissions,
-        size: u64,
-    },
-    Directory,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ComponentFileSystemNode {
-    pub name: String,
-    pub last_modified: SystemTime,
-    pub details: ComponentFileSystemNodeDetails,
-}
-
-// Custom Deserialize is replaced with Simple Deserialize
-#[derive(
-    Debug, Clone, PartialEq, Serialize, BinaryCodec, Default, Deserialize, poem_openapi::Enum,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "kebab-case")]
-#[oai(rename_all = "kebab-case")]
-pub enum GatewayBindingType {
-    #[default]
-    Default,
-    FileServer,
-    HttpHandler,
-    CorsPreflight,
-    SwaggerUi,
-}
-
-impl TryFrom<String> for GatewayBindingType {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "default" => Ok(GatewayBindingType::Default),
-            "file-server" => Ok(GatewayBindingType::FileServer),
-            _ => Err(format!("Invalid WorkerBindingType: {value}")),
+impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(json) => Ok(Self(json)),
+            _ => Err(poem_openapi::types::ParseError::<UntypedJsonBody>::custom(
+                "Received empty value for UntypedJsonBody",
+            )),
         }
     }
 }
@@ -1880,24 +913,20 @@ impl From<golem_wasm::AgentId> for WorkerId {
     }
 }
 
-impl From<golem_wasm::ComponentId> for ComponentId {
-    fn from(host: golem_wasm::ComponentId) -> Self {
-        let high_bits = host.uuid.high_bits;
-        let low_bits = host.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
+impl From<PromiseId> for golem_wasm::PromiseId {
+    fn from(promise_id: PromiseId) -> Self {
+        golem_wasm::PromiseId {
+            agent_id: promise_id.worker_id.into(),
+            oplog_idx: promise_id.oplog_idx.into(),
+        }
     }
 }
 
-impl From<ComponentId> for golem_wasm::ComponentId {
-    fn from(component_id: ComponentId) -> Self {
-        let (high_bits, low_bits) = component_id.0.as_u64_pair();
-
-        golem_wasm::ComponentId {
-            uuid: golem_wasm::Uuid {
-                high_bits,
-                low_bits,
-            },
+impl From<golem_wasm::PromiseId> for PromiseId {
+    fn from(host: golem_wasm::PromiseId) -> Self {
+        Self {
+            worker_id: host.agent_id.into(),
+            oplog_idx: OplogIndex::from_u64(host.oplog_idx),
         }
     }
 }
@@ -1908,124 +937,6 @@ pub enum ForkResult {
     Original,
     /// The new worker
     Forked,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, BinaryCodec, Serialize, Deserialize, Union, IntoValue, FromValue,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
-pub enum RevertWorkerTarget {
-    RevertToOplogIndex(RevertToOplogIndex),
-    RevertLastInvocations(RevertLastInvocations),
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
-    ) -> Result<Self, Self::Error> {
-        match value.target {
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
-                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
-            }
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
-                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
-            }
-            None => Err("Missing field: target".to_string()),
-        }
-    }
-}
-
-impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
-    fn from(value: RevertWorkerTarget) -> Self {
-        match value {
-            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
-            },
-            RevertWorkerTarget::RevertLastInvocations(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
-            },
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-    FromValue,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertToOplogIndex {
-    pub last_oplog_index: OplogIndex,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
-        }
-    }
-}
-
-impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
-    fn from(value: RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: u64::from(value.last_oplog_index) as i64,
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-    FromValue,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertLastInvocations {
-    pub number_of_invocations: u64,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as u64,
-        }
-    }
-}
-
-impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
-    fn from(value: RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as i64,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]

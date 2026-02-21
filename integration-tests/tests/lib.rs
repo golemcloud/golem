@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod api;
+mod custom_api;
+mod fork;
+mod plugins;
+mod worker;
+
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
@@ -19,12 +25,6 @@ use golem_test_framework::config::{
 use test_r::test_dep;
 
 test_r::enable!();
-
-mod fork;
-
-mod rib;
-mod rib_repl;
-mod worker;
 
 #[derive(Debug)]
 pub struct Tracing;
@@ -44,7 +44,8 @@ pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
         worker_executor_cluster_size: 3,
         ..EnvBasedTestDependenciesConfig::new()
     })
-    .await;
+    .await
+    .expect("Failed constructing test dependencies");
 
     deps.redis_monitor().assert_valid();
 

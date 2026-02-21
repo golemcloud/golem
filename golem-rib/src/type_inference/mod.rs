@@ -2755,7 +2755,7 @@ mod tests {
             let component_dependency_key = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
-                component_version: 0,
+                component_revision: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -2794,7 +2794,7 @@ mod tests {
             let component_dependency_key = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
-                component_version: 0,
+                component_revision: 0,
                 root_package_name: None,
                 root_package_version: None,
             };

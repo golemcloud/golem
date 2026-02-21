@@ -12,21 +12,21 @@ harness = false
 name = "golem-debugging-service"
 path = "src/server.rs"
 
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
+
 [dependencies]
 golem-worker-executor = { workspace = true }
-golem-common = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-api-grpc = { workspace = true }
-golem-rib = { workspace = true }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-async-dropper = { workspace = true }
-async-dropper-simple = { workspace = true }
 axum-jrpc = { workspace = true }
-bytes = { workspace = true }
-desert_rust = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
 humansize = { workspace = true }
@@ -34,6 +34,7 @@ log = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -55,10 +56,6 @@ wasmtime-wasi-http = { workspace = true }
 
 
 [dev-dependencies]
-test-r = { workspace = true }
 golem-test-framework = { workspace = true }
-
-[[test]]
-name = "integration"
-path = "tests/lib.rs"
-harness = false
+golem-worker-executor-test-utils = { workspace = true }
+test-r = { workspace = true }

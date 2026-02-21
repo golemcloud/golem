@@ -17,13 +17,17 @@ use crate::model::text::fmt::{
     MessageWithFields, TextView,
 };
 use cli_table::Table;
-use golem_client::model::PluginInstallation;
+use golem_common::model::plugin_registration::PluginRegistrationDto;
+use serde_derive::Serialize;
 
-use crate::model::PluginDefinition;
-use itertools::Itertools;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PluginNameAndVersion {
+    pub name: String,
+    pub version: String,
+}
 
 #[derive(Table)]
-struct PluginDefinitionTableView {
+struct PluginRegistrationTableView {
     #[table(title = "Plugin name")]
     pub name: String,
     #[table(title = "Plugin version")]
@@ -34,78 +38,99 @@ struct PluginDefinitionTableView {
     pub homepage: String,
     #[table(title = "Type")]
     pub typ: String,
-    #[table(title = "Scope")]
-    pub scope: String,
 }
 
-impl From<&PluginDefinition> for PluginDefinitionTableView {
-    fn from(value: &PluginDefinition) -> Self {
+impl From<&PluginRegistrationDto> for PluginRegistrationTableView {
+    fn from(value: &PluginRegistrationDto) -> Self {
         Self {
             name: value.name.clone(),
             version: value.version.clone(),
             description: value.description.clone(),
             homepage: value.homepage.clone(),
-            typ: value.typ.clone(),
-            scope: value.scope.clone(),
+            typ: value.typ_as_str().to_string(),
         }
     }
 }
 
-impl TextView for Vec<PluginDefinition> {
+impl TextView for Vec<PluginRegistrationDto> {
     fn log(&self) {
-        log_table::<_, PluginDefinitionTableView>(self.as_slice())
+        log_table::<_, PluginRegistrationTableView>(self.as_slice())
     }
 }
 
-impl MessageWithFields for PluginDefinition {
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginRegistrationRegisterView(pub PluginRegistrationDto);
+
+impl MessageWithFields for PluginRegistrationRegisterView {
     fn message(&self) -> String {
         format!(
-            "Got metadata for plugin {} version {}",
-            format_message_highlight(&self.name),
-            format_message_highlight(&self.version),
+            "Registered new plugin {} version {}",
+            format_message_highlight(&self.0.name),
+            format_message_highlight(&self.0.version),
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        let mut fields = FieldsBuilder::new();
-
-        fields
-            .fmt_field("Name", &self.name, format_main_id)
-            .fmt_field("Version", &self.version, format_main_id)
-            .field("Description", &self.description)
-            .field("Homepage", &self.homepage)
-            .field("Scope", &self.scope)
-            .field("Type", &self.typ)
-            .fmt_field_option(
-                "Validate URL",
-                &self.component_transformer_validate_url,
-                |f| f.to_string(),
-            )
-            .fmt_field_option(
-                "Transform URL",
-                &self.component_transformer_transform_url,
-                |f| f.to_string(),
-            )
-            .fmt_field_option(
-                "Component ID",
-                &self.oplog_processor_component_id,
-                format_id,
-            )
-            .fmt_field_option(
-                "Component Version",
-                &self.oplog_processor_component_version,
-                format_id,
-            );
-
-        fields.build()
+        plugin_registration_fields(&self.0)
     }
 }
 
-impl MessageWithFields for PluginInstallation {
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginRegistrationGetView(pub PluginRegistrationDto);
+
+impl MessageWithFields for PluginRegistrationGetView {
+    fn message(&self) -> String {
+        format!(
+            "Got metadata for plugin {} version {}",
+            format_message_highlight(&self.0.name),
+            format_message_highlight(&self.0.version),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        plugin_registration_fields(&self.0)
+    }
+}
+
+fn plugin_registration_fields(plugin: &PluginRegistrationDto) -> Vec<(String, String)> {
+    let mut fields = FieldsBuilder::new();
+
+    fields
+        .fmt_field("Name", &plugin.name, format_main_id)
+        .fmt_field("Version", &plugin.version, format_main_id)
+        .field("Description", &plugin.description)
+        .field("Homepage", &plugin.homepage)
+        .field("Type", &plugin.typ_as_str())
+        .fmt_field_option(
+            "Validate URL",
+            &plugin.component_transformer_validate_url(),
+            |u| u.to_string(),
+        )
+        .fmt_field_option(
+            "Transform URL",
+            &plugin.component_transformer_validate_url(),
+            |u| u.to_string(),
+        )
+        .fmt_field_option(
+            "Component ID",
+            &plugin.oplog_processor_component_id(),
+            format_id,
+        )
+        .fmt_field_option(
+            "Component Version",
+            &plugin.oplog_processor_component_revision(),
+            format_id,
+        );
+
+    fields.build()
+}
+
+// TODO: atomic
+/*impl MessageWithFields for PluginInstallation {
     fn message(&self) -> String {
         format!(
             "Installed plugin {} version {}",
-            format_message_highlight(&self.plugin_name),
+            format_message_highlight(&self.environment_plugin_grant_id),
             format_message_highlight(&self.plugin_version),
         )
     }
@@ -136,19 +161,16 @@ struct PluginInstallationTableView {
     pub name: String,
     #[table(title = "Plugin version")]
     pub version: String,
-    #[table(title = "Priority")]
-    pub priority: String,
     #[table(title = "Parameters")]
     pub parameters: String,
 }
 
-impl From<&PluginInstallation> for PluginInstallationTableView {
-    fn from(value: &PluginInstallation) -> Self {
+impl From<&PluginRegistrationDto> for PluginInstallationTableView {
+    fn from(value: &PluginRegistrationDto) -> Self {
         Self {
             id: value.id.to_string(),
-            name: value.plugin_name.clone(),
-            version: value.plugin_version.clone(),
-            priority: value.priority.to_string(),
+            name: value.name.clone(),
+            version: value.version.clone(),
             parameters: value
                 .parameters
                 .iter()
@@ -158,8 +180,8 @@ impl From<&PluginInstallation> for PluginInstallationTableView {
     }
 }
 
-impl TextView for Vec<PluginInstallation> {
+impl TextView for Vec<PluginRegistrationDto> {
     fn log(&self) {
         log_table::<_, PluginInstallationTableView>(self.as_slice())
     }
-}
+}*/

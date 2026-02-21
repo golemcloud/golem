@@ -1,22 +1,25 @@
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::AccountId;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::workerexecutor;
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     fork_worker_response, revert_worker_response, ForkWorkerRequest, RevertWorkerRequest,
 };
 use golem_common::base_model::OplogIndex;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, PromiseId, RevertWorkerTarget,
-    WorkerId,
-};
+use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_test_framework::components::worker_executor::WorkerExecutor;
+use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_wasm::{ValueAndType, WitValue};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
+use golem_worker_executor_test_utils::component_writer::FileSystemComponentWriter;
+use golem_worker_executor_test_utils::TestContext;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use tonic::transport::Channel;
 
 // Worker Proxy will be internally used by fork functionality,
 // Fork will be resuming the worker (the target) in the real executor by
@@ -25,11 +28,24 @@ use std::sync::Arc;
 // Here the proxy implementation bypasses the worker service
 // however place it in the real executor
 pub struct TestWorkerProxy {
-    pub worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
-    pub project_resolver: Arc<dyn GetWorkerProject>,
+    client: WorkerExecutorClient<Channel>,
+    component_service: Arc<FileSystemComponentWriter>,
+    test_ctx: TestContext,
 }
 
 impl TestWorkerProxy {
+    pub fn new(
+        client: WorkerExecutorClient<Channel>,
+        component_service: Arc<FileSystemComponentWriter>,
+        test_ctx: TestContext,
+    ) -> Self {
+        Self {
+            client,
+            component_service,
+            test_ctx,
+        }
+    }
+
     fn should_retry<R>(retry_count: &mut usize, result: &Result<R, tonic::Status>) -> bool {
         if let Err(status) = result {
             if *retry_count > 0 && status.code() == tonic::Code::Unavailable {
@@ -48,9 +64,9 @@ impl WorkerProxy for TestWorkerProxy {
     async fn start(
         &self,
         _owned_worker_id: &OwnedWorkerId,
-        _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
+        _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -66,10 +82,10 @@ impl WorkerProxy for TestWorkerProxy {
         _function_name: String,
         _function_params: Vec<WitValue>,
         _caller_worker_id: WorkerId,
-        _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
+        _caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -85,10 +101,10 @@ impl WorkerProxy for TestWorkerProxy {
         _function_name: String,
         _function_params: Vec<WitValue>,
         _caller_worker_id: WorkerId,
-        _caller_args: Vec<String>,
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
+        _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -100,8 +116,10 @@ impl WorkerProxy for TestWorkerProxy {
     async fn update(
         &self,
         _owned_worker_id: &OwnedWorkerId,
-        _target_version: ComponentVersion,
+        _target_revision: ComponentRevision,
         _mode: UpdateMode,
+        _disable_wakeup: bool,
+        _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -110,24 +128,37 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
+    async fn resume(
+        &self,
+        worker_id: &WorkerId,
+        force: bool,
+        caller_account_id: AccountId,
+    ) -> Result<(), WorkerProxyError> {
         let mut retry_count = Self::RETRY_COUNT;
-        let project_id = self.project_resolver.get_worker_project(worker_id).await?;
-        let worker_id: golem_api_grpc::proto::golem::worker::WorkerId = worker_id.clone().into();
+
+        let component = self
+            .component_service
+            .get_latest_component_metadata(&worker_id.component_id)
+            .await
+            .unwrap();
+
+        assert!(caller_account_id == self.test_ctx.account_id);
+
+        let auth_ctx = AuthCtx::User(UserAuthCtx {
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
+            account_roles: self.test_ctx.account_roles.clone(),
+        });
 
         let result = loop {
             let result = self
-                .worker_executor
-                .client()
-                .await
-                .map_err(|e| WorkerProxyError::InternalError(WorkerExecutorError::from(e)))?
+                .client
+                .clone()
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
-                    worker_id: Some(worker_id.clone()),
-                    account_id: Some(AccountId {
-                        name: "test-account".to_string(),
-                    }),
-                    project_id: Some(project_id.clone().into()),
+                    worker_id: Some(worker_id.clone().into()),
+                    environment_id: Some(component.environment_id.into()),
                     force: Some(force),
+                    auth_ctx: Some(auth_ctx.clone().into()),
                 })
                 .await;
 
@@ -157,24 +188,32 @@ impl WorkerProxy for TestWorkerProxy {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
-        let project_id = self
-            .project_resolver
-            .get_worker_project(source_worker_id)
-            .await?;
-        let result = self
-            .worker_executor
-            .client()
+        let component = self
+            .component_service
+            .get_latest_component_metadata(&source_worker_id.component_id)
             .await
-            .map_err(|e| WorkerProxyError::InternalError(WorkerExecutorError::from(e)))?
+            .unwrap();
+
+        assert!(caller_account_id == self.test_ctx.account_id);
+
+        let auth_ctx = AuthCtx::User(UserAuthCtx {
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
+            account_roles: self.test_ctx.account_roles.clone(),
+        });
+
+        let result = self
+            .client
+            .clone()
             .fork_worker(ForkWorkerRequest {
-                account_id: Some(AccountId {
-                    name: "test-account".to_string(),
-                }),
-                project_id: Some(project_id.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
                 source_worker_id: Some(source_worker_id.clone().into()),
                 target_worker_id: Some(target_worker_id.clone().into()),
                 oplog_index_cutoff: (*oplog_index_cutoff).into(),
+                auth_ctx: Some(auth_ctx.into()),
             })
             .await?
             .into_inner()
@@ -195,20 +234,30 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
-        let project_id = self.project_resolver.get_worker_project(worker_id).await?;
-        let result = self
-            .worker_executor
-            .client()
+        let component = self
+            .component_service
+            .get_latest_component_metadata(&worker_id.component_id)
             .await
-            .map_err(|e| WorkerProxyError::InternalError(WorkerExecutorError::from(e)))?
+            .unwrap();
+
+        assert!(caller_account_id == self.test_ctx.account_id);
+
+        let auth_ctx = AuthCtx::User(UserAuthCtx {
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
+            account_roles: self.test_ctx.account_roles.clone(),
+        });
+
+        let result = self
+            .client
+            .clone()
             .revert_worker(RevertWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                account_id: Some(AccountId {
-                    name: "test-account".to_string(),
-                }),
-                project_id: Some(project_id.into()),
+                environment_id: Some(component.environment_id.into()),
                 target: Some(target.into()),
+                auth_ctx: Some(auth_ctx.into()),
             })
             .await?
             .into_inner()
@@ -229,13 +278,8 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _promise_id: PromiseId,
         _data: Vec<u8>,
+        _caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError> {
         unimplemented!()
     }
-}
-
-#[async_trait]
-pub trait GetWorkerProject: Send + Sync {
-    async fn get_worker_project(&self, worker_id: &WorkerId)
-        -> Result<ProjectId, WorkerProxyError>;
 }

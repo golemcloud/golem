@@ -17,15 +17,16 @@ test = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true }
-golem-service-base = { workspace = true }
-golem-worker-executor = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-service-base = { workspace = true, features = ["worker-executor"] }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 lazy_static.workspace = true
 prometheus = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -34,7 +35,6 @@ tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
-#tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }
 

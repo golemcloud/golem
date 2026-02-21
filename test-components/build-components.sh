@@ -2,42 +2,39 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
-"option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
-"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests")
-
-rust_test_apps=("auction-example" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters"  "rpc" )
+rust_test_components=("oplog-processor")
+rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc" "benchmarks")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-rpc")
+benchmark_apps=("benchmarks")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
-# - update-wit: update the wit/deps directories
-# - rust / c / ts: build only the specified language
+# - rust / c / ts / benchmarks: build only the specified group
 
 rebuild=false
-single_lang=false
-update_wit=false
-lang=""
+single_group=false
+group=""
 for arg in "$@"; do
   case $arg in
     rebuild)
       rebuild=true
       ;;
-    update-wit)
-      update_wit=true
-      ;;
     rust)
-      single_lang=true
-      lang="rust"
+      single_group=true
+      group="rust"
       ;;
     c)
-      single_lang=true
-      lang="c"
+      single_group=true
+      group="c"
       ;;
     ts)
-      single_lang=true
-      lang="ts"
+      single_group=true
+      group="ts"
+      ;;
+    benchmarks)
+      single_group=true
+      group="benchmarks"
       ;;
     *)
       echo "Unknown argument: $arg"
@@ -46,15 +43,11 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   echo "Building the Rust test components"
   for subdir in "${rust_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
-
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
 
     if [ "$rebuild" = true ]; then
       cargo clean
@@ -71,40 +64,31 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
   done
 fi
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   echo "Building the Rust test apps"
   TEST_COMP_DIR="$(pwd)"
   export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
-  export GOLEM_CLI=${TEST_COMP_DIR}/../target/debug/golem-cli
   for subdir in "${rust_test_apps[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
-
     if [ "$rebuild" = true ]; then
-      $GOLEM_CLI app clean
+      golem-cli clean
       cargo clean
     fi
 
-    $GOLEM_CLI app -b release build
-    $GOLEM_CLI app -b release copy
+    golem-cli --preset release  build
+    golem-cli --preset release exec copy
 
     popd || exit
   done
 fi
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "c" ]; then
   echo "Building the C test components"
   for subdir in "${c_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
-
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -123,23 +107,40 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
   done
 fi
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
   echo "Building the TS test apps"
   for subdir in "${ts_test_apps[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$update_wit" = true ]; then
-      golem-cli app update-wit-deps
+    if [ "$rebuild" = true ]; then
+      rm -rf node_modules
+      npm install
+      golem-cli clean
     fi
+
+    golem-cli build
+    golem-cli exec copy
+
+    popd || exit
+  done
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
+  echo "Building benchmark apps"
+  for subdir in "${benchmark_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
 
     if [ "$rebuild" = true ]; then
-      golem-cli app clean
       rm -rf node_modules
+      npm install
+      golem-cli clean
+      cargo clean
     fi
 
-    golem-cli app build
-    golem-cli app copy
+    golem-cli build
+    golem-cli exec copy
 
     popd || exit
   done

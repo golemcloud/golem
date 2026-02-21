@@ -14,7 +14,7 @@
 
 use crate::preview2::golem_api_1_x::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
-use golem_common::base_model::ProjectId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
     BeginRemoteWriteParams, CancelPendingInvocationParams, ChangePersistenceLevelParams,
@@ -42,11 +42,10 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
                 worker_id,
-                component_version,
-                args,
+                component_revision,
                 env,
                 created_by,
-                project_id,
+                environment_id,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
@@ -56,13 +55,11 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
-                component_version,
-                args,
+                component_revision: component_revision.into(),
+                args: vec![],
                 env: env.into_iter().collect(),
-                created_by: oplog::AccountId {
-                    value: created_by.value,
-                },
-                project_id: project_id.into(),
+                created_by: created_by.into(),
+                environment_id: environment_id.into(),
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
@@ -180,31 +177,31 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }),
             PublicOplogEntry::PendingUpdate(PendingUpdateParams {
                 timestamp,
-                target_version,
+                target_revision,
                 description,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_revision: target_revision.into(),
                 update_description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp,
-                target_version,
+                target_revision,
                 new_component_size,
                 new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_revision: target_revision.into(),
                 new_component_size,
                 new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
             PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
-                target_version,
+                target_revision,
                 details,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_revision: target_revision.into(),
                 details,
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
@@ -434,8 +431,8 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                     .map(|inner| inner.into_iter().map(|span| span.into()).collect())
                     .collect(),
             }),
-            PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_version }) => {
-                Self::ManualUpdate(target_version)
+            PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
+                Self::ManualUpdate(target_revision.into())
             }
         }
     }
@@ -456,7 +453,6 @@ impl From<PublicRetryConfig> for oplog::RetryPolicy {
 impl From<PluginInstallationDescription> for oplog::PluginInstallationDescription {
     fn from(value: PluginInstallationDescription) -> Self {
         Self {
-            installation_id: value.installation_id.0.into(),
             name: value.plugin_name,
             version: value.plugin_version,
             parameters: value.parameters.into_iter().collect(),
@@ -499,8 +495,8 @@ impl From<PublicAttributeValue> for oplog::AttributeValue {
     }
 }
 
-impl From<ProjectId> for oplog::ProjectId {
-    fn from(value: ProjectId) -> Self {
+impl From<EnvironmentId> for oplog::EnvironmentId {
+    fn from(value: EnvironmentId) -> Self {
         Self {
             uuid: value.0.into(),
         }

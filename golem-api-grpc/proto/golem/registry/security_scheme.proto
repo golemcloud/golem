@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package golem.registry;
+
+import "golem/common/uuid.proto";
+
+message SecuritySchemeId {
+  golem.common.UUID value = 1;
+}
+
+enum SecuritySchemeProvider {
+  SECURITY_SCHEME_PROVIDER_UNSPECIFIED = 0;
+  SECURITY_SCHEME_PROVIDER_GOOGLE = 1;
+  SECURITY_SCHEME_PROVIDER_FACEBOOK = 2;
+  SECURITY_SCHEME_PROVIDER_MICROSOFT = 3;
+  SECURITY_SCHEME_PROVIDER_GITLAB = 4;
+}

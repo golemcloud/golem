@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await};
+use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
+use golem_common::base_model::agent::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::WorkerId;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValueAndType, ValueAndType};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
 use std::time::Duration;
 use tracing::{info, Level};
@@ -29,9 +32,6 @@ pub struct LatencySmall {
     config: RunConfig,
 }
 pub struct LatencyMedium {
-    config: RunConfig,
-}
-pub struct LatencyLarge {
     config: RunConfig,
 }
 
@@ -47,7 +47,7 @@ impl Benchmark for LatencySmall {
     fn description() -> &'static str {
         indoc! {
             "Benchmarks both the cold and hot latency of a invoking a component that can potentially
-            be swapped out of the executor's memory. This variant uses a small rust component.
+            be swapped out of the executor's memory. This variant uses a small rust agent.
             The `size` parameter is the number of workers to create. The `length` parameter is the number
             of hot invocations to be done per worker (the first one is separately recorded as cold).
             "
@@ -62,10 +62,9 @@ impl Benchmark for LatencySmall {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         LatencyBenchmark::new(
-            "benchmark_direct_rust",
-            "benchmark:direct-rust",
-            "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
-            vec!["benchmark".into_value_and_type()],
+            "benchmark_agent_rust_release",
+            "benchmark:agent-rust",
+            "rust-benchmark-agent",
             mode,
             verbosity,
             cluster_size,
@@ -145,89 +144,7 @@ impl Benchmark for LatencyMedium {
         LatencyBenchmark::new(
             "benchmark_agent_ts",
             "benchmark:agent-ts",
-            "benchmark:agent-ts/benchmark-agent.{echo}",
-            vec!["benchmark".into_value_and_type()],
-            mode,
-            verbosity,
-            cluster_size,
-            disable_compilation_cache,
-            otlp,
-        )
-        .await
-    }
-
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
-    }
-
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
-    }
-
-    async fn setup_iteration(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
-    }
-
-    async fn warmup(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        _context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(&self.config).await
-    }
-
-    async fn run(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: &Self::IterationContext,
-        recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
-    }
-
-    async fn cleanup_iteration(
-        &self,
-        benchmark_context: &Self::BenchmarkContext,
-        context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
-    }
-}
-
-#[async_trait]
-impl Benchmark for LatencyLarge {
-    type BenchmarkContext = LatencyBenchmark;
-    type IterationContext = IterationContext;
-
-    fn name() -> &'static str {
-        "latency-large"
-    }
-
-    fn description() -> &'static str {
-        indoc! {
-            "Benchmarks both the cold and hot latency of a invoking a component that can potentially
-            be swapped out of the executor's memory. This variant uses a TypeScript agent with many AI dependencies.
-            The `size` parameter is the number of workers to create. The `length` parameter is the number
-            of hot invocations to be done per worker (the first one is separately recorded as cold).
-            "
-        }
-    }
-
-    async fn create_benchmark_context(
-        mode: &TestMode,
-        verbosity: Level,
-        cluster_size: usize,
-        disable_compilation_cache: bool,
-        otlp: bool,
-    ) -> Self::BenchmarkContext {
-        LatencyBenchmark::new(
-            "benchmark_agent_ts_large",
-            "benchmark:agent-ts-large",
-            "benchmark:agent-ts-large/benchmark-agent.{echo}",
-            vec!["benchmark".into_value_and_type()],
+            "benchmark-agent",
             mode,
             verbosity,
             cluster_size,
@@ -279,15 +196,16 @@ impl Benchmark for LatencyLarge {
 }
 
 pub struct IterationContext {
-    worker_ids: Vec<WorkerId>,
+    user: TestUserContext<BenchmarkTestDependencies>,
+    component_id: ComponentId,
+    agent_ids: Vec<AgentId>,
     length: usize,
 }
 
 pub struct LatencyBenchmark {
     component_name: String,
     root_package_name: String,
-    function_name: String,
-    function_params: Vec<ValueAndType>,
+    agent_type_name: String,
     deps: BenchmarkTestDependencies,
 }
 
@@ -295,8 +213,7 @@ impl LatencyBenchmark {
     pub async fn new(
         component_name: &str,
         root_package_name: &str,
-        function_name: &str,
-        function_params: Vec<ValueAndType>,
+        agent_type_name: &str,
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
@@ -306,8 +223,7 @@ impl LatencyBenchmark {
         Self {
             component_name: component_name.to_string(),
             root_package_name: root_package_name.to_string(),
-            function_name: function_name.to_string(),
-            function_params,
+            agent_type_name: agent_type_name.to_string(),
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -324,27 +240,26 @@ impl LatencyBenchmark {
     }
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
-        let mut worker_ids = vec![];
+        let user = self.deps.user().await.unwrap();
+        let (_, env) = user.app_and_env().await.unwrap();
 
-        let component_id = self
-            .deps
-            .admin()
-            .await
-            .component(&self.component_name)
+        let component = user
+            .component(&env.id, &self.component_name)
             .name(&self.root_package_name)
             .store()
-            .await;
+            .await
+            .unwrap();
 
+        let mut agent_ids = vec![];
         for n in 0..config.size {
-            let worker_id = WorkerId {
-                component_id: component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}\")"),
-            };
-            worker_ids.push(worker_id);
+            let agent_id = agent_id!(&self.agent_type_name, format!("test-{n}"));
+            agent_ids.push(agent_id);
         }
 
         IterationContext {
-            worker_ids,
+            user,
+            component_id: component.id,
+            agent_ids,
             length: config.length,
         }
     }
@@ -361,26 +276,28 @@ impl LatencyBenchmark {
 
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
         let result_futures = iteration
-            .worker_ids
+            .agent_ids
             .iter()
-            .map(move |worker_id| async move {
-                let deps_clone = self.deps.clone();
+            .map(move |agent_id| async move {
+                let user_clone = iteration.user.clone();
 
-                let cold_result = invoke_and_await(
-                    &deps_clone,
-                    worker_id,
-                    &self.function_name,
-                    self.function_params.clone(),
+                let cold_result = invoke_and_await_agent(
+                    &user_clone,
+                    &iteration.component_id,
+                    agent_id,
+                    "echo",
+                    data_value!("benchmark"),
                 )
                 .await;
 
                 let mut hot_results = vec![];
                 for _ in 0..iteration.length {
-                    let hot_result = invoke_and_await(
-                        &deps_clone,
-                        worker_id,
-                        &self.function_name,
-                        self.function_params.clone(),
+                    let hot_result = invoke_and_await_agent(
+                        &user_clone,
+                        &iteration.component_id,
+                        agent_id,
+                        "echo",
+                        data_value!("benchmark"),
                     )
                     .await;
                     hot_results.push(hot_result);
@@ -400,6 +317,11 @@ impl LatencyBenchmark {
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        delete_workers(&self.deps, &iteration.worker_ids).await
+        let worker_ids: Vec<WorkerId> = iteration
+            .agent_ids
+            .iter()
+            .filter_map(|agent_id| WorkerId::from_agent_id(iteration.component_id, agent_id).ok())
+            .collect();
+        delete_workers(&iteration.user, &worker_ids).await
     }
 }

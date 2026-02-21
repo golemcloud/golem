@@ -12,213 +12,193 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::ComponentServiceConfig;
-use crate::service::component::ComponentServiceError;
-use crate::service::with_metadata;
+use crate::config::AuthServiceConfig;
+use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::{
-    get_component_metadata_response, GetLatestComponentRequest,
-};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::{AccountId, ComponentId, ProjectId};
-use golem_common::retries::with_retries;
-use golem_service_base::clients::auth::AuthServiceError;
-use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::error;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::model::auth::AuthorizationError;
+use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
+use std::sync::Arc;
 
-// A wrapper over base auth service to be used by worker-service as well as debug-service (both being directly user facing).
-// Debug service requires similar authentication when trying to create a worker in debug mode.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthServiceError {
+    #[error("Could not authenticate user using token")]
+    CouldNotAuthenticate,
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
+}
+
+impl SafeDisplay for AuthServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::CouldNotAuthenticate => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
+            Self::InternalError(_) => "Internal error".to_string(),
+        }
+    }
+}
+
+error_forwarding!(AuthServiceError, RegistryServiceError);
+
 #[async_trait]
 pub trait AuthService: Send + Sync {
-    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError>;
-
-    async fn authorize_project_action(
+    async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
+    async fn authorize_environment_actions(
         &self,
-        project_id: &ProjectId,
-        permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError>;
-
-    async fn is_authorized_by_component(
-        &self,
-        component_id: &ComponentId,
-        permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError>;
+        environment_id: EnvironmentId,
+        action: EnvironmentAction,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AuthDetailsForEnvironment, AuthServiceError>;
 }
 
-pub struct GrpcAuthService {
-    common_auth: golem_service_base::clients::auth::AuthService,
-    component_service_config: ComponentServiceConfig,
-    component_service_client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
-    component_project_cache: Cache<ComponentId, (), ProjectId, String>,
+#[derive(Clone)]
+enum AuthCtxCacheError {
+    CouldNotAuthenticate,
+    Error,
 }
 
-impl GrpcAuthService {
-    pub fn new(
-        common_auth: golem_service_base::clients::auth::AuthService,
-        component_service_config: ComponentServiceConfig,
-    ) -> Self {
-        let component_service_client = GrpcClient::new(
-            "auth_service",
-            |channel| {
-                ComponentServiceClient::new(channel)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-            },
-            component_service_config.uri(),
-            GrpcClientConfig {
-                retries_on_unavailable: component_service_config.retries.clone(),
-                ..Default::default()
-            },
-        );
+impl From<AuthCtxCacheError> for AuthServiceError {
+    fn from(value: AuthCtxCacheError) -> Self {
+        match value {
+            AuthCtxCacheError::CouldNotAuthenticate => AuthServiceError::CouldNotAuthenticate,
+            AuthCtxCacheError::Error => {
+                AuthServiceError::InternalError(anyhow!("Cached request failed"))
+            }
+        }
+    }
+}
 
-        // TODO configuration
-        let component_project_cache = Cache::new(
-            Some(10000),
-            FullCacheEvictionMode::LeastRecentlyUsed(1),
-            BackgroundEvictionMode::OlderThan {
-                ttl: Duration::from_secs(60 * 60),
-                period: Duration::from_secs(60),
-            },
-            "component_project",
-        );
+#[derive(Clone)]
+enum EnvironmentAuthDetailsCacheError {
+    NotFound,
+    Error,
+}
 
+pub struct RemoteAuthService {
+    client: Arc<dyn RegistryService>,
+    auth_ctx_cache: Cache<TokenSecret, (), AuthCtx, AuthCtxCacheError>,
+    environment_auth_details_cache: Cache<
+        (EnvironmentId, AuthCtx),
+        (),
+        AuthDetailsForEnvironment,
+        EnvironmentAuthDetailsCacheError,
+    >,
+}
+
+impl RemoteAuthService {
+    pub fn new(client: Arc<dyn RegistryService>, config: &AuthServiceConfig) -> Self {
         Self {
-            common_auth,
-            component_service_config,
-            component_service_client,
-            component_project_cache,
+            client,
+            auth_ctx_cache: Cache::new(
+                Some(config.auth_ctx_cache_max_capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::OlderThan {
+                    ttl: config.auth_ctx_cache_ttl,
+                    period: config.auth_ctx_cache_eviction_period,
+                },
+                "token_secret_to_auth_ctx",
+            ),
+            environment_auth_details_cache: Cache::new(
+                Some(config.environment_auth_details_cache_max_capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::OlderThan {
+                    ttl: config.environment_auth_details_cache_ttl,
+                    period: config.environment_auth_details_cache_eviction_period,
+                },
+                "environment_id_to_auth_details",
+            ),
         }
     }
 
-    async fn get_project(
+    async fn auth_details_for_environment_id(
         &self,
-        component_id: &ComponentId,
-        metadata: &AuthCtx,
-    ) -> Result<ProjectId, AuthServiceError> {
-        let id = component_id.clone();
-        let metadata = metadata.clone();
-        let retries = self.component_service_config.retries.clone();
-        let client = self.component_service_client.clone();
-
-        self.component_project_cache
-            .get_or_insert_simple(component_id, || {
-                Box::pin(async move {
-                    let result = with_retries(
-                        "component",
-                        "get_project",
-                        Some(format!("{id}")),
-                        &retries.clone(),
-                        &(client.clone(), id.clone(), metadata.clone()),
-                        |(client, id, metadata)| {
-                            Box::pin(async move {
-                                let response = client
-                                    .call("get_latest_component", move |client| {
-                                        let request = GetLatestComponentRequest {
-                                            component_id: Some(id.clone().into()),
-                                        };
-                                        let request = with_metadata(request, metadata.clone());
-
-                                        Box::pin(client.get_latest_component_metadata(request))
-                                    })
-                                    .await?
-                                    .into_inner();
-
-                                match response.result {
-                                    None => Err(ComponentServiceError::Internal(
-                                        "Empty response".to_string(),
-                                    )),
-                                    Some(get_component_metadata_response::Result::Success(
-                                        response,
-                                    )) => response
-                                        .component
-                                        .and_then(|c| c.project_id)
-                                        .and_then(|id| id.try_into().ok())
-                                        .ok_or_else(|| {
-                                            ComponentServiceError::Internal(
-                                                "Empty project id".to_string(),
-                                            )
-                                        }),
-                                    Some(get_component_metadata_response::Result::Error(error)) => {
-                                        let err = error.into();
-                                        Err(err)
-                                    }
-                                }
-                            })
-                        },
-                        is_retriable,
-                    )
-                    .await;
-
-                    result.map_err(|e| {
-                        error!("Getting project of component: {} - error: {}", id, e);
-                        "Get project error".to_string()
-                    })
-                })
-            })
+        environment_id: EnvironmentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Option<AuthDetailsForEnvironment>, AuthServiceError> {
+        // environment level auth does not care about impersonation, so downgrade here to avoid cache
+        // misses during rpc
+        let impersonated_auth = auth_ctx.impersonated();
+        let result = self
+            .environment_auth_details_cache
+            .get_or_insert_simple(
+                &(environment_id, impersonated_auth.clone()),
+                async move || {
+                    self.client
+                        .get_auth_details_for_environment(environment_id, false, &impersonated_auth)
+                        .await
+                        .map_err(|e| match e {
+                            RegistryServiceError::NotFound(_) => {
+                                EnvironmentAuthDetailsCacheError::NotFound
+                            }
+                            e => {
+                                tracing::warn!("Authenticating user token failed: {e}");
+                                EnvironmentAuthDetailsCacheError::Error
+                            }
+                        })
+                },
+            )
             .await
-            .map_err(AuthServiceError::Unauthorized)
+            .map(Some)
+            .or_else(|e| match e {
+                EnvironmentAuthDetailsCacheError::NotFound => Ok(None),
+                EnvironmentAuthDetailsCacheError::Error => Err(anyhow!(
+                    "Cached get_auth_details_for_environment request failed"
+                )),
+            })?;
+
+        Ok(result)
     }
 }
 
 #[async_trait]
-impl AuthService for GrpcAuthService {
-    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
-        self.common_auth.get_account(ctx).await
+impl AuthService for RemoteAuthService {
+    async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
+        let result = self
+            .auth_ctx_cache
+            .get_or_insert_simple(&token.clone(), async move || {
+                self.client
+                    .authenticate_token(&token)
+                    .await
+                    .map_err(|e| match e {
+                        RegistryServiceError::CouldNotAuthenticate(_) => {
+                            AuthCtxCacheError::CouldNotAuthenticate
+                        }
+                        e => {
+                            tracing::warn!("Authenticating user token failed: {e}");
+                            AuthCtxCacheError::Error
+                        }
+                    })
+            })
+            .await?;
+
+        Ok(result)
     }
 
-    async fn authorize_project_action(
+    async fn authorize_environment_actions(
         &self,
-        project_id: &ProjectId,
-        permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError> {
-        self.common_auth
-            .authorize_project_action(project_id, permission, ctx)
-            .await
-    }
+        environment_id: EnvironmentId,
+        action: EnvironmentAction,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AuthDetailsForEnvironment, AuthServiceError> {
+        let environment_auth_details = self
+            .auth_details_for_environment_id(environment_id, auth_ctx)
+            .await?
+            .ok_or(AuthServiceError::Unauthorized(
+                AuthorizationError::EnvironmentActionNotAllowed(action),
+            ))?;
 
-    async fn is_authorized_by_component(
-        &self,
-        component_id: &ComponentId,
-        permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError> {
-        let project_id = self.get_project(component_id, ctx).await?;
+        auth_ctx.authorize_environment_action(
+            environment_auth_details.account_id_owning_environment,
+            &environment_auth_details.environment_roles_from_shares,
+            action,
+        )?;
 
-        self.authorize_project_action(&project_id, permission, ctx)
-            .await
-    }
-}
-
-fn is_retriable(error: &ComponentServiceError) -> bool {
-    matches!(
-        error,
-        ComponentServiceError::FailedGrpcStatus(_) | ComponentServiceError::FailedTransport(_)
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::service::with_metadata;
-    use uuid::Uuid;
-
-    #[test]
-    fn test_uuid_aut() {
-        let uuid = Uuid::new_v4();
-        let metadata = vec![("authorization".to_string(), format!("Bearer {uuid}"))];
-
-        let result = with_metadata((), metadata);
-        assert_eq!(1, result.metadata().len())
+        Ok(environment_auth_details)
     }
 }

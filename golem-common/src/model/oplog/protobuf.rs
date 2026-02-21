@@ -16,11 +16,12 @@ use super::{
     ExportedFunctionParameters, LogLevel, ManualUpdateParameters, OplogCursor,
     PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
     PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
-    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError, WorkerResourceId,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicOplogEntryWithIndex, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
+    PublicWorkerInvocation, SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError,
+    WorkerResourceId, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
@@ -122,7 +123,7 @@ impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
     fn from(value: golem_api_grpc::proto::golem::worker::OplogCursor) -> Self {
         Self {
             next_oplog_index: value.next_oplog_index,
-            current_component_version: value.current_component_version,
+            current_component_revision: value.current_component_revision,
         }
     }
 }
@@ -131,7 +132,7 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
     fn from(value: OplogCursor) -> Self {
         Self {
             next_oplog_index: value.next_oplog_index,
-            current_component_version: value.current_component_version,
+            current_component_revision: value.current_component_revision,
         }
     }
 }
@@ -141,11 +142,11 @@ impl From<PluginInstallationDescription>
 {
     fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
         golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
-            installation_id: Some(plugin_installation_description.installation_id.into()),
+            plugin_priority: plugin_installation_description.plugin_priority.0,
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
             parameters: HashMap::from_iter(plugin_installation_description.parameters),
-            registered: plugin_installation_description.registered,
+            registered: false,
         }
     }
 }
@@ -159,13 +160,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
         value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
     ) -> Result<Self, Self::Error> {
         Ok(PluginInstallationDescription {
-            installation_id: value
-                .installation_id
-                .ok_or("Missing installation_id".to_string())?
-                .try_into()?,
+            plugin_priority: PluginPriority(value.plugin_priority),
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
-            registered: value.registered,
             parameters: BTreeMap::from_iter(value.parameters),
         })
     }
@@ -211,14 +208,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .worker_id
                     .ok_or("Missing worker_id field")?
                     .try_into()?,
-                component_version: create.component_version,
-                args: create.args,
+                component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
-                project_id: create
-                    .project_id
-                    .ok_or("Missing project_id field")?
+                environment_id: create
+                    .environment_id
+                    .ok_or("Missing environment_id field")?
                     .try_into()?,
-                created_by: create.created_by.ok_or("Missing created_by field")?.into(),
+                created_by: create
+                    .created_by
+                    .ok_or("Missing created_by field")?
+                    .try_into()?,
                 wasi_config_vars: create
                     .wasi_config_vars
                     .ok_or("Missing wasi_config_vars field")?
@@ -282,19 +281,28 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     )?,
                 }),
             ),
-            oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => Ok(
-                PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
-                    timestamp: exported_function_completed
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    response: exported_function_completed
-                        .response
-                        .map(|tav| tav.try_into())
-                        .transpose()?,
-                    consumed_fuel: exported_function_completed.consumed_fuel,
-                }),
-            ),
+            oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => {
+                // TODO: align types
+                let consumed_fuel = if exported_function_completed.consumed_fuel > i64::MAX as u64 {
+                    i64::MAX
+                } else {
+                    exported_function_completed.consumed_fuel as i64
+                };
+
+                Ok(PublicOplogEntry::ExportedFunctionCompleted(
+                    ExportedFunctionCompletedParams {
+                        timestamp: exported_function_completed
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        response: exported_function_completed
+                            .response
+                            .map(|tav| tav.try_into())
+                            .transpose()?,
+                        consumed_fuel,
+                    },
+                ))
+            }
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
                 timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
@@ -388,7 +396,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: pending_update.target_version,
+                    target_revision: pending_update.target_revision.try_into()?,
                     description: pending_update
                         .update_description
                         .ok_or("Missing update_description field")?
@@ -401,7 +409,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: successful_update.target_version,
+                    target_revision: successful_update.target_revision.try_into()?,
                     new_component_size: successful_update.new_component_size,
                     new_active_plugins: BTreeSet::from_iter(
                         successful_update
@@ -418,7 +426,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_version: failed_update.target_version,
+                    target_revision: failed_update.target_revision.try_into()?,
                     details: failed_update.details,
                 }))
             }
@@ -595,11 +603,10 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         worker_id: Some(create.worker_id.into()),
-                        component_version: create.component_version,
-                        args: create.args,
+                        component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
-                        project_id: Some(create.project_id.into()),
+                        environment_id: Some(create.environment_id.into()),
                         wasi_config_vars: Some(create.wasi_config_vars.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
@@ -651,6 +658,13 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 }
             }
             PublicOplogEntry::ExportedFunctionCompleted(exported_function_completed) => {
+                // TODO: align types
+                let consumed_fuel = if exported_function_completed.consumed_fuel < 0 {
+                    0
+                } else {
+                    exported_function_completed.consumed_fuel as u64
+                };
+
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::ExportedFunctionCompleted(
                         golem_api_grpc::proto::golem::worker::ExportedFunctionCompletedParameters {
@@ -658,7 +672,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             response: exported_function_completed
                                 .response
                                 .map(|value| value.into()),
-                            consumed_fuel: exported_function_completed.consumed_fuel,
+                            consumed_fuel,
                         },
                     )),
                 }
@@ -776,7 +790,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::PendingUpdate(
                         golem_api_grpc::proto::golem::worker::PendingUpdateParameters {
                             timestamp: Some(pending_update.timestamp.into()),
-                            target_version: pending_update.target_version,
+                            target_revision: pending_update.target_revision.into(),
                             update_description: Some(pending_update.description.into()),
                         },
                     )),
@@ -787,7 +801,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::SuccessfulUpdate(
                         golem_api_grpc::proto::golem::worker::SuccessfulUpdateParameters {
                             timestamp: Some(successful_update.timestamp.into()),
-                            target_version: successful_update.target_version,
+                            target_revision: successful_update.target_revision.into(),
                             new_component_size: successful_update.new_component_size,
                             new_active_plugins: successful_update
                                 .new_active_plugins
@@ -803,7 +817,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::FailedUpdate(
                         golem_api_grpc::proto::golem::worker::FailedUpdateParameters {
                             timestamp: Some(failed_update.timestamp.into()),
-                            target_version: failed_update.target_version,
+                            target_revision: failed_update.target_revision.into(),
                             details: failed_update.details,
                         },
                     )),
@@ -1186,7 +1200,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
             ),
             worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
                 PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
-                    target_version: manual_update,
+                    target_revision: manual_update.try_into()?,
                 }),
             ),
         }
@@ -1220,7 +1234,7 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
             PublicWorkerInvocation::ManualUpdate(manual_update) => {
                 golem_api_grpc::proto::golem::worker::WorkerInvocation {
                     invocation: Some(worker_invocation::Invocation::ManualUpdate(
-                        manual_update.target_version,
+                        manual_update.target_revision.into(),
                     )),
                 }
             }
@@ -1366,5 +1380,33 @@ fn decode_public_span_data(
         }
 
         result
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
+    for PublicOplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: OplogIndex::from_u64(value.oplog_index),
+            entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
+        })
+    }
+}
+
+impl TryFrom<PublicOplogEntryWithIndex>
+    for golem_api_grpc::proto::golem::worker::OplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: value.oplog_index.into(),
+            entry: Some(value.entry.try_into()?),
+        })
     }
 }

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package golem.common;
 
+import "golem/common/uuid.proto";
+
 message AccountId {
-  string name = 1;
+  golem.common.UUID value = 1;
 }

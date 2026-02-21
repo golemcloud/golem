@@ -15,22 +15,19 @@
 use super::{HasWasiConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
+use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
-use crate::services::resource_limits::ResourceLimits;
+use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
@@ -47,19 +44,21 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use golem_common::base_model::{OplogIndex, ProjectId};
+use golem_common::base_model::OplogIndex;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{
+    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
+};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerStatusRecord,
-};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
@@ -80,33 +79,28 @@ use wasmtime_wasi_http::WasiHttpView;
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     config: Arc<GolemConfig>,
-    project_owner_account_id: AccountId,
-    resource_limits: Arc<dyn ResourceLimits>,
-    last_fuel_level: i64,
-    min_fuel_level: i64,
+    resource_limit_entry: Arc<AtomicResourceEntry>,
+    last_fuel_level: u64,
+    min_fuel_level: u64,
 }
 
 impl Context {
     pub fn new(
         golem_ctx: DurableWorkerCtx<Context>,
         config: Arc<GolemConfig>,
-        project_owner_account_id: AccountId,
-        resource_limits: Arc<dyn ResourceLimits + Send + Sync>,
+        resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Self {
         Self {
             durable_ctx: golem_ctx,
             config,
-            project_owner_account_id,
-            resource_limits,
-            last_fuel_level: i64::MAX,
-            min_fuel_level: i64::MAX,
+            resource_limit_entry,
+            last_fuel_level: u64::MAX,
+            min_fuel_level: u64::MAX,
         }
     }
 
-    pub async fn get_max_memory(&self) -> Result<usize, WorkerExecutorError> {
-        self.resource_limits
-            .get_max_memory(&self.project_owner_account_id)
-            .await
+    pub fn get_max_memory(&self) -> usize {
+        self.resource_limit_entry.max_memory_limit()
     }
 }
 
@@ -122,61 +116,32 @@ impl DurableWorkerCtxView<Context> for Context {
 
 #[async_trait]
 impl FuelManagement for Context {
-    fn is_out_of_fuel(&self, current_level: i64) -> bool {
-        current_level < self.min_fuel_level
-    }
-
-    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError> {
-        let amount = self
-            .resource_limits
-            .borrow_fuel(
-                &self.project_owner_account_id,
-                self.config.limits.fuel_to_borrow,
-            )
-            .await?;
-        self.min_fuel_level -= amount;
-        debug!(
-            "borrowed fuel for {}: {}",
-            self.project_owner_account_id, amount
-        );
-        Ok(())
-    }
-
-    fn borrow_fuel_sync(&mut self) {
-        let amount = self.resource_limits.borrow_fuel_sync(
-            &self.project_owner_account_id,
+    fn borrow_fuel(&mut self, current_level: u64) -> bool {
+        let amount_to_borrow = Ord::max(
             self.config.limits.fuel_to_borrow,
+            self.min_fuel_level.saturating_sub(current_level),
         );
-        match amount {
-            Some(amount) => {
-                debug!("borrowed fuel for {}: {}", self.project_owner_account_id, amount);
-                self.min_fuel_level -= amount;
-            }
-            None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
+        let success = self.resource_limit_entry.borrow_fuel(amount_to_borrow);
+        if success {
+            debug!("borrowed {amount_to_borrow} fuel");
         }
+        success
     }
 
-    async fn return_fuel(&mut self, current_level: i64) -> Result<i64, WorkerExecutorError> {
-        let unused = current_level - self.min_fuel_level;
+    fn return_fuel(&mut self, current_level: u64) -> u64 {
+        let unused = current_level.saturating_sub(self.min_fuel_level);
         if unused > 0 {
-            debug!("current_level: {current_level}");
-            debug!("min_fuel_level: {}", self.min_fuel_level);
-            debug!("last_fuel_level: {}", self.last_fuel_level);
-            debug!(
-                "returning unused fuel for {}: {}",
-                self.project_owner_account_id, unused
-            );
-            self.resource_limits
-                .return_fuel(&self.project_owner_account_id, unused)
-                .await?
+            self.resource_limit_entry.return_fuel(unused);
+            debug!("returned {} fuel", unused);
+            self.min_fuel_level = self.min_fuel_level.saturating_add(unused);
         }
+
+        assert!(self.last_fuel_level >= current_level);
         let consumed = self.last_fuel_level - current_level;
         self.last_fuel_level = current_level;
-        debug!(
-            "reset fuel mark for {}: {}",
-            self.project_owner_account_id, current_level
-        );
-        Ok(consumed)
+        debug!("reset fuel mark to {}", current_level);
+
+        consumed
     }
 }
 
@@ -251,7 +216,7 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
@@ -272,7 +237,7 @@ impl ResourceLimiterAsync for Context {
         desired: usize,
         maximum: Option<usize>,
     ) -> anyhow::Result<bool> {
-        let limit = self.get_max_memory().await?;
+        let limit = self.get_max_memory();
         debug!(
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
             current, desired, maximum, limit
@@ -341,17 +306,6 @@ impl ExternalOperations<Context> for Context {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 
-    async fn record_last_known_limits<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        project_id: &ProjectId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        let project_owner = this.project_service().get_project_owner(project_id).await?;
-        this.resource_limits()
-            .update_last_known_limits(&project_owner, last_known_limits)
-            .await
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
@@ -390,22 +344,22 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         details: Option<String>,
     ) {
         self.durable_ctx
-            .on_worker_update_failed(target_version, details)
+            .on_worker_update_failed(target_revision, details)
             .await
     }
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -537,7 +491,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -632,11 +586,10 @@ impl WorkerCtx for Context {
         worker_config: WorkerConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -662,16 +615,16 @@ impl WorkerCtx for Context {
             worker_config.clone(),
             execution_status,
             file_loader,
-            plugins,
             worker_fork,
-            project_service,
             agent_types_service,
+            agent_webhooks_service,
             shard_service,
             pending_update,
             original_phantom_id,
         )
         .await?;
-        Ok(Self::new(golem_ctx, config, account_id, resource_limits))
+        let account_resource_limits = resource_limits.initialize_account(account_id).await?;
+        Ok(Self::new(golem_ctx, config, account_resource_limits))
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {
@@ -706,11 +659,11 @@ impl WorkerCtx for Context {
         self.durable_ctx.agent_mode()
     }
 
-    fn created_by(&self) -> &AccountId {
+    fn created_by(&self) -> AccountId {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component {
+    fn component_metadata(&self) -> &ComponentDto {
         self.durable_ctx.component_metadata()
     }
 

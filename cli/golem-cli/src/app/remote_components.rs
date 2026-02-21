@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::context::check_http_response_success;
+use crate::client::check_http_response_success;
+use crate::fs;
 use crate::log::{log_action, log_warn_action, LogColorize};
 use anyhow::{anyhow, Context};
 use std::path::PathBuf;
@@ -35,7 +36,7 @@ impl RemoteComponents {
 
     pub async fn get_from_url(&self, url: &Url) -> anyhow::Result<PathBuf> {
         let parent_dir = self.temp_dir.join("remote-components");
-        crate::fs::create_dir_all(&parent_dir)?;
+        fs::create_dir_all(&parent_dir)?;
 
         let url_hash = blake3::hash(url.as_str().as_bytes()).to_hex();
         let path = parent_dir.join(format!("{url_hash}.wasm"));

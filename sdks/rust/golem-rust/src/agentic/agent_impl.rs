@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::{agent_registry, get_principal, get_resolved_agent, register_principal};
+use crate::golem_agentic::golem::agent::common::Principal;
+use crate::golem_agentic::golem::agent::host::parse_agent_id;
+use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
+use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 use crate::{
     agentic::{
         with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
@@ -19,15 +24,25 @@ use crate::{
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
-use crate::agentic::{agent_registry, get_resolved_agent};
-use crate::golem_agentic::golem::agent::host::parse_agent_id;
-use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
-use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
+fn serialize_principal(p: &Principal) -> Vec<u8> {
+    serde_json::to_vec(p).expect("Failed to serialize principal to JSON")
+}
+
+fn deserialize_principal(bytes: &[u8]) -> Result<Principal, String> {
+    serde_json::from_slice(bytes).map_err(|e| format!("Failed to deserialize principal: {e}"))
+}
 
 pub struct Component;
 
 impl Guest for Component {
-    fn initialize(agent_type: String, input: DataValue) -> Result<(), AgentError> {
+    fn initialize(
+        agent_type: String,
+        input: DataValue,
+        principal: Principal,
+    ) -> Result<(), AgentError> {
+        wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
+        log::set_max_level(log::LevelFilter::Trace);
+
         let agent_types = agent_registry::get_all_agent_types();
 
         let agent_type = agent_types
@@ -47,20 +62,27 @@ impl Guest for Component {
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
+        register_principal(&principal);
+
         with_agent_initiator(
-            |initiator| async move { initiator.initiate(input).await.map(|_| ()) },
+            |initiator| async move { initiator.initiate(input, principal).await.map(|_| ()) },
             &agent_type_name,
         )
     }
 
+    // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
-    fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
+    fn invoke(
+        method_name: String,
+        input: DataValue,
+        principal: Principal,
+    ) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
             resolved_agent
                 .agent
                 .borrow_mut()
                 .as_mut()
-                .invoke(method_name, input)
+                .invoke(method_name, input, principal)
                 .await
         })
     }
@@ -77,8 +99,12 @@ impl Guest for Component {
 }
 
 impl LoadSnapshotGuest for Component {
+    // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn load(bytes: Vec<u8>) -> Result<(), String> {
+        wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
+        log::set_max_level(log::LevelFilter::Trace);
+
         let agent_id = get_resolved_agent();
 
         if agent_id.is_some() {
@@ -91,11 +117,32 @@ impl LoadSnapshotGuest for Component {
 
         let version = bytes[0];
 
-        if version != 1 {
-            return Err(format!("Unsupported snapshot version: {}", version));
-        }
+        let (principal, agent_snapshot) = match version {
+            1 => {
+                let agent_snapshot = bytes[1..].to_vec();
+                let principal = get_principal().unwrap_or(Principal::Anonymous);
+                (principal, agent_snapshot)
+            }
+            2 => {
+                if bytes.len() < 5 {
+                    return Err("Version 2 snapshot too short for principal length".into());
+                }
+                let principal_len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                let principal_start = 5;
+                let principal_end = principal_start + principal_len;
+                if bytes.len() < principal_end {
+                    return Err("Version 2 snapshot too short for principal data".into());
+                }
+                let principal = deserialize_principal(&bytes[principal_start..principal_end])?;
+                let agent_snapshot = bytes[principal_end..].to_vec();
+                (principal, agent_snapshot)
+            }
+            _ => {
+                return Err(format!("Unsupported snapshot version: {}", version));
+            }
+        };
 
-        let agent_snapshot = bytes[1..].to_vec();
+        register_principal(&principal);
 
         let id = std::env::var("GOLEM_AGENT_ID")
             .expect("GOLEM_AGENT_ID environment variable must be set");
@@ -104,26 +151,23 @@ impl LoadSnapshotGuest for Component {
             parse_agent_id(&id).map_err(|e| e.to_string())?;
 
         with_agent_initiator(
-            |initiator| async move {
-                initiator
-                    .initiate(agent_parameters)
-                    .await
-                    .map_err(|e| e.to_string())?;
-
-                get_resolved_agent()
-                    .unwrap()
-                    .agent
-                    .borrow()
-                    .load_snapshot_base(agent_snapshot)
-                    .await
-            },
+            |initiator| async move { initiator.initiate(agent_parameters, principal).await },
             &AgentTypeName(agent_type_name),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+        with_agent_instance_async(|resolved_agent| async move {
+            resolved_agent
+                .agent
+                .borrow_mut()
+                .load_snapshot_base(agent_snapshot)
+                .await
+        })
     }
 }
 
 impl SaveSnapshotGuest for Component {
+    // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn save() -> Vec<u8> {
         with_agent_instance_async(|resolved_agent| async move {
@@ -134,12 +178,16 @@ impl SaveSnapshotGuest for Component {
                 .await
                 .expect("Failed to save agent snapshot");
 
-            let total_length = 1 + agent_snapshot.len();
+            let principal = get_principal().unwrap_or(Principal::Anonymous);
+            let principal_bytes = serialize_principal(&principal);
 
+            // Version 2 format: [version=2][principal_len:u32 BE][principal_bytes][agent_snapshot]
+            let total_length = 1 + 4 + principal_bytes.len() + agent_snapshot.len();
             let mut full_snapshot = Vec::with_capacity(total_length);
 
-            full_snapshot.push(1);
-
+            full_snapshot.push(2);
+            full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+            full_snapshot.extend_from_slice(&principal_bytes);
             full_snapshot.extend_from_slice(&agent_snapshot);
 
             full_snapshot

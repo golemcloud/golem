@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
+use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
     pool: SqlitePool,
 }
@@ -57,8 +57,20 @@ impl SqliteIndexedStorage {
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog => "worker-oplog".to_string(),
-            IndexedStorageNamespace::CompressedOpLog { level } => {
+            IndexedStorageNamespace::OpLog { worker_id: _ } => "worker-oplog".to_string(),
+            IndexedStorageNamespace::CompressedOpLog {
+                worker_id: _,
+                level,
+            } => {
+                format!("worker-c{level}-oplog")
+            }
+        }
+    }
+
+    fn meta_namespace(namespace: IndexedStorageMetaNamespace) -> String {
+        match namespace {
+            IndexedStorageMetaNamespace::Oplog => "worker-oplog".to_string(),
+            IndexedStorageMetaNamespace::CompressedOplog { level } => {
                 format!("worker-c{level}-oplog")
             }
         }
@@ -110,7 +122,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: IndexedStorageMetaNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -118,7 +130,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let key = pattern.replace("*", "%").replace("?", "_");
         let query =
             sqlx::query_as("SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
-                .bind(Self::namespace(namespace))
+                .bind(Self::meta_namespace(namespace))
                 .bind(&key)
                 .bind(sqlx::types::Json(count))
                 .bind(sqlx::types::Json(cursor));
@@ -126,7 +138,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let keys = self
             .pool
             .with_ro(svc_name, api_name)
-            .fetch_all::<(String,), _>(query)
+            .fetch_all_as::<(String,), _>(query)
             .await
             .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
             .map_err(|err| err.to_safe_string())?;
@@ -228,7 +240,7 @@ impl IndexedStorage for SqliteIndexedStorage {
 
         self.pool
             .with_ro(svc_name, api_name)
-            .fetch_all::<DBIdValue, _>(query)
+            .fetch_all_as::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
             .map_err(|err| err.to_safe_string())

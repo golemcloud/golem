@@ -23,22 +23,23 @@ use crate::worker::{
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
-    GetFileSystemNodeResult, OplogIndex,
+    OplogIndex,
 };
 use golem_common::model::{
-    ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    IdempotencyKey, OwnedWorkerId, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::Value;
 use std::collections::VecDeque;
@@ -58,6 +59,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
+    pub interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     pub oom_retry_count: u32,
 }
 
@@ -94,6 +96,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     owned_worker_id: self.owned_worker_id.clone(),
                     parent: self.parent.clone(),
                     waiting_for_command: self.waiting_for_command.clone(),
+                    interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
                 };
@@ -188,7 +191,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             agent_type = self.parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         let prepare_result =
@@ -235,6 +238,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
+    interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
 }
@@ -264,17 +268,34 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         while let Some(cmd) = self.receiver.recv().await {
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
-                WorkerCommand::Invocation => {
-                    let message = self.active.write().await.pop_front();
+                WorkerCommand::Unblock => {
+                    loop {
+                        if let Some(kind) = self.interrupt_signal.lock().await.take() {
+                            break self.interrupt(kind).await;
+                        }
 
-                    if let Some(message) = message {
-                        self.invocation(message).await
-                    } else {
-                        CommandOutcome::Continue
+                        let message = self.active.write().await.pop_front();
+
+                        let result = if let Some(message) = message {
+                            self.internal_invocation(message).await
+                        } else {
+                            // Queue is empty, use last_known_status for pending updates and invocations
+                            break self.drain_pending_from_status().await;
+                        };
+
+                        match result {
+                            CommandOutcome::Continue => {
+                                // Continue draining the queue
+                                continue;
+                            }
+                            other => {
+                                // Break out of the drain loop and handle the outcome
+                                break other;
+                            }
+                        }
                     }
                 }
                 WorkerCommand::ResumeReplay => self.resume_replay().await,
-                WorkerCommand::Interrupt(kind) => self.interrupt(kind).await,
             };
             match outcome {
                 CommandOutcome::BreakOuterLoop => {
@@ -295,6 +316,60 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
         final_decision
+    }
+
+    /// When the main queue becomes empty, process items from last_known_status:
+    /// first pending_updates, then pending_invocations
+    async fn drain_pending_from_status(&mut self) -> CommandOutcome {
+        loop {
+            let status = self.parent.last_known_status.read().await.clone();
+
+            // First, try to process a pending update
+            if let Some(update) = status.pending_updates.front() {
+                let target_revision = *update.description.target_revision();
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_worker_id: self.owned_worker_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                };
+                match invocation.manual_update(target_revision).await {
+                    CommandOutcome::Continue => continue,
+                    other => break other,
+                }
+            }
+
+            // Then, try to process a pending invocation
+            if let Some(timestamped_invocation) = status.pending_invocations.first() {
+                let idempotency_key = timestamped_invocation.invocation.idempotency_key();
+                let invocation_span = if let Some(idempotency_key) = idempotency_key {
+                    let spans = self.parent.external_invocation_spans.read().await;
+                    spans.get(idempotency_key).cloned()
+                } else {
+                    None
+                };
+
+                let invocation_span = invocation_span.unwrap_or(Span::current());
+
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_worker_id: self.owned_worker_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                };
+                match invocation
+                    .external_invocation(timestamped_invocation.clone(), &invocation_span)
+                    .await
+                {
+                    CommandOutcome::Continue => continue,
+                    other => break other,
+                }
+            }
+
+            break CommandOutcome::Continue;
+        }
     }
 
     /// Resumes an interrupted replay process
@@ -321,10 +396,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Performs a queued invocation on the worker
     ///
-    /// The queued invocations are grouped into "external" invocations that are observable by the users
-    /// in the worker's invocation queue, oplog, etc., and some internal invocations that we use for
+    /// The queued invocations internal invocations that we use for
     /// concurrency control.
-    async fn invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
+    async fn internal_invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         let mut store = self.store.lock().await;
         let store = store.deref_mut();
 
@@ -364,17 +438,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::External {
-                invocation,
-                span,
-                canceled,
-            } => {
-                if !canceled {
-                    self.external_invocation(invocation, &span).await
-                } else {
-                    CommandOutcome::Continue
-                }
-            }
             QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
@@ -424,8 +487,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     CommandOutcome::Continue
                 }
             }
-            WorkerInvocation::ManualUpdate { target_version } => {
-                self.manual_update(target_version).await
+            WorkerInvocation::ManualUpdate { target_revision } => {
+                self.manual_update(target_revision).await
             }
         }
     }
@@ -447,7 +510,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             agent_type = self.parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             %idempotency_key,
             function = full_function_name
@@ -575,7 +638,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         full_function_name: String,
         function_input: &Vec<Value>,
         output: Option<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
     ) -> CommandOutcome {
         let component_metadata = self.store.as_context().data().component_metadata();
 
@@ -653,7 +716,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         full_function_name: String,
         function_input: &Vec<Value>,
         output: Option<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         function_result: Option<AnalysedFunctionResult>,
     ) -> Result<CommandOutcome, WorkerExecutorError> {
         let result = interpret_function_result(output, function_result).map_err(|e| {
@@ -726,26 +789,26 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
-    async fn manual_update(&mut self, target_version: ComponentVersion) -> CommandOutcome {
+    async fn manual_update(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
         let span = span!(
             Level::INFO,
             "manual_update",
             worker_id = %self.owned_worker_id.worker_id,
-            target_version = %target_version,
+            target_revision = %target_revision,
             agent_type = self.parent
                 .agent_id
                 .as_ref()
-                .map(|id| id.agent_type.clone())
+                .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
 
-        self.manual_update_inner(target_version)
+        self.manual_update_inner(target_revision)
             .instrument(span)
             .await
     }
 
     /// The inner implementation of the manual update command
-    async fn manual_update_inner(&mut self, target_version: ComponentVersion) -> CommandOutcome {
+    async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
         let _idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
@@ -778,7 +841,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 .data()
                                 .get_public_state()
                                 .oplog()
-                                .create_snapshot_based_update_description(target_version, bytes)
+                                .create_snapshot_based_update_description(target_revision, bytes)
                                 .await
                             {
                                 Ok(update_description) => {
@@ -791,7 +854,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 }
                                 Err(error) => {
                                     self.fail_update(
-                                        target_version,
+                                        target_revision,
                                         format!(
                                             "failed to store the snapshot for manual update: {error}"
                                         ),
@@ -801,7 +864,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             }
                         } else {
                             self.fail_update(
-                                target_version,
+                                target_revision,
                                 "failed to get a snapshot for manual update: invalid snapshot result"
                                     .to_string(),
                             )
@@ -817,14 +880,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             .get_last_invocation_errors();
                         let error = error.to_string(&stderr);
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             format!("failed to get a snapshot for manual update: {error}"),
                         )
                             .await
                     }
                     Ok(InvokeResult::Exited { .. }) => {
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             "failed to get a snapshot for manual update: it called exit"
                                 .to_string(),
                         )
@@ -832,7 +895,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             format!(
                                 "failed to get a snapshot for manual update: {interrupt_kind:?}"
                             ),
@@ -841,7 +904,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Err(error) => {
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             format!("failed to get a snapshot for manual update: {error:?}"),
                         )
                             .await
@@ -850,7 +913,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             Ok(None) => {
                 self.fail_update(
-                    target_version,
+                    target_revision,
                     "failed to get a snapshot for manual update: save-snapshot is not exported"
                         .to_string(),
                 )
@@ -858,7 +921,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             Err(error) => {
                 self.fail_update(
-                    target_version,
+                    target_revision,
                     format!("failed to get a snapshot for manual update: error while finding the exported save-snapshot function: {error}"),
                 )
                     .await
@@ -909,10 +972,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Records an attempted worker update as failed
-    async fn fail_update(&self, target_version: ComponentVersion, error: String) -> CommandOutcome {
+    async fn fail_update(
+        &self,
+        target_revision: ComponentRevision,
+        error: String,
+    ) -> CommandOutcome {
         self.store
             .data()
-            .on_worker_update_failed(target_version, Some(error))
+            .on_worker_update_failed(target_revision, Some(error))
             .await;
         CommandOutcome::Continue
     }
@@ -962,7 +1029,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         if let Some(agent_id) = agent_id {
             invocation_span.set_attribute(
                 "agent_type".to_string(),
-                AttributeValue::String(agent_id.agent_type.clone()),
+                AttributeValue::String(agent_id.agent_type.to_string()),
             );
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),

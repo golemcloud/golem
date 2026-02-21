@@ -944,3 +944,21 @@ impl<
         Ok((a, b, c, d, e, f, g, h, i, j, k, l))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::roundtrip_test;
+    use proptest::strategy::Strategy;
+    use test_r::test;
+
+    roundtrip_test!(
+        prop_roundtrip_tuple2_u32_string,
+        (u32, String),
+        (0u32.., ".*").prop_map(|(a, b)| (a, b))
+    );
+    roundtrip_test!(
+        prop_roundtrip_tuple3_u32_string_bool,
+        (u32, String, bool),
+        (0u32.., ".*", proptest::bool::ANY).prop_map(|(a, b, c)| (a, b, c))
+    );
+}

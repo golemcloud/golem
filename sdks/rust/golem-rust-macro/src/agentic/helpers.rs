@@ -15,7 +15,7 @@
 use syn::{ReturnType, Type};
 
 pub struct FunctionOutputInfo {
-    pub future_or_immediate: Asyncness,
+    pub async_ness: Asyncness,
     pub is_unit: bool,
 }
 
@@ -32,7 +32,7 @@ impl FunctionOutputInfo {
         };
 
         FunctionOutputInfo {
-            future_or_immediate: function_kind,
+            async_ness: function_kind,
             is_unit,
         }
     }

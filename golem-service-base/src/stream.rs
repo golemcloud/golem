@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::stream;
 use futures::Stream;
+use futures::stream;
 use pin_project::pin_project;
 use std::error::Error;
 use std::pin::Pin;
@@ -109,7 +109,7 @@ mod tests {
 
     use crate::stream::ByteStream;
     use anyhow::Error;
-    use futures::{stream, StreamExt, TryStreamExt};
+    use futures::{StreamExt, TryStreamExt, stream};
 
     #[test]
     pub async fn test_byte_stream() {

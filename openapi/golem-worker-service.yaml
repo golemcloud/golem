@@ -7,17 +7,24 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: Agent
+  description: API working on agent instances
 - name: AgentTypes
   description: API working on registered agent types
 - name: ApiCertificate
-- name: ApiDefinition
 - name: ApiDeployment
 - name: ApiDomain
 - name: ApiSecurity
+- name: Application
 - name: Component
 - name: Debugging
+- name: Deployment
+- name: Environment
+- name: EnvironmentPluginGrants
+- name: EnvironmentShares
 - name: Grant
 - name: HealthCheck
+- name: HttpApiDefinition
 - name: Limits
   description: The limits API allows users to query their current resource limits.
 - name: Login
@@ -35,6 +42,8 @@ tags:
     The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
 - name: ProjectPolicy
   description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
+- name: RegistryService
+- name: Reports
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -49,7 +58,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HealthcheckResponse'
+                $ref: '#/components/schemas/Empty'
       operationId: healthcheck
   /version:
     get:
@@ -115,12 +124,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -128,6 +131,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -236,12 +245,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -249,6 +252,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -311,12 +320,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -324,6 +327,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -381,7 +390,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerMetadata'
+                $ref: '#/components/schemas/WorkerMetadataDto'
         '400':
           description: ''
           content:
@@ -400,12 +409,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -413,6 +416,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -495,12 +504,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -508,6 +511,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -591,12 +600,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -604,6 +607,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -675,12 +684,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -688,6 +691,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -762,12 +771,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -775,6 +778,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -855,12 +864,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -868,6 +871,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -929,12 +938,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -942,6 +945,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1009,12 +1018,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1022,6 +1025,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1113,12 +1122,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1126,6 +1129,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1194,12 +1203,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1207,6 +1210,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1276,12 +1285,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1289,6 +1292,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1326,10 +1335,13 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: plugin-installation-id
+      - name: plugin-priority
         schema:
-          type: string
-          format: uuid
+          type: integer
+          format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
         in: query
         required: true
         deprecated: false
@@ -1359,12 +1371,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1372,6 +1378,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1409,10 +1421,13 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: plugin-installation-id
+      - name: plugin-priority
         schema:
-          type: string
-          format: uuid
+          type: integer
+          format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
         in: query
         required: true
         deprecated: false
@@ -1442,12 +1457,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1455,6 +1464,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1523,6 +1538,81 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: revert_worker
+  /v1/components/{component_id}/workers/{worker_name}/fork:
+    post:
+      tags:
+      - Worker
+      summary: Fork a worker
+      description: Fork a worker by creating a new worker with the oplog up to the provided index
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: worker_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ForkWorkerRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ForkWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '403':
           description: ''
           content:
@@ -1541,6 +1631,12 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '500':
           description: ''
           content:
@@ -1550,7 +1646,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: revert_worker
+      operationId: fork_worker
   /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
     delete:
       tags:
@@ -1605,12 +1701,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1618,6 +1708,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1675,12 +1771,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
         '404':
           description: ''
           content:
@@ -1688,6 +1778,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -1700,590 +1796,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
       operationId: worker_connect
-  /v1/api/definitions/{project_id}/import:
-    put:
-      tags:
-      - ApiDefinition
-      summary: Upload an OpenAPI definition
-      description: |-
-        Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
-        API definition using it.
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: OpenAPI+WorkerBridgeCustomExtension
-              title: API definition in OpenAPI format
-              description: API definition in OpenAPI format with required custom extensions
-          application/x-yaml:
-            schema:
-              type: OpenAPI+WorkerBridgeCustomExtension
-              title: API definition in OpenAPI format
-              description: API definition in OpenAPI format with required custom extensions
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: import_open_api
-  /v1/api/definitions/{project_id}:
+  /v1/agents/invoke-agent:
     post:
       tags:
-      - ApiDefinition
-      summary: Create a new API definition
-      description: |-
-        Creates a new API definition described by Golem's API definition JSON document.
-        If an API definition of the same version already exists, its an error.
+      - Agent
       parameters:
-      - name: project_id
+      - name: Idempotency-Key
         schema:
           type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/HttpApiDefinitionRequest'
-          application/x-yaml:
-            schema:
-              $ref: '#/components/schemas/HttpApiDefinitionRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create_definition
-    get:
-      tags:
-      - ApiDefinition
-      summary: List API definitions
-      description: Lists all API definitions associated with the project.
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: api-definition-id
-        schema:
-          type: string
-        in: query
+        in: header
         required: false
         deprecated: false
         explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/HttpApiDefinitionResponseData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: list_definitions
-  /v1/api/definitions/{project_id}/{id}/{version}:
-    put:
-      tags:
-      - ApiDefinition
-      summary: Update an existing API definition.
-      description: Only draft API definitions can be updated.
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/HttpApiDefinitionRequest'
-          application/x-yaml:
-            schema:
-              $ref: '#/components/schemas/HttpApiDefinitionRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: update_definition
-    get:
-      tags:
-      - ApiDefinition
-      summary: Get an API definition
-      description: An API definition is selected by its API definition ID and version.
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_definition
-    delete:
-      tags:
-      - ApiDefinition
-      summary: Delete an API definition
-      description: Deletes an API definition by its API definition ID and version.
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_definition
-  /v1/api/definitions/{project_id}/{id}/{version}/export:
-    get:
-      tags:
-      - ApiDefinition
-      summary: Export an API definition in OpenAPI format
-      description: Exports an API definition by its API definition ID and version in OpenAPI format.
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/OpenApiHttpApiDefinitionResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: export_definition
-  /v1/api/deployments/deploy:
-    post:
-      tags:
-      - ApiDeployment
-      summary: Creates or updates a deployment
-      description: Deploys a set of API definitions to a site (specific host and subdomain).
       requestBody:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/ApiDeploymentRequest'
+              $ref: '#/components/schemas/AgentInvocationRequest'
         required: true
       responses:
         '200':
@@ -2291,7 +1820,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ApiDeployment'
+                $ref: '#/components/schemas/AgentInvocationResult'
         '400':
           description: ''
           content:
@@ -2299,12 +1828,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorsBody'
         '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -2328,80 +1851,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: deploy
-  /v1/api/deployments:
-    get:
-      tags:
-      - ApiDeployment
-      summary: Get one or more API deployments
-      description: |-
-        If `api-definition-id` is not set, it lists all API deployments.
-        If `api-definition-id` is set, returns a single API deployment.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: api-definition-id
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ApiDeployment'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
+        '422':
           description: ''
           content:
             application/json; charset=utf-8:
@@ -2416,827 +1866,57 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_deployments
-  /v1/api/deployments/{site}:
-    get:
-      tags:
-      - ApiDeployment
-      summary: Get API deployment by site
-      description: Gets an API deployment by the host name (optionally with a subdomain) it is deployed to.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: site
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ApiDeployment'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_deployment
-    delete:
-      tags:
-      - ApiDeployment
-      summary: Delete API deployment by site
-      description: Deletes an API deployment by the host name (optionally with a subdomain) it is deployed to.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: site
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_deployment
-  /v1/api/deployments/{site}/{id}/{version}:
-    delete:
-      tags:
-      - ApiDeployment
-      summary: Undeploy a single API definition from a site
-      description: Removes a specific API definition (by id and version) from a site without deleting the entire deployment.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: site
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: id
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: version
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: undeploy_api
-  /v1/api/certificates:
-    post:
-      tags:
-      - ApiCertificate
-      summary: Creates a new certificate
-      description: |-
-        A certificate is associated with a given Golem project and domain, and consists of
-        a key pair.
-
-        The created certificate will be associated with a certificate ID returned by this endpoint.
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CertificateRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Certificate'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create_certificate
-    get:
-      tags:
-      - ApiCertificate
-      summary: Gets one or all certificates for a given project
-      description: |-
-        If `certificate-id` is not set, it returns all certificates associated with the project.
-        If `certificate-id` is set, it returns a single certificate if it exists.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: certificate-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Certificate'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_certificates
-    delete:
-      tags:
-      - ApiCertificate
-      summary: Deletes a certificate
-      description: Deletes the certificate associated with the given certificate ID and project ID.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: certificate-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_certificate
-  /v1/api/domains:
-    put:
-      tags:
-      - ApiDomain
-      summary: Create or update an API domain
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/DomainRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ApiDomain'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create_or_update_domain
-    get:
-      tags:
-      - ApiDomain
-      summary: Get all API domains
-      description: Returns a list of API domains for the given project.
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ApiDomain'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_domains
-    delete:
-      tags:
-      - ApiDomain
-      summary: Delete an API domain
-      parameters:
-      - name: project-id
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      - name: domain
-        schema:
-          type: string
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                type: string
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: delete_domain
-  /v1/api/security/{project_id}/{security_scheme_identifier}:
-    get:
-      tags:
-      - ApiSecurity
-      summary: Get a security scheme
-      description: Get a security scheme by name
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: security_scheme_identifier
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/SecuritySchemeData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get
-  /v1/api/security/{project_id}:
-    post:
-      tags:
-      - ApiSecurity
-      summary: Create a security scheme
-      parameters:
-      - name: project_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/SecuritySchemeData'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/SecuritySchemeData'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create
+      operationId: invoke_agent
 components:
   schemas:
     ActivatePluginResponse:
       type: object
       title: ActivatePluginResponse
+    AgentInvocationMode:
+      type: string
+      enum:
+      - await
+      - schedule
+    AgentInvocationRequest:
+      type: object
+      title: AgentInvocationRequest
+      required:
+      - appName
+      - envName
+      - agentTypeName
+      - parameters
+      - methodName
+      - methodParameters
+      - mode
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentTypeName:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/UntypedJsonDataValue'
+        phantomId:
+          type: string
+          format: uuid
+        methodName:
+          type: string
+        methodParameters:
+          $ref: '#/components/schemas/UntypedJsonDataValue'
+        mode:
+          $ref: '#/components/schemas/AgentInvocationMode'
+        scheduleAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+    AgentInvocationResult:
+      type: object
+      title: AgentInvocationResult
+      properties:
+        result:
+          $ref: '#/components/schemas/UntypedJsonDataValue'
     AnalysedResourceMode:
       type: string
       enum:
@@ -3556,83 +2236,69 @@ components:
             - Variant
             example: Variant
       - $ref: '#/components/schemas/TypeVariant'
-    ApiDefinitionInfo:
+    BinaryReference:
       type: object
-      title: ApiDefinitionInfo
-      required:
-      - id
-      - version
-      properties:
-        id:
-          type: string
-        version:
-          type: string
-    ApiDeployment:
+      oneOf:
+      - $ref: '#/components/schemas/BinaryReference_Url'
+      - $ref: '#/components/schemas/BinaryReference_BinarySource'
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/BinaryReference_Url'
+          Inline: '#/components/schemas/BinaryReference_BinarySource'
+    BinaryReferenceValue:
       type: object
-      title: ApiDeployment
+      title: BinaryReferenceValue
       required:
-      - apiDefinitions
-      - projectId
-      - site
+      - value
       properties:
-        apiDefinitions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ApiDefinitionInfo'
-        projectId:
-          type: string
-          format: uuid
-        site:
-          $ref: '#/components/schemas/ApiSite'
-        createdAt:
-          type: string
-          format: date-time
-    ApiDeploymentRequest:
-      type: object
-      title: ApiDeploymentRequest
-      required:
-      - apiDefinitions
-      - projectId
-      - site
-      properties:
-        apiDefinitions:
-          type: array
-          items:
-            $ref: '#/components/schemas/ApiDefinitionInfo'
-        projectId:
-          type: string
-          format: uuid
-        site:
-          $ref: '#/components/schemas/ApiSite'
-    ApiDomain:
-      type: object
-      title: ApiDomain
-      required:
-      - projectId
-      - domainName
-      - nameServers
-      properties:
-        projectId:
-          type: string
-          format: uuid
-        domainName:
-          type: string
-        nameServers:
-          type: array
-          items:
+        value:
+          $ref: '#/components/schemas/BinaryReference'
+    BinaryReference_BinarySource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
             type: string
-        createdAt:
-          type: string
-          format: date-time
-    ApiSite:
+            enum:
+            - Inline
+            example: Inline
+      - $ref: '#/components/schemas/BinarySource'
+    BinaryReference_Url:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Url
+            example: Url
+      - $ref: '#/components/schemas/Url'
+    BinarySource:
       type: object
-      title: ApiSite
+      title: BinarySource
       required:
-      - host
+      - data
+      - binaryType
       properties:
-        host:
-          type: string
-        subdomain:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        binaryType:
+          $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      type: object
+      title: BinaryType
+      required:
+      - mimeType
+      properties:
+        mimeType:
           type: string
     CancelInvocationResponse:
       type: object
@@ -3642,43 +2308,6 @@ components:
       properties:
         canceled:
           type: boolean
-    Certificate:
-      type: object
-      title: Certificate
-      required:
-      - id
-      - projectId
-      - domainName
-      properties:
-        id:
-          type: string
-          format: uuid
-        projectId:
-          type: string
-          format: uuid
-        domainName:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
-    CertificateRequest:
-      type: object
-      title: CertificateRequest
-      required:
-      - projectId
-      - domainName
-      - certificateBody
-      - certificatePrivateKey
-      properties:
-        projectId:
-          type: string
-          format: uuid
-        domainName:
-          type: string
-        certificateBody:
-          type: string
-        certificatePrivateKey:
-          type: string
     CompleteParameters:
       type: object
       title: CompleteParameters
@@ -3705,18 +2334,6 @@ components:
     DeleteWorkerResponse:
       type: object
       title: DeleteWorkerResponse
-    DomainRequest:
-      type: object
-      title: DomainRequest
-      required:
-      - projectId
-      - domainName
-      properties:
-        projectId:
-          type: string
-          format: uuid
-        domainName:
-          type: string
     Empty:
       type: object
       title: Empty
@@ -3795,12 +2412,12 @@ components:
       title: FailedUpdate
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
       properties:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
         details:
@@ -3839,71 +2456,21 @@ components:
       enum:
       - directory
       - file
-    GatewayBindingComponent:
+    ForkWorkerRequest:
       type: object
-      title: GatewayBindingComponent
+      title: ForkWorkerRequest
       required:
-      - name
+      - targetWorkerId
+      - oplogIndexCutoff
       properties:
-        name:
-          type: string
-        version:
+        targetWorkerId:
+          $ref: '#/components/schemas/WorkerId'
+        oplogIndexCutoff:
           type: integer
           format: uint64
-          description: |-
-            Version of the component. If not provided the latest version is used.
-            Note that the version is only used to typecheck the various rib scripts and prevent component updates.
-            During runtime, the actual version of the worker or the latest version (in case no worker was found) is used.
-    GatewayBindingData:
+    ForkWorkerResponse:
       type: object
-      title: GatewayBindingData
-      properties:
-        bindingType:
-          $ref: '#/components/schemas/GatewayBindingType'
-        component:
-          $ref: '#/components/schemas/GatewayBindingComponent'
-        workerName:
-          type: string
-        idempotencyKey:
-          type: string
-        response:
-          type: string
-        invocationContext:
-          type: string
-    GatewayBindingResponseData:
-      type: object
-      title: GatewayBindingResponseData
-      properties:
-        component:
-          $ref: '#/components/schemas/ResolvedGatewayBindingComponent'
-        workerName:
-          type: string
-        idempotencyKey:
-          type: string
-        invocationContext:
-          type: string
-        response:
-          type: string
-        bindingType:
-          $ref: '#/components/schemas/GatewayBindingType'
-        responseMappingInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        workerNameInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        idempotencyKeyInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        corsPreflight:
-          $ref: '#/components/schemas/HttpCors'
-        responseMappingOutput:
-          $ref: '#/components/schemas/RibOutputTypeInfo'
-    GatewayBindingType:
-      type: string
-      enum:
-      - default
-      - file-server
-      - http-handler
-      - cors-preflight
-      - swagger-ui
+      title: ForkWorkerResponse
     GetFilesResponse:
       type: object
       title: GetFilesResponse
@@ -3934,75 +2501,6 @@ components:
         lastIndex:
           type: integer
           format: uint64
-    HealthcheckResponse:
-      type: object
-      title: HealthcheckResponse
-    HttpApiDefinitionRequest:
-      type: object
-      title: HttpApiDefinitionRequest
-      required:
-      - id
-      - version
-      - routes
-      - draft
-      properties:
-        id:
-          type: string
-        version:
-          type: string
-        security:
-          type: array
-          items:
-            type: string
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteRequestData'
-        draft:
-          type: boolean
-    HttpApiDefinitionResponseData:
-      type: object
-      title: HttpApiDefinitionResponseData
-      required:
-      - id
-      - version
-      - routes
-      - draft
-      properties:
-        id:
-          type: string
-        version:
-          type: string
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteResponseData'
-        draft:
-          type: boolean
-        createdAt:
-          type: string
-          format: date-time
-    HttpCors:
-      type: object
-      title: HttpCors
-      required:
-      - allowOrigin
-      - allowMethods
-      - allowHeaders
-      properties:
-        allowOrigin:
-          type: string
-        allowMethods:
-          type: string
-        allowHeaders:
-          type: string
-        exposeHeaders:
-          type: string
-        allowCredentials:
-          type: boolean
-        maxAge:
-          type: integer
-          format: uint64
     InterruptResponse:
       type: object
       title: InterruptResponse
@@ -4025,6 +2523,13 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/ValueAndType'
+    JsonComponentModelValue:
+      type: object
+      title: JsonComponentModelValue
+      required:
+      - value
+      properties:
+        value: {}
     LogLevel:
       type: string
       description: Worker log levels including the special stdout and stderr channels
@@ -4041,23 +2546,11 @@ components:
       type: object
       title: ManualUpdateParameters
       required:
-      - targetVersion
+      - targetRevision
       properties:
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
-    MethodPattern:
-      type: string
-      enum:
-      - Get
-      - Connect
-      - Post
-      - Delete
-      - Put
-      - Patch
-      - Options
-      - Trace
-      - Head
     NameOptionTypePair:
       type: object
       title: NameOptionTypePair
@@ -4079,31 +2572,17 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
-    OpenApiHttpApiDefinitionResponse:
-      type: object
-      title: OpenApiHttpApiDefinitionResponse
-      required:
-      - id
-      - version
-      - openapi_yaml
-      properties:
-        id:
-          type: string
-        version:
-          type: string
-        openapi_yaml:
-          type: string
     OplogCursor:
       type: object
       title: OplogCursor
       required:
       - nextOplogIndex
-      - currentComponentVersion
+      - currentComponentRevision
       properties:
         nextOplogIndex:
           type: integer
           format: uint64
-        currentComponentVersion:
+        currentComponentRevision:
           type: integer
           format: uint64
     OplogRegion:
@@ -4124,12 +2603,12 @@ components:
       title: PendingUpdate
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
       properties:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
     PersistenceLevel:
@@ -4142,32 +2621,25 @@ components:
       type: object
       title: PluginInstallationDescription
       required:
-      - installationId
+      - pluginPriority
       - pluginName
       - pluginVersion
-      - registered
       - parameters
       properties:
-        installationId:
-          type: string
-          format: uuid
+        pluginPriority:
+          type: integer
+          format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
         pluginName:
           type: string
         pluginVersion:
           type: string
-        registered:
-          type: boolean
         parameters:
           type: object
           additionalProperties:
             type: string
-    Provider:
-      type: string
-      enum:
-      - Google
-      - Facebook
-      - Microsoft
-      - Gitlab
     PublicAttribute:
       type: object
       title: PublicAttribute
@@ -4948,18 +3420,6 @@ components:
             - ManualUpdate
             example: ManualUpdate
       - $ref: '#/components/schemas/ManualUpdateParameters'
-    ResolvedGatewayBindingComponent:
-      type: object
-      title: ResolvedGatewayBindingComponent
-      required:
-      - name
-      - version
-      properties:
-        name:
-          type: string
-        version:
-          type: integer
-          format: uint64
     ResumeResponse:
       type: object
       title: ResumeResponse
@@ -4992,8 +3452,8 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          revertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
-          revertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+          RevertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+          RevertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
     RevertWorkerTarget_RevertLastInvocations:
       allOf:
       - type: object
@@ -5003,8 +3463,8 @@ components:
           type:
             type: string
             enum:
-            - revertLastInvocations
-            example: revertLastInvocations
+            - RevertLastInvocations
+            example: RevertLastInvocations
       - $ref: '#/components/schemas/RevertLastInvocations'
     RevertWorkerTarget_RevertToOplogIndex:
       allOf:
@@ -5015,59 +3475,9 @@ components:
           type:
             type: string
             enum:
-            - revertToOplogIndex
-            example: revertToOplogIndex
+            - RevertToOplogIndex
+            example: RevertToOplogIndex
       - $ref: '#/components/schemas/RevertToOplogIndex'
-    RibInputTypeInfo:
-      type: object
-      title: RibInputTypeInfo
-      required:
-      - types
-      properties:
-        types:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/AnalysedType'
-    RibOutputTypeInfo:
-      type: object
-      title: RibOutputTypeInfo
-      required:
-      - analysedType
-      properties:
-        analysedType:
-          $ref: '#/components/schemas/AnalysedType'
-    RouteRequestData:
-      type: object
-      title: RouteRequestData
-      required:
-      - method
-      - path
-      - binding
-      properties:
-        method:
-          $ref: '#/components/schemas/MethodPattern'
-        path:
-          type: string
-        binding:
-          $ref: '#/components/schemas/GatewayBindingData'
-        security:
-          type: string
-    RouteResponseData:
-      type: object
-      title: RouteResponseData
-      required:
-      - method
-      - path
-      - binding
-      properties:
-        method:
-          $ref: '#/components/schemas/MethodPattern'
-        path:
-          type: string
-        security:
-          type: string
-        binding:
-          $ref: '#/components/schemas/GatewayBindingResponseData'
     ScanCursor:
       type: object
       title: ScanCursor
@@ -5081,31 +3491,6 @@ components:
         layer:
           type: integer
           format: uint64
-    SecuritySchemeData:
-      type: object
-      title: SecuritySchemeData
-      required:
-      - providerType
-      - schemeIdentifier
-      - clientId
-      - clientSecret
-      - redirectUrl
-      - scopes
-      properties:
-        providerType:
-          $ref: '#/components/schemas/Provider'
-        schemeIdentifier:
-          type: string
-        clientId:
-          type: string
-        clientSecret:
-          type: string
-        redirectUrl:
-          type: string
-        scopes:
-          type: array
-          items:
-            type: string
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -5138,14 +3523,74 @@ components:
       title: SuccessfulUpdate
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
       properties:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
+    TextReference:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/TextReference_Url'
+      - $ref: '#/components/schemas/TextReference_TextSource'
+      discriminator:
+        propertyName: type
+        mapping:
+          Url: '#/components/schemas/TextReference_Url'
+          Inline: '#/components/schemas/TextReference_TextSource'
+    TextReferenceValue:
+      type: object
+      title: TextReferenceValue
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/TextReference'
+    TextReference_TextSource:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Inline
+            example: Inline
+      - $ref: '#/components/schemas/TextSource'
+    TextReference_Url:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Url
+            example: Url
+      - $ref: '#/components/schemas/Url'
+    TextSource:
+      type: object
+      title: TextSource
+      required:
+      - data
+      properties:
+        data:
+          type: string
+        textType:
+          $ref: '#/components/schemas/TextType'
+    TextType:
+      type: object
+      title: TextType
+      required:
+      - languageCode
+      properties:
+        languageCode:
+          type: string
     TypeBool:
       type: object
       title: TypeBool
@@ -5307,6 +3752,119 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NameOptionTypePair'
+    UntypedJsonDataValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
+      - $ref: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/UntypedJsonDataValue_UntypedJsonElementValues'
+          Multimodal: '#/components/schemas/UntypedJsonDataValue_UntypedJsonNamedElementValues'
+    UntypedJsonDataValue_UntypedJsonElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tuple
+            example: Tuple
+      - $ref: '#/components/schemas/UntypedJsonElementValues'
+    UntypedJsonDataValue_UntypedJsonNamedElementValues:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multimodal
+            example: Multimodal
+      - $ref: '#/components/schemas/UntypedJsonNamedElementValues'
+    UntypedJsonElementValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
+      - $ref: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
+      - $ref: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/UntypedJsonElementValue_JsonComponentModelValue'
+          UnstructuredText: '#/components/schemas/UntypedJsonElementValue_TextReferenceValue'
+          UnstructuredBinary: '#/components/schemas/UntypedJsonElementValue_BinaryReferenceValue'
+    UntypedJsonElementValue_BinaryReferenceValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredBinary
+            example: UnstructuredBinary
+      - $ref: '#/components/schemas/BinaryReferenceValue'
+    UntypedJsonElementValue_JsonComponentModelValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/JsonComponentModelValue'
+    UntypedJsonElementValue_TextReferenceValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredText
+            example: UnstructuredText
+      - $ref: '#/components/schemas/TextReferenceValue'
+    UntypedJsonElementValues:
+      type: object
+      title: UntypedJsonElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/UntypedJsonElementValue'
+    UntypedJsonNamedElementValue:
+      type: object
+      title: UntypedJsonNamedElementValue
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/UntypedJsonElementValue'
+    UntypedJsonNamedElementValues:
+      type: object
+      title: UntypedJsonNamedElementValues
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/UntypedJsonNamedElementValue'
     UpdateRecord:
       type: object
       oneOf:
@@ -5316,9 +3874,9 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          pendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
-          successfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
-          failedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
+          PendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
+          SuccessfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+          FailedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
     UpdateRecord_FailedUpdate:
       allOf:
       - type: object
@@ -5328,8 +3886,8 @@ components:
           type:
             type: string
             enum:
-            - failedUpdate
-            example: failedUpdate
+            - FailedUpdate
+            example: FailedUpdate
       - $ref: '#/components/schemas/FailedUpdate'
     UpdateRecord_PendingUpdate:
       allOf:
@@ -5340,8 +3898,8 @@ components:
           type:
             type: string
             enum:
-            - pendingUpdate
-            example: pendingUpdate
+            - PendingUpdate
+            example: PendingUpdate
       - $ref: '#/components/schemas/PendingUpdate'
     UpdateRecord_SuccessfulUpdate:
       allOf:
@@ -5352,24 +3910,35 @@ components:
           type:
             type: string
             enum:
-            - successfulUpdate
-            example: successfulUpdate
+            - SuccessfulUpdate
+            example: SuccessfulUpdate
       - $ref: '#/components/schemas/SuccessfulUpdate'
     UpdateWorkerRequest:
       type: object
       title: UpdateWorkerRequest
       required:
       - mode
-      - targetVersion
+      - targetRevision
       properties:
         mode:
           $ref: '#/components/schemas/WorkerUpdateMode'
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
+        disableWakeup:
+          type: boolean
+          default: false
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+    Url:
+      type: object
+      title: Url
+      required:
+      - value
+      properties:
+        value:
+          type: string
     ValueAndOptionalType:
       type: object
       required:
@@ -5433,20 +4002,15 @@ components:
       title: WorkerCreationRequest
       required:
       - name
-      - args
       - env
       properties:
         name:
           type: string
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           type: array
           default: []
           items:
@@ -5456,11 +4020,11 @@ components:
       title: WorkerCreationResponse
       required:
       - workerId
-      - componentVersion
+      - componentRevision
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
     WorkerEnvFilter:
@@ -5496,7 +4060,7 @@ components:
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
@@ -5508,7 +4072,7 @@ components:
         mapping:
           Name: '#/components/schemas/WorkerFilter_WorkerNameFilter'
           Status: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-          Version: '#/components/schemas/WorkerFilter_WorkerVersionFilter'
+          Revision: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
           CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
           Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
@@ -5587,6 +4151,18 @@ components:
             - Or
             example: Or
       - $ref: '#/components/schemas/WorkerOrFilter'
+    WorkerFilter_WorkerRevisionFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Revision
+            example: Revision
+      - $ref: '#/components/schemas/WorkerRevisionFilter'
     WorkerFilter_WorkerStatusFilter:
       allOf:
       - type: object
@@ -5599,18 +4175,6 @@ components:
             - Status
             example: Status
       - $ref: '#/components/schemas/WorkerStatusFilter'
-    WorkerFilter_WorkerVersionFilter:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Version
-            example: Version
-      - $ref: '#/components/schemas/WorkerVersionFilter'
     WorkerFilter_WorkerWasiConfigVarsFilter:
       allOf:
       - type: object
@@ -5635,18 +4199,17 @@ components:
           format: uuid
         workerName:
           type: string
-    WorkerMetadata:
+    WorkerMetadataDto:
       type: object
-      title: WorkerMetadata
+      title: WorkerMetadataDto
       required:
       - workerId
-      - projectId
+      - environmentId
       - createdBy
-      - args
       - env
       - wasiConfigVars
       - status
-      - componentVersion
+      - componentRevision
       - retryCount
       - pendingInvocationCount
       - updates
@@ -5660,15 +4223,12 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        projectId:
+        environmentId:
           type: string
           format: uuid
         createdBy:
           type: string
-        args:
-          type: array
-          items:
-            type: string
+          format: uuid
         env:
           type: object
           additionalProperties:
@@ -5679,7 +4239,7 @@ components:
             $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
         retryCount:
@@ -5710,8 +4270,11 @@ components:
         activePlugins:
           type: array
           items:
-            type: string
-            format: uuid
+            type: integer
+            format: int32
+            title: |-
+              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+              There can only be a single plugin with a given priority installed to a component.
         skippedRegions:
           type: array
           description: |-
@@ -5769,6 +4332,18 @@ components:
           type: string
         resourceName:
           type: string
+    WorkerRevisionFilter:
+      type: object
+      title: WorkerRevisionFilter
+      required:
+      - comparator
+      - value
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: integer
+          format: uint64
     WorkerStatus:
       type: string
       description: |-
@@ -5798,20 +4373,8 @@ components:
     WorkerUpdateMode:
       type: string
       enum:
-      - Automatic
-      - Manual
-    WorkerVersionFilter:
-      type: object
-      title: WorkerVersionFilter
-      required:
-      - comparator
-      - value
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          type: integer
-          format: uint64
+      - automatic
+      - manual
     WorkerWasiConfigVarsFilter:
       type: object
       title: WorkerWasiConfigVarsFilter
@@ -5848,7 +4411,7 @@ components:
         workers:
           type: array
           items:
-            $ref: '#/components/schemas/WorkerMetadata'
+            $ref: '#/components/schemas/WorkerMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
     WriteRemoteBatchedParameters:
@@ -5962,11 +4525,10 @@ components:
       required:
       - timestamp
       - workerId
-      - componentVersion
-      - args
+      - componentRevision
       - env
       - createdBy
-      - projectId
+      - environmentId
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -5977,20 +4539,17 @@ components:
           format: date-time
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
             type: string
         createdBy:
           type: string
-        projectId:
+          format: uuid
+        environmentId:
           type: string
           format: uuid
         parent:
@@ -6168,12 +4727,12 @@ components:
       title: r#FailedUpdateParams
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
       properties:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
         details:
@@ -6277,13 +4836,13 @@ components:
       title: r#PendingUpdateParams
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
       - description
       properties:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
         description:
@@ -6404,14 +4963,14 @@ components:
       title: r#SuccessfulUpdateParams
       required:
       - timestamp
-      - targetVersion
+      - targetRevision
       - newComponentSize
       - newActivePlugins
       properties:
         timestamp:
           type: string
           format: date-time
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
         newComponentSize:

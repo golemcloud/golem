@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::fs;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, TextDescriptor,
 };
+use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{
     case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
     unit_result, variant,
 };
+use std::path::Path;
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent1".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -61,6 +64,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             },
             AgentMethod {
                 name: "f2".to_string(),
@@ -90,10 +94,12 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             },
         ],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
@@ -117,7 +123,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
 
     let agent_types = vec![
         AgentType {
-            type_name: "agent1".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
             description: "An example agent".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -159,12 +165,14 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
-            type_name: "agent2".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("agent2".to_string()),
             description: "Another example agent".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -216,9 +224,11 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                         },
                     ],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
     ];
 
@@ -227,7 +237,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
 
 pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent1".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
         description: "An example agent using WIT keywords as names".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -264,6 +274,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             },
             AgentMethod {
                 name: "package".to_string(),
@@ -281,17 +292,19 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
                         .collect(),
                 }),
                 output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                http_endpoint: Vec::new(),
             },
         ],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
 pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
     vec![
         AgentType {
-            type_name: "assistant-agent".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("assistant-agent".to_string()),
             description: "AssistantAgent".to_string(),
             constructor: AgentConstructor {
                 name: Some("AssistantAgent".to_string()),
@@ -319,12 +332,14 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
         AgentType {
-            type_name: "weather-agent".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("weather-agent".to_string()),
             description: "WeatherAgent".to_string(),
             constructor: AgentConstructor {
                 name: Some("WeatherAgent".to_string()),
@@ -370,16 +385,18 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
                         }),
                     }],
                 }),
+                http_endpoint: Vec::new(),
             }],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         },
     ]
 }
 
 pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "foo-agent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("foo-agent".to_string()),
         description: "FooAgent".to_string(),
         constructor: AgentConstructor {
             name: Some("FooAgent".to_string()),
@@ -416,15 +433,17 @@ pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
 pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "bar-agent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("bar-agent".to_string()),
         description: "Constructs the agent bar-agent".to_string(),
         constructor: AgentConstructor {
             name: Some("BarAgent".to_string()),
@@ -452,15 +471,17 @@ pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
 pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "test-agent".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("test-agent".to_string()),
         description: "Test".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -504,15 +525,17 @@ pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
                     },
                 ],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
 pub fn char_type() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent-using-char".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent-using-char".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -540,15 +563,17 @@ pub fn char_type() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
 }
 
 pub fn unit_result_type() -> Vec<AgentType> {
     vec![AgentType {
-        type_name: "agent-unit-result".to_string(),
+        type_name: golem_common::model::agent::AgentTypeName("agent-unit-result".to_string()),
         description: "An example agent".to_string(),
         constructor: AgentConstructor {
             name: None,
@@ -576,8 +601,36 @@ pub fn unit_result_type() -> Vec<AgentType> {
                     }),
                 }],
             }),
+            http_endpoint: Vec::new(),
         }],
         dependencies: vec![],
         mode: AgentMode::Durable,
+        http_mount: None,
     }]
+}
+
+// Use `cargo make cli-integration-tests-update-golden-files` to update the reference extracted types
+pub fn code_first_snippets_agent_types(language: GuestLanguage) -> Vec<AgentType> {
+    let goldenfile = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test-data/goldenfiles/extracted-agent-types")
+        .join(format!("code_first_snippets_{}.json", language.id()));
+
+    serde_json::from_str(&fs::read_to_string(&goldenfile).unwrap()).unwrap_or_else(|err| {
+        panic!(
+            "Failed to deserialize golden file {}: {err}",
+            goldenfile.display()
+        )
+    })
+}
+
+pub fn code_first_snippets_agent_type(language: GuestLanguage, agent_name: &str) -> AgentType {
+    code_first_snippets_agent_types(language)
+        .into_iter()
+        .find(|t| t.type_name.0 == agent_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "Agent type {} not found in {} extracted code first snippets goldenfile",
+                agent_name, language
+            )
+        })
 }

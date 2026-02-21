@@ -1,7 +1,7 @@
 [package]
 name = "golem-worker-service"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
@@ -9,39 +9,33 @@ description = "Golem Worker Service including API Gateway functionalities"
 
 license-file = "../LICENSE"
 
+autotests = false
+autobenches = false
+
 [[bin]]
 name = "golem-worker-service"
 path = "src/server.rs"
 test = false
 
 [lib]
+path = "src/lib.rs"
 harness = false
 
 [[test]]
-name = "services_tests"
-path = "tests/services_tests.rs"
+name = "oidc"
+path = "tests/oidc/lib.rs"
 harness = false
 
-[[test]]
-name = "api_gateway_end_to_end_tests"
-path = "tests/api_gateway_end_to_end_tests.rs"
-harness = false
-
-[[test]]
-name = "api_oas_convert_tests"
-path = "tests/api_oas_convert_tests.rs"
-harness = false
-
-[[bench]]
-name = "tree"
-harness = false
+# [[bench]]
+# name = "tree"
+# harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-rib = { workspace = true }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
@@ -50,6 +44,7 @@ bigdecimal = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+cookie = { workspace = true }
 darling = { workspace = true }
 derive_more = { workspace = true }
 desert_rust = { workspace = true }
@@ -59,6 +54,7 @@ futures = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+humantime-serde.workspace = true
 hyper = { workspace = true }
 include_dir = { workspace = true }
 mime = { workspace = true }
@@ -78,6 +74,7 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+rustls = { workspace = true, features = [ "ring" ] }
 rusoto_acm = { workspace = true }
 rusoto_core = { workspace = true }
 rusoto_credential = { workspace = true }
@@ -108,12 +105,13 @@ uuid = { workspace = true }
 x509-certificate = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework.workspace = true
+
 assert2 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
+tempfile.workspace = true
 test-r = { workspace = true }
 tryhard = { workspace = true }

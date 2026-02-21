@@ -12,19 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::cloud_service::CloudService;
-use crate::components::component_service::ComponentService;
-use crate::components::redis::Redis;
-use crate::components::shard_manager::ShardManager;
-use crate::components::worker_service::WorkerService;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use super::redis::Redis;
+use super::registry_service::RegistryService;
+use super::shard_manager::ShardManager;
+use super::worker_service::WorkerService;
+use super::{wait_for_startup_grpc, EnvVarBuilder};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::{Channel, Endpoint};
 use tracing::Level;
 
 pub mod provided;
@@ -32,45 +28,15 @@ pub mod spawned;
 
 #[async_trait]
 pub trait WorkerExecutor: Send + Sync {
-    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>>;
+    fn grpc_host(&self) -> String;
 
-    fn private_host(&self) -> String;
-    fn private_http_port(&self) -> u16;
-    fn private_grpc_port(&self) -> u16;
-
-    fn public_host(&self) -> String {
-        self.private_host()
-    }
-
-    fn public_http_port(&self) -> u16 {
-        self.private_http_port()
-    }
-
-    fn public_grpc_port(&self) -> u16 {
-        self.private_grpc_port()
-    }
+    fn grpc_port(&self) -> u16;
 
     async fn kill(&self);
+
     async fn restart(&self);
 
     async fn is_running(&self) -> bool;
-}
-
-async fn new_client(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
-    Ok(
-        WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}"))
-            .await?
-            .send_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Gzip),
-    )
-}
-
-fn new_client_lazy(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
-    Ok(WorkerExecutorClient::new(
-        Endpoint::try_from(format!("http://{host}:{grpc_port}"))?.connect_lazy(),
-    )
-    .send_compressed(CompressionEncoding::Gzip)
-    .accept_compressed(CompressionEncoding::Gzip))
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
@@ -80,11 +46,10 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
 async fn env_vars(
     http_port: u16,
     grpc_port: u16,
-    component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-    shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
-    worker_service: Arc<dyn WorkerService + 'static>,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
-    cloud_service: &Arc<dyn CloudService>,
+    shard_manager: &Arc<dyn ShardManager>,
+    worker_service: &Arc<dyn WorkerService>,
+    redis: &Arc<dyn Redis>,
+    registry_service: &Arc<dyn RegistryService>,
     verbosity: Level,
     otlp: bool,
 ) -> HashMap<String, String> {
@@ -109,51 +74,29 @@ async fn env_vars(
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
             "GOLEM__PUBLIC_WORKER_API__HOST",
-            &worker_service.private_host(),
+            &worker_service.grpc_host(),
         )
         .with(
             "GOLEM__PUBLIC_WORKER_API__PORT",
-            worker_service.private_grpc_port().to_string(),
+            worker_service.gprc_port().to_string(),
         )
-        .with(
-            "GOLEM__PUBLIC_WORKER_API__ACCESS_TOKEN",
-            cloud_service.admin_token().to_string(),
-        )
-        .with_str("GOLEM__COMPONENT_SERVICE__TYPE", "Grpc")
         .with_str(
-            "GOLEM__COMPONENT_SERVICE__CONFIG__HOST",
-            &component_service.private_host(),
+            "GOLEM__REGISTRY_SERVICE__HOST",
+            &registry_service.grpc_host(),
         )
         .with(
-            "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
-            component_service.private_grpc_port().to_string(),
-        )
-        .with(
-            "GOLEM__COMPONENT_SERVICE__CONFIG__ACCESS_TOKEN",
-            cloud_service.admin_token().to_string(),
-        )
-        .with_str("GOLEM__PLUGIN_SERVICE__TYPE", "Grpc")
-        .with_str(
-            "GOLEM__PLUGIN_SERVICE__CONFIG__HOST",
-            &component_service.private_host(),
-        )
-        .with(
-            "GOLEM__PLUGIN_SERVICE__CONFIG__PORT",
-            component_service.private_grpc_port().to_string(),
-        )
-        .with(
-            "GOLEM__PLUGIN_SERVICE__CONFIG__ACCESS_TOKEN",
-            cloud_service.admin_token().to_string(),
+            "GOLEM__REGISTRY_SERVICE__PORT",
+            registry_service.grpc_port().to_string(),
         )
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
         .with_str("GOLEM__SHARD_MANAGER_SERVICE__TYPE", "Grpc")
         .with_str(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST",
-            &shard_manager.private_host(),
+            &shard_manager.grpc_host(),
         )
         .with(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT",
-            shard_manager.private_grpc_port().to_string(),
+            shard_manager.grpc_port().to_string(),
         )
         .with_str(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS",
@@ -171,35 +114,13 @@ async fn env_vars(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
             "2",
         )
-        .with_str("GOLEM__RESOURCE_LIMITS__TYPE", "Disabled")
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
-        .with_str("GOLEM__PROJECT_SERVICE__TYPE", "Grpc")
-        .with(
-            "GOLEM__PROJECT_SERVICE__CONFIG__HOST",
-            cloud_service.private_host(),
-        )
-        .with(
-            "GOLEM__PROJECT_SERVICE__CONFIG__PORT",
-            cloud_service.private_grpc_port().to_string(),
-        )
-        .with(
-            "GOLEM__PROJECT_SERVICE__CONFIG__ACCESS_TOKEN",
-            cloud_service.admin_token().to_string(),
-        )
-        .with_str("GOLEM__AGENT_TYPES_SERVICE__TYPE", "Grpc")
+        .with_str("GOLEM__AGENT_DEPLOYMENTS_SERVICE__CACHE_CAPACITY", "0")
         .with_str(
-            "GOLEM__AGENT_TYPES_SERVICE__CONFIG__HOST",
-            &component_service.private_host(),
+            "GOLEM__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
+            "false",
         )
-        .with(
-            "GOLEM__AGENT_TYPES_SERVICE__CONFIG__PORT",
-            component_service.private_grpc_port().to_string(),
-        )
-        .with(
-            "GOLEM__AGENT_TYPES_SERVICE__CONFIG__ACCESS_TOKEN",
-            cloud_service.admin_token().to_string(),
-        )
-        .with("GOLEM__PORT", grpc_port.to_string())
+        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("worker_executor", otlp)
         .build()

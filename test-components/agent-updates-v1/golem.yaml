@@ -1,0 +1,23 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+app: agent-updates
+
+includes:
+- common-*/golem.yaml
+- components-*/*/golem.yaml
+witDeps:
+- .wit/wit/deps
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

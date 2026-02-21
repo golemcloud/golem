@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
+use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{
-    Enumeration, EnumerationType, Interval, TimeTz, ValuesRange,
+    Enumeration, EnumerationType, Interval, SparseVec, TimeTz, ValuesRange,
 };
-use golem_common::model::{ComponentId, RdbmsPoolKey, TransactionId, WorkerId};
+use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
@@ -29,6 +29,7 @@ use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::rdbms::{DbResult, DbRow, RdbmsError, RdbmsTransactionStatus};
 use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use mac_address::MacAddress;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::any::{Any, TypeId};
 use std::collections::{Bound, HashMap};
@@ -44,7 +45,7 @@ use uuid::Uuid;
 #[test_dep]
 async fn postgres() -> DockerPostgresRdb {
     let unique_network_id = Uuid::new_v4().to_string();
-    DockerPostgresRdb::new(&unique_network_id, false).await
+    DockerPostgresRdb::new_with_image(&unique_network_id, false, "pgvector/pgvector", "pg14").await
 }
 
 #[test_dep]
@@ -338,6 +339,33 @@ async fn postgres_create_insert_select_test(
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
 
+    let db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_simple_db", 1, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
+
+    let db_address = db_addresses[0].clone();
+
+    let statements = vec![
+        r#"
+             CREATE EXTENSION IF NOT EXISTS vector;
+        "#,
+    ];
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
+            None,
+        ),
+    )
+    .await;
+
     let statements = vec![
         r#"
              CREATE TYPE test_enum AS ENUM ('regular', 'special');
@@ -402,7 +430,10 @@ async fn postgres_create_insert_select_test(
                 tsquery_col TSQUERY,
                 inventory_item_col inventory_item,
                 posint4_col posint4,
-                float8range_col float8range
+                float8range_col float8range,
+                vector_col vector(5),
+                halfvec_col halfvec(5),
+                sparsevec_col sparsevec(5)
             );
         "#,
     ];
@@ -464,7 +495,10 @@ async fn postgres_create_insert_select_test(
             tsquery_col,
             inventory_item_col,
             posint4_col,
-            float8range_col
+            float8range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
             )
             VALUES
             (
@@ -472,7 +506,7 @@ async fn postgres_create_insert_select_test(
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector, $39::tsquery,
-                $40, $41, $42
+                $40, $41, $42, $43, $44, $45
             );
         "#;
 
@@ -618,9 +652,16 @@ async fn postgres_create_insert_select_test(
                         Bound::Excluded(postgres_types::DbValue::Float8(4.55)),
                     ),
                 ))),
+                postgres_types::DbValue::Vector(vec![1.0, 2.0, 3.0, 4.0, 5.0]),
+                postgres_types::DbValue::Halfvec(half::vec::HalfFloatVecExt::from_f32_slice(&[
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                ])),
+                postgres_types::DbValue::Sparsevec(
+                    SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),
+                ),
             ]);
         } else {
-            for _ in 0..41 {
+            for _ in 0..44 {
                 params.push(postgres_types::DbValue::Null);
             }
         }
@@ -918,6 +959,24 @@ async fn postgres_create_insert_select_test(
             )),
             db_type_name: "float8range".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "vector_col".to_string(),
+            ordinal: 42,
+            db_type: postgres_types::DbColumnType::Vector,
+            db_type_name: "VECTOR".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "halfvec_col".to_string(),
+            ordinal: 43,
+            db_type: postgres_types::DbColumnType::Halfvec,
+            db_type_name: "HALFVEC".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "sparsevec_col".to_string(),
+            ordinal: 44,
+            db_type: postgres_types::DbColumnType::Sparsevec,
+            db_type_name: "SPARSEVEC".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -963,7 +1022,10 @@ async fn postgres_create_insert_select_test(
             tsquery_col::text,
             inventory_item_col,
             posint4_col,
-            float8range_col
+            float8range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
            FROM data_types ORDER BY id ASC;
         "#;
 
@@ -993,6 +1055,33 @@ async fn postgres_create_insert_select_array_test(
 ) {
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
+
+    let db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_array_db", 1, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
+
+    let db_address = db_addresses[0].clone();
+
+    let statements = vec![
+        r#"
+             CREATE EXTENSION IF NOT EXISTS vector;
+        "#,
+    ];
+
+    rdbms_test(
+        rdbms.clone(),
+        &db_address,
+        RdbmsTest::new(
+            statements
+                .into_iter()
+                .map(|s| StatementTest::execute_test(s, vec![], Some(0)))
+                .collect(),
+            None,
+        ),
+    )
+    .await;
 
     let statements = vec![
         r#"
@@ -1130,7 +1219,10 @@ async fn postgres_create_insert_select_array_test(
                 inventory_item_col a_inventory_item[],
                 posint8_col posint8[],
                 float4range_col float4range[],
-                a_custom_type_range_col a_custom_type_range[]
+                a_custom_type_range_col a_custom_type_range[],
+                vector_col vector[],
+                halfvec_col halfvec[],
+                sparsevec_col sparsevec[]
             );
         "#,
     ];
@@ -1193,7 +1285,10 @@ async fn postgres_create_insert_select_array_test(
             inventory_item_col,
             posint8_col,
             float4range_col,
-            a_custom_type_range_col
+            a_custom_type_range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
             )
             VALUES
             (
@@ -1201,7 +1296,7 @@ async fn postgres_create_insert_select_array_test(
                 $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
                 $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
                 $30, $31, $32, $33, $34, $35, $36, $37, $38::tsvector[], $39::tsquery[],
-                $40, $41, $42, $43
+                $40, $41, $42, $43, $44, $45, $46
             );
         "#;
 
@@ -1475,9 +1570,18 @@ async fn postgres_create_insert_select_array_test(
                         ),
                     ))),
                 ]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Vector(vec![
+                    1.0, 2.0, 3.0, 4.0, 5.0,
+                ])]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Halfvec(
+                    half::vec::HalfFloatVecExt::from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]),
+                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Sparsevec(
+                    SparseVec::try_new(5, vec![1, 2, 4], vec![1.0, 2.0, 4.0]).unwrap(),
+                )]),
             ]);
         } else {
-            for _ in 0..42 {
+            for _ in 0..45 {
                 params.push(postgres_types::DbValue::Array(vec![]));
             }
         }
@@ -1789,6 +1893,24 @@ async fn postgres_create_insert_select_array_test(
             .into_array(),
             db_type_name: "a_custom_type_range[]".to_string(),
         },
+        postgres_types::DbColumn {
+            name: "vector_col".to_string(),
+            ordinal: 43,
+            db_type: postgres_types::DbColumnType::Vector.into_array(),
+            db_type_name: "VECTOR[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "halfvec_col".to_string(),
+            ordinal: 44,
+            db_type: postgres_types::DbColumnType::Halfvec.into_array(),
+            db_type_name: "HALFVEC[]".to_string(),
+        },
+        postgres_types::DbColumn {
+            name: "sparsevec_col".to_string(),
+            ordinal: 45,
+            db_type: postgres_types::DbColumnType::Sparsevec.into_array(),
+            db_type_name: "SPARSEVEC[]".to_string(),
+        },
     ];
 
     let select_statement = r#"
@@ -1835,7 +1957,10 @@ async fn postgres_create_insert_select_array_test(
             inventory_item_col,
             posint8_col,
             float4range_col,
-            a_custom_type_range_col
+            a_custom_type_range_col,
+            vector_col,
+            halfvec_col,
+            sparsevec_col
            FROM array_data_types ORDER BY id ASC;
         "#;
 
@@ -2541,7 +2666,7 @@ async fn rdbms_test<T: RdbmsType + 'static>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
     let (transaction_id, results) =
         execute_rdbms_test::<T>(rdbms.clone(), &pool_key, &worker_id, test.clone()).await;
@@ -2559,7 +2684,7 @@ async fn rdbms_test<T: RdbmsType + 'static>(
 
     let _ = rdbms.remove(&pool_key, &worker_id).await;
     let exists = rdbms.exists(&pool_key, &worker_id).await;
-    check!(!exists);
+    assert!(!exists);
 }
 
 async fn check_transaction<T: RdbmsType + 'static>(
@@ -2570,7 +2695,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
     transaction_id: Option<TransactionId>,
 ) {
     if let Some(te) = transaction_end {
-        check!(
+        assert!(
             transaction_id.is_some(),
             "transaction id for worker {worker_id} is some"
         );
@@ -2578,21 +2703,23 @@ async fn check_transaction<T: RdbmsType + 'static>(
         let transaction_status = rdbms
             .get_transaction_status(pool_key, worker_id, &transaction_id)
             .await;
-        check!(
+        assert!(
             transaction_status.is_ok(),
             "transaction status for worker {worker_id} is ok"
         );
         let transaction_status = transaction_status.unwrap();
         match te {
             TransactionEnd::Commit => {
-                check!(
-                    transaction_status == RdbmsTransactionStatus::Committed,
+                assert_eq!(
+                    transaction_status,
+                    RdbmsTransactionStatus::Committed,
                     "transaction status for worker {worker_id} is committed"
                 );
             }
             TransactionEnd::Rollback => {
-                check!(
-                    transaction_status == RdbmsTransactionStatus::RolledBack,
+                assert_eq!(
+                    transaction_status,
+                    RdbmsTransactionStatus::RolledBack,
                     "transaction status for worker {worker_id} is rolled back"
                 );
             }
@@ -2602,7 +2729,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
         let result = rdbms
             .cleanup_transaction(pool_key, worker_id, &transaction_id)
             .await;
-        check!(
+        assert!(
             result.is_ok(),
             "transaction cleanup for worker {worker_id} is ok"
         );
@@ -2611,13 +2738,14 @@ async fn check_transaction<T: RdbmsType + 'static>(
             let transaction_status = rdbms
                 .get_transaction_status(pool_key, worker_id, &transaction_id)
                 .await;
-            check!(
+            assert!(
                 transaction_status.is_ok(),
                 "transaction status for worker {worker_id} is ok"
             );
             let transaction_status = transaction_status.unwrap();
-            check!(
-                transaction_status == RdbmsTransactionStatus::NotFound,
+            assert_eq!(
+                transaction_status,
+                RdbmsTransactionStatus::NotFound,
                 "transaction status for worker {worker_id} is cleaned up"
             );
         }
@@ -2635,15 +2763,16 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Execute(result))) => {
                         if let Some(expected) = expected.expected {
-                            check!(
-                                result == expected,
+                            assert_eq!(
+                                result,
+                                expected,
                                 "execute result for worker {worker_id} and test statement with index {i} match"
                             );
                         }
                     }
                     v => {
                         info!("execute result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        check!(false, "execute result for worker {worker_id} and test statement with index {i} is error or not found");
+                        panic!("execute result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2653,15 +2782,15 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            check!(result.columns == expected_columns, "query result columns for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.columns, expected_columns, "query result columns for worker {worker_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            check!(result.rows == expected_rows, "query result rows for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.rows, expected_rows, "query result rows for worker {worker_id} and test statement with index {i} match");
                         }
                     }
                     v => {
                         info!("query result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        check!(false, "query result for worker {worker_id} and test statement with index {i} is error or not found");
+                        panic!("query result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2671,15 +2800,15 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            check!(result.columns == expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.columns, expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            check!(result.rows == expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.rows, expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} match");
                         }
                     }
                     v => {
                         info!("query stream result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        check!(false, "query stream result for worker {worker_id} and test statement with index {i} is error or not found");
+                        panic!("query stream result for worker {worker_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2855,11 +2984,11 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
     let worker_id = new_worker_id();
     let result = rdbms.create(db_address, &worker_id).await;
 
-    check!(result.is_err(), "connection to {db_address} is error");
+    assert!(result.is_err(), "connection to {db_address} is error");
 
     let error = result.err().unwrap();
-    check!(
-        error == expected,
+    assert_eq!(
+        error, expected,
         "connection error for {db_address} - response error match"
     );
 }
@@ -2873,14 +3002,14 @@ async fn rdbms_query_err_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms
         .query_stream(&pool_key, &worker_id, query, params)
         .await;
 
-    check!(
+    assert!(
         result.is_err(),
         "query {} (executed on {}) - result is error",
         query,
@@ -2888,11 +3017,10 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    check!(
-        error == expected,
+    assert_eq!(
+        error, expected,
         "query {} (executed on {}) - result error match",
-        query,
-        pool_key
+        query, pool_key
     );
 
     let _ = rdbms.remove(&pool_key, &worker_id).await;
@@ -2907,12 +3035,12 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
 
-    check!(
+    assert!(
         result.is_err(),
         "query {} (executed on {}) - result is error",
         query,
@@ -2920,11 +3048,10 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    check!(
-        error == expected,
+    assert_eq!(
+        error, expected,
         "query {} (executed on {}) - result error match",
-        query,
-        pool_key
+        query, pool_key
     );
 
     let _ = rdbms.remove(&pool_key, &worker_id).await;
@@ -2933,27 +3060,34 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 #[test]
 fn test_rdbms_pool_key_masked_address() {
     let key = RdbmsPoolKey::from("mysql://user:password@localhost:3306").unwrap();
-    check!(key.masked_address() == "mysql://user:*****@localhost:3306");
+    assert_eq!(key.masked_address(), "mysql://user:*****@localhost:3306");
     let key = RdbmsPoolKey::from("mysql://user@localhost:3306").unwrap();
-    check!(key.masked_address() == "mysql://user@localhost:3306");
+    assert_eq!(key.masked_address(), "mysql://user@localhost:3306");
     let key = RdbmsPoolKey::from("mysql://localhost:3306").unwrap();
-    check!(key.masked_address() == "mysql://localhost:3306");
+    assert_eq!(key.masked_address(), "mysql://localhost:3306");
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&def=xyz").unwrap();
-    check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&def=xyz");
+    assert_eq!(
+        key.masked_address(),
+        "postgres://user:*****@localhost:5432?abc=xyz&def=xyz"
+    );
     let key =
         RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&secret=xyz").unwrap();
-    check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&secret=*****");
+    assert_eq!(
+        key.masked_address(),
+        "postgres://user:*****@localhost:5432?abc=xyz&secret=*****"
+    );
 }
 
 #[test]
 async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefault) {
     let db_address = mysql.public_connection_string();
     let rdbms = rdbms_service.mysql();
-    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
-        mysql.public_connection_string_to_db(&db_name)
-    })
-    .await;
+    let mut db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_db", 3, |db_name| {
+            mysql.public_connection_string_to_db(&db_name)
+        })
+        .await;
     db_addresses.push(db_address);
 
     rdbms_par_test(
@@ -2972,10 +3106,11 @@ async fn mysql_par_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServiceDefa
 async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsServiceDefault) {
     let db_address = postgres.public_connection_string();
     let rdbms = rdbms_service.postgres();
-    let mut db_addresses = create_test_databases(rdbms.clone(), &db_address, 3, |db_name| {
-        postgres.public_connection_string_to_db(&db_name)
-    })
-    .await;
+    let mut db_addresses =
+        create_test_databases(rdbms.clone(), &db_address, "test_db", 3, |db_name| {
+            postgres.public_connection_string_to_db(&db_name)
+        })
+        .await;
     db_addresses.push(db_address);
 
     rdbms_par_test(
@@ -2993,19 +3128,20 @@ async fn postgres_par_test(postgres: &DockerPostgresRdb, rdbms_service: &RdbmsSe
 async fn create_test_databases<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
+    db_name_prefix: &str,
     count: u8,
     to_db_address: impl Fn(String) -> String,
 ) -> Vec<String> {
     let worker_id = new_worker_id();
 
     let connection = rdbms.create(db_address, &worker_id).await;
-    check!(connection.is_ok(), "connection to {} is ok", db_address);
+    assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let mut values: Vec<String> = Vec::with_capacity(count as usize);
 
     for i in 0..count {
-        let db_name = format!("test_db_{i}");
+        let db_name = format!("{db_name_prefix}_{i}");
 
         let r = rdbms
             .execute(
@@ -3016,7 +3152,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
             )
             .await;
 
-        check!(r.is_ok(), "db creation {} is ok", db_name);
+        assert!(r.is_ok(), "db creation {} is ok", db_name);
 
         let address = to_db_address(db_name);
         values.push(address);
@@ -3090,12 +3226,24 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         let _ = rdbms.remove(&pool_key, &worker_id).await;
     }
 
-    check!(rdbms_status.pools.len() == db_addresses.len());
+    let pool_keys = db_addresses
+        .iter()
+        .map(|a| RdbmsPoolKey::from(a.as_str()))
+        .collect::<Result<Vec<RdbmsPoolKey>, String>>();
+
+    assert!(pool_keys.is_ok(), "pool keys are ok");
+    assert!(
+        pool_keys
+            .unwrap()
+            .iter()
+            .all(|key| rdbms_status.pools.contains_key(key)),
+        "pool keys match"
+    );
 
     for (worker_id, pool_key) in workers_pools {
         let worker_ids = rdbms_status.pools.get(&pool_key);
 
-        check!(
+        assert!(
             worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
             "worker {worker_id} found in pool {pool_key}"
         );
@@ -3108,7 +3256,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 
 fn new_worker_id() -> WorkerId {
     WorkerId {
-        component_id: ComponentId::new_v4(),
+        component_id: ComponentId::new(),
         worker_name: "test".to_string(),
     }
 }

@@ -16,21 +16,21 @@ golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
 golem-rib = { workspace = true }
-golem-rib-repl = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
-assert2 = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 futures-concurrency = { workspace = true }
 headers = { workspace = true }
 indoc = { workspace = true }
+pretty_assertions = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rlimit = { workspace = true }
@@ -43,6 +43,7 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
+goldenfile = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
 
@@ -58,17 +59,6 @@ harness = false
 name = "sharding"
 path = "tests/sharding.rs"
 harness = false
-
-[[test]]
-name = "api"
-path = "tests/api/lib.rs"
-harness = false
-
-[[bin]]
-name = "rib-repl"
-path = "src/rib_repl/main.rs"
-harness = false
-test = false
 
 [[bin]]
 name = "benchmarks"

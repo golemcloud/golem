@@ -1,6 +1,4 @@
 ## Generated from default config
-grpc_host = "0.0.0.0"
-grpc_port = 9091
 http_host = "0.0.0.0"
 http_port = 8084
 
@@ -11,29 +9,38 @@ type = "LocalFileSystem"
 root = "../data/blob_storage"
 
 [compile_worker]
-max_component_size = 1000000
+connect_timeout = "10s"
+max_message_size = 1000000
 
-[compile_worker.connect_timeout]
-nanos = 0
-secs = 10
-
-[compile_worker.retries]
+[compile_worker.retries_on_unavailable]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
+[compile_worker.tls]
+type = "Disabled"
+
+[compile_worker.tls.config]
+
 [compiled_component_service]
 type = "Enabled"
 
 [compiled_component_service.config]
 
-[component_service]
+[grpc]
+port = 9091
+
+[grpc.tls]
+type = "Disabled"
+
+[grpc.tls.config]
+
+[registry_service]
 type = "Static"
 
-[component_service.config]
-access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+[registry_service.config]
 host = "localhost"
 port = 9090
 
@@ -87,8 +94,6 @@ without_time = false
 
 
 ## Generated from example config: with s3 blob storage and disabled compiled component service
-# grpc_host = "0.0.0.0"
-# grpc_port = 9091
 # http_host = "0.0.0.0"
 # http_port = 8084
 # 
@@ -105,7 +110,6 @@ without_time = false
 # oplog_payload_bucket = "oplog-payload"
 # plugin_wasm_files_bucket = "golem-plugin-wasm-files"
 # region = "us-east-1"
-# use_minio_credentials = false
 # 
 # [blob_storage.config.retries]
 # max_attempts = 3
@@ -115,29 +119,38 @@ without_time = false
 # multiplier = 3.0
 # 
 # [compile_worker]
-# max_component_size = 1000000
+# connect_timeout = "10s"
+# max_message_size = 1000000
 # 
-# [compile_worker.connect_timeout]
-# nanos = 0
-# secs = 10
-# 
-# [compile_worker.retries]
+# [compile_worker.retries_on_unavailable]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [compile_worker.tls]
+# type = "Disabled"
+# 
+# [compile_worker.tls.config]
+# 
 # [compiled_component_service]
 # type = "Disabled"
 # 
 # [compiled_component_service.config]
 # 
-# [component_service]
+# [grpc]
+# port = 9091
+# 
+# [grpc.tls]
+# type = "Disabled"
+# 
+# [grpc.tls.config]
+# 
+# [registry_service]
 # type = "Static"
 # 
-# [component_service.config]
-# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# [registry_service.config]
 # host = "localhost"
 # port = 9090
 # 

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
+use crate::golem_agentic::exports::golem::agent::guest::{
+    AgentError, AgentType, DataValue, Principal,
+};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 
 #[async_trait::async_trait(?Send)]
-pub trait Agent<T = ()> {
+pub trait BaseAgent<T = ()> {
     /// Gets the agent ID string of this agent.
     ///
     /// The agent ID consists of the agent type name, constructor parameter values and optional
@@ -28,6 +30,7 @@ pub trait Agent<T = ()> {
         &mut self,
         method_name: String,
         input: DataValue,
+        principal: Principal,
     ) -> Result<DataValue, AgentError>;
 
     /// Gets the agent type metadata of this agent
@@ -39,7 +42,7 @@ pub trait Agent<T = ()> {
         phantom_id.map(|id| id.into())
     }
 
-    async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String>;
+    async fn load_snapshot_base(&mut self, bytes: Vec<u8>) -> Result<(), String>;
 
     async fn save_snapshot_base(&self) -> Result<Vec<u8>, String>;
 }

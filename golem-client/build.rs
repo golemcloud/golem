@@ -10,7 +10,6 @@ fn main() {
     let root_yaml_path = PathBuf::from("../openapi/golem-service.yaml");
     let local_yaml_path = PathBuf::from("openapi/golem-service.yaml");
 
-    println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed={}", root_yaml_path.display());
     println!("cargo::rerun-if-changed={}", local_yaml_path.display());
 
@@ -36,94 +35,288 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         false,
         true,
         &[
-            ("AgentType", "golem_common::model::agent::AgentType"),
-            ("DataSchema", "golem_common::model::agent::DataSchema"),
-            ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
+            // account
+            ("Account", "golem_common::model::account::Account"),
             (
-                "AgentInstanceDescription",
-                "golem_common::model::AgentInstanceDescription",
-            ),
-            ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
-            ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
-            ("PluginScope", "golem_common::model::plugin::PluginScope"),
-            (
-                "ComponentMetadata",
-                "golem_common::model::component_metadata::ComponentMetadata",
+                "AccountCreation",
+                "golem_common::model::account::AccountCreation",
             ),
             (
-                "ComponentFilePathWithPermissionsList",
-                "golem_common::model::ComponentFilePathWithPermissionsList",
-            ),
-            ("ComponentType", "golem_common::model::ComponentType"),
-            ("DataValue", "golem_common::model::agent::DataValue"),
-            ("Empty", "golem_common::model::Empty"),
-            (
-                "InitialComponentFile",
-                "golem_common::model::InitialComponentFile",
-            ),
-            ("ErrorBody", "golem_common::model::error::ErrorBody"),
-            ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
-            (
-                "ExportedResourceInstanceKey",
-                "golem_common::model::ExportedResourceInstanceKey",
+                "AccountSetPlan",
+                "golem_common::model::account::AccountSetPlan",
             ),
             (
-                "ExportedResourceInstanceDescription",
-                "golem_common::model::ExportedResourceInstanceDescription",
-            ),
-            ("GolemError", "golem_common::model::error::GolemError"),
-            (
-                "PluginInstallationAction",
-                "golem_common::model::plugin::PluginInstallationAction",
-            ),
-            ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
-            ("OplogRegion", "golem_common::model::regions::OplogRegion"),
-            (
-                "ProjectActions",
-                "golem_common::model::auth::ProjectActions",
+                "AccountSetRoles",
+                "golem_common::model::account::AccountSetRoles",
             ),
             (
-                "ProjectPermission",
-                "golem_common::model::auth::ProjectPermission",
+                "AccountUpdate",
+                "golem_common::model::account::AccountUpdate",
             ),
-            ("PromiseId", "golem_common::model::PromiseId"),
+            // agent
             (
-                "PublicOplogEntry",
-                "golem_common::model::oplog::PublicOplogEntry",
+                "JsonComponentModelValue",
+                "golem_common::model::agent::JsonComponentModelValue",
             ),
             (
-                "RegisteredAgentType",
-                "golem_common::model::agent::RegisteredAgentType",
+                "DeployedRegisteredAgentType",
+                "golem_common::model::agent::DeployedRegisteredAgentType",
             ),
-            ("ShardId", "golem_common::model::ShardId"),
-            ("ValueAndType", "golem_wasm::ValueAndType"),
             (
-                "ValueAndOptionalType",
-                "golem_wasm::json::OptionallyValueAndTypeJson",
+                "RegisteredAgentTypeImplementer",
+                "golem_common::model::agent::RegisteredAgentTypeImplementer",
+            ),
+            (
+                "UntypedJsonDataValue",
+                "golem_common::model::agent::UntypedJsonDataValue",
+            ),
+            (
+                "UntypedDataValue",
+                "golem_common::model::agent::UntypedDataValue",
+            ),
+            // application
+            (
+                "Application",
+                "golem_common::model::application::Application",
+            ),
+            (
+                "ApplicationCreation",
+                "golem_common::model::application::ApplicationCreation",
+            ),
+            (
+                "ApplicationUpdate",
+                "golem_common::model::application::ApplicationUpdate",
+            ),
+            // auth
+            ("Token", "golem_common::model::auth::Token"),
+            ("TokenCreation", "golem_common::model::auth::TokenCreation"),
+            (
+                "TokenWithSecret",
+                "golem_common::model::auth::TokenWithSecret",
+            ),
+            // component
+            (
+                "ComponentCreation",
+                "golem_common::model::component::ComponentCreation",
+            ),
+            (
+                "ComponentDto",
+                "golem_common::model::component::ComponentDto",
+            ),
+            (
+                "ComponentFileOptions",
+                "golem_common::model::component::ComponentFileOptions",
+            ),
+            (
+                "ComponentUpdate",
+                "golem_common::model::component::ComponentUpdate",
+            ),
+            // deployment
+            ("Deployment", "golem_common::model::deployment::Deployment"),
+            (
+                "CurrentDeployment",
+                "golem_common::model::deployment::CurrentDeployment",
+            ),
+            (
+                "DeploymentCreation",
+                "golem_common::model::deployment::DeploymentCreation",
+            ),
+            (
+                "DeploymentRollback",
+                "golem_common::model::deployment::DeploymentRollback",
+            ),
+            (
+                "DeploymentPlan",
+                "golem_common::model::deployment::DeploymentPlan",
+            ),
+            (
+                "DeploymentPlanComponentEntry",
+                "golem_common::model::deployment::DeploymentPlanComponentEntry",
+            ),
+            (
+                "DeploymentSummary",
+                "golem_common::model::deployment::DeploymentSummary",
+            ),
+            // domain_registration
+            (
+                "DomainRegistration",
+                "golem_common::model::domain_registration::DomainRegistration",
+            ),
+            (
+                "DomainRegistrationCreation",
+                "golem_common::model::domain_registration::DomainRegistrationCreation",
+            ),
+            // environment
+            (
+                "Environment",
+                "golem_common::model::environment::Environment",
+            ),
+            (
+                "EnvironmentCreation",
+                "golem_common::model::environment::EnvironmentCreation",
+            ),
+            (
+                "EnvironmentUpdate",
+                "golem_common::model::environment::EnvironmentUpdate",
+            ),
+            (
+                "EnvironmentWithDetails",
+                "golem_common::model::environment::EnvironmentWithDetails",
+            ),
+            // environment_plugin_grant
+            (
+                "EnvironmentPluginGrant",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrant",
+            ),
+            (
+                "EnvironmentPluginGrantWithDetails",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrantWithDetails",
+            ),
+            (
+                "EnvironmentPluginGrantCreation",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation",
+            ),
+            // environment_share
+            (
+                "EnvironmentShare",
+                "golem_common::model::environment_share::EnvironmentShare",
+            ),
+            (
+                "EnvironmentShareCreation",
+                "golem_common::model::environment_share::EnvironmentShareCreation",
+            ),
+            (
+                "EnvironmentShareUpdate",
+                "golem_common::model::environment_share::EnvironmentShareUpdate",
+            ),
+            // login
+            (
+                "OAuth2DeviceflowData",
+                "golem_common::model::login::OAuth2DeviceflowData",
+            ),
+            (
+                "OAuth2DeviceflowStart",
+                "golem_common::model::login::OAuth2DeviceflowStart",
+            ),
+            (
+                "OAuth2WebflowData",
+                "golem_common::model::login::OAuth2WebflowData",
+            ),
+            // plan
+            ("Plan", "golem_common::model::plan::Plan"),
+            // plugin_registration
+            (
+                "ComponentTransformerPluginSpec",
+                "golem_common::model::plugin_registration::ComponentTransformerPluginSpec",
+            ),
+            (
+                "OplogProcessorPluginSpec",
+                "golem_common::model::plugin_registration::OplogProcessorPluginSpec",
+            ),
+            (
+                "PluginRegistrationCreation",
+                "golem_common::model::plugin_registration::PluginRegistrationCreation",
+            ),
+            (
+                "PluginRegistrationDto",
+                "golem_common::model::plugin_registration::PluginRegistrationDto",
+            ),
+            // reports
+            (
+                "AccountCountsReport",
+                "golem_common::model::reports::AccountCountsReport",
+            ),
+            (
+                "AccountSummaryReport",
+                "golem_common::model::reports::AccountSummaryReport",
+            ),
+            // security_scheme
+            (
+                "SecuritySchemeCreation",
+                "golem_common::model::security_scheme::SecuritySchemeCreation",
+            ),
+            (
+                "SecuritySchemeDto",
+                "golem_common::model::security_scheme::SecuritySchemeDto",
+            ),
+            (
+                "SecuritySchemeUpdate",
+                "golem_common::model::security_scheme::SecuritySchemeUpdate",
+            ),
+            // worker
+            (
+                "FlatComponentFileSystemNode",
+                "golem_common::model::worker::FlatComponentFileSystemNode",
+            ),
+            (
+                "RevertWorkerTarget",
+                "golem_common::model::worker::RevertWorkerTarget",
+            ),
+            (
+                "WasiConfigVars",
+                "golem_common::model::worker::WasiConfigVars",
             ),
             (
                 "WasiConfigVarsEntry",
                 "golem_common::model::worker::WasiConfigVarsEntry",
             ),
             (
-                "WasmRpcTarget",
-                "golem_common::model::component_metadata::WasmRpcTarget",
-            ),
-            (
                 "WorkerCreationRequest",
                 "golem_common::model::worker::WorkerCreationRequest",
             ),
+            (
+                "WorkerMetadataDto",
+                "golem_common::model::worker::WorkerMetadataDto",
+            ),
+            (
+                "WorkerUpdateMode",
+                "golem_common::model::worker::WorkerUpdateMode",
+            ),
+            // oplog
+            ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
+            (
+                "PublicOplogEntry",
+                "golem_common::model::oplog::PublicOplogEntry",
+            ),
+            (
+                "PublicOplogEntryWithIndex",
+                "golem_common::model::oplog::PublicOplogEntryWithIndex",
+            ),
+            // http_api_deployment
+            (
+                "HttpApiDeployment",
+                "golem_common::model::http_api_deployment::HttpApiDeployment",
+            ),
+            (
+                "HttpApiDeploymentCreation",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentCreation",
+            ),
+            (
+                "HttpApiDeploymentUpdate",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
+            ),
+            // common
+            ("Empty", "golem_common::model::Empty"),
+            ("ErrorBody", "golem_common::model::error::ErrorBody"),
+            ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            ("ScanCursor", "golem_common::model::ScanCursor"),
+            ("UntypedJsonBody", "golem_common::model::UntypedJsonBody"),
+            ("VersionInfo", "golem_common::model::VersionInfo"),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
-            (
-                "WorkerBindingType",
-                "golem_common::model::WorkerBindingType",
-            ),
             (
                 "WorkerResourceDescription",
                 "golem_common::model::WorkerResourceDescription",
             ),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
+            // golem_wasm
+            ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
+            ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
+            (
+                "ValueAndOptionalType",
+                "golem_wasm::json::OptionallyValueAndTypeJson",
+            ),
+            ("ValueAndType", "golem_wasm::ValueAndType"),
         ],
         &["/v1/components/{component_id}/workers/{worker_name}/connect"],
     )

@@ -1,7 +1,11 @@
 syntax = "proto3";
 
+import "golem/common/empty.proto";
 import "wasm/rpc/type.proto";
 import "wasm/rpc/value_and_type.proto";
+import "golem/common/account_id.proto";
+import "golem/component/component_id.proto";
+import "golem/worker/worker_id.proto";
 
 package golem.component;
 
@@ -30,6 +34,7 @@ message AgentMethod {
   optional string prompt_hint = 3;
   DataSchema input_schema = 4;
   DataSchema output_schema = 5;
+  repeated HttpEndpointDetails http_endpoint = 6;
 }
 
 message AgentType {
@@ -39,6 +44,7 @@ message AgentType {
   repeated AgentMethod methods = 4;
   repeated AgentDependency dependencies = 5;
   AgentMode mode = 6;
+  optional HttpMountDetails http_mount = 7;
 }
 
 message BinaryDescriptor {
@@ -135,4 +141,119 @@ message BinaryReference {
 message BinarySource {
   bytes data = 1;
   optional BinaryType binary_type = 2;
+}
+
+message HttpMountDetails {
+  repeated PathSegment path_prefix = 1;
+  optional AgentHttpAuthDetails auth_details = 2;
+  bool phantom_agent = 3;
+  CorsOptions cors_options = 4;
+  repeated PathSegment webhook_suffix = 5;
+}
+
+message HttpEndpointDetails {
+  HttpMethod http_method = 1;
+  repeated PathSegment path_suffix = 2;
+  repeated HeaderVariable header_vars = 3;
+  repeated QueryVariable query_vars = 4;
+  optional AgentHttpAuthDetails auth_details = 5;
+  CorsOptions cors_options = 6;
+}
+
+enum StandardHttpMethod {
+  STANDARD_HTTP_METHOD_UNSPECIFIED = 0;
+  STANDARD_HTTP_METHOD_GET = 1;
+  STANDARD_HTTP_METHOD_HEAD = 2;
+  STANDARD_HTTP_METHOD_POST = 3;
+  STANDARD_HTTP_METHOD_PUT = 4;
+  STANDARD_HTTP_METHOD_DELETE = 5;
+  STANDARD_HTTP_METHOD_CONNECT = 6;
+  STANDARD_HTTP_METHOD_OPTIONS = 7;
+  STANDARD_HTTP_METHOD_TRACE = 8;
+  STANDARD_HTTP_METHOD_PATCH = 9;
+}
+
+message HttpMethod {
+  oneof value {
+    StandardHttpMethod standard = 1;
+    string custom = 2;
+  }
+}
+
+message CorsOptions {
+  repeated string allowed_patterns = 1;
+}
+
+message PathSegment {
+  oneof value {
+    LiteralSegment literal = 1;
+    SystemVariableSegment system_variable = 2;
+    PathVariable path_variable = 3;
+    PathVariable remaining_path_variable = 4;
+  }
+}
+
+message LiteralSegment {
+  string value = 1;
+}
+
+message SystemVariableSegment {
+  SystemVariable value = 1;
+}
+
+enum SystemVariable {
+  SYSTEM_VARIABLE_UNSPECIFIED = 0;
+  SYSTEM_VARIABLE_AGENT_TYPE = 1;
+  SYSTEM_VARIABLE_AGENT_VERSION = 2;
+}
+
+message PathVariable {
+  string variable_name = 1;
+}
+
+message HeaderVariable {
+  string header_name = 1;
+  string variable_name = 2;
+}
+
+message QueryVariable {
+  string query_param_name = 1;
+  string variable_name = 2;
+}
+
+message AgentHttpAuthDetails {
+  bool required = 1;
+}
+
+message Principal {
+  oneof value {
+    OidcPrincipal oidc = 1;
+    AgentPrincipal agent = 2;
+    GolemUserPrincipal golem_user = 3;
+    golem.common.Empty anonymous = 4;
+  }
+}
+
+message OidcPrincipal {
+  string sub = 1;
+  string issuer = 2;
+
+  optional string email = 3;
+  optional string name = 4;
+  optional bool email_verified = 5;
+
+  optional string given_name = 6;
+  optional string family_name = 7;
+  optional string picture = 8;
+  optional string preferred_username = 9;
+
+  string claims = 10;
+}
+
+message AgentPrincipal {
+  golem.worker.WorkerId agent_id = 1;
+}
+
+message GolemUserPrincipal {
+  golem.common.AccountId account_id = 1;
 }

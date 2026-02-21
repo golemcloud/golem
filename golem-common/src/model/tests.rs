@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::{ComponentFilePath, ComponentRevision};
+use crate::model::environment::EnvironmentId;
+use crate::model::oplog::OplogIndex;
+use crate::model::{
+    AccountId, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
 use desert_rust::BinaryCodec;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::vec;
 use test_r::test;
-
-use crate::model::oplog::OplogIndex;
-
-use crate::model::{
-    AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
-    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
-};
-
-use serde::{Deserialize, Serialize};
+use uuid::uuid;
 
 #[test]
 fn timestamp_conversion() {
@@ -47,13 +46,11 @@ struct ExampleWithAccountId {
 
 #[test]
 fn account_id_from_json_apigateway_version() {
-    let json = "{ \"account_id\": \"account-1\" }";
+    let json = "{ \"account_id\": \"f935056f-e2f0-4183-a40f-d8ef3011f0bc\" }";
     let example: ExampleWithAccountId = serde_json::from_str(json).unwrap();
     assert_eq!(
         example.account_id,
-        AccountId {
-            value: "account-1".to_string()
-        }
+        AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc"))
     );
 }
 
@@ -61,12 +58,13 @@ fn account_id_from_json_apigateway_version() {
 fn account_id_json_serialization() {
     // We want to use this variant for serialization because it is used on the public API gateway API
     let example: ExampleWithAccountId = ExampleWithAccountId {
-        account_id: AccountId {
-            value: "account-1".to_string(),
-        },
+        account_id: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
     };
     let json = serde_json::to_string(&example).unwrap();
-    assert_eq!(json, "{\"account_id\":\"account-1\"}");
+    assert_eq!(
+        json,
+        "{\"account_id\":\"f935056f-e2f0-4183-a40f-d8ef3011f0bc\"}"
+    );
 }
 
 #[test]
@@ -82,8 +80,11 @@ fn worker_filter_parse() {
     );
 
     assert_eq!(
-        WorkerFilter::from_str("version >= 10").unwrap(),
-        WorkerFilter::new_version(FilterComparator::GreaterEqual, 10)
+        WorkerFilter::from_str("revision >= 10").unwrap(),
+        WorkerFilter::new_revision(
+            FilterComparator::GreaterEqual,
+            ComponentRevision::new(10).unwrap()
+        )
     );
 
     assert_eq!(
@@ -122,11 +123,14 @@ fn worker_filter_combination() {
                 FilterComparator::Equal,
                 WorkerStatus::Running,
             ))
-            .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            .and(WorkerFilter::new_revision(
+                FilterComparator::Equal,
+                ComponentRevision::new(1).unwrap()
+            )),
         WorkerFilter::new_and(vec![
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
             WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-            WorkerFilter::new_version(FilterComparator::Equal, 1),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
@@ -146,11 +150,14 @@ fn worker_filter_combination() {
                 FilterComparator::NotEqual,
                 WorkerStatus::Running,
             ))
-            .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            .or(WorkerFilter::new_revision(
+                FilterComparator::Equal,
+                ComponentRevision::new(1).unwrap()
+            )),
         WorkerFilter::new_or(vec![
             WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
             WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-            WorkerFilter::new_version(FilterComparator::Equal, 1),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
@@ -160,13 +167,16 @@ fn worker_filter_combination() {
                 FilterComparator::NotEqual,
                 WorkerStatus::Running,
             ))
-            .or(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            .or(WorkerFilter::new_revision(
+                FilterComparator::Equal,
+                ComponentRevision::new(1).unwrap()
+            )),
         WorkerFilter::new_or(vec![
             WorkerFilter::new_and(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
             ]),
-            WorkerFilter::new_version(FilterComparator::Equal, 1),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
@@ -176,39 +186,39 @@ fn worker_filter_combination() {
                 FilterComparator::NotEqual,
                 WorkerStatus::Running,
             ))
-            .and(WorkerFilter::new_version(FilterComparator::Equal, 1)),
+            .and(WorkerFilter::new_revision(
+                FilterComparator::Equal,
+                ComponentRevision::new(1).unwrap()
+            )),
         WorkerFilter::new_and(vec![
             WorkerFilter::new_or(vec![
                 WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
                 WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
             ]),
-            WorkerFilter::new_version(FilterComparator::Equal, 1),
+            WorkerFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 }
 
 #[test]
 fn worker_filter_matches() {
-    let component_id = ComponentId::new_v4();
+    let component_id = ComponentId::new();
     let worker_metadata = WorkerMetadata {
         worker_id: WorkerId {
             worker_name: "worker-1".to_string(),
             component_id,
         },
-        args: vec![],
         env: vec![
             ("env1".to_string(), "value1".to_string()),
             ("env2".to_string(), "value2".to_string()),
         ],
-        project_id: ProjectId::new_v4(),
-        created_by: AccountId {
-            value: "account-1".to_string(),
-        },
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
         wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: WorkerStatusRecord {
-            component_version: 1,
+            component_revision: ComponentRevision::new(1).unwrap(),
             ..WorkerStatusRecord::default()
         },
         original_phantom_id: None,
@@ -249,23 +259,35 @@ fn worker_filter_matches() {
 
     assert!(
         WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-            .and(WorkerFilter::new_version(FilterComparator::Equal, 1))
+            .and(WorkerFilter::new_revision(
+                FilterComparator::Equal,
+                ComponentRevision::new(1).unwrap()
+            ))
             .matches(&worker_metadata)
     );
 
     assert!(
         WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
-            .or(WorkerFilter::new_version(FilterComparator::Equal, 1))
+            .or(WorkerFilter::new_revision(
+                FilterComparator::Equal,
+                ComponentRevision::new(1).unwrap()
+            ))
             .matches(&worker_metadata)
     );
 
-    assert!(WorkerFilter::new_version(FilterComparator::GreaterEqual, 1)
-        .and(WorkerFilter::new_version(FilterComparator::Less, 2))
-        .or(WorkerFilter::new_name(
-            StringFilterComparator::Equal,
-            "worker-2".to_string(),
-        ))
-        .matches(&worker_metadata));
+    assert!(WorkerFilter::new_revision(
+        FilterComparator::GreaterEqual,
+        ComponentRevision::new(1).unwrap()
+    )
+    .and(WorkerFilter::new_revision(
+        FilterComparator::Less,
+        ComponentRevision::new(2).unwrap()
+    ))
+    .or(WorkerFilter::new_name(
+        StringFilterComparator::Equal,
+        "worker-2".to_string(),
+    ))
+    .matches(&worker_metadata));
 
     assert!(WorkerFilter::new_wasi_config_vars(
         "var1".to_string(),

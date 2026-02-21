@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::AppComponentName;
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
+use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::analysed_type::{case, variant};
 use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,7 @@ use wit_component::WitPrinter;
 use wit_parser::{PackageId, Resolve, SourceMap};
 
 pub fn generate_agent_wrapper_wit(
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
     agent_types: &[AgentType],
 ) -> anyhow::Result<AgentWrapperGeneratorContext> {
     let mut ctx = AgentWrapperGeneratorContextState::new(agent_types.to_vec());
@@ -72,7 +72,7 @@ impl AgentWrapperGeneratorContextState {
     }
 
     /// Generate the wrapper WIT that also imports and exports golem:agent/guest
-    fn generate_wit_source(&mut self, component_name: &AppComponentName) -> anyhow::Result<()> {
+    fn generate_wit_source(&mut self, component_name: &ComponentName) -> anyhow::Result<()> {
         if self.wrapper_package_wit_source.is_some() {
             return Err(anyhow!("generate_wit_source has been called already"));
         }
@@ -181,7 +181,7 @@ impl AgentWrapperGeneratorContextState {
         result: &mut String,
         agent: &AgentType,
     ) -> anyhow::Result<String> {
-        let interface_name = escape_wit_keyword(&agent.type_name.to_wit_naming());
+        let interface_name = escape_wit_keyword(&agent.type_name.to_wit_naming().to_string());
 
         writeln!(result, "/// {}", agent.description)?;
         writeln!(result, "interface {interface_name} {{")?;
@@ -767,6 +767,8 @@ mod tests {
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
         NamedElementSchemas, TextDescriptor,
     };
+    use golem_common::model::component::ComponentName;
+    use golem_templates::model::GuestLanguage;
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
@@ -775,7 +777,7 @@ mod tests {
 
     #[test]
     fn empty_agent_wrapper() {
-        let component_name = "example:empty".into();
+        let component_name = ComponentName("example:empty".to_string());
         let agent_types = vec![];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -807,7 +809,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_1() {
-        let component_name = "example:single1".into();
+        let component_name = ComponentName("example:single1".to_string());
         let agent_types = single_agent_wrapper_types();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -856,7 +858,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_2() {
-        let component_name = "example:single2".into();
+        let component_name = ComponentName("example:single2".to_string());
 
         let color = r#enum(&["red", "green", "blue"]).named("color");
 
@@ -876,7 +878,7 @@ mod tests {
         .named("location");
 
         let agent_types = vec![AgentType {
-            type_name: "agent1".to_string(),
+            type_name: golem_common::model::agent::AgentTypeName("agent1".to_string()),
             description: "An example agent".to_string(),
             constructor: AgentConstructor {
                 name: None,
@@ -919,6 +921,7 @@ mod tests {
                             }),
                         }],
                     }),
+                    http_endpoint: Vec::new(),
                 },
                 AgentMethod {
                     name: "f2".to_string(),
@@ -940,10 +943,12 @@ mod tests {
                             }),
                         }],
                     }),
+                    http_endpoint: Vec::new(),
                 },
             ],
             dependencies: vec![],
             mode: AgentMode::Durable,
+            http_mount: None,
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1017,7 +1022,7 @@ mod tests {
 
     #[test]
     fn multi_agent_wrapper_2() {
-        let component_name = "example:multi1".into();
+        let component_name = ComponentName("example:multi1".to_string());
         let agent_types = test::multi_agent_wrapper_2_types();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1114,7 +1119,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_1_using_wit_keywords() {
-        let component_name = "example:single1".into();
+        let component_name = ComponentName("example:single1".to_string());
         let agent_types = agent_type_with_wit_keywords();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1163,7 +1168,7 @@ mod tests {
 
     #[test]
     fn bug_multiple_types_called_element() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = reproducer_for_multiple_types_called_element();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1176,44 +1181,44 @@ mod tests {
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
-            
+
               record element {
                 x: string,
               }
-            
+
               record element1 {
                 data: string,
                 value: s32,
               }
             }
-            
+
             /// AssistantAgent
             interface assistant-agent {
               use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{element};
-            
+
               /// Constructs [object Object]
               initialize: func();
-            
+
               get-definition: func() -> agent-type;
-            
+
               ask-more: func(name: string) -> element;
             }
-            
+
             /// WeatherAgent
             interface weather-agent {
               use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{element, element1};
-            
+
               /// Constructs [object Object]
               initialize: func(username: string);
-            
+
               get-definition: func() -> agent-type;
-            
+
               /// Weather forecast weather for you
               get-weather: func(name: string, param2: element1) -> string;
             }
-            
+
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
               import wasi:io/poll@0.2.3;
@@ -1223,7 +1228,7 @@ mod tests {
               import golem:api/save-snapshot@1.3.0;
               import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
-            
+
               export golem:agent/guest;
               export golem:api/save-snapshot@1.3.0;
               export golem:api/load-snapshot@1.3.0;
@@ -1238,7 +1243,7 @@ mod tests {
 
     #[test]
     fn single_agent_wrapper_1_test_in_package_name() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = single_agent_wrapper_types();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1287,7 +1292,7 @@ mod tests {
 
     #[test]
     pub fn enum_type() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = reproducer_for_issue_with_enums();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1327,7 +1332,7 @@ mod tests {
 
     #[test]
     pub fn result_type() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = reproducer_for_issue_with_result_types();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1342,12 +1347,12 @@ mod tests {
                 /// Constructs the agent bar-agent
                 interface bar-agent {
                   use golem:agent/common.{agent-type, binary-reference, text-reference};
-                
+
                   /// Constructs the agent bar-agent
                   initialize: func();
-                
+
                   get-definition: func() -> agent-type;
-                
+
                   fun-either: func(either: result<string, string>) -> result<string, string>;
                 }
             "#},
@@ -1356,7 +1361,7 @@ mod tests {
 
     #[test]
     pub fn multimodal_untagged_variant_in_out() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = test::multimodal_untagged_variant_in_out();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1408,7 +1413,7 @@ mod tests {
 
     #[test]
     pub fn char_type() {
-        let component_name = "test:agent".into();
+        let component_name = "test:agent".try_into().unwrap();
         let agent_types = test::char_type();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1438,7 +1443,7 @@ mod tests {
 
     #[test]
     pub fn unit_result_type() {
-        let component_name = "test:agent".into();
+        let component_name = "test:agent".try_into().unwrap();
         let agent_types = test::unit_result_type();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1463,6 +1468,326 @@ mod tests {
                   f1: func() -> result;
                 }
             "#},
+        )
+    }
+
+    #[test]
+    pub fn ts_code_first_snippets() {
+        let component_name = "test:agent".try_into().unwrap();
+        let agent_types = test::code_first_snippets_agent_types(GuestLanguage::TypeScript);
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        // println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                interface types {
+                  use golem:agent/common.{text-reference, binary-reference};
+
+                  variant element1 {
+                    case1(string),
+                    case2(f64),
+                  }
+
+                  record element3 {
+                    param1: string,
+                    param2: option<f64>,
+                    param3: option<string>,
+                  }
+
+                  variant fun-multimodal-advanced-input {
+                    text(string),
+                    image(list<u8>),
+                  }
+
+                  variant fun-multimodal-advanced-output {
+                    text(string),
+                    image(list<u8>),
+                  }
+
+                  variant fun-multimodal-input {
+                    text(text-reference),
+                    binary(binary-reference),
+                  }
+
+                  variant fun-multimodal-output {
+                    text(text-reference),
+                    binary(binary-reference),
+                  }
+
+                  record object-type {
+                    a: string,
+                    b: f64,
+                    c: bool,
+                  }
+
+                  variant element {
+                    case3(string),
+                    case4(f64),
+                    case5(object-type),
+                    case6(bool),
+                  }
+
+                  record element2 {
+                    param1: option<element1>,
+                    param2: option<string>,
+                    param3: option<element1>,
+                    param4: option<element1>,
+                    param5: option<string>,
+                    param6: option<string>,
+                    param7: option<element>,
+                  }
+
+                  record object-with-union-with-undefined1 {
+                    a: option<string>,
+                  }
+
+                  record object-with-union-with-undefined2 {
+                    a: option<element1>,
+                  }
+
+                  record object-with-union-with-undefined3 {
+                    a: option<element1>,
+                  }
+
+                  record object-with-union-with-undefined4 {
+                    a: option<string>,
+                  }
+
+                  variant result-like {
+                    okay(string),
+                    error(option<string>),
+                  }
+
+                  record result-like-with-no-tag {
+                    ok: option<string>,
+                    err: option<string>,
+                  }
+
+                  record simple-interface-type {
+                    n: f64,
+                  }
+
+                  variant union-type {
+                    union-type1(string),
+                    union-type2(f64),
+                    union-type3(object-type),
+                    union-type4(bool),
+                  }
+
+                  record object-complex-type {
+                    a: string,
+                    b: f64,
+                    c: bool,
+                    d: object-type,
+                    e: union-type,
+                    f: list<string>,
+                    g: list<object-type>,
+                    h: tuple<string, f64, bool>,
+                    i: tuple<string, f64, object-type>,
+                    j: list<tuple<string, f64>>,
+                    k: simple-interface-type,
+                  }
+
+                  variant tagged-union {
+                    a(string),
+                    b(f64),
+                    c(bool),
+                    d(union-type),
+                    e(object-type),
+                    f(list<string>),
+                    g(tuple<string, f64, bool>),
+                    h(simple-interface-type),
+                    i,
+                    j,
+                  }
+
+                  variant union-complex-type {
+                    union-complex-type1(string),
+                    union-complex-type2(f64),
+                    union-complex-type3(object-complex-type),
+                    union-complex-type4(object-type),
+                    union-complex-type5(list<string>),
+                    union-complex-type6(list<object-type>),
+                    union-complex-type7(tuple<string, f64, bool>),
+                    union-complex-type8(tuple<string, f64, object-type>),
+                    union-complex-type9(list<tuple<string, f64>>),
+                    union-complex-type10(simple-interface-type),
+                    union-complex-type11(bool),
+                  }
+
+                  variant union-with-literals {
+                    lit1,
+                    lit2,
+                    lit3,
+                    union-with-literals1(bool),
+                  }
+
+                  enum union-with-only-literals {
+                    foo,
+                    bar,
+                    baz,
+                  }
+                }
+
+                /// TS Code First BarAgent
+                interface bar-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                  use types.{element, element1, element2, element3, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like, result-like-with-no-tag, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+
+                  /// TS Code First BarAgent
+                  initialize: func(optional-string-type: option<string>, optional-union-type: option<element>);
+
+                  get-definition: func() -> agent-type;
+
+                  fun-all: func(complex-type: object-complex-type, union-type: union-type, union-complex-type: union-complex-type, number-type: f64, string-type: string, boolean-type: bool, map-type: list<tuple<string, f64>>, tuple-complex-type: tuple<string, f64, object-type>, tuple-type: tuple<string, f64, bool>, list-complex-type: list<object-type>, object-type: object-type, result-like: result-like, result-like-with-no-tag: result-like-with-no-tag, union-with-null: option<element1>, object-with-union-with-undefined1: object-with-union-with-undefined1, object-with-union-with-undefined2: object-with-union-with-undefined2, object-with-union-with-undefined3: object-with-union-with-undefined3, object-with-union-with-undefined4: object-with-union-with-undefined4, optional-string-type: option<string>, optional-union-type: option<element>, tagged-union-type: tagged-union) -> string;
+
+                  fun-arrow-sync: func(text: string);
+
+                  fun-boolean: func(boolean-type: bool) -> bool;
+
+                  fun-builtin-result-sn: func(%result: result<string, f64>) -> result<string, f64>;
+
+                  fun-builtin-result-sv: func(%result: result<string>) -> result<string>;
+
+                  fun-builtin-result-vs: func(%result: result<_, string>) -> result<_, string>;
+
+                  fun-list-complex-type: func(list-complex-type: list<object-type>) -> list<object-type>;
+
+                  fun-multimodal: func(input: list<fun-multimodal-input>) -> list<fun-multimodal-output>;
+
+                  fun-multimodal-advanced: func(input: list<fun-multimodal-advanced-input>) -> list<fun-multimodal-advanced-output>;
+
+                  fun-no-return: func(text: string);
+
+                  fun-null-return: func(text: string);
+
+                  fun-number: func(number-type: f64) -> f64;
+
+                  fun-object-complex-type: func(text: object-complex-type) -> object-complex-type;
+
+                  fun-object-type: func(object-type: object-type) -> object-type;
+
+                  fun-optional: func(param1: option<element1>, param2: object-with-union-with-undefined1, param3: object-with-union-with-undefined2, param4: object-with-union-with-undefined3, param5: object-with-union-with-undefined4, param6: option<string>, param7: option<element>) -> element2;
+
+                  fun-optional-q-mark: func(param1: string, param2: option<f64>, param3: option<string>) -> element3;
+
+                  fun-result-exact: func(either: result<string, string>) -> result<string, string>;
+
+                  fun-result-like: func(either-one-optional: result-like) -> result-like;
+
+                  fun-result-like-with-void: func(result-like-with-void: result) -> result;
+
+                  fun-result-no-tag: func(either-both-optional: result-like-with-no-tag) -> result-like-with-no-tag;
+
+                  fun-string: func(string-type: string) -> string;
+
+                  fun-tagged-union: func(tagged-union-type: tagged-union) -> tagged-union;
+
+                  fun-text: func(map-type: list<tuple<string, f64>>) -> list<tuple<string, f64>>;
+
+                  fun-tuple-complex-type: func(complex-type: tuple<string, f64, object-type>) -> tuple<string, f64, object-type>;
+
+                  fun-tuple-type: func(tuple-type: tuple<string, f64, bool>) -> tuple<string, f64, bool>;
+
+                  fun-undefined-return: func(text: string);
+
+                  fun-union-complex-type: func(union-complex-type: union-complex-type) -> union-complex-type;
+
+                  fun-union-type: func(union-type: union-type) -> union-type;
+
+                  fun-union-with-literals: func(union-with-literals: union-with-literals) -> union-with-literals;
+
+                  fun-union-with-only-literals: func(union-with-literals: union-with-only-literals) -> union-with-only-literals;
+
+                  fun-unstructured-binary: func(unstructured-text: binary-reference) -> string;
+
+                  fun-unstructured-text: func(unstructured-text: text-reference) -> string;
+
+                  fun-void-return: func(text: string);
+                }
+
+                /// TS Code First FooAgent
+                interface foo-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                  use types.{element, element1, element2, element3, fun-multimodal-advanced-input, fun-multimodal-advanced-output, fun-multimodal-input, fun-multimodal-output, object-complex-type, object-type, object-with-union-with-undefined1, object-with-union-with-undefined2, object-with-union-with-undefined3, object-with-union-with-undefined4, result-like, result-like-with-no-tag, tagged-union, union-complex-type, union-type, union-with-literals, union-with-only-literals};
+
+                  /// TS Code First FooAgent
+                  initialize: func(input: string);
+
+                  get-definition: func() -> agent-type;
+
+                  fun-all: func(complex-type: object-complex-type, union-type: union-type, union-complex-type: union-complex-type, number-type: f64, string-type: string, boolean-type: bool, map-type: list<tuple<string, f64>>, tuple-complex-type: tuple<string, f64, object-type>, tuple-type: tuple<string, f64, bool>, list-complex-type: list<object-type>, object-type: object-type, result-like: result-like, result-like-with-no-tag: result-like-with-no-tag, union-with-null: option<element1>, object-with-union-with-undefined1: object-with-union-with-undefined1, object-with-union-with-undefined2: object-with-union-with-undefined2, object-with-union-with-undefined3: object-with-union-with-undefined3, object-with-union-with-undefined4: object-with-union-with-undefined4, optional-string-type: option<string>, optional-union-type: option<element>, tagged-union-type: tagged-union) -> string;
+
+                  fun-arrow-sync: func(text: string);
+
+                  fun-boolean: func(boolean-type: bool) -> bool;
+
+                  fun-builtin-result-sn: func(%result: result<string, f64>) -> result<string, f64>;
+
+                  fun-builtin-result-sv: func(%result: result<string>) -> result<string>;
+
+                  fun-builtin-result-vs: func(%result: result<_, string>) -> result<_, string>;
+
+                  fun-either-optional: func(either-both-optional: result-like-with-no-tag) -> result-like-with-no-tag;
+
+                  fun-list-complex-type: func(list-complex-type: list<object-type>) -> list<object-type>;
+
+                  fun-map: func(map-type: list<tuple<string, f64>>) -> list<tuple<string, f64>>;
+
+                  fun-multimodal: func(input: list<fun-multimodal-input>) -> list<fun-multimodal-output>;
+
+                  fun-multimodal-advanced: func(input: list<fun-multimodal-advanced-input>) -> list<fun-multimodal-advanced-output>;
+
+                  fun-no-return: func(text: string);
+
+                  fun-null-return: func(text: string);
+
+                  fun-number: func(number-type: f64) -> f64;
+
+                  fun-object-complex-type: func(text: object-complex-type) -> object-complex-type;
+
+                  fun-object-type: func(object-type: object-type) -> object-type;
+
+                  fun-optional: func(param1: option<element1>, param2: object-with-union-with-undefined1, param3: object-with-union-with-undefined2, param4: object-with-union-with-undefined3, param5: object-with-union-with-undefined4, param6: option<string>, param7: option<element>) -> element2;
+
+                  fun-optional-q-mark: func(param1: string, param2: option<f64>, param3: option<string>) -> element3;
+
+                  fun-result-exact: func(either: result<string, string>) -> result<string, string>;
+
+                  fun-result-like: func(either-one-optional: result-like) -> result-like;
+
+                  fun-result-like-with-void: func(result-like-with-void: result) -> result;
+
+                  fun-string: func(string-type: string) -> string;
+
+                  fun-tagged-union: func(tagged-union-type: tagged-union) -> tagged-union;
+
+                  fun-tuple-complex-type: func(complex-type: tuple<string, f64, object-type>) -> tuple<string, f64, object-type>;
+
+                  fun-tuple-type: func(tuple-type: tuple<string, f64, bool>) -> tuple<string, f64, bool>;
+
+                  fun-undefined-return: func(text: string);
+
+                  fun-union-complex-type: func(union-complex-type: union-complex-type) -> union-complex-type;
+
+                  fun-union-type: func(union-type: union-type) -> union-type;
+
+                  fun-union-with-literals: func(union-with-literals: union-with-literals) -> union-with-literals;
+
+                  fun-union-with-only-literals: func(union-with-literals: union-with-only-literals) -> union-with-only-literals;
+
+                  fun-unstructured-binary: func(unstructured-text: binary-reference) -> string;
+
+                  fun-unstructured-text: func(unstructured-text: text-reference) -> string;
+
+                  fun-void-return: func(text: string);
+                }
+                "#},
         )
     }
 

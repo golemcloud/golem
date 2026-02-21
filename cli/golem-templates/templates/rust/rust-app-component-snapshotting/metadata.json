@@ -1,0 +1,4 @@
+{
+  "description": "A simple agent implementing a counter with custom state snapshotting",
+  "appComponentGroup": "default"
+}

@@ -32,6 +32,7 @@ use wasmtime::Engine;
 /// which is going to be replaced by a new way to compose libraries through a dynamic host interface.
 pub fn should_mock_dependency(name: &str) -> bool {
     const PREFIXES: &[&str] = &[
+        "golem:embed/embed",
         "golem:exec/executor",
         "golem:exec/types",
         "golem:graph/connection",

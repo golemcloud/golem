@@ -19,6 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
+  WASM_RQUICKJS_VERSION: "0.0.23"
 
 jobs:
   build-and-store:
@@ -34,7 +35,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: true
@@ -50,11 +51,11 @@ jobs:
         run: cargo make --profile ci build-all-bins-including-tests
         timeout-minutes: 15
 
-#      - name: Mount binary store
-#        uses: useblacksmith/stickydisk@v1
-#        with:
-#          key: golem-binaries-${{ github.run_id }}
-#          path: ~/golem-binaries-cache
+      #      - name: Mount binary store
+      #        uses: useblacksmith/stickydisk@v1
+      #        with:
+      #          key: golem-binaries-${{ github.run_id }}
+      #          path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
         run: |
@@ -68,8 +69,8 @@ jobs:
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
         timeout-minutes: 2
 
-#      - name: Move archive to sticky disk
-#        run: mv tmp/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
+      #      - name: Move archive to sticky disk
+      #        run: mv tmp/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
 
       - name: Save packaged binaries to cache
         uses: actions/cache/save@v4
@@ -90,7 +91,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -118,21 +119,21 @@ jobs:
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-#      - name: Restore binary archive
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: all-bins-including-tests
-#          path: tmp/golem-binaries.tar.zst
+      #      - name: Restore binary archive
+      #        uses: actions/download-artifact@v4
+      #        with:
+      #          name: all-bins-including-tests
+      #          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
           path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
-#      - name: Mount binary store
-#        uses: useblacksmith/stickydisk@v1
-#        with:
-#          key: golem-binaries-${{ github.run_id }}
-#          path: ~/golem-binaries-cache
+      #      - name: Mount binary store
+      #        uses: useblacksmith/stickydisk@v1
+      #        with:
+      #          key: golem-binaries-${{ github.run_id }}
+      #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
         run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
@@ -141,7 +142,7 @@ jobs:
         run: |
           mkdir -pv target/debug
           find target/nextest-archive
-          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/          
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -196,21 +197,21 @@ jobs:
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-#      - name: Restore binary archive
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: all-bins-including-tests
-#          path: tmp/golem-binaries.tar.zst
+      #      - name: Restore binary archive
+      #        uses: actions/download-artifact@v4
+      #        with:
+      #          name: all-bins-including-tests
+      #          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
           path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
-#      - name: Mount binary store
-#        uses: useblacksmith/stickydisk@v1
-#        with:
-#          key: golem-binaries-${{ github.run_id }}
-#          path: ~/golem-binaries-cache
+      #      - name: Mount binary store
+      #        uses: useblacksmith/stickydisk@v1
+      #        with:
+      #          key: golem-binaries-${{ github.run_id }}
+      #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
         run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
@@ -252,6 +253,8 @@ jobs:
             description: "IT #2"
           - name: integration-tests-group3
             description: "IT #3"
+          - name: integration-tests-group4
+            description: "IT #4"
           - name: api-tests
             description: "API tests"
           - name: cli-integration-tests-group1
@@ -262,9 +265,7 @@ jobs:
           - name: cli-integration-tests-group3
             description: "CLI tests #3"
             runner: blacksmith-16vcpu-ubuntu-2204
-          - name: cli-integration-tests-group4
-            description: "CLI tests #4"
-            runner: blacksmith-16vcpu-ubuntu-2204
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -291,23 +292,31 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
 
+      - uses: pnpm/action-setup@v2
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        with:
+          version: latest
+      - name: Install wasm-rquickjs
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-#      - name: Restore binary archive
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: all-bins-including-tests
-#          path: tmp/golem-binaries.tar.zst
+      #      - name: Restore binary archive
+      #        uses: actions/download-artifact@v4
+      #        with:
+      #          name: all-bins-including-tests
+      #          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
           path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
-#      - name: Mount binary store
-#        uses: useblacksmith/stickydisk@v1
-#        with:
-#          key: golem-binaries-${{ github.run_id }}
-#          path: ~/golem-binaries-cache
+      #      - name: Mount binary store
+      #        uses: useblacksmith/stickydisk@v1
+      #        with:
+      #          key: golem-binaries-${{ github.run_id }}
+      #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
         run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
@@ -340,18 +349,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-#  cleanup:
-#    runs-on: blacksmith
-#    needs:
-#      - worker-tests
-#      - it
-#      - unit-tests-and-checks
-#    if: always()
-#    steps:
-#      - name: Delete sticky disk
-#        uses: useblacksmith/stickydisk-delete@v1
-#        with:
-#          delete-key: golem-binaries-${{ github.run_id }}
+  #  cleanup:
+  #    runs-on: blacksmith
+  #    needs:
+  #      - worker-tests
+  #      - it
+  #      - unit-tests-and-checks
+  #    if: always()
+  #    steps:
+  #      - name: Delete sticky disk
+  #        uses: useblacksmith/stickydisk-delete@v1
+  #        with:
+  #          delete-key: golem-binaries-${{ github.run_id }}
 
   wasm-rpc-stub:
     runs-on: blacksmith
@@ -369,7 +378,7 @@ jobs:
         run: cargo binstall --force cargo-component@0.21.1
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -381,13 +390,39 @@ jobs:
       - name: Build wasm-rpc in stub mode
         run: cargo component build -p golem-wasm --no-default-features --features stub
 
+  golem-client:
+    runs-on: blacksmith
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v4-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+      - name: Prepare WIT dependencies
+        run: cargo make wit
+      - name: Build golem-client (dependencies in features=client mode)
+        run: cargo build -p golem-client
+
   build-golem-rust:
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v1-golem-rust
+          prefix-key: v2-golem-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -413,22 +448,60 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20.x"
+      - uses: pnpm/action-setup@v2
+        with:
+          version: latest
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo binstall --force cargo-component@0.21.1
+      - name: Install wasm-rquickjs
+        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+
       - name: Install dependencies
         working-directory: sdks/ts
         run: |
-          npm install
-      - name: Generate types
+          pnpm install
+
+      - name: Check code quality
         working-directory: sdks/ts
         run: |
-          npm run generate-types
-      - name: Run code quality check
+          pnpm run lint || (
+            echo "Linting issues found. Please fix them before proceeding. `npm run lint:fix` may help"
+            exit 1
+          )
+
+      - name: Check code formatting
         working-directory: sdks/ts
         run: |
-          npm run check
+          pnpm run format:check || (
+            echo "Code formatting issues found. Please run 'npm run format' to fix them."
+            exit 1
+          )
+
       - name: Build the package
         working-directory: sdks/ts
         run: |
-          npm run build
+          pnpm run build
+
+      - name: Verify golem-ts-sdk types are committed
+        working-directory: sdks/ts
+        run: |
+          if ! git diff --exit-code packages/golem-ts-sdk/types; then
+            echo "❌ The files in packages/golem-ts-sdk/types differ from the committed version."
+            echo "Please run 'pnpm run build' and commit the updated files."
+            exit 1
+          fi
+
+      - name: Build the agent template WASM binary
+        working-directory: sdks/ts
+        run: pnpm run build-agent-template
+
+      - name: Run tests
+        working-directory: sdks/ts
+        run: |
+          pnpm run test
 
   docker-targets-build:
     env:
@@ -466,7 +539,7 @@ jobs:
         run: rustup target add ${{ matrix.platform.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: debug
           cache-all-crates: true
           save-if: false
@@ -539,20 +612,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for cloud service
-        id: meta-cloud-service
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/cloud-service
-      - name: Build and push cloud-service
-        uses: useblacksmith/build-push-action@v1
-        with:
-          context: .
-          file: ./cloud-service/docker/Dockerfile
-          push: true
-          platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-cloud-service.outputs.tags }}
-          labels: ${{ steps.meta-cloud-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for worker executor
         id: meta-worker-executor
         uses: docker/metadata-action@v5
@@ -567,6 +627,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-worker-executor.outputs.tags }}
           labels: ${{ steps.meta-worker-executor.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem debugging service
         id: meta-golem-debugging-service
         uses: docker/metadata-action@v5
@@ -581,6 +642,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-debugging-service.outputs.tags }}
           labels: ${{ steps.meta-golem-debugging-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for shard manager
         id: meta-shard-manager
         uses: docker/metadata-action@v5
@@ -644,20 +706,22 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Extract metadata (tags, labels) for golem component service
-        id: meta-golem-component-service
+
+      - name: Extract metadata (tags, labels) for registry service
+        id: meta-registry-service
         uses: docker/metadata-action@v5
         with:
-          images: golemservices/golem-component-service
-      - name: Build and push golem component service image
+          images: golemservices/registry-service
+      - name: Build and push registry-service
         uses: useblacksmith/build-push-action@v1
         with:
           context: .
-          file: ./golem-component-service/docker/Dockerfile
+          file: ./golem-registry-service/docker/Dockerfile
           push: true
           platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-component-service.outputs.tags }}
-          labels: ${{ steps.meta-golem-component-service.outputs.labels }}
+          tags: ${{ steps.meta-registry-service.outputs.tags }}
+          labels: ${{ steps.meta-registry-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem worker service
         id: meta-golem-worker-service
         uses: docker/metadata-action@v5
@@ -672,6 +736,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-worker-service.outputs.tags }}
           labels: ${{ steps.meta-golem-worker-service.outputs.labels }}
+
       - name: Extract metadata (tags, labels) for golem component compilation service
         id: meta-golem-component-compilation-service
         uses: docker/metadata-action@v5
@@ -710,7 +775,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: v3-rust
+          prefix-key: v4-rust
           shared-key: release
           cache-all-crates: true
           save-if: true
@@ -743,7 +808,7 @@ jobs:
             os: macos-latest
           - rust-target: aarch64-apple-darwin
             os: macos-latest
-          - rust-target: x86_64-pc-windows-gnu
+          - rust-target: x86_64-pc-windows-msvc
             os: windows-latest
     name: Publish binaries of ${{ matrix.project }}
     runs-on: ${{ matrix.cfg.os }}
@@ -765,7 +830,7 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v0-rust"
+          prefix-key: v4-rust
           shared-key: release-${{ matrix.cfg.rust-target }}
           cache-all-crates: true
           save-if: true
@@ -792,82 +857,93 @@ jobs:
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.cfg.os != 'windows-latest'
 
-      - name: Import Code Signing Certificate
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          
-          # Create and unlock keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          
-          # Import certificate
-          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
-          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
-          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          
-          # Add keychain to search list
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-          
-          # Set partition list to allow codesign to access the certificate
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+      # - name: Import Code Signing Certificate
+      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
+      #   env:
+      #     CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      #     CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      #   run: |
+      #     # Create temporary keychain
+      #     KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+      #     KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
-      - name: Code Sign Binary
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-          
-          # Sign with hardened runtime
-          codesign --force \
-            --options runtime \
-            --timestamp \
-            --sign "Developer ID Application: $APPLE_TEAM_ID" \
-            "$BINARY_PATH"
-          
-          # Verify signature
-          codesign --verify --verbose "$BINARY_PATH"
-          codesign --display --verbose=4 "$BINARY_PATH"
+      #     # Create and unlock keychain
+      #     security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+      #     security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+      #     security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      - name: Create Notarization Archive
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        run: |
-          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
-          
-          # Create zip for notarization
-          zip -j "$ZIP_PATH" "$BINARY_PATH"
+      #     # Import certificate - use -T to allow codesign access
+      #     CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+      #     echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+      #     security import "$CERTIFICATE_PATH" \
+      #       -P "$CERTIFICATE_PASSWORD" \
+      #       -T /usr/bin/codesign \
+      #       -T /usr/bin/security \
+      #       -f pkcs12 \
+      #       -k "$KEYCHAIN_PATH"
 
-      - name: Submit for Notarization
-        if: contains(matrix.cfg.rust-target, 'apple-darwin')
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
-          
-          # Submit for notarization (async - no wait)
-          xcrun notarytool submit "$ZIP_PATH" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait false
-          
-          echo "Notarization submitted. Check status in Apple Developer portal."
+      #     # Add keychain to search list (prepend to existing list)
+      #     security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
 
-      - name: Cleanup Keychain
-        if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          security delete-keychain "$KEYCHAIN_PATH" || true
+      #     # Set partition list to allow codesign to access the certificate
+      #     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      #     # Debug: verify certificate was imported
+      #     echo "Imported certificates:"
+      #     security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      # - name: Code Sign Binary
+      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
+      #   env:
+      #     APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      #   run: |
+      #     BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+
+      #     # Debug: list available signing identities
+      #     echo "Available signing identities:"
+      #     security find-identity -v -p codesigning
+
+      #     # Sign with hardened runtime
+      #     codesign --force \
+      #       --options runtime \
+      #       --timestamp \
+      #       --sign "$APPLE_SIGNING_IDENTITY" \
+      #       "$BINARY_PATH"
+
+      #     # Verify signature
+      #     codesign --verify --verbose "$BINARY_PATH"
+      #     codesign --display --verbose=4 "$BINARY_PATH"
+
+      # - name: Create Notarization Archive
+      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
+      #   run: |
+      #     BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+      #     ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+
+      #     # Create zip for notarization
+      #     zip -j "$ZIP_PATH" "$BINARY_PATH"
+
+      # - name: Submit for Notarization
+      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
+      #   env:
+      #     APPLE_ID: ${{ secrets.APPLE_ID }}
+      #     APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      #     APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      #   run: |
+      #     ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+
+      #     # Submit for notarization and wait for completion
+      #     xcrun notarytool submit "$ZIP_PATH" \
+      #       --apple-id "$APPLE_ID" \
+      #       --team-id "$APPLE_TEAM_ID" \
+      #       --password "$APPLE_APP_PASSWORD" \
+      #       --wait false
+
+      # - name: Cleanup Keychain
+      #   if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
+      #   run: |
+      #     KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+      #     security delete-keychain "$KEYCHAIN_PATH" || true
 
       - name: Login GH CLI
         shell: bash

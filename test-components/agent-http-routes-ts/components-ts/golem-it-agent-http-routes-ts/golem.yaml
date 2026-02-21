@@ -1,0 +1,380 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+# httpApi:
+#   definitions:
+#     golem-it-agent-http-routes-ts-api:
+#       version: '0.0.1'
+#       routes:
+#       - method: POST
+#         path: /golem-it-agent-http-routes-ts-api/{name}/increment
+#         binding:
+#           type: default
+#           componentName: golem-it:agent-http-routes-ts
+#           response: |
+#             let name: string = request.path.name;
+#             let agent = counter-agent(name);
+#             let new-value = agent.increment();
+#             { status: 200, body: { result: "incremented ${name}, new value is ${new-value}" } }
+
+#   deployments:
+#     local:
+#     - domain: agent-http-routes-ts.localhost:9006
+#       definitions:
+#       - golem-it-agent-http-routes-ts-api
+
+components:
+  golem-it:agent-http-routes-ts:
+    templates: ts
+
+    # Component environment variables can reference system environment variables with minijinja syntax:
+    #
+    #   env:
+    #     ENV_VAR_1: "{{ ENV_VAR_1 }}"
+    #     RENAMED_VAR_2: "{{ ENV_VAR_2 }}"
+    #     COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
+    #
+    env:
+    # LLM providers
+    # -------------
+
+    ## Common
+    # GOLEM_LLM_LOG: "trace" # Optional, defaults to warn
+
+    ## Anthropic
+    # ANTHROPIC_API_KEY: "<KEY>"
+
+    ## OpenAI
+    # OPENAI_API_KEY: "<KEY>"
+
+    ## OpenRouter
+    # OPENROUTER_API_KEY: "<KEY>"
+
+    ## Amazon Bedrock
+    # AWS_ACCESS_KEY_ID: "<KEY>"
+    # AWS_REGION: "<REGION>"
+    # AWS_SECRET_ACCESS_KEY: "<KEY>"
+    # AWS_SESSION_TOKEN: "<TOKEN>" # Optional
+
+    ## Grok
+    # XAI_API_KEY: "<KEY>"
+
+    ## Ollama
+    # GOLEM_OLLAMA_BASE_URL: "<URL>" # Optional, defaults to http://localhost:11434
+
+
+    # Embedding providers
+    # -------------------
+
+    ## OpenAI
+    # OPENAI_API_KEY: "<KEY>"
+
+    ## Cohere
+    # COHERE_API_KEY: "<KEY>"
+
+    ## HuggingFace
+    # HUGGING_FACE_API_KEY: "<KEY>"
+
+    ## VoyageAI
+    # VOYAGEAI_API_KEY: "<KEY>"
+
+
+    # Graph database providers
+    # ------------------------
+
+    ## ArangoDB
+    # ARANGODB_HOST: "<HOST>"
+    # ARANGODB_PORT: "<PORT>" # Optional, defaults to 8529
+    # ARANGODB_USER: "<USER>"
+    # ARANGODB_PASSWORD: "<PASS>"
+    # ARANGO_DATABASE: "<DB>"
+
+    ## JanusGraph
+    # JANUSGRAPH_HOST: "<HOST>"
+    # JANUSGRAPH_PORT: "<PORT>" # Optional, defaults to 8182
+    # JANUSGRAPH_USER: "<USER>"
+    # JANUSGRAPH_PASSWORD: "<PASS>"
+
+    ## Neo4j
+    # NEO4J_HOST: "<HOST>"
+    # NEO4J_PORT: "<PORT>" # Optional, defaults to 7687
+    # NEO4J_USER: "<USER>"
+    # NEO4J_PASSWORD: "<PASS>"
+
+
+    # Search providers
+    # ----------------
+
+    ## Common
+    # GOLEM_SEARCH_LOG: "trace" # Optional, defaults to warn
+
+    ## Algolia
+    # ALGOLIA_APPLICATION_ID: "<ID>"
+    # ALGOLIA_API_KEY: "<KEY>"
+
+    ## ElasticSearch
+    # ELASTICSEARCH_URL: "<URL>"
+    # ELASTICSEARCH_USERNAME: "<USERNAME>"
+    # ELASTICSEARCH_PASSWORD: "<PASSWORD>"
+    # ELASTICSEARCH_API_KEY: "<API_KEY>"
+
+    ## Meilisearch
+    # MEILISEARCH_BASE_URL: "<URL>"
+    # MEILISEARCH_API_KEY: "<KEY>"
+
+    ## OpenSearch
+    # OPENSEARCH_BASE_URL: "<URL>"
+    # OPENSEARCH_USERNAME: "<USER>"
+    # OPENSEARCH_PASSWORD: "<PASS>"
+    # OPENSEARCH_API_KEY: "<KEY>"
+
+    ## Typesense
+    # TYPESENSE_BASE_URL: "<URL>"
+    # TYPESENSE_API_KEY: "<KEY>"
+
+
+    # Speech-to-text providers
+    # ------------------------
+
+    ## Common
+    # STT_PROVIDER_LOG_LEVEL: "trace" # Optional, defaults to warn
+    # STT_PROVIDER_MAX_RETRIES: "10" # Optional, defaults to 10
+
+    ## AWS
+    # AWS_REGION: "<REGION>"
+    # AWS_ACCESS_KEY: "<KEY>"
+    # AWS_SECRET_KEY: "<KEY>"
+    # AWS_BUCKET_NAME: "<BUCKET>"
+
+    ## Azure
+    # AZURE_REGION: "<REGION>"
+    # AZURE_SUBSCRIPTION_KEY: "<KEY>"
+
+    ## Deepgram
+    # DEEPGRAM_API_TOKEN: "<TOKEN>"
+    # DEEPGRAM_ENDPOINT: "<URL>" # Optional
+
+    ## Google
+    # GOOGLE_LOCATION: ""
+    # GOOGLE_BUCKET_NAME: ""
+    # GOOGLE_APPLICATION_CREDENTIALS: "<CRED>" # or use the vars below
+    # GOOGLE_PROJECT_ID: "<ID>"
+    # GOOGLE_CLIENT_EMAIL: "<EMAIL>"
+    # GOOGLE_PRIVATE_KEY: "<KEY>"
+
+    ## Whisper
+    # OPENAI_API_KEY: "<KEY>"
+
+
+    # Video generation providers
+    # --------------------------
+
+    ## Kling
+    # KLING_ACCESS_KEY: "<KEY>"
+    # KLING_SECRET_KEY: "<KEY>"
+
+    ## Runway
+    # RUNWAY_API_KEY: "<KEY>"
+
+    ## Stability
+    # STABILITY_API_KEY: "<KEY>"
+
+    ## Veo
+    # VEO_PROJECT_ID: "<ID>"
+    # VEO_CLIENT_EMAIL: "<EMAIL>"
+    # VEO_PRIVATE_KEY: "<KEY>"
+
+
+    # WebSearch providers
+    # -------------------
+
+    ## Brave
+    # BRAVE_API_KEY: "<KEY>"
+
+    ## Google
+    # GOOGLE_API_KEY: "<KEY>"
+    # GOOGLE_SEARCH_ENGINE_ID: "<ID>"
+
+    ## Serper
+    # SERPER_API_KEY: "<KEY>"
+
+    ## Tavily
+    # TAVILY_API_KEY: "<KEY>"
+
+    dependencies:
+    # The following block contains commented-out dependencies for various Golem AI libraries.
+    # For each area (such as LLM, Search, etc) only one of the providers can be commented out.
+    # If no provider dependency is commented out, then using that AI API will be a runtime failure.
+    # LLM providers
+    # -------------
+
+    ## Anthropic
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_anthropic.wasm
+
+    ## OpenAI
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_openai.wasm
+
+    ## OpenRouter
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_openrouter.wasm
+
+    ## Amazon Bedrock
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_bedrock.wasm
+
+    ## Grok
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_grok.wasm
+
+    ## Ollama
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_ollama.wasm
+
+
+    # Code execution providers
+    # ------------------------
+
+    ## Python and JavaScript
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_exec.wasm
+
+    ## Python only
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_exec_python.wasm
+
+    ## JavaScript only
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_exec_javascript.wasm
+
+
+    # Embedding providers
+    # -------------------
+
+    ## OpenAI
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_embed_openai.wasm
+
+    ## Cohere
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_embed_cohere.wasm
+
+    ## HuggingFace
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_embed_hugging_face.wasm
+
+    ## VoyageAI
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_embed_voyageai.wasm
+
+
+    # Graph database providers
+    # ------------------------
+
+    ## ArangoDB
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_graph_arangodb.wasm
+
+    ## JanusGraph
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_graph_janusgraph.wasm
+
+    ## Neo4j
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_graph_neo4j.wasm
+
+
+    # Search providers
+    # ----------------
+
+    ## Algolia
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_search_algolia.wasm
+
+    ## ElasticSearch
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_search_elasticsearch.wasm
+
+    ## Meilisearch
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_search_meilisearch.wasm
+
+    ## OpenSearch
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_search_opensearch.wasm
+
+    ## Typesense
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_search_typesense.wasm
+
+
+    # Speech-to-text providers
+    # ------------------------
+
+    ## AWS
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_stt_aws.wasm
+
+    ## Azure
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_stt_azure.wasm
+
+    ## Deepgram
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_stt_deepgram.wasm
+
+    ## Google
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_stt_google.wasm
+
+    ## Whisper
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_stt_whisper.wasm
+
+
+    # Video generation providers
+    # --------------------------
+
+    ## Kling
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_video_kling.wasm
+
+    ## Runway
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_video_runway.wasm
+
+    ## Stability
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_video_stability.wasm
+
+    ## Veo
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_video_veo.wasm
+
+
+    # WebSearch providers
+    # -------------------
+
+    ## Brave
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_web_search_brave.wasm
+
+    ## Google
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_web_search_google.wasm
+
+    ## Serper
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_web_search_serper.wasm
+
+    ## Tavily
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_web_search_tavily.wasm
+
+

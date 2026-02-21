@@ -13,17 +13,16 @@
 // limitations under the License.
 
 use crate::log::{logln, LogColorize};
-use crate::model::app::AppComponentName;
-use crate::model::component::{
-    agent_interface_name, render_type, show_exported_functions, Component,
-};
+use crate::model::component::{agent_interface_name, render_type, show_exported_functions};
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
 };
 use cli_table::Table;
 use colored::Colorize;
+use golem_client::model::ComponentDto;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
@@ -67,25 +66,36 @@ impl MessageWithFields for WorkerNameHelp {
                 ),
         );
         fields.field(
-            "<PROJECT>/<COMPONENT>/<AGENT>",
+            "<ENVIRONMENT/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Project and component specific agent name.
+                    Environment and component specific agent name.
 
                     Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific project.
+                    specific environment.
 
                     "
             ),
         );
         fields.field(
-            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT>",
+            "<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, project and component specific agent name.
+                    Application, environment and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific project owned by another account
+                    It can refer to components in a specific application and environment, always
+                    expects the component name to be fully qualified.
+                    "
+            ),
+        );
+        fields.field(
+            "<ACCOUNT>/<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
+            &indoc!(
+                "
+                    Account, application, environment and component specific agent name.
+
+                    Behaves the same as <APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>, except it can
+                    refer to any account.
                     "
             ),
         );
@@ -167,7 +177,7 @@ impl MessageWithFields for ComponentNameHelp {
     }
 }
 
-pub struct AvailableComponentNamesHelp(pub Vec<AppComponentName>);
+pub struct AvailableComponentNamesHelp(pub Vec<ComponentName>);
 
 impl TextView for AvailableComponentNamesHelp {
     fn log(&self) {
@@ -200,7 +210,7 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new(component: &Component, agent_id: Option<&AgentId>) -> Self {
+    pub fn new(component: &ComponentDto, agent_id: Option<&AgentId>) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
             agent_name: agent_id
@@ -346,5 +356,101 @@ pub struct ParameterErrorTableView(pub Vec<ArgumentError>);
 impl TextView for ParameterErrorTableView {
     fn log(&self) {
         log_table::<_, ParameterErrorTable>(self.0.as_slice());
+    }
+}
+
+pub struct EnvironmentNameHelp;
+
+impl MessageWithFields for EnvironmentNameHelp {
+    fn message(&self) -> String {
+        "Accepted environment and profile flags and environment variables:"
+            .log_color_help_group()
+            .to_string()
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        let mut fields = FieldsBuilder::new();
+
+        // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
+        fields.field(
+            "--environment <ENVIRONMENT_NAME>, -E <ENVIRONMENT_NAME>",
+            &indoc! { "
+                Selects an environment from the current application manifest.
+                The application is searched based on the current directory.
+
+                If no explicit flags or environment variables are used then the default environment
+                is selected from the manifest.
+
+                If there is no available application, then a more specific from has to be used.
+
+                It is not compatible with the --cloud and --local flags.
+
+            "},
+        );
+        fields.field(
+            "--environment <APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <APPLICATION_NAME>/<ENVIRONMENT_NAME>",
+            &indoc! { "
+                Selects a server environment from a specific application. The used server is the
+                current selected manifest environment or the selected profile if the CLI is used
+                without a manifest.
+
+            "},
+        );
+        fields.field(
+            "--environment <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>",
+            &indoc! { "
+                Selects a server environment from a specific application owned by another account.
+                The used server is the current selected manifest environment or the selected profile
+                if the CLI is used without a manifest.
+
+            "},
+        );
+        fields.field(
+            "--local, -L",
+            &indoc! { "
+                When used with an application manifest then the environment is selected from the
+                manifest. Without it it selects the built-in local profile.
+
+            "},
+        );
+        fields.field(
+            "--cloud, -C",
+            &indoc! { "
+                When used with an application manifest then the environment is selected from the
+                manifest. Without it it selects the built-in cloud profile.
+
+            "},
+        );
+        fields.field(
+            "--profile",
+            &indoc! { "
+                Selects a different profile then the default one. Only effective when used without
+                an application manifest.
+
+            "},
+        );
+        fields.field(
+            "GOLEM_ENVIRONMENT environment variable",
+            &indoc! { "
+                Alternative to the --environment flag.
+
+            "},
+        );
+        fields.field(
+            "GOLEM_PROFILE environment variable",
+            &indoc! { "
+                Alternative to the --profile flag.
+            "},
+        );
+
+        fields.build()
+    }
+
+    fn indent_mode() -> MessageWithFieldsIndentMode {
+        MessageWithFieldsIndentMode::IdentFields
+    }
+
+    fn format_field_name(name: String) -> String {
+        name.log_color_highlight().to_string()
     }
 }

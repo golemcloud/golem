@@ -12,30 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use http::Uri;
 use shadow_rs::shadow;
 use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
 pub mod base_model;
+
+#[cfg(not(feature = "full"))]
+pub mod model {
+    pub use crate::base_model::*;
+}
+
+#[cfg(feature = "full")]
 pub mod cache;
-pub mod client;
+#[cfg(feature = "full")]
 pub mod config;
-pub mod grpc;
+#[cfg(feature = "full")]
 pub mod json_yaml;
+#[cfg(feature = "full")]
 pub mod metrics;
+#[cfg(feature = "full")]
 pub mod model;
-pub mod newtype;
+#[cfg(feature = "full")]
 pub mod one_shot;
+#[cfg(feature = "full")]
 pub mod poem;
+#[cfg(feature = "full")]
 pub mod read_only_lock;
+#[cfg(feature = "full")]
 pub mod redis;
-pub mod repo;
+#[cfg(feature = "full")]
 pub mod retriable_error;
+#[cfg(feature = "full")]
 pub mod retries;
+#[cfg(feature = "full")]
 pub mod serialization;
+#[cfg(feature = "full")]
 pub mod tracing;
+#[cfg(feature = "full")]
 pub mod virtual_exports;
+
+mod macros;
 
 #[cfg(test)]
 test_r::enable!();
@@ -92,4 +111,22 @@ impl SafeDisplay for () {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }
+}
+
+pub trait IntoAnyhow {
+    /// Direct conversion to anyhow::Error. This is preferred over going through the blanket Into<anyhow::Error> impl for std::err::Error,
+    /// as it can preserve more information depending on the implementor.
+    /// Can be removed when specialization is stable or std::err::Error has backtraces.
+    fn into_anyhow(self) -> anyhow::Error;
+}
+
+pub fn grpc_uri(host: &String, port: u16, tls: bool) -> Uri {
+    let scheme = if tls { "https" } else { "http" };
+
+    Uri::builder()
+        .scheme(scheme)
+        .authority(format!("{}:{}", host, port).as_str())
+        .path_and_query("/")
+        .build()
+        .expect("Failed to build URI")
 }

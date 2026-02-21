@@ -16,18 +16,25 @@ use poem_openapi::Tags;
 
 #[derive(Tags)]
 pub enum ApiTags {
+    RegistryService,
+
     /// The account API allows users to query and manipulate their own account data.
     Account,
     AccountSummary,
     ApiCertificate,
-    ApiDefinition,
     ApiDeployment,
     ApiDomain,
     ApiSecurity,
+    Application,
     Component,
+    Deployment,
+    Environment,
+    EnvironmentShares,
+    EnvironmentPluginGrants,
     Debugging,
     Grant,
     HealthCheck,
+    HttpApiDefinition,
     /// The limits API allows users to query their current resource limits.
     Limits,
     /// The login endpoints are implementing an OAuth2 flow.
@@ -43,9 +50,12 @@ pub enum ApiTags {
     ProjectGrant,
     /// Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
     ProjectPolicy,
+    Reports,
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
     Worker,
     /// API working on registered agent types
     AgentTypes,
+    /// API working on agent instances
+    Agent,
 }

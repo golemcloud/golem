@@ -17,8 +17,10 @@ use crate::services::debug_service::{DebugService, DebugServiceError};
 use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
 use futures::{SinkExt, StreamExt};
-use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::account::AccountId;
 use golem_common::model::OwnedWorkerId;
+use golem_common::SafeDisplay;
+use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use poem::web::websocket::{CloseCode, Message, WebSocketStream};
 use serde::Serialize;
@@ -165,7 +167,7 @@ pub async fn run_jrpc_debug_websocket_session(
 }
 
 struct JrpcSessionData {
-    pub namespace: Namespace,
+    pub account_id: AccountId,
     pub connected_worker: OwnedWorkerId,
 }
 
@@ -251,10 +253,10 @@ impl JrpcSession {
                     .await;
 
                 match result {
-                    Ok((result, connected_worker, namespace, worker_event_receiver)) => {
+                    Ok((result, account_id, connected_worker, worker_event_receiver)) => {
                         self.active_session = Some(JrpcSessionData {
+                            account_id,
                             connected_worker,
-                            namespace,
                         });
 
                         self.start_worker_event_processor(worker_event_receiver);
@@ -276,7 +278,7 @@ impl JrpcSession {
                         .debug_service
                         .playback(
                             &owned_worker_id,
-                            &active_session_data.namespace.account_id,
+                            active_session_data.account_id,
                             params.target_index,
                             params.overrides,
                             params.ensure_invocation_boundary.unwrap_or(true),
@@ -300,7 +302,7 @@ impl JrpcSession {
                         .debug_service
                         .rewind(
                             &owned_worker_id,
-                            &active_session_data.namespace.account_id,
+                            active_session_data.account_id,
                             params.target_index,
                             params.ensure_invocation_boundary.unwrap_or(true),
                         )
@@ -321,7 +323,7 @@ impl JrpcSession {
                     let result = self
                         .debug_service
                         .fork(
-                            &active_session_data.namespace.account_id,
+                            active_session_data.account_id,
                             &owned_worker_id,
                             &params.target_worker_id,
                             params.oplog_index_cut_off,
@@ -469,7 +471,7 @@ impl JrpcHandlerError {
                 self.jrpc_id.clone(),
                 JsonRpcError::new(
                     JsonRpcErrorReason::ApplicationError(-1),
-                    e.to_string(),
+                    e.to_safe_string(),
                     Value::Null,
                 ),
             ),

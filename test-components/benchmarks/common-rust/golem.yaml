@@ -1,14 +1,14 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       debug:
         build:
           - command: cargo component build
@@ -26,6 +26,7 @@ templates:
         clean:
           - src/bindings.rs
       release:
+        default: true
         build:
           - command: cargo component build --release
             sources:
@@ -41,13 +42,12 @@ templates:
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
         clean:
           - src/bindings.rs
-    defaultProfile: release
     customCommands:
       copy:
         - command: cp ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm ../../../{{ component_name | to_snake_case }}.wasm
 
   rust-agent:
-    profiles:
+    presets:
       debug:
         build:
           - command: cargo component build
@@ -72,6 +72,7 @@ templates:
           copy:
             - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
       release:
+        default: true
         build:
           - command: cargo component build --release
             sources:
@@ -94,7 +95,6 @@ templates:
         customCommands:
           copy:
             - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm ../../..
-    defaultProfile: debug
 
 customCommands:
   cargo-clean:

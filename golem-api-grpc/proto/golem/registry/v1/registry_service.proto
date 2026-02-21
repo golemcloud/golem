@@ -1,0 +1,297 @@
+syntax = "proto3";
+
+package golem.registry.v1;
+
+import "golem/auth/auth_ctx.proto";
+import "golem/common/account_id.proto";
+import "golem/common/application.proto";
+import "golem/common/empty.proto";
+import "golem/common/environment.proto";
+import "golem/common/resource_limits.proto";
+import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
+import "golem/component/component.proto";
+import "golem/component/component_files.proto";
+import "golem/component/component_id.proto";
+import "golem/component/dynamic_linked_instance.proto";
+import "golem/registry/fuel_usage_update.proto";
+import "golem/registry/agent_deployment.proto";
+import "golem/registry/v1/registry_service_error.proto";
+import "golem/worker/worker_id.proto";
+import "golem/customapi/core.proto";
+import "golem/auth/auth_details_for_environment.proto";
+
+service RegistryService {
+  // auth api
+  rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
+  rpc GetAuthDetailsForEnvironment (GetAuthDetailsForEnvironmentRequest) returns (GetAuthDetailsForEnvironmentResponse);
+
+  // limits api
+  rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
+  rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
+  rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
+
+  // components api
+  rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
+  rpc GetComponentMetadata(GetComponentMetadataRequest) returns (GetComponentMetadataResponse);
+  rpc GetDeployedComponentMetadata (GetDeployedComponentMetadataRequest) returns (GetDeployedComponentMetadataResponse);
+  rpc GetAllDeployedComponentRevisions (GetAllDeployedComponentRevisionsRequest) returns (GetAllDeployedComponentRevisionsResponse);
+  rpc ResolveComponent (ResolveComponentRequest) returns (ResolveComponentResponse);
+
+  // agent types api
+  rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
+  rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
+  rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
+
+  // current deployment agents/routes
+  rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
+  rpc GetAgentDeployments (GetAgentDeploymentsRequest) returns (GetAgentDeploymentsResponse);
+}
+
+message AuthenticateTokenRequest {
+  string secret = 1;
+}
+
+message AuthenticateTokenResponse {
+  oneof result {
+      AuthenticateTokenSuccessResponse success = 1;
+      RegistryServiceError error = 2;
+  }
+}
+
+message AuthenticateTokenSuccessResponse {
+    golem.auth.UserAuthCtx auth_ctx = 1;
+}
+
+message GetAuthDetailsForEnvironmentRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  bool include_deleted = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message GetAuthDetailsForEnvironmentResponse {
+  oneof result {
+      GetAuthDetailsForEnvironmentSuccessResponse success = 1;
+      RegistryServiceError error = 2;
+  }
+}
+
+message GetAuthDetailsForEnvironmentSuccessResponse {
+  golem.auth.AuthDetailsForEnvironment auth_details_for_environment = 1;
+}
+
+message GetResourceLimitsRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message GetResourceLimitsResponse {
+  oneof result {
+    GetResourceLimitsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetResourceLimitsSuccessResponse {
+  golem.common.ResourceLimits limits = 1;
+}
+
+message UpdateWorkerLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.worker.WorkerId workerId = 2;
+  bool added = 3;
+}
+
+message UpdateWorkerLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message UpdateWorkerConnectionLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.worker.WorkerId workerId = 2;
+  bool added = 3;
+}
+
+message UpdateWorkerConnectionLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message BatchUpdateFuelUsageRequest {
+  repeated golem.registry.FuelUsageUpdate updates = 1;
+}
+
+message BatchUpdateFuelUsageResponse {
+  oneof result {
+    BatchUpdateFuelUsageSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message BatchUpdateFuelUsageSuccessResponse {
+  golem.common.AccountResourceLimits account_resource_limits = 1;
+}
+
+message DownloadComponentRequest {
+  golem.component.ComponentId componentId = 1;
+  uint64 revision = 2;
+}
+
+message DownloadComponentResponse {
+  oneof result {
+    bytes successChunk = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetComponentMetadataRequest {
+  golem.component.ComponentId componentId = 1;
+  uint64 revision = 2;
+}
+
+message GetComponentMetadataResponse {
+  oneof result {
+    GetComponentMetadataSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetComponentMetadataSuccessResponse {
+  golem.component.Component component = 1;
+}
+
+message GetDeployedComponentMetadataRequest {
+  golem.component.ComponentId componentId = 1;
+}
+
+message GetDeployedComponentMetadataResponse {
+  oneof result {
+    GetDeployedComponentMetadataSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetDeployedComponentMetadataSuccessResponse {
+  golem.component.Component component = 1;
+}
+
+message GetAllDeployedComponentRevisionsRequest {
+  golem.component.ComponentId componentId = 1;
+}
+
+message GetAllDeployedComponentRevisionsResponse {
+  oneof result {
+    GetAllDeployedComponentRevisionsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAllDeployedComponentRevisionsSuccessResponse {
+  repeated golem.component.Component components = 1;
+}
+
+message ResolveComponentRequest {
+  golem.common.AccountId resolving_account_id = 1;
+  golem.common.ApplicationId resolving_application_id = 2;
+  golem.common.EnvironmentId resolving_environment_id = 3;
+  string component_slug = 4;
+}
+
+message ResolveComponentResponse {
+  oneof result {
+    ResolveComponentSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveComponentSuccessResponse {
+  golem.component.Component component = 1;
+}
+
+message GetAllAgentTypesRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
+}
+
+message GetAllAgentTypesResponse {
+  oneof result {
+    GetAllAgentTypesSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAllAgentTypesSuccessResponse {
+  repeated RegisteredAgentType agent_types = 1;
+}
+
+message GetAgentTypeRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.component.ComponentId component_id = 2;
+  uint64 component_revision = 3;
+  string agentType = 4;
+}
+
+message GetAgentTypeResponse {
+  oneof result {
+    GetAgentTypeSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAgentTypeSuccessResponse {
+  RegisteredAgentType agent_type = 1;
+}
+
+message ResolveLatestAgentTypeByNamesRequest {
+  golem.common.AccountId accountId = 1;
+  string app_name = 2;
+  string environment_name = 3;
+  string agent_type_name = 4;
+}
+
+message ResolveLatestAgentTypeByNamesResponse {
+  oneof result {
+    ResolveLatestAgentTypeByNamesSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveLatestAgentTypeByNamesSuccessResponse {
+  RegisteredAgentType agent_type = 1;
+}
+
+message GetActiveRoutesForDomainRequest {
+  string domain = 1;
+}
+
+message GetActiveRoutesForDomainResponse {
+  oneof result {
+    GetActiveRoutesForDomainSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetActiveRoutesForDomainSuccessResponse {
+  golem.customapi.CompiledRoutes compiled_routes = 1;
+}
+
+message GetAgentDeploymentsRequest {
+  golem.common.EnvironmentId environment_id = 1;
+}
+
+message GetAgentDeploymentsResponse {
+  oneof result {
+    GetAgentDeploymentsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+
+  message GetAgentDeploymentsSuccessResponse {
+    repeated AgentDeploymentDetails agent_deployment_details = 1;
+  }
+}

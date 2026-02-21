@@ -12,24 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 mod from;
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 mod into;
-#[cfg(all(feature = "host", test))]
+#[cfg(all(any(feature = "host", feature = "client"), test))]
 mod tests;
 
 use crate::analysis::AnalysedType;
-use crate::{Value, WitValue};
+use crate::Value;
+use uuid::Uuid;
 
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
+pub use into::ConvertToValueAndType;
+#[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValue;
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use into::IntoValueAndType;
 
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use from::FromValue;
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub use from::FromValueAndType;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,6 +56,10 @@ impl std::fmt::Display for ValueAndType {
 impl ValueAndType {
     pub fn new(value: Value, typ: AnalysedType) -> Self {
         Self { value, typ }
+    }
+
+    pub fn convert_to_value_and_type(self) -> ValueAndType {
+        self
     }
 
     pub fn into_list_items(self) -> Option<Vec<ValueAndType>> {
@@ -80,7 +87,8 @@ impl From<ValueAndType> for AnalysedType {
     }
 }
 
-impl From<ValueAndType> for WitValue {
+#[cfg(feature = "host")]
+impl From<ValueAndType> for crate::WitValue {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.value.into()
     }
@@ -95,3 +103,21 @@ impl From<ValueAndType> for crate::WitType {
 
 /// Helper for dynamically creating record ValueAndType values with String keys
 pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
+
+/// Wrapped Uuid, matching the schema provided by the Golem Rust SDK
+#[derive(Clone, Debug)]
+pub struct UuidRecord {
+    pub value: Uuid,
+}
+
+impl From<Uuid> for UuidRecord {
+    fn from(uuid: Uuid) -> Self {
+        Self { value: uuid }
+    }
+}
+
+impl From<UuidRecord> for Uuid {
+    fn from(uuid_record: UuidRecord) -> Self {
+        uuid_record.value
+    }
+}

@@ -16,9 +16,9 @@ WORKDIR /app
 COPY /target/$RUST_TARGET/release/golem-worker-service ./
 COPY /golem-worker-service/config/worker-service.toml ./config/worker-service.toml
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
 
 EXPOSE 9005
 
-ENTRYPOINT ["./golem-worker-service"]
+ENTRYPOINT ["/usr/bin/tini", "--", "./golem-worker-service"]

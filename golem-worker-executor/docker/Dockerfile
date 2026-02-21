@@ -16,9 +16,9 @@ WORKDIR /app
 COPY /target/$RUST_TARGET/release/worker-executor ./
 COPY /golem-worker-executor/config/worker-executor.toml ./config/worker-executor.toml
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates
+RUN apt-get update && apt-get install -y pkg-config libssl-dev ca-certificates tini
 RUN update-ca-certificates
 
 EXPOSE 9000
 
-ENTRYPOINT ["./worker-executor"]
+ENTRYPOINT ["/usr/bin/tini", "--", "./worker-executor"]

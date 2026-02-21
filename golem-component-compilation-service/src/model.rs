@@ -14,40 +14,41 @@
 
 use std::fmt::Display;
 
-use crate::config::StaticComponentServiceConfig;
-use golem_common::model::{ComponentId, ProjectId};
+use crate::config::StaticRegistryServiceConfig;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use tokio::sync::mpsc;
 use wasmtime::component::Component;
 
-#[derive(Debug, Clone)]
-pub struct ComponentWithVersion {
+#[derive(Debug, Copy, Clone)]
+pub struct ComponentIdAndRevision {
     pub id: ComponentId,
-    pub version: u64,
+    pub revision: ComponentRevision,
 }
 
-impl Display for ComponentWithVersion {
+impl Display for ComponentIdAndRevision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}@{}", self.id, self.version)
+        write!(f, "{}@{}", self.id, self.revision)
     }
 }
 
 #[derive(Debug)]
 pub struct CompilationRequest {
-    pub component: ComponentWithVersion,
-    pub project_id: ProjectId,
-    pub sender: Option<StaticComponentServiceConfig>,
+    pub component: ComponentIdAndRevision,
+    pub environment_id: EnvironmentId,
+    pub sender: Option<StaticRegistryServiceConfig>,
 }
 
 pub struct CompiledComponent {
-    pub component_and_version: ComponentWithVersion,
-    pub project_id: ProjectId,
+    pub component_and_revision: ComponentIdAndRevision,
+    pub environment_id: EnvironmentId,
     pub component: Component,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CompilationError {
     #[error("Component not found: {0}")]
-    ComponentNotFound(ComponentWithVersion),
+    ComponentNotFound(ComponentIdAndRevision),
     #[error("Failed to compile component: {0}")]
     CompileFailure(String),
     #[error("Failed to download component: {0}")]

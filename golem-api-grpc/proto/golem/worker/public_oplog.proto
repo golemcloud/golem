@@ -4,8 +4,7 @@ package golem.worker;
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
-import "golem/common/plugin_installation_id.proto";
-import "golem/common/project_id.proto";
+import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/worker/idempotency_key.proto";
@@ -71,7 +70,7 @@ message WrappedFunctionType {
 }
 
 message PluginInstallationDescription {
-  golem.common.PluginInstallationId installation_id = 1;
+  int32 plugin_priority = 1;
   string plugin_name = 2;
   string plugin_version = 3;
   map<string, string> parameters = 4;
@@ -81,15 +80,14 @@ message PluginInstallationDescription {
 message CreateParameters {
   google.protobuf.Timestamp timestamp = 1;
   WorkerId worker_id = 2;
-  uint64 component_version = 3;
-  repeated string args = 4;
+  uint64 component_revision = 3;
   map<string, string> env = 5;
   golem.common.AccountId created_by = 6;
   optional WorkerId parent = 7;
   uint64 component_size = 8;
   uint64 initial_total_linear_memory_size = 9;
   repeated PluginInstallationDescription initial_active_plugins = 10;
-  golem.common.ProjectId project_id = 11;
+  golem.common.EnvironmentId environment_id = 11;
   WasiConfigVars wasi_config_vars = 12;
   optional golem.common.UUID original_phantom_id = 13;
 }
@@ -115,7 +113,7 @@ message ExportedFunctionInvokedParameters {
 message ExportedFunctionCompletedParameters {
   google.protobuf.Timestamp timestamp = 1;
   wasm.rpc.ValueAndType response = 2;
-  int64 consumed_fuel = 3;
+  uint64 consumed_fuel = 3;
 }
 
 message ErrorParameters {
@@ -198,20 +196,20 @@ message UpdateDescription {
 
 message PendingUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   UpdateDescription update_description = 3;
 }
 
 message SuccessfulUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
 }
 
 message FailedUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   optional string details = 3;
 }
 

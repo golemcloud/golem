@@ -487,13 +487,11 @@ impl<DB: Database> TransactionConnection<DB> {
     }
 }
 
-struct SqlxDbTransactionConnection<DB: Database>(
-    Arc<async_mutex::Mutex<TransactionConnection<DB>>>,
-);
+struct SqlxDbTransactionConnection<DB: Database>(Arc<async_lock::Mutex<TransactionConnection<DB>>>);
 
 impl<DB: Database> SqlxDbTransactionConnection<DB> {
     fn new(connection: PoolConnection<DB>, open: bool) -> Self {
-        Self(Arc::new(async_mutex::Mutex::new(
+        Self(Arc::new(async_lock::Mutex::new(
             TransactionConnection::new(connection, open),
         )))
     }
@@ -926,8 +924,8 @@ where
 pub struct SqlxDbResultStream<'q, T: RdbmsType, DB: Database> {
     rdbms_type: T,
     columns: Vec<T::DbColumn>,
-    first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow<T::DbValue>>>>>,
-    row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
+    first_rows: Arc<async_lock::Mutex<Option<Vec<DbRow<T::DbValue>>>>>,
+    row_stream: Arc<async_lock::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
 }
 
 impl<'q, T, DB> SqlxDbResultStream<'q, T, DB>
@@ -946,8 +944,8 @@ where
         Self {
             rdbms_type,
             columns,
-            first_rows: Arc::new(async_mutex::Mutex::new(Some(first_rows))),
-            row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
+            first_rows: Arc::new(async_lock::Mutex::new(Some(first_rows))),
+            row_stream: Arc::new(async_lock::Mutex::new(row_stream)),
         }
     }
 

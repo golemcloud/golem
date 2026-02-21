@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::model::component::ComponentId;
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
-use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
+use golem_test_framework::config::dsl_impl::TestUserContext;
+use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::Value;
 use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Client, Request};
 use std::str::FromStr;
@@ -29,10 +32,13 @@ pub mod latency;
 pub mod sleep;
 pub mod throughput;
 
-pub async fn delete_workers(deps: &BenchmarkTestDependencies, worker_ids: &[WorkerId]) {
+pub async fn delete_workers(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    worker_ids: &[WorkerId],
+) {
     info!("Deleting {} workers...", worker_ids.len());
     for worker_id in worker_ids {
-        if let Err(err) = deps.admin().await.delete_worker(worker_id).await {
+        if let Err(err) = user.delete_worker(worker_id).await {
             warn!("Failed to delete worker: {:?}", err);
         }
     }
@@ -73,11 +79,12 @@ impl InvokeResult {
     }
 }
 
-pub async fn invoke_and_await(
-    deps: &BenchmarkTestDependencies,
-    worker_id: &WorkerId,
-    function_name: &str,
-    params: Vec<ValueAndType>,
+pub async fn invoke_and_await_agent(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    component_id: &ComponentId,
+    agent_id: &AgentId,
+    method_name: &str,
+    params: DataValue,
 ) -> InvokeResult {
     const TIMEOUT: Duration = Duration::from_secs(180);
     const RETRY_DELAY: Duration = Duration::from_millis(100);
@@ -87,49 +94,49 @@ pub async fn invoke_and_await(
     let mut accumulated_time = Duration::from_secs(0);
     let mut retries = 0;
     let mut timeouts = 0;
-    let dsl = deps.admin().await;
 
     loop {
         let start = SystemTime::now();
         let result = tokio::time::timeout(
             TIMEOUT,
-            dsl.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
+            user.invoke_and_await_agent_with_key(
+                component_id,
+                agent_id,
+                &key,
+                method_name,
+                params.clone(),
+            ),
         )
         .await;
         let duration = start.elapsed().expect("SystemTime elapsed failed");
 
         match result {
-            Ok(Ok(Ok(r))) => {
+            Ok(Ok(data_value)) => {
                 accumulated_time += duration;
+                let value = data_value
+                    .into_return_value()
+                    .map(|v| vec![v])
+                    .unwrap_or_default();
                 break InvokeResult {
-                    value: r,
+                    value,
                     retries,
                     timeouts,
                     accumulated_time,
                 };
             }
-            Ok(Ok(Err(e))) => {
-                // worker error
-                println!("Invocation failed, retrying: {e:?}");
-                retries += 1;
-                accumulated_time += duration;
-                tokio::time::sleep(RETRY_DELAY).await;
-                deps.ensure_all_deps_running().await;
-            }
             Ok(Err(e)) => {
-                // client error
                 println!("Invocation failed, retrying: {e:?}");
                 retries += 1;
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
-                deps.ensure_all_deps_running().await;
+                user.deps.ensure_all_deps_running().await;
             }
             Err(e) => {
                 // timeout
                 // not counting timeouts into the accumulated time
                 timeouts += 1;
                 println!("Invocation timed out, retrying: {e:?}");
-                deps.ensure_all_deps_running().await;
+                user.deps.ensure_all_deps_running().await;
             }
         }
     }

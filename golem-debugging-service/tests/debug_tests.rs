@@ -1,18 +1,17 @@
-use crate::debug_mode::debug_worker_executor::{DebugWorkerExecutorClient, UntypedJrpcMessage};
-use crate::regular_mode::regular_worker_executor::TestRegularWorkerExecutor;
 use crate::*;
+use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionCompletedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{Timestamp, WorkerId};
+use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_debugging_service::model::params::PlaybackOverride;
-use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::analysed_type::{record, str, variant};
-use golem_wasm::analysis::{NameOptionTypePair, NameTypePair};
-use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::ValueAndType;
+use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(RegularWorkerExecutorTestDependencies);
+inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
@@ -21,27 +20,22 @@ inherit_test_dep!(Tracing);
 #[tracing::instrument]
 async fn test_connect_non_invoked_worker(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "non-invoked");
     let worker_id = regular_worker_executor
-        .start_worker(&component, "shopping-cart")
+        .start_agent(&component.id, repo_id.clone())
         .await
         .unwrap_or_else(|e| panic!("Failed to start a regular worker: {e}"));
 
@@ -53,6 +47,8 @@ async fn test_connect_non_invoked_worker(
     drop(regular_worker_executor);
 
     assert_eq!(connect_result.worker_id, worker_id);
+
+    Ok(())
 }
 
 // Loading an existing worker (in regular executor) into debug mode (into debug service)
@@ -60,258 +56,171 @@ async fn test_connect_non_invoked_worker(
 #[tracing::instrument]
 async fn test_connect_invoked_worker(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "invoked");
     let worker_id = regular_worker_executor
-        .try_start_worker(&component, "shopping-cart")
-        .await
-        .unwrap()
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    let _ = regular_worker_executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
+    regular_worker_executor
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await;
+        .await?;
 
-    let _ = regular_worker_executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    regular_worker_executor
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
         )
-        .await;
+        .await?;
 
-    let connect_result = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
-
-    drop(regular_worker_executor);
+    let connect_result = debug_executor.connect(&worker_id).await?;
 
     assert_eq!(connect_result.worker_id, worker_id);
+
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 async fn test_connect_and_playback(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "playback");
     let worker_id = regular_worker_executor
-        .start_worker(&component, "shopping-cart")
-        .await
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
+        .await?;
 
-    let connect_result = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    let connect_result = debug_executor.connect(&worker_id).await?;
 
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let playback_result = debug_executor
         .playback(first_invocation_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
-
-    drop(regular_worker_executor);
+        .await?;
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
     assert_eq!(playback_result.current_index, first_invocation_boundary);
+
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 async fn test_connect_and_playback_raw(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "playback-raw");
     let worker_id = regular_worker_executor
-        .start_worker(&component, "shopping-cart")
-        .await
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     regular_worker_executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem T-Shirt L".into_value_and_type()),
-                ("price", 120.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
         )
-        .await
-        .unwrap()
-        .expect("Failed to invoke and await");
+        .await?;
 
     regular_worker_executor
-        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await
-        .unwrap()
-        .expect("Failed to invoke and await");
+        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
+        .await?;
 
-    debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    debug_executor.connect(&worker_id).await?;
 
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
     let fourth_invocation_boundary = nth_invocation_boundary(&oplogs, 4);
 
     let playback_result_1 = debug_executor
         .playback(fourth_invocation_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
+        .await?;
 
     assert!(!playback_result_1.incremental_playback);
 
-    debug_executor
-        .rewind(first_invocation_boundary)
-        .await
-        .expect("Failed to rewind the worker in debug mode");
+    debug_executor.rewind(first_invocation_boundary).await?;
 
     let playback_result_2 = debug_executor
         .playback(fourth_invocation_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
+        .await?;
 
     assert!(playback_result_2.incremental_playback);
 
     let all_messages = debug_executor.all_read_messages();
 
-    assert!(matches!(
-        &all_messages[..],
-        [
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                method: Some(_),
-                ..
-            },
-            UntypedJrpcMessage {
-                result: Some(_),
-                ..
-            },
-        ]
-    ));
+    assert_eq!(
+        all_messages.iter().filter(|m| m.result.is_some()).count(),
+        4
+    );
 
-    for id in [1, 2, 3, 4, 6, 8, 9, 10] {
-        assert_eq!(all_messages[id].method, Some("emit-logs".to_string()))
-    }
+    let emit_log_indices: Vec<usize> = all_messages
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            if m.method == Some("emit-logs".to_string()) {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(emit_log_indices, vec![1, 2, 3, 6, 7, 8]);
 
     assert_eq!(
         all_messages[1].params.clone().unwrap().as_array().unwrap()[0]
@@ -319,63 +228,53 @@ async fn test_connect_and_playback_raw(
             .unwrap()
             .get("message")
             .unwrap(),
-        &serde_json::json!("Initializing cart for user test-user-1\n")
-    )
+        &serde_json::json!("Adding item G1000 to repository\n")
+    );
+
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 async fn test_connect_and_playback_to_middle_of_invocation(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "playback-middle");
     let worker_id = regular_worker_executor
-        .start_worker(&component, "shopping-cart")
-        .await
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
+        .await?;
 
-    let connect_result = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    let connect_result = debug_executor.connect(&worker_id).await?;
 
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let index_in_middle = previous_index(first_invocation_boundary);
 
-    let playback_result = debug_executor
-        .playback(index_in_middle, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
-
-    drop(regular_worker_executor);
+    let playback_result = debug_executor.playback(index_in_middle, None).await?;
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
     assert_eq!(playback_result.current_index, first_invocation_boundary); // Playback should stop at the end of the invocation
+
+    Ok(())
 }
 
 // playback twice with progressing indexes
@@ -383,174 +282,128 @@ async fn test_connect_and_playback_to_middle_of_invocation(
 #[tracing::instrument]
 async fn test_playback_from_breakpoint(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "breakpoint");
     let worker_id = regular_worker_executor
-        .try_start_worker(&component, "shopping-cart")
-        .await
-        .unwrap()
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
+        .await?;
 
-    let initialize_boundary = nth_invocation_boundary(&oplogs, 1);
+    let first_add_boundary = nth_invocation_boundary(&oplogs, 1);
 
-    let add_item_boundary = nth_invocation_boundary(&oplogs, 2);
+    let second_add_boundary = nth_invocation_boundary(&oplogs, 2);
 
-    let connect_result = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    let connect_result = debug_executor.connect(&worker_id).await?;
 
-    let playback_result1 = debug_executor
-        .playback(initialize_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
+    let playback_result1 = debug_executor.playback(first_add_boundary, None).await?;
 
-    let current_index = debug_executor
-        .current_index()
-        .await
-        .expect("Failed to get current index");
+    let current_index = debug_executor.current_index().await?;
 
-    // In the test We expect the current index to be the index of the initialize-cart invocation within
-    // the configured wait_time_in_seconds.
-    // If this is false, we haven't waited enough. Asking for the current index again
-    // will be a good way to ensure that the playback has completed.
-    assert_eq!(current_index, initialize_boundary);
+    assert_eq!(current_index, first_add_boundary);
 
-    let playback_result2 = debug_executor
-        .playback(add_item_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
+    let playback_result2 = debug_executor.playback(second_add_boundary, None).await?;
 
-    let current_index = debug_executor
-        .current_index()
-        .await
-        .expect("Failed to get current index");
+    let current_index = debug_executor.current_index().await?;
 
-    assert_eq!(current_index, add_item_boundary);
+    assert_eq!(current_index, second_add_boundary);
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result1.worker_id, worker_id);
-    assert_eq!(playback_result1.current_index, initialize_boundary);
+    assert_eq!(playback_result1.current_index, first_add_boundary);
     assert!(!playback_result1.incremental_playback);
     assert_eq!(playback_result2.worker_id, worker_id);
     assert!(playback_result2.incremental_playback);
+
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 async fn test_playback_and_rewind(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "rewind");
     let worker_id = regular_worker_executor
-        .try_start_worker(&component, "shopping-cart")
-        .await
-        .unwrap()
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
+        .await?;
 
     let first_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let second_boundary = nth_invocation_boundary(&oplogs, 2);
 
-    let connect_result = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    let connect_result = debug_executor.connect(&worker_id).await?;
 
-    let playback_result = debug_executor
-        .playback(second_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
+    let playback_result = debug_executor.playback(second_boundary, None).await?;
 
-    let rewind_result = debug_executor
-        .rewind(first_boundary)
-        .await
-        .expect("Failed to playback the worker in debug mode");
-
-    drop(regular_worker_executor);
+    let rewind_result = debug_executor.rewind(first_boundary).await?;
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
     assert_eq!(playback_result.current_index, second_boundary);
     assert_eq!(rewind_result.worker_id, worker_id);
     assert_eq!(rewind_result.current_index, first_boundary);
+
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 async fn test_playback_and_fork(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "fork-source");
     let worker_id = regular_worker_executor
-        .try_start_worker(&component, "shopping-cart")
-        .await
-        .unwrap()
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+    run_repo_add_two(&regular_worker_executor, &component.id, &repo_id).await?;
 
     let oplogs = regular_worker_executor
         .get_oplog(&worker_id, OplogIndex::INITIAL)
@@ -559,137 +412,117 @@ async fn test_playback_and_fork(
 
     let first_boundary = nth_invocation_boundary(&oplogs, 1);
 
-    let connect_result = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    let connect_result = debug_executor.connect(&worker_id).await?;
 
-    let playback_result = debug_executor
-        .playback(first_boundary, None)
-        .await
-        .expect("Failed to playback the worker in debug mode");
+    let playback_result = debug_executor.playback(first_boundary, None).await?;
 
-    let target_worker_id = WorkerId {
-        component_id: worker_id.component_id.clone(),
-        worker_name: "forked-worker".to_string(),
-    };
+    let forked_repo_id = agent_id!("repository", "forked-worker");
+    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &forked_repo_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let fork_result = debug_executor.fork(&target_worker_id, first_boundary).await;
 
-    // We ensure first invocation exists in the forked worker
-    let first_invocation_in_forked = regular_worker_executor
-        .search_oplog(&target_worker_id, "initialize-cart")
-        .await
-        .expect("Failed to search oplog for first invocation");
+    // Verify forked worker has oplog entries up to first boundary (first add only)
+    let forked_oplogs = regular_worker_executor
+        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+        .await?;
+    let forked_oplog_len_before = forked_oplogs.len();
 
-    // We ensure second invocation doesn't exist in the forked worker
-    let second_invocation_in_forked = regular_worker_executor
-        .search_oplog(&target_worker_id, "G1000")
-        .await
-        .expect("Failed to search oplog for second invocation");
-
-    // invoke the forked worker with second invocation
-    let _ = regular_worker_executor
-        .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    // Invoke the forked worker with another add
+    regular_worker_executor
+        .invoke_and_await_agent(
+            &component.id,
+            &forked_repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
         )
-        .await;
+        .await?;
 
-    let post_fork_invocation_in_forked = regular_worker_executor
-        .search_oplog(&target_worker_id, "G1000")
-        .await
-        .expect("Failed to search oplog for second invocation");
-
-    drop(regular_worker_executor);
+    let forked_oplogs_after = regular_worker_executor
+        .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+        .await?;
 
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result.worker_id, worker_id);
     assert!(fork_result.is_ok());
-    assert!(!first_invocation_in_forked.is_empty());
-    assert!(second_invocation_in_forked.is_empty());
-    assert!(!post_fork_invocation_in_forked.is_empty());
+    assert_eq!(forked_oplog_len_before, u64::from(first_boundary) as usize);
+    assert!(forked_oplogs_after.len() > forked_oplog_len_before);
+
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 async fn test_playback_with_overrides(
     last_unique_id: &LastUniqueId,
-    deps: &RegularWorkerExecutorTestDependencies,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context =
-        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
-    let regular_worker_executor = start_regular_executor(deps, &context)
-        .await
-        .into_admin()
-        .await;
-
-    let debug_context = DebugExecutorTestContext::from(&context);
-    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
+    let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
-        .component("shopping-cart")
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
 
+    let repo_id = agent_id!("repository", "overrides");
     let worker_id = regular_worker_executor
-        .try_start_worker(&component, "shopping-cart")
-        .await
-        .unwrap()
-        .unwrap();
+        .start_agent(&component.id, repo_id.clone())
+        .await?;
 
-    let shopping_cart_execution_result =
-        run_shopping_cart_workflow(&regular_worker_executor, &worker_id).await;
+    let workflow_result =
+        run_repo_workflow(&regular_worker_executor, &component.id, &repo_id).await?;
 
-    let new_checkout_result = new_shopping_cart_checkout_result();
+    // Extract the actual response from the list invocation to get the correct type,
+    // then construct a modified override value with the same type structure
+    let original_list_entry =
+        &workflow_result.oplogs[u64::from(workflow_result.list_boundary) as usize - 1];
+    let original_response = match &original_list_entry.entry {
+        PublicOplogEntry::ExportedFunctionCompleted(completed) => completed
+            .response
+            .clone()
+            .expect("Expected response in list completion"),
+        _ => panic!("Expected ExportedFunctionCompleted at list boundary"),
+    };
+
+    let override_response = ValueAndType::new(
+        original_response.value.clone(),
+        original_response.typ.clone(),
+    );
 
     let public_oplog_entry =
         PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
             timestamp: Timestamp::now_utc(),
-            response: Some(new_checkout_result),
+            response: Some(override_response.clone()),
             consumed_fuel: 0,
         });
 
     let oplog_overrides = PlaybackOverride {
-        index: shopping_cart_execution_result.last_checkout_boundary,
+        index: workflow_result.list_boundary,
         oplog: public_oplog_entry,
     };
 
     // Connect in Debug mode
-    let _ = debug_executor
-        .connect(&worker_id)
-        .await
-        .expect("Failed to connect to the worker in debug mode");
+    debug_executor.connect(&worker_id).await?;
 
     // Playback until the last invocation boundary
-    let _ = debug_executor
+    debug_executor
         .playback(
-            shopping_cart_execution_result.last_add_item_boundary,
+            workflow_result.last_add_boundary,
             Some(vec![oplog_overrides]),
         )
-        .await
-        .expect("Failed to playback the worker in debug mode");
+        .await?;
 
-    // Fork from the last checkout boundary
-    let target_worker_id = WorkerId {
-        component_id: worker_id.component_id.clone(),
-        worker_name: "forked-worker".to_string(),
-    };
+    // Fork from the list boundary
+    let target_agent_id = phantom_agent_id!("repository", uuid::Uuid::new_v4(), "overrides");
+    let target_worker_id = WorkerId::from_agent_id(worker_id.component_id, &target_agent_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // While we played back until last boundary, we fork from shopping cart boundary
     let fork = debug_executor
-        .fork(
-            &target_worker_id,
-            shopping_cart_execution_result.last_checkout_boundary,
-        )
+        .fork(&target_worker_id, workflow_result.list_boundary)
         .await;
 
     assert!(fork.is_ok());
@@ -697,8 +530,7 @@ async fn test_playback_with_overrides(
     // Oplogs in forked worker in regular executor
     let oplogs_in_forked_worker = regular_worker_executor
         .get_oplog(&target_worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
+        .await?;
 
     let entry = oplogs_in_forked_worker.last();
 
@@ -707,20 +539,17 @@ async fn test_playback_with_overrides(
         oplog_index: _,
     }) = entry
     {
-        assert_eq!(
-            completed.response,
-            Some(new_shopping_cart_checkout_result())
-        );
+        assert_eq!(completed.response, Some(override_response));
     } else {
         panic!("Expected ExportedFunctionCompleted entry");
     }
 
-    drop(regular_worker_executor);
-
     assert_eq!(
         oplogs_in_forked_worker.len(),
-        u64::from(shopping_cart_execution_result.last_checkout_boundary) as usize
+        u64::from(workflow_result.list_boundary) as usize
     );
+
+    Ok(())
 }
 
 fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> OplogIndex {
@@ -735,140 +564,76 @@ fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> Op
     OplogIndex::from_u64((index + 1) as u64)
 }
 
-async fn start_regular_executor(
-    deps: &RegularWorkerExecutorTestDependencies,
-    context: &RegularExecutorTestContext,
-) -> TestRegularWorkerExecutor {
-    start_regular_worker_executor(deps, context)
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to start regular executor at port {}: {}",
-                context.grpc_port(),
-                e
-            )
-        })
-}
-
-async fn start_debug_executor(
-    deps: &RegularWorkerExecutorTestDependencies,
-    context: &DebugExecutorTestContext,
-) -> DebugWorkerExecutorClient {
-    start_debug_worker_executor(deps, context)
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to start debug executor at port {}: {}",
-                context.grpc_port(),
-                e
-            )
-        })
-}
-
 fn previous_index(index: OplogIndex) -> OplogIndex {
     OplogIndex::from_u64(u64::from(index) - 1)
 }
 
-// Regardless of the items added, we override the checkout result
-// with a new value.
-fn new_shopping_cart_checkout_result() -> ValueAndType {
-    ValueAndType::new(
-        Value::Variant {
-            case_idx: 1,
-            case_value: Some(Box::new(Value::Record(vec![Value::String(
-                "new-order-id".to_string(),
-            )]))),
-        },
-        variant(vec![
-            NameOptionTypePair {
-                name: "error".to_string(),
-                typ: Some(str()),
-            },
-            NameOptionTypePair {
-                name: "success".to_string(),
-                typ: Some(record(vec![NameTypePair {
-                    name: "order-id".to_string(),
-                    typ: str(),
-                }])),
-            },
-        ]),
-    )
+async fn run_repo_add_two(
+    executor: &TestWorkerExecutor,
+    component_id: &ComponentId,
+    repo_id: &AgentId,
+) -> anyhow::Result<()> {
+    executor
+        .invoke_and_await_agent(
+            component_id,
+            repo_id,
+            "add",
+            data_value!("G1000", "Golem T-Shirt M"),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            component_id,
+            repo_id,
+            "add",
+            data_value!("G1001", "Golem Cloud Subscription 1y"),
+        )
+        .await?;
+
+    Ok(())
 }
 
-async fn run_shopping_cart_initialize_and_add(
-    regular_worker_executor: &impl TestDsl,
-    worker_id: &WorkerId,
-) {
-    regular_worker_executor
-        .invoke_and_await(
-            worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await
-        .unwrap()
-        .expect("Failed to invoke and await");
+async fn run_repo_workflow(
+    executor: &TestWorkerExecutor,
+    component_id: &ComponentId,
+    repo_id: &AgentId,
+) -> anyhow::Result<RepoWorkflowResult> {
+    // Add two items
+    run_repo_add_two(executor, component_id, repo_id).await?;
 
-    regular_worker_executor
-        .invoke_and_await(
-            worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
+    // List
+    executor
+        .invoke_and_await_agent(component_id, repo_id, "list", data_value!())
+        .await?;
+
+    // Add another item
+    executor
+        .invoke_and_await_agent(
+            component_id,
+            repo_id,
+            "add",
+            data_value!("G1002", "Mud Golem"),
         )
-        .await
-        .unwrap()
-        .expect("Failed to invoke and await");
+        .await?;
+
+    let worker_id =
+        WorkerId::from_agent_id(*component_id, repo_id).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let oplogs = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let list_boundary = nth_invocation_boundary(&oplogs, 3);
+    let last_add_boundary = nth_invocation_boundary(&oplogs, 4);
+
+    Ok(RepoWorkflowResult {
+        oplogs,
+        list_boundary,
+        last_add_boundary,
+    })
 }
 
-async fn run_shopping_cart_workflow(
-    regular_worker_executor: &impl TestDsl,
-    worker_id: &WorkerId,
-) -> ShoppingCartExecutionResult {
-    // Initialize
-    run_shopping_cart_initialize_and_add(regular_worker_executor, worker_id).await;
-
-    // Checkout
-    let _ = regular_worker_executor
-        .invoke_and_await(worker_id, "golem:it/api.{checkout}", vec![])
-        .await
-        .expect("Failed to invoke and await");
-
-    // Add Item again
-    let _ = regular_worker_executor
-        .invoke_and_await(
-            worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await;
-
-    let oplogs = regular_worker_executor
-        .get_oplog(worker_id, OplogIndex::INITIAL)
-        .await
-        .unwrap();
-
-    let last_checkout_boundary = nth_invocation_boundary(&oplogs, 3);
-    let last_add_item_boundary = nth_invocation_boundary(&oplogs, 4);
-
-    ShoppingCartExecutionResult {
-        last_checkout_boundary,
-        last_add_item_boundary,
-    }
-}
-
-struct ShoppingCartExecutionResult {
-    last_checkout_boundary: OplogIndex,
-    last_add_item_boundary: OplogIndex,
+struct RepoWorkflowResult {
+    oplogs: Vec<PublicOplogEntryWithIndex>,
+    list_boundary: OplogIndex,
+    last_add_boundary: OplogIndex,
 }

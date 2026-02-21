@@ -47,85 +47,87 @@ pub fn start_router(
     let metrics = PrometheusExporter::new(started_components.prometheus_registry.clone());
 
     let worker_service_api = Arc::new(started_components.worker_service.api_endpoint);
-    let component_service_api = Arc::new(started_components.component_service.endpoint);
-    let cloud_service_api = Arc::new(started_components.cloud_service.endpoint);
+    let registry_service_api = Arc::new(started_components.registry_service.endpoint);
 
     let app = Route::new()
-        .at("/v1/api/definitions", worker_service_api.clone())
-        .at("/v1/api/definitions/*", worker_service_api.clone())
-        .at("/v1/api/deployments", worker_service_api.clone())
-        .at("/v1/api/deployments/*", worker_service_api.clone())
-        .at("/v1/api/security", worker_service_api.clone())
-        .at("/v1/api/security/*", worker_service_api.clone())
-        .at("/v1/app-plugins", component_service_api.clone())
-        .at("/v1/components", component_service_api.clone())
-        .at(
-            "/v1/components/:component_id",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/download",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/invoke",
-            worker_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/invoke-and-await",
-            worker_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/latest",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/latest/*",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/updates",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/upload",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/versions",
-            component_service_api.clone(),
-        )
-        .at(
-            "/v1/components/:component_id/versions/*",
-            component_service_api.clone(),
-        )
+        // Worker endpoints
+        .at("/v1/agents/invoke-agent", worker_service_api.clone())
         .at(
             "/v1/components/:component_id/workers",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/*",
+            "/v1/components/:component_id/workers/find",
             worker_service_api.clone(),
         )
         .at(
-            "/v1/components/:component_id/workers/:worker_id/connect",
+            "/v1/components/:component_id/workers/:worker_name",
             worker_service_api.clone(),
         )
-        .at("/v1/library-plugins", component_service_api.clone())
-        .at("/v1/plugins", component_service_api.clone())
-        .at("/v1/plugins/*", component_service_api.clone())
-        .at("/v1/accounts", cloud_service_api.clone())
-        .at("/v1/accounts/*", cloud_service_api.clone())
-        .at("/v1/admin/*", cloud_service_api.clone())
-        .at("/v1/resource-limits", cloud_service_api.clone())
-        .at("/v1/oauth2", cloud_service_api.clone())
-        .at("/v1/login/*", cloud_service_api.clone())
-        .at("/v1/projects", cloud_service_api.clone())
-        .at("/v1/projects/*", cloud_service_api.clone())
-        .at("/v1/agent-types", component_service_api.clone())
-        .at("/v1/agent-types/*", component_service_api.clone())
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/activate-plugin",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/complete",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/connect",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/deactivate-plugin",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/file-contents/:file_name",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/files/:file_name",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/fork",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/interrupt",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/invocations/:idempotency_key",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/invoke",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/invoke-and-await",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/oplog",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/resume",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/revert",
+            worker_service_api.clone(),
+        )
+        .at(
+            "/v1/components/:component_id/workers/:worker_name/update",
+            worker_service_api.clone(),
+        )
+        // Metrics
         .at("/metrics", metrics)
-        .at("/healthcheck", component_service_api)
+        // Everything else is routed to registry service
+        .at("*", registry_service_api.clone())
         .with(CookieJarManager::new())
         .with(Cors::new().allow_origin_regex(".*").allow_credentials(true))
         .with(OpenTelemetryMetrics::new())

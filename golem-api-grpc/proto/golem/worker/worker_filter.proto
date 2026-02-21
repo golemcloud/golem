@@ -12,7 +12,7 @@ import "google/protobuf/timestamp.proto";
 message WorkerFilter {
   oneof filter {
     WorkerNameFilter name = 1;
-    WorkerVersionFilter version = 2;
+    WorkerRevisionFilter revision = 2;
     WorkerStatusFilter status = 3;
     WorkerCreatedAtFilter created_at = 4;
     WorkerEnvFilter env = 5;
@@ -40,7 +40,7 @@ message WorkerNameFilter {
   string value = 2;
 }
 
-message WorkerVersionFilter {
+message WorkerRevisionFilter {
   golem.common.FilterComparator comparator = 1;
   uint64 value = 2;
 }

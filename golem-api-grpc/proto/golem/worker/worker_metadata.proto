@@ -3,22 +3,20 @@ syntax = "proto3";
 package golem.worker;
 
 import "golem/common/account_id.proto";
-import "golem/common/project_id.proto";
-import "golem/common/plugin_installation_id.proto";
 import "golem/component/agent.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "golem/worker/wasi_config_vars.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
+import "golem/common/environment.proto";
 
 message WorkerMetadata {
   WorkerId worker_id = 1;
   golem.common.AccountId created_by = 2;
-  repeated string args = 3;
   map<string, string> env = 4;
   WorkerStatus status = 5;
-  uint64 component_version = 6;
+  uint64 component_revision = 6;
   uint32 retry_count = 7;
   uint64 pending_invocation_count = 8;
   repeated UpdateRecord updates = 9;
@@ -27,16 +25,16 @@ message WorkerMetadata {
   uint64 component_size = 12;
   uint64 total_linear_memory_size = 13;
   repeated ResourceDescription owned_resources = 14;
-  repeated golem.common.PluginInstallationId active_plugins = 15;
+  repeated int32 active_plugins = 15;
   repeated OplogRegion skipped_regions = 16;
   repeated OplogRegion deleted_regions = 17;
-  golem.common.ProjectId project_id = 18;
+  golem.common.EnvironmentId environment_id = 18;
   WasiConfigVars wasi_config_vars = 19;
 }
 
 message UpdateRecord {
   google.protobuf.Timestamp timestamp = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   oneof update {
     PendingUpdate pending = 3;
     FailedUpdate failed = 4;

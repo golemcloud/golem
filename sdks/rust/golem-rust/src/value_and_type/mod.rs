@@ -15,21 +15,60 @@
 // Guest binding version of `golem_wasm` crate's `IntoValueAndType` trait, to be upstreamed
 // eventually.
 
+pub mod golem_host;
+pub mod http_uri;
 pub mod tuples;
 pub mod type_builder;
+pub mod wasi;
 
+#[cfg(test)]
+mod test_macros;
+#[cfg(test)]
+mod tests;
+
+#[cfg(feature = "bigdecimal")]
+pub mod bigdecimal;
+#[cfg(feature = "bit_vec")]
+pub mod bit_vec;
+#[cfg(feature = "bytes")]
+pub mod bytes;
+#[cfg(feature = "chrono")]
+pub mod chrono;
+#[cfg(feature = "mac_address")]
+pub mod mac_address;
+#[cfg(feature = "nonempty_collections")]
+pub mod nonempty_collections;
+#[cfg(feature = "num_bigint")]
+pub mod num_bigint;
+#[cfg(feature = "rust_decimal")]
+pub mod rust_decimal;
+#[cfg(feature = "serde_json_types")]
+pub mod serde_json;
+#[cfg(feature = "url")]
+pub mod url;
+pub mod uuid;
+
+use crate::PromiseId;
 use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
-    ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode, WitValue,
-    WitValueBuilderExtensions,
+    AccountId, AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType,
+    WitTypeNode, WitValue, WitValueBuilderExtensions,
 };
-use std::collections::Bound;
-use std::collections::HashMap;
-use std::hash::Hash;
-use type_builder::WitTypeBuilderExtensions;
-
 pub use golem_wasm::{NodeBuilder, WitValueExtractor};
+use std::collections::Bound;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
+use std::hash::Hash;
+use std::marker::PhantomData;
+use std::net::IpAddr;
+use std::num::{
+    NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8,
+};
+use std::ops::Range;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 pub use type_builder::TypeNodeBuilder;
+use type_builder::WitTypeBuilderExtensions;
 
 /// Specific trait to convert a type into a pair of `WitValue` and `WitType`.
 pub trait IntoValue: Sized {
@@ -137,6 +176,27 @@ impl FromValueAndType for u64 {
         extractor: &'a impl WitValueExtractor<'a, 'b>,
     ) -> Result<Self, String> {
         extractor.u64().ok_or_else(|| "Expected u64".to_string())
+    }
+}
+
+impl IntoValue for usize {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u64(self as u64)
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u64()
+    }
+}
+
+impl FromValueAndType for usize {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u64()
+            .map(|n| n as usize)
+            .ok_or_else(|| "Expected u64".to_string())
     }
 }
 
@@ -560,6 +620,24 @@ impl<K: FromValueAndType + Eq + Hash, V: FromValueAndType> FromValueAndType for 
     }
 }
 
+impl<T: IntoValue> IntoValue for Box<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        (*self).add_to_builder(builder)
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder)
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for Box<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        T::from_extractor(extractor).map(Box::new)
+    }
+}
+
 impl IntoValue for ComponentId {
     fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
         let builder = builder.record();
@@ -574,6 +652,33 @@ impl IntoValue for ComponentId {
 }
 
 impl FromValueAndType for ComponentId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            uuid: <Uuid>::from_extractor(
+                &extractor
+                    .field(0usize)
+                    .ok_or_else(|| "Missing uuid field".to_string())?,
+            )?,
+        })
+    }
+}
+
+impl IntoValue for AccountId {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let builder = builder.record();
+        let builder = self.uuid.add_to_builder(builder.item());
+        builder.finish()
+    }
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        let builder = builder.record(Some("AccountId".to_string()), None);
+        let builder = <Uuid>::add_to_type_builder(builder.field("uuid"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for AccountId {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl WitValueExtractor<'a, 'b>,
     ) -> Result<Self, String> {
@@ -634,6 +739,7 @@ impl IntoValue for ValueAndType {
         builder.finish()
     }
 }
+
 impl FromValueAndType for ValueAndType {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl WitValueExtractor<'a, 'b>,
@@ -1158,192 +1264,580 @@ impl FromValueAndType for ResourceMode {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::value_and_type::{FromValueAndType, IntoValue};
-    use golem_rust_macro::{FromValueAndType, IntoValue};
-    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-    use golem_wasm::{Value, WitValue};
-
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
-    enum MyEnum {
-        Simple,
-        Complex1(i32),
-        Complex2(i32, String),
-        Complex3 { x: String, y: bool },
+// &str implementation - treat as String
+impl IntoValue for &str {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.string(self)
     }
 
-    #[test]
-    fn test_into_value_derivation_enum() {
-        let simple_value = MyEnum::Simple.into_value();
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.string()
+    }
+}
 
-        let complex1_value = MyEnum::Complex1(42).into_value();
-
-        let complex2_value = MyEnum::Complex2(7, "hello".to_string()).into_value();
-
-        let complex3_value = MyEnum::Complex3 {
-            x: "world".to_string(),
-            y: true,
+// HashSet<T> implementation - treat as list
+impl<T: IntoValue + Eq + Hash> IntoValue for HashSet<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let mut list_builder = builder.list();
+        for item in self {
+            list_builder = item.add_to_builder(list_builder.item());
         }
-        .into_value();
-
-        let expected_simple = Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        };
-
-        let expected_complex1 = Value::Variant {
-            case_idx: 1,
-            case_value: Some(Box::new(Value::S32(42))),
-        };
-
-        let expected_complex2 = Value::Variant {
-            case_idx: 2,
-            case_value: Some(Box::new(Value::Tuple(vec![
-                Value::S32(7),
-                Value::String("hello".to_string()),
-            ]))),
-        };
-
-        let expected_complex3 = Value::Variant {
-            case_idx: 3,
-            case_value: Some(Box::new(Value::Record(vec![
-                Value::String("world".to_string()),
-                Value::Bool(true),
-            ]))),
-        };
-
-        assert_eq!(simple_value, WitValue::from(expected_simple));
-        assert_eq!(complex1_value, WitValue::from(expected_complex1));
-        assert_eq!(complex2_value, WitValue::from(expected_complex2));
-        assert_eq!(complex3_value, WitValue::from(expected_complex3));
+        list_builder.finish()
     }
 
-    #[test]
-    fn test_from_value_derivation_enum() {
-        let enum_type = MyEnum::get_type();
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder.list(None, None)).finish()
+    }
+}
 
-        let simple1_value = WitValue::from(Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        });
+impl<T: FromValueAndType + Eq + Hash> FromValueAndType for HashSet<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let items: Vec<T> = FromValueAndType::from_extractor(extractor)?;
+        Ok(HashSet::from_iter(items))
+    }
+}
 
-        let simple1_value_and_type = ValueAndType {
-            value: simple1_value,
-            typ: enum_type.clone(),
-        };
+// BTreeMap<K, V> implementation - treat as list of tuples
+impl<K: IntoValue + Ord, V: IntoValue> IntoValue for BTreeMap<K, V> {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let mut list_builder = builder.list();
 
-        let complex1_value = WitValue::from(Value::Variant {
-            case_idx: 1,
-            case_value: Some(Box::new(Value::S32(42))),
-        });
+        for (key, value) in self {
+            let mut tuple_builder = list_builder.item().tuple();
+            tuple_builder = key.add_to_builder(tuple_builder.item());
+            tuple_builder = value.add_to_builder(tuple_builder.item());
+            list_builder = tuple_builder.finish();
+        }
 
-        let complex1_value_and_type = ValueAndType {
-            value: complex1_value,
-            typ: enum_type.clone(),
-        };
-
-        let complex2_value = WitValue::from(Value::Variant {
-            case_idx: 2,
-            case_value: Some(Box::new(Value::Tuple(vec![
-                Value::S32(7),
-                Value::String("hello".to_string()),
-            ]))),
-        });
-
-        let complex2_value_and_type = ValueAndType {
-            value: complex2_value,
-            typ: enum_type.clone(),
-        };
-
-        let complex3_value = WitValue::from(Value::Variant {
-            case_idx: 3,
-            case_value: Some(Box::new(Value::Record(vec![
-                Value::String("world".to_string()),
-                Value::Bool(true),
-            ]))),
-        });
-
-        let complex3_value_and_type = ValueAndType {
-            value: complex3_value,
-            typ: enum_type.clone(),
-        };
-
-        let expected_simple = MyEnum::Simple;
-
-        let expected_complex1 = MyEnum::Complex1(42);
-
-        let expected_complex2 = MyEnum::Complex2(7, "hello".to_string());
-
-        let expected_complex3 = MyEnum::Complex3 {
-            x: "world".to_string(),
-            y: true,
-        };
-
-        assert_eq!(
-            MyEnum::from_value_and_type(simple1_value_and_type).unwrap(),
-            expected_simple
-        );
-        assert_eq!(
-            MyEnum::from_value_and_type(complex1_value_and_type).unwrap(),
-            expected_complex1
-        );
-        assert_eq!(
-            MyEnum::from_value_and_type(complex2_value_and_type).unwrap(),
-            expected_complex2
-        );
-        assert_eq!(
-            MyEnum::from_value_and_type(complex3_value_and_type).unwrap(),
-            expected_complex3
-        );
+        list_builder.finish()
     }
 
-    #[test]
-    fn test_round_trip_enum_derivation() {
-        let simple = MyEnum::Simple;
-        let complex1 = MyEnum::Complex1(42);
-        let complex2 = MyEnum::Complex2(7, "hello".to_string());
-        let complex3 = MyEnum::Complex3 {
-            x: "world".to_string(),
-            y: true,
-        };
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let mut builder = builder.list(None, None).tuple(None, None);
+        builder = K::add_to_type_builder(builder.item());
+        builder = V::add_to_type_builder(builder.item());
+        builder.finish().finish()
+    }
+}
 
-        let typ = MyEnum::get_type();
+impl<K: FromValueAndType + Ord, V: FromValueAndType> FromValueAndType for BTreeMap<K, V> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let items: Vec<(K, V)> = FromValueAndType::from_extractor(extractor)?;
+        Ok(BTreeMap::from_iter(items))
+    }
+}
 
-        let simple_value = ValueAndType {
-            value: simple.clone().into_value(),
-            typ: typ.clone(),
-        };
+// BTreeSet<T> implementation - treat as list
+impl<T: IntoValue + Ord> IntoValue for BTreeSet<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let mut list_builder = builder.list();
+        for item in self {
+            list_builder = item.add_to_builder(list_builder.item());
+        }
+        list_builder.finish()
+    }
 
-        let complex1_value = ValueAndType {
-            value: complex1.clone().into_value(),
-            typ: typ.clone(),
-        };
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder.list(None, None)).finish()
+    }
+}
 
-        let complex2_value = ValueAndType {
-            value: complex2.clone().into_value(),
-            typ: typ.clone(),
-        };
+impl<T: FromValueAndType + Ord> FromValueAndType for BTreeSet<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let items: Vec<T> = FromValueAndType::from_extractor(extractor)?;
+        Ok(BTreeSet::from_iter(items))
+    }
+}
 
-        let complex3_value = ValueAndType {
-            value: complex3.clone().into_value(),
-            typ: typ.clone(),
-        };
+// VecDeque<T> implementation - treat as list
+impl<T: IntoValue> IntoValue for VecDeque<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let mut list_builder = builder.list();
+        for item in self {
+            list_builder = item.add_to_builder(list_builder.item());
+        }
+        list_builder.finish()
+    }
 
-        assert_eq!(MyEnum::from_value_and_type(simple_value).unwrap(), simple);
-        assert_eq!(
-            MyEnum::from_value_and_type(complex1_value).unwrap(),
-            complex1
-        );
-        assert_eq!(
-            MyEnum::from_value_and_type(complex2_value).unwrap(),
-            complex2
-        );
-        assert_eq!(
-            MyEnum::from_value_and_type(complex3_value).unwrap(),
-            complex3
-        );
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder.list(None, None)).finish()
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for VecDeque<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let items: Vec<T> = FromValueAndType::from_extractor(extractor)?;
+        Ok(VecDeque::from_iter(items))
+    }
+}
+
+// LinkedList<T> implementation - treat as list
+impl<T: IntoValue> IntoValue for LinkedList<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let mut list_builder = builder.list();
+        for item in self {
+            list_builder = item.add_to_builder(list_builder.item());
+        }
+        list_builder.finish()
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder.list(None, None)).finish()
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for LinkedList<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let items: Vec<T> = FromValueAndType::from_extractor(extractor)?;
+        Ok(LinkedList::from_iter(items))
+    }
+}
+
+// NonZero unsigned integers - treat as their underlying unsigned type
+impl IntoValue for NonZeroU8 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u8(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u8()
+    }
+}
+
+impl FromValueAndType for NonZeroU8 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u8()
+            .and_then(NonZeroU8::new)
+            .ok_or_else(|| "Expected non-zero u8".to_string())
+    }
+}
+
+impl IntoValue for NonZeroU16 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u16(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u16()
+    }
+}
+
+impl FromValueAndType for NonZeroU16 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u16()
+            .and_then(NonZeroU16::new)
+            .ok_or_else(|| "Expected non-zero u16".to_string())
+    }
+}
+
+impl IntoValue for NonZeroU32 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u32(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u32()
+    }
+}
+
+impl FromValueAndType for NonZeroU32 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u32()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| "Expected non-zero u32".to_string())
+    }
+}
+
+impl IntoValue for NonZeroU64 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.u64(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.u64()
+    }
+}
+
+impl FromValueAndType for NonZeroU64 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .u64()
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| "Expected non-zero u64".to_string())
+    }
+}
+
+// NonZero signed integers - treat as their underlying signed type
+impl IntoValue for NonZeroI8 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.s8(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.s8()
+    }
+}
+
+impl FromValueAndType for NonZeroI8 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .s8()
+            .and_then(NonZeroI8::new)
+            .ok_or_else(|| "Expected non-zero i8".to_string())
+    }
+}
+
+impl IntoValue for NonZeroI16 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.s16(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.s16()
+    }
+}
+
+impl FromValueAndType for NonZeroI16 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .s16()
+            .and_then(NonZeroI16::new)
+            .ok_or_else(|| "Expected non-zero i16".to_string())
+    }
+}
+
+impl IntoValue for NonZeroI32 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.s32(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.s32()
+    }
+}
+
+impl FromValueAndType for NonZeroI32 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .s32()
+            .and_then(NonZeroI32::new)
+            .ok_or_else(|| "Expected non-zero i32".to_string())
+    }
+}
+
+impl IntoValue for NonZeroI64 {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        builder.s64(self.get())
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        builder.s64()
+    }
+}
+
+impl FromValueAndType for NonZeroI64 {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        extractor
+            .s64()
+            .and_then(NonZeroI64::new)
+            .ok_or_else(|| "Expected non-zero i64".to_string())
+    }
+}
+
+// Duration implementation - treat as record with seconds and nanos
+impl IntoValue for Duration {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let builder = builder.record();
+        let builder = self.as_secs().add_to_builder(builder.item());
+        let builder = self.subsec_nanos().add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        let builder = builder.record(Some("Duration".to_string()), None);
+        let builder = u64::add_to_type_builder(builder.field("secs"));
+        let builder = u32::add_to_type_builder(builder.field("nanos"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for Duration {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let secs = u64::from_extractor(
+            &extractor
+                .field(0usize)
+                .ok_or_else(|| "Missing secs field".to_string())?,
+        )?;
+        let nanos = u32::from_extractor(
+            &extractor
+                .field(1usize)
+                .ok_or_else(|| "Missing nanos field".to_string())?,
+        )?;
+        Ok(Duration::new(secs, nanos))
+    }
+}
+
+// Range<T> implementation - treat as record with start and end
+impl<T: IntoValue> IntoValue for Range<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        let builder = builder.record();
+        let builder = self.start.add_to_builder(builder.item());
+        let builder = self.end.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        let builder = builder.record(Some("Range".to_string()), None);
+        let builder = T::add_to_type_builder(builder.field("start"));
+        let builder = T::add_to_type_builder(builder.field("end"));
+        builder.finish()
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for Range<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let start = T::from_extractor(
+            &extractor
+                .field(0usize)
+                .ok_or_else(|| "Missing start field".to_string())?,
+        )?;
+        let end = T::from_extractor(
+            &extractor
+                .field(1usize)
+                .ok_or_else(|| "Missing end field".to_string())?,
+        )?;
+        Ok(Range { start, end })
+    }
+}
+
+// Rc<T> implementation - treat as inner type
+impl<T: IntoValue + Clone> IntoValue for Rc<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        (*self).clone().add_to_builder(builder)
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder)
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for Rc<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        T::from_extractor(extractor).map(Rc::new)
+    }
+}
+
+// Arc<T> implementation - treat as inner type
+impl<T: IntoValue + Clone> IntoValue for Arc<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        (*self).clone().add_to_builder(builder)
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        T::add_to_type_builder(builder)
+    }
+}
+
+impl<T: FromValueAndType> FromValueAndType for Arc<T> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        T::from_extractor(extractor).map(Arc::new)
+    }
+}
+
+// PhantomData<T> implementation - treat as empty record (always empty)
+impl<T> IntoValue for PhantomData<T> {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        builder.record().finish()
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        builder
+            .record(Some("PhantomData".to_string()), None)
+            .finish()
+    }
+}
+
+impl<T> FromValueAndType for PhantomData<T> {
+    fn from_extractor<'a, 'b>(
+        _extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        // PhantomData is always empty, so just consume nothing
+        Ok(PhantomData)
+    }
+}
+
+// IpAddr implementation - treat as enum variant
+impl IntoValue for IpAddr {
+    fn add_to_builder<B: NodeBuilder>(self, builder: B) -> B::Result {
+        match self {
+            IpAddr::V4(addr) => {
+                let builder = builder.variant(0);
+                addr.octets().to_vec().add_to_builder(builder).finish()
+            }
+            IpAddr::V6(addr) => {
+                let builder = builder.variant(1);
+                addr.segments().to_vec().add_to_builder(builder).finish()
+            }
+        }
+    }
+
+    fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
+        let mut builder = builder.variant(Some("IpAddr".to_string()), None);
+        builder = <Vec<u8>>::add_to_type_builder(builder.case("v4"));
+        builder = <Vec<u16>>::add_to_type_builder(builder.case("v6"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for IpAddr {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let (idx, inner) = extractor
+            .variant()
+            .ok_or_else(|| "IpAddr should be variant".to_string())?;
+        match idx {
+            0 => {
+                let octets: Vec<u8> = FromValueAndType::from_extractor(
+                    &inner.ok_or_else(|| "Missing IpAddrV4 body".to_string())?,
+                )?;
+                if octets.len() != 4 {
+                    return Err("IPv4 address must have 4 octets".to_string());
+                }
+                Ok(IpAddr::V4(std::net::Ipv4Addr::new(
+                    octets[0], octets[1], octets[2], octets[3],
+                )))
+            }
+            1 => {
+                let segments: Vec<u16> = FromValueAndType::from_extractor(
+                    &inner.ok_or_else(|| "Missing IpAddrV6 body".to_string())?,
+                )?;
+                if segments.len() != 8 {
+                    return Err("IPv6 address must have 8 segments".to_string());
+                }
+                Ok(IpAddr::V6(std::net::Ipv6Addr::new(
+                    segments[0],
+                    segments[1],
+                    segments[2],
+                    segments[3],
+                    segments[4],
+                    segments[5],
+                    segments[6],
+                    segments[7],
+                )))
+            }
+            _ => Err(format!("Invalid IpAddr variant: {}", idx)),
+        }
+    }
+}
+
+impl IntoValue for AgentId {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let builder = builder.record();
+        let builder = self.component_id.add_to_builder(builder.item());
+        let builder = self.agent_id.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(Some("agent-id".to_string()), Some("golem".to_string()));
+        let builder = ComponentId::add_to_type_builder(builder.field("component_id"));
+        let builder = String::add_to_type_builder(builder.field("agent_id"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for AgentId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let component_id = ComponentId::from_extractor(
+            &extractor
+                .field(0)
+                .ok_or_else(|| "Missing component-id field".to_string())?,
+        )?;
+        let agent_id = String::from_extractor(
+            &extractor
+                .field(1)
+                .ok_or_else(|| "Missing agent-id field".to_string())?,
+        )?;
+        Ok(AgentId {
+            component_id,
+            agent_id,
+        })
+    }
+}
+
+impl IntoValue for PromiseId {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let builder = builder.record();
+        let builder = self.agent_id.add_to_builder(builder.item());
+        let builder = self.oplog_idx.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(Some("promise-id".to_string()), Some("golem".to_string()));
+        let builder = AgentId::add_to_type_builder(builder.field("agent-id"));
+        let builder = u64::add_to_type_builder(builder.field("oplog-idx"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for PromiseId {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let agent_id = AgentId::from_extractor(
+            &extractor
+                .field(0)
+                .ok_or_else(|| "Missing agent-id field".to_string())?,
+        )?;
+        let oplog_idx = u64::from_extractor(
+            &extractor
+                .field(1)
+                .ok_or_else(|| "Missing oplog-idx field".to_string())?,
+        )?;
+        Ok(PromiseId {
+            agent_id,
+            oplog_idx,
+        })
     }
 }

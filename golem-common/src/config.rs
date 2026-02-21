@@ -472,6 +472,7 @@ impl Default for DbConfig {
         DbConfig::Sqlite(DbSqliteConfig {
             database: "golem_service.db".to_string(),
             max_connections: 10,
+            foreign_keys: false,
         })
     }
 }
@@ -494,6 +495,7 @@ impl DbConfig {
 pub struct DbSqliteConfig {
     pub database: String,
     pub max_connections: u32,
+    pub foreign_keys: bool,
 }
 
 impl DbSqliteConfig {
@@ -502,6 +504,7 @@ impl DbSqliteConfig {
             .filename(&self.database)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .create_if_missing(true)
+            .foreign_keys(self.foreign_keys)
     }
 }
 

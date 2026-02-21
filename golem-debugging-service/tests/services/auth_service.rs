@@ -1,40 +1,37 @@
 use async_trait::async_trait;
-use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::{AccountId, ComponentId, ProjectId};
-use golem_debugging_service::auth::AuthService;
-use golem_service_base::clients::auth::AuthServiceError;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::environment::EnvironmentId;
+use golem_debugging_service::services::auth::{AuthService, AuthServiceError};
+use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+use golem_worker_executor_test_utils::TestContext;
 
-// This will be used by debugging service in tests
-pub struct TestAuthService;
+pub struct TestAuthService {
+    test_ctx: TestContext,
+}
+
+impl TestAuthService {
+    pub fn new(test_ctx: TestContext) -> Self {
+        Self { test_ctx }
+    }
+}
 
 #[async_trait]
 impl AuthService for TestAuthService {
-    async fn get_account(&self, ctx: &AuthCtx) -> Result<AccountId, AuthServiceError> {
-        Ok(AccountId::from(ctx.token_secret.value.to_string().as_str()))
+    async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
+        if token != self.test_ctx.account_token {
+            return Err(AuthServiceError::CouldNotAuthenticate);
+        }
+        Ok(AuthCtx::User(UserAuthCtx {
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
+            account_roles: self.test_ctx.account_roles.clone(),
+        }))
     }
-
-    async fn authorize_project_action(
+    async fn check_user_allowed_to_debug_in_environment(
         &self,
-        project_id: &ProjectId,
-        _permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError> {
-        Ok(Namespace::new(
-            project_id.clone(),
-            AccountId::from(ctx.token_secret.value.to_string().as_str()),
-        ))
-    }
-
-    async fn is_authorized_by_component(
-        &self,
-        component_id: &ComponentId,
-        _permission: ProjectAction,
-        ctx: &AuthCtx,
-    ) -> Result<Namespace, AuthServiceError> {
-        Ok(Namespace::new(
-            ProjectId(component_id.0),
-            AccountId::from(ctx.token_secret.value.to_string().as_str()),
-        ))
+        _environment_id: EnvironmentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<(), AuthServiceError> {
+        Ok(())
     }
 }

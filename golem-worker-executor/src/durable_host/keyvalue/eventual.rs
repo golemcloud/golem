@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -51,7 +51,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .get(project_id, bucket.clone(), key.clone())
+                .get(environment_id, bucket.clone(), key.clone())
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -88,7 +88,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -116,7 +116,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .set(project_id, bucket, key, outgoing_value)
+                .set(environment_id, bucket, key, outgoing_value)
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -141,7 +141,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -161,7 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .delete(project_id, bucket, key)
+                .delete(environment_id, bucket, key)
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
@@ -186,7 +186,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -206,7 +206,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .exists(project_id, bucket, key)
+                .exists(environment_id, bucket, key)
                 .await
                 .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;

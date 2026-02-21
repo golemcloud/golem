@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
-use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
 use golem_common::cache::*;
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{RetryConfig, RoutingTable};
+use golem_common::model::RoutingTable;
 use golem_common::retriable_error::IsRetriableError;
-use golem_common::SafeDisplay;
+use golem_common::{SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,9 +31,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Status;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[derive(Debug, Clone)]
@@ -98,16 +98,13 @@ pub struct RoutingTableConfig {
     pub port: u16,
     #[serde(with = "humantime_serde")]
     pub invalidation_min_delay: Duration,
-    pub retries: RetryConfig,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
+    #[serde(flatten)]
+    pub client_config: GrpcClientConfig,
 }
 
 impl RoutingTableConfig {
-    pub fn url(&self) -> Uri {
-        format!("http://{}:{}", self.host, self.port)
-            .parse()
-            .expect("Failed to parse shard manager URL")
+    pub fn uri(&self) -> Uri {
+        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
     }
 }
 
@@ -121,9 +118,7 @@ impl SafeDisplay for RoutingTableConfig {
             "invalidation minimum delay: {:?}",
             self.invalidation_min_delay
         );
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
 }
@@ -134,8 +129,7 @@ impl Default for RoutingTableConfig {
             host: "localhost".to_string(),
             port: 9002,
             invalidation_min_delay: Duration::from_millis(500),
-            retries: RetryConfig::default(),
-            connect_timeout: Duration::from_secs(10),
+            client_config: GrpcClientConfig::default(),
         }
     }
 }
@@ -167,11 +161,8 @@ impl RoutingTableServiceDefault {
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
             },
-            config.url(),
-            GrpcClientConfig {
-                retries_on_unavailable: config.retries.clone(),
-                connect_timeout: config.connect_timeout,
-            },
+            config.uri(),
+            config.client_config.clone(),
         );
         Self {
             config,

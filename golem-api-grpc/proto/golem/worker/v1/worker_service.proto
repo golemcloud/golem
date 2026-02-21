@@ -2,70 +2,46 @@ syntax = "proto3";
 
 package golem.worker.v1;
 
-import public "golem/common/empty.proto";
-import public "golem/common/plugin_installation_id.proto";
-import public "golem/common/revert_worker_response.proto";
-import public "golem/worker/complete_parameters.proto";
-import public "golem/worker/cursor.proto";
-import public "golem/worker/idempotency_key.proto";
-import public "golem/worker/invocation_context.proto";
-import public "golem/worker/invoke_parameters.proto";
-import public "golem/worker/invoke_result.proto";
-import public "golem/worker/invoke_result_json.proto";
-import public "golem/worker/v1/worker_error.proto";
-import public "golem/worker/worker_filter.proto";
-import public "golem/worker/worker_metadata.proto";
-import public "golem/worker/log_event.proto";
-import public "golem/worker/oplog_cursor.proto";
-import public "golem/worker/public_oplog.proto";
-import public "golem/worker/worker_id.proto";
-import public "golem/component/component_id.proto";
-import public "golem/worker/update_mode.proto";
-import public "golem/worker/filesystem.proto";
+import "golem/common/empty.proto";
+import "golem/common/revert_worker_response.proto";
+import "golem/worker/complete_parameters.proto";
+import "golem/worker/cursor.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation_context.proto";
+import "golem/worker/invoke_parameters.proto";
+import "golem/worker/invoke_result.proto";
+import "golem/worker/invoke_result_json.proto";
+import "golem/worker/v1/worker_error.proto";
+import "golem/worker/worker_filter.proto";
+import "golem/worker/worker_metadata.proto";
+import "golem/worker/log_event.proto";
+import "golem/worker/oplog_cursor.proto";
+import "golem/worker/public_oplog.proto";
+import "golem/worker/worker_id.proto";
+import "golem/component/component_id.proto";
+import "golem/worker/update_mode.proto";
+import "golem/worker/filesystem.proto";
+import "golem/auth/auth_ctx.proto";
 import "golem/worker/wasi_config_vars.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
-  rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
-  rpc DeleteWorker (DeleteWorkerRequest) returns (DeleteWorkerResponse);
-  rpc GetWorkerMetadata (GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
-
-  rpc InterruptWorker (InterruptWorkerRequest) returns (InterruptWorkerResponse);
   rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
-  rpc InvokeAndAwaitJson (InvokeAndAwaitJsonRequest) returns (InvokeAndAwaitJsonResponse);
-  rpc InvokeAndAwaitTyped (InvokeAndAwaitRequest) returns (InvokeAndAwaitTypedResponse);
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
-  rpc InvokeJson (InvokeJsonRequest) returns (InvokeResponse);
-  rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
-  rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
-  rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
-
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
-
-  rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
-  rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
-
-  rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
-  rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
-
-  rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
-  rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
-
+  rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
-
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
-  rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
+  rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
 }
-
-
 
 message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
   string name = 2;
-  repeated string args = 3;
   map<string, string> env = 4;
   golem.worker.WasiConfigVars wasi_config_vars = 5;
   bool ignore_already_existing = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
 }
 
 message LaunchNewWorkerResponse {
@@ -75,23 +51,15 @@ message LaunchNewWorkerResponse {
   }
 }
 
-
-
 message LaunchNewWorkerSuccessResponse {
   golem.worker.WorkerId workerId = 1;
   uint64 component_version = 2;
 }
 
-message ForkWorkerRequest {
-  golem.worker.WorkerId source_worker_id = 2;
-  golem.worker.WorkerId target_worker_id = 3;
-  uint64 oplog_index_cutoff = 4;
-}
-
-
 message CompletePromiseRequest {
   golem.worker.WorkerId workerId = 1;
   golem.worker.CompleteParameters completeParameters = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message CompletePromiseResponse {
@@ -101,45 +69,17 @@ message CompletePromiseResponse {
   }
 }
 
+message ForkWorkerRequest {
+  golem.worker.WorkerId source_worker_id = 1;
+  golem.worker.WorkerId target_worker_id = 2;
+  uint64 oplog_index_cutoff = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
 message ForkWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerError error  = 2;
-  }
-}
-
-
-message DeleteWorkerRequest {
-  golem.worker.WorkerId workerId = 1;
-}
-
-message DeleteWorkerResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.worker.v1.WorkerError error = 2;
-  }
-}
-
-message GetWorkerMetadataRequest {
-  golem.worker.WorkerId workerId = 1;
-}
-
-message GetWorkerMetadataResponse {
-  oneof result {
-    golem.worker.WorkerMetadata success = 1;
-    golem.worker.v1.WorkerError error = 2;
-  }
-}
-
-message InterruptWorkerRequest {
-  golem.worker.WorkerId workerId = 1;
-  bool recoverImmediately = 2;
-}
-
-message InterruptWorkerResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -148,34 +88,13 @@ message InvokeAndAwaitRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
+  optional golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message InvokeAndAwaitResponse {
   oneof result {
-    golem.worker.InvokeResult success = 1;
-    golem.worker.v1.WorkerError error = 2;
-  }
-}
-
-message InvokeAndAwaitTypedResponse {
-  oneof result {
     golem.worker.InvokeResultTyped success = 1;
-    golem.worker.v1.WorkerError error = 2;
-  }
-}
-
-message InvokeAndAwaitJsonRequest {
-  golem.worker.WorkerId workerId = 1;
-  golem.worker.IdempotencyKey idempotencyKey = 2;
-  string function = 3;
-  repeated string invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
-}
-
-message InvokeAndAwaitJsonResponse {
-  oneof result {
-    string success = 1;
     golem.worker.v1.WorkerError error = 2;
   }
 }
@@ -185,7 +104,8 @@ message InvokeRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
+  optional golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message InvokeResponse {
@@ -195,17 +115,10 @@ message InvokeResponse {
   }
 }
 
-message InvokeJsonRequest {
-  golem.worker.WorkerId workerId = 1;
-  golem.worker.IdempotencyKey idempotencyKey = 2;
-  string function = 3;
-  repeated string invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
-}
-
 message ResumeWorkerRequest {
   golem.worker.WorkerId workerId = 1;
   optional bool force = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message ResumeWorkerResponse {
@@ -215,36 +128,12 @@ message ResumeWorkerResponse {
   }
 }
 
-message ConnectWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
-}
-
-message GetWorkersMetadataRequest {
-  golem.component.ComponentId component_id = 1;
-  golem.worker.WorkerFilter filter = 2;
-  golem.worker.Cursor cursor = 3;
-  uint64 count = 4;
-  bool precise = 5;
-}
-
-
-message GetWorkersMetadataResponse {
-  oneof result {
-    GetWorkersMetadataSuccessResponse success = 1;
-    WorkerError error = 2;
-  }
-}
-
-message GetWorkersMetadataSuccessResponse {
-  repeated golem.worker.WorkerMetadata workers = 1;
-  optional golem.worker.Cursor cursor = 2;
-}
-
-
 message UpdateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
-  uint64 target_version = 2;
+  uint64 target_revision = 2;
   golem.worker.UpdateMode mode = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+  bool disable_wakeup = 5;
 }
 
 message UpdateWorkerResponse {
@@ -254,122 +143,19 @@ message UpdateWorkerResponse {
   }
 }
 
-message GetOplogRequest {
-  golem.worker.WorkerId worker_id = 1;
-  uint64 from_oplog_index = 3;
-  optional golem.worker.OplogCursor cursor = 4;
-  uint64 count = 5;
-}
-
-message GetOplogResponse {
-  oneof result {
-    GetOplogSuccessResponse success = 1;
-    WorkerError error = 2;
-  }
-}
-
-message GetOplogSuccessResponse {
-  repeated golem.worker.OplogEntry entries = 1;
-  optional golem.worker.OplogCursor next = 2;
-  uint64 first_index_in_chunk = 3;
-  uint64 last_index = 5;
-}
-
-
-message SearchOplogRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string query = 3;
-  optional golem.worker.OplogCursor cursor = 5;
-  uint64 count = 6;
-}
-
-message SearchOplogResponse {
-  oneof result {
-    SearchOplogSuccessResponse success = 1;
-    WorkerError error = 2;
-  }
-}
-
-message SearchOplogSuccessResponse {
-  repeated golem.worker.OplogEntryWithIndex entries = 1;
-  optional golem.worker.OplogCursor next = 2;
-  uint64 last_index = 5;
-}
-
-message GetFileSystemNodeRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string path = 2;
-}
-
-message GetFileSystemNodeResponse {
-  oneof result {
-    ListFileSystemNodeResponse success = 1;
-    WorkerError error = 2;
-  }
-}
-
 message ListFileSystemNodeResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
- 
-
-message GetFileContentsRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string file_path = 2;
-}
-
-message GetFileContentsResponse {
-  oneof result {
-    bytes success = 1;
-    WorkerError error = 2;
-  }
-}
-
-message ActivatePluginRequest {
-  golem.worker.WorkerId worker_id = 1;
-  golem.common.PluginInstallationId installation_id = 2;
-}
-
-message ActivatePluginResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    WorkerError error = 2;
-  }
-}
-
-message DeactivatePluginRequest {
-  golem.worker.WorkerId worker_id = 1;
-  golem.common.PluginInstallationId installation_id = 2;
-}
-
-message DeactivatePluginResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    WorkerError error = 2;
-  }
-}
-
 
 message RevertWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.RevertWorkerTarget target = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message RevertWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
-    WorkerError error = 2;
-  }
-}
-
-message CancelInvocationRequest {
-  golem.worker.WorkerId worker_id = 1;
-  golem.worker.IdempotencyKey idempotency_key = 2;
-}
-
-message CancelInvocationResponse {
-  oneof result {
-    bool success = 1;
     WorkerError error = 2;
   }
 }

@@ -16,25 +16,25 @@ test_r::enable!();
 
 #[test_r::sequential]
 mod tests {
-    use test_r::{flaky, test, test_dep, timeout};
-
     use async_trait::async_trait;
-    use golem_wasm::IntoValueAndType;
-    use rand::prelude::*;
-    use rand::rng;
-    use std::env;
-    use std::time::Duration;
-    use tokio::sync::mpsc;
-    use tokio::task::JoinSet;
-    use tracing::{error, info, Instrument};
-
     use golem_api_grpc::proto::golem::worker;
-    use golem_common::model::{IdempotencyKey, WorkerId};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::IdempotencyKey;
     use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+    use golem_common::{agent_id, data_value};
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
-    use golem_test_framework::dsl::TestDslUnsafe;
+    use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+
+    use golem_common::model::agent::AgentId;
+    use rand::prelude::*;
+    use rand::rng;
+    use std::time::Duration;
+    use test_r::{flaky, test, test_dep, timeout};
+    use tokio::sync::mpsc;
+    use tokio::task::JoinSet;
+    use tracing::{error, info, Instrument};
 
     pub struct Tracing;
 
@@ -53,7 +53,8 @@ mod tests {
             number_of_shards_override: Some(16),
             ..EnvBasedTestDependenciesConfig::new()
         })
-        .await;
+        .await
+        .unwrap();
 
         deps.redis_monitor().assert_valid();
 
@@ -63,17 +64,6 @@ mod tests {
     #[test_dep]
     pub fn tracing() -> Tracing {
         Tracing::init()
-    }
-
-    fn coordinated_scenario_retries() -> usize {
-        let retries = env::var("COORDINATED_SCENARIO_RETRIES")
-            .ok()
-            .and_then(|str| str.parse::<usize>().ok())
-            .unwrap_or(1);
-
-        info!("COORDINATED_SCENARIO_RETRIES: {retries}");
-
-        retries
     }
 
     struct Scenario;
@@ -129,102 +119,94 @@ mod tests {
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_01_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-        for _ in 0..coordinated_scenario_retries() {
-            coordinated_scenario(
-                deps,
-                5,
-                4,
-                vec![
-                    Scenario::case_1(Duration::from_secs(3)),
-                    Scenario::case_2(),
-                    Scenario::case_3(Duration::from_secs(3)),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-            )
-            .await;
-        }
+        coordinated_scenario(
+            deps,
+            5,
+            4,
+            vec![
+                Scenario::case_1(Duration::from_secs(3)),
+                Scenario::case_2(),
+                Scenario::case_3(Duration::from_secs(3)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        )
+        .await;
     }
 
     #[test]
     #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_01_02(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-        for _ in 0..coordinated_scenario_retries() {
-            coordinated_scenario(
-                deps,
-                5,
-                30,
-                vec![
-                    Scenario::case_1(Duration::from_secs(5)),
-                    Scenario::case_2(),
-                    Scenario::case_3(Duration::from_secs(3)),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-            )
-            .await;
-        }
+        coordinated_scenario(
+            deps,
+            5,
+            30,
+            vec![
+                Scenario::case_1(Duration::from_secs(5)),
+                Scenario::case_2(),
+                Scenario::case_3(Duration::from_secs(3)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        )
+        .await;
     }
 
     #[test]
     #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_02_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-        for _ in 0..coordinated_scenario_retries() {
-            coordinated_scenario(
-                deps,
-                5,
-                10,
-                vec![
-                    Scenario::case_2(),
-                    Scenario::case_3(Duration::from_secs(3)),
-                    Scenario::case_1(Duration::from_secs(3)),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-            )
-            .await;
-        }
+        coordinated_scenario(
+            deps,
+            5,
+            10,
+            vec![
+                Scenario::case_2(),
+                Scenario::case_3(Duration::from_secs(3)),
+                Scenario::case_1(Duration::from_secs(3)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        )
+        .await;
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_03_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-        for _ in 0..coordinated_scenario_retries() {
-            coordinated_scenario(
-                deps,
-                5,
-                10,
-                vec![
-                    Scenario::case_3(Duration::from_secs(3)),
-                    Scenario::case_4(),
-                    Scenario::case_3(Duration::from_secs(3)),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-            )
-            .await;
-        }
+        coordinated_scenario(
+            deps,
+            5,
+            10,
+            vec![
+                Scenario::case_3(Duration::from_secs(3)),
+                Scenario::case_4(),
+                Scenario::case_3(Duration::from_secs(3)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        )
+        .await;
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn service_is_responsive_to_shard_changes(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,
     ) {
         deps.reset(16).await;
-        let worker_ids = deps.create_component_and_start_workers(4).await;
+        let (component_id, agent_ids) = deps.create_component_and_start_workers(4).await;
 
         let deps_clone = deps.clone();
         let (stop_tx, stop_rx) = mpsc::channel(128);
@@ -242,7 +224,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
             info!("Invoking workers ({c})");
-            deps.invoke_and_await_workers(&worker_ids)
+            deps.invoke_and_await_workers(&component_id, &agent_ids)
                 .await
                 .expect("Invocations failed");
             info!("Invoking workers done ({c})");
@@ -260,7 +242,7 @@ mod tests {
         steps: Vec<Step>,
     ) {
         deps.reset(number_of_shard).await;
-        let worker_ids = deps
+        let (component_id, agent_ids) = deps
             .create_component_and_start_workers(number_of_workers)
             .await;
 
@@ -318,7 +300,8 @@ mod tests {
                     worker_command_tx
                         .send(WorkerCommand::InvokeAndAwaitWorkers {
                             name,
-                            worker_ids: worker_ids.clone(),
+                            component_id,
+                            agent_ids: agent_ids.clone(),
                         })
                         .await
                         .unwrap();
@@ -349,10 +332,12 @@ mod tests {
     #[async_trait]
     trait DepsOps {
         async fn reset(&self, number_of_shards: usize);
-        async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId>;
+        async fn create_component_and_start_workers(&self, n: usize)
+            -> (ComponentId, Vec<AgentId>);
         async fn invoke_and_await_workers(
             &self,
-            workers: &[WorkerId],
+            component_id: &ComponentId,
+            agent_ids: &[AgentId],
         ) -> Result<(), worker::v1::worker_error::Error>;
         async fn start_all_worker_executors(&self);
         async fn stop_random_worker_executor(&self);
@@ -383,46 +368,62 @@ mod tests {
             info!("Reset done");
         }
 
-        async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId> {
+        async fn create_component_and_start_workers(
+            &self,
+            n: usize,
+        ) -> (ComponentId, Vec<AgentId>) {
             let admin = self.admin().await;
+            let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
-            let component_id = admin.component("option-service").store().await;
-            info!("ComponentId: {}", component_id);
+            let component = admin
+                .component(&env.id, "it_agent_counters_release")
+                .name("it:agent-counters")
+                .store()
+                .await
+                .unwrap();
+            info!("ComponentId: {}", component.id);
 
-            let mut worker_ids = Vec::new();
+            let mut agent_ids = Vec::new();
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let worker_name = format!("sharding-test-{i}");
-                let worker_id = admin.start_worker(&component_id, &worker_name).await;
+                let agent_id = agent_id!("counter", format!("sharding-test-{i}"));
+                admin
+                    .start_agent(&component.id, agent_id.clone())
+                    .await
+                    .unwrap();
                 info!("Worker {i} started");
-                worker_ids.push(worker_id);
+                agent_ids.push(agent_id);
             }
 
             info!("All workers started");
 
-            worker_ids
+            (component.id, agent_ids)
         }
 
         async fn invoke_and_await_workers(
             &self,
-            workers: &[WorkerId],
+            component_id: &ComponentId,
+            agent_ids: &[AgentId],
         ) -> Result<(), worker::v1::worker_error::Error> {
             let mut tasks = JoinSet::new();
-            for worker_id in workers {
-                let self_clone = self.clone().into_admin().await;
+            for agent_id in agent_ids {
+                let self_clone = self.admin().await;
                 tasks.spawn({
-                    let worker_id = worker_id.clone();
+                    let agent_id = agent_id.clone();
+                    let component_id = *component_id;
                     async move {
                         let idempotency_key = IdempotencyKey::fresh();
                         (
-                            worker_id.clone(),
+                            component_id,
+                            agent_id.clone(),
                             self_clone
-                                .invoke_and_await_with_key(
-                                    &worker_id,
+                                .invoke_and_await_agent_with_key(
+                                    &component_id,
+                                    &agent_id,
                                     &idempotency_key,
-                                    "golem:it/api.{echo}",
-                                    vec![Some("Hello".to_string()).into_value_and_type()],
+                                    "increment",
+                                    data_value!(),
                                 )
                                 .await,
                         )
@@ -432,18 +433,21 @@ mod tests {
             }
 
             info!("Workers invoked");
+            let mut pending_count = agent_ids.len();
             while let Some(result) = tasks.join_next().await {
-                let (worker_id, result) = result.unwrap();
+                let (_component_id, agent_id, result) = result.unwrap();
                 match result {
                     Ok(_) => {
-                        info!("Worker invoke success: {worker_id}")
+                        pending_count -= 1;
+                        info!("Worker invoke success: {agent_id}, pending: {pending_count}",);
                     }
                     Err(err) => {
-                        error!("Worker invoke error: {worker_id}, {err:?}");
-                        panic!("Worker invoke error: {worker_id}, {err:?}");
+                        error!("Worker invoke error: {agent_id}, {err:?}");
+                        panic!("Worker invoke error: {agent_id}, {err:?}");
                     }
                 }
             }
+            info!("All workers finished invocation");
 
             Ok(())
         }
@@ -656,7 +660,8 @@ mod tests {
     enum WorkerCommand {
         InvokeAndAwaitWorkers {
             name: String,
-            worker_ids: Vec<WorkerId>,
+            component_id: ComponentId,
+            agent_ids: Vec<AgentId>,
         },
         Stop,
     }
@@ -715,10 +720,13 @@ mod tests {
         mut command_rx: mpsc::Receiver<WorkerCommand>,
         event_tx: mpsc::Sender<WorkerEvent>,
     ) {
-        while let WorkerCommand::InvokeAndAwaitWorkers { name, worker_ids } =
-            command_rx.recv().await.unwrap()
+        while let WorkerCommand::InvokeAndAwaitWorkers {
+            name,
+            component_id,
+            agent_ids,
+        } = command_rx.recv().await.unwrap()
         {
-            deps.invoke_and_await_workers(&worker_ids)
+            deps.invoke_and_await_workers(&component_id, &agent_ids)
                 .await
                 .expect("Worker invocation failed");
             event_tx

@@ -4,29 +4,14 @@ package golem:api@1.3.0;
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
-    use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, agent-id};
+    use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, agent-id, promise-id, oplog-index};
     use wasi:io/poll@0.2.3.{pollable};
 
-    /// An index into the persistent log storing all performed operations of an agent
-    type oplog-index = u64;
-
-    /// A promise ID is a value that can be passed to an external Golem API to complete that promise
-    /// from an arbitrary external source, while Golem agents can await for this completion.
-    record promise-id {
-        agent-id: agent-id,
-        oplog-idx: oplog-index,
-    }
-
     /// Represents a Golem component's version
-    type component-version = u64;
+    type component-revision = u64;
 
-    /// Represents a Golem Cloud account
-    record account-id {
-        value: string
-    }
-
-    /// Represents a Golem project
-    record project-id {
+    /// Represents a Golem environment
+    record environment-id {
       uuid: uuid,
     }
 
@@ -171,7 +156,7 @@ interface host {
         /// The current agent status
         status: agent-status,
         /// The component version the agent is running with
-        component-version: u64,
+        component-revision: u64,
         /// The agent's current retry count
         retry-count: u64
     }
@@ -279,7 +264,7 @@ interface host {
 
     /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
     /// not waiting for the agent to get updated.
-    update-agent:  func(agent-id: agent-id, target-version: component-version, mode: update-mode);
+    update-agent:  func(agent-id: agent-id, target-revision: component-revision, mode: update-mode);
 
     /// Get the current agent's metadata
     get-self-metadata: func() -> agent-metadata;

@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentType, ComponentModelElementSchema,
-    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
+use super::{
+    AgentConstructor, AgentDependency, AgentMethod, AgentType, AgentTypeName,
+    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
 };
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
+use golem_wasm::ValueAndType;
 
 /// ToWitNaming allows converting discovered AgentTypes to WIT and WAVE compatible naming for named
 /// elements
@@ -32,6 +34,12 @@ impl ToWitNaming for String {
         // NOTE: wrap and include kebab case only here, in case we have to handle more WIT specific
         //       special cases.
         heck::ToKebabCase::to_kebab_case(self.as_str())
+    }
+}
+
+impl ToWitNaming for AgentTypeName {
+    fn to_wit_naming(&self) -> Self {
+        Self(self.0.to_wit_naming())
     }
 }
 
@@ -71,6 +79,7 @@ impl ToWitNaming for AgentType {
             methods: self.methods.to_wit_naming(),
             dependencies: self.dependencies.to_wit_naming(),
             mode: self.mode,
+            http_mount: self.http_mount.clone(),
         }
     }
 }
@@ -94,6 +103,7 @@ impl ToWitNaming for AgentMethod {
             prompt_hint: self.prompt_hint.clone(),
             input_schema: self.input_schema.to_wit_naming(),
             output_schema: self.output_schema.to_wit_naming(),
+            http_endpoint: self.http_endpoint.clone(),
         }
     }
 }
@@ -240,6 +250,61 @@ impl ToWitNaming for NameTypePair {
         Self {
             name: self.name.to_wit_naming(),
             typ: self.typ.to_wit_naming(),
+        }
+    }
+}
+
+impl ToWitNaming for DataValue {
+    fn to_wit_naming(&self) -> Self {
+        match self {
+            DataValue::Tuple(elems) => DataValue::Tuple(elems.to_wit_naming()),
+            DataValue::Multimodal(elems) => DataValue::Multimodal(elems.to_wit_naming()),
+        }
+    }
+}
+
+impl ToWitNaming for ElementValues {
+    fn to_wit_naming(&self) -> Self {
+        Self {
+            elements: self
+                .elements
+                .iter()
+                .map(|elem| elem.to_wit_naming())
+                .collect(),
+        }
+    }
+}
+
+impl ToWitNaming for NamedElementValues {
+    fn to_wit_naming(&self) -> Self {
+        Self {
+            elements: self
+                .elements
+                .iter()
+                .map(|elem| elem.to_wit_naming())
+                .collect(),
+        }
+    }
+}
+
+impl ToWitNaming for NamedElementValue {
+    fn to_wit_naming(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            value: self.value.to_wit_naming(),
+        }
+    }
+}
+
+impl ToWitNaming for ElementValue {
+    fn to_wit_naming(&self) -> Self {
+        match self {
+            ElementValue::ComponentModel(vnt) => ElementValue::ComponentModel(ValueAndType::new(
+                vnt.value.clone(),
+                vnt.typ.to_wit_naming(),
+            )),
+            ElementValue::UnstructuredText(_) => self.clone(),
+            ElementValue::UnstructuredBinary(_) => self.clone(),
         }
     }
 }

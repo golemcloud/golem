@@ -107,7 +107,7 @@ pub trait DbTransaction<T: RdbmsType> {
 }
 
 #[async_trait]
-pub trait Rdbms<T: RdbmsType> {
+pub trait Rdbms<T: RdbmsType>: Send + Sync {
     async fn create(&self, address: &str, worker_id: &WorkerId)
         -> Result<RdbmsPoolKey, RdbmsError>;
 
@@ -169,22 +169,22 @@ pub trait Rdbms<T: RdbmsType> {
 }
 
 pub trait RdbmsService: Send + Sync {
-    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync>;
-    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync>;
+    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType>>;
+    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType>>;
 }
 
 pub trait RdbmsTypeService<T: RdbmsType> {
-    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<T> + Send + Sync>;
+    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<T>>;
 }
 
 impl RdbmsTypeService<MysqlType> for dyn RdbmsService {
-    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
+    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<MysqlType>> {
         self.mysql()
     }
 }
 
 impl RdbmsTypeService<PostgresType> for dyn RdbmsService {
-    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
+    fn rdbms_type_service(&self) -> Arc<dyn Rdbms<PostgresType>> {
         self.postgres()
     }
 }
@@ -211,11 +211,11 @@ impl Default for RdbmsServiceDefault {
 }
 
 impl RdbmsService for RdbmsServiceDefault {
-    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
+    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType>> {
         self.mysql.clone()
     }
 
-    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
+    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType>> {
         self.postgres.clone()
     }
 }

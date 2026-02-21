@@ -1,13 +1,13 @@
 use crate::app::build::command::ensure_common_deps_for_tool;
 use crate::app::context::ToolsWithEnsuredCommonDeps;
 use crate::fs;
-use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::{AppComponentName, Application, BuildProfileName};
+use crate::model::app::Application;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use anyhow::{anyhow, bail, Context, Error};
-use golem_common::model::agent::AgentType;
+use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::component::ComponentName;
 use indexmap::IndexMap;
 use indoc::formatdoc;
 use itertools::Itertools;
@@ -282,35 +282,42 @@ fn collect_package_sources(
 pub struct ResolvedWitComponent {
     main_package_name: PackageName,
     resolved_wit_dir: Option<ResolvedWitDir>,
-    app_component_deps: HashSet<AppComponentName>,
+    app_component_deps: HashSet<ComponentName>,
     source_referenced_package_deps: HashSet<PackageName>,
     source_contained_package_deps: HashSet<PackageName>,
-    source_component_deps: BTreeSet<AppComponentName>, // NOTE: BTree for making dep sorting deterministic
-    generated_component_deps: Option<HashSet<AppComponentName>>,
+    source_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
+    generated_component_deps: Option<HashSet<ComponentName>>,
 }
 
-#[derive(Default)]
-enum ExtractedAgentTypes {
+#[derive(Default, Clone)]
+enum ExtractedComponentAgentTypes {
     #[default]
     NotAnAgent,
     ToBeExtracted,
     Extracted(Vec<AgentType>),
 }
 
+#[derive(Default, Clone)]
+struct ExtractedAgentTypes {
+    component_agent_types: BTreeMap<ComponentName, ExtractedComponentAgentTypes>,
+    agent_type_wrapper_name_sources: BTreeMap<String, BTreeSet<ComponentName>>,
+    agent_type_name_sources: BTreeMap<AgentTypeName, BTreeSet<ComponentName>>,
+}
+
 pub struct ResolvedWitApplication {
-    components: BTreeMap<AppComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
-    package_to_component: HashMap<PackageName, AppComponentName>,
-    stub_package_to_component: HashMap<PackageName, AppComponentName>,
-    interface_package_to_component: HashMap<PackageName, AppComponentName>,
-    component_order: Vec<AppComponentName>,
-    agent_types: BTreeMap<AppComponentName, ExtractedAgentTypes>,
+    components: BTreeMap<ComponentName, ResolvedWitComponent>,
+    package_to_component: HashMap<PackageName, ComponentName>,
+    stub_package_to_component: HashMap<PackageName, ComponentName>,
+    interface_package_to_component: HashMap<PackageName, ComponentName>,
+    component_order: Vec<ComponentName>,
+    non_agent_components: HashSet<ComponentName>,
+    agent_types: tokio::sync::RwLock<ExtractedAgentTypes>,
     enable_wasmtime_fs_cache: bool,
 }
 
 impl ResolvedWitApplication {
     pub async fn new(
         app: &Application,
-        profile: Option<&BuildProfileName>,
         tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
         enable_wasmtime_fs_cache: bool,
     ) -> ValidatedResult<Self> {
@@ -323,71 +330,134 @@ impl ResolvedWitApplication {
             stub_package_to_component: Default::default(),
             interface_package_to_component: Default::default(),
             component_order: Default::default(),
-            agent_types: BTreeMap::new(),
+            non_agent_components: Default::default(),
+            agent_types: Default::default(),
             enable_wasmtime_fs_cache,
         };
 
         let mut validation = ValidationBuilder::new();
 
         resolved_app
-            .add_components_from_app(
-                &mut validation,
-                app,
-                profile,
-                tools_with_ensured_common_deps,
-            )
+            .add_components_from_app(&mut validation, app, tools_with_ensured_common_deps)
             .await;
 
         resolved_app.validate_package_names(&mut validation);
         resolved_app.collect_component_deps(app, &mut validation);
         resolved_app.sort_components_by_source_deps(&mut validation);
-        resolved_app.extract_agent_types(&mut validation);
+        resolved_app.search_for_agent_types(&mut validation).await;
 
         validation.build(resolved_app)
     }
 
-    pub fn is_agent(&self, app_component_name: &AppComponentName) -> bool {
-        !matches!(
-            self.agent_types
-                .get(app_component_name)
-                .unwrap_or(&ExtractedAgentTypes::NotAnAgent),
-            ExtractedAgentTypes::NotAnAgent
-        )
+    pub fn is_agent(&self, app_component_name: &ComponentName) -> bool {
+        !self.non_agent_components.contains(app_component_name)
     }
 
-    pub async fn get_extracted_agent_types(
-        &mut self,
-        app_component_name: &AppComponentName,
+    pub async fn get_or_extract_component_agent_types(
+        &self,
+        component_name: &ComponentName,
         compiled_wasm_path: &Path,
     ) -> anyhow::Result<Vec<AgentType>> {
-        match self.agent_types.get(app_component_name) {
+        let mut all_agent_types = self.agent_types.write().await;
+
+        match all_agent_types
+            .component_agent_types
+            .get(component_name)
+            .cloned()
+        {
             None => Err(anyhow!(
                 "No agent information available about component: {}",
-                app_component_name
+                component_name
             )),
-            Some(ExtractedAgentTypes::NotAnAgent) => {
-                Err(anyhow!("Component {} is not an agent", app_component_name))
+            Some(ExtractedComponentAgentTypes::NotAnAgent) => {
+                Err(anyhow!("Component {} is not an agent", component_name))
             }
-            Some(ExtractedAgentTypes::ToBeExtracted) => {
+            Some(ExtractedComponentAgentTypes::ToBeExtracted) => {
                 let agent_types = crate::model::agent::extraction::extract_agent_types(
                     compiled_wasm_path,
                     self.enable_wasmtime_fs_cache,
                 )
                 .await?;
-                self.agent_types.insert(
-                    app_component_name.clone(),
-                    ExtractedAgentTypes::Extracted(agent_types.clone()),
-                );
-                Ok(agent_types)
+                Self::add_component_agent_types(&mut all_agent_types, component_name, agent_types)
             }
-            Some(ExtractedAgentTypes::Extracted(agent_types)) => Ok(agent_types.clone()),
+            Some(ExtractedComponentAgentTypes::Extracted(agent_types)) => Ok(agent_types),
         }
+    }
+
+    pub async fn add_cached_component_agent_types(
+        &self,
+        component_name: &ComponentName,
+        agent_types: Vec<AgentType>,
+    ) -> anyhow::Result<Vec<AgentType>> {
+        let mut agent_type = self.agent_types.write().await;
+        Self::add_component_agent_types(&mut agent_type, component_name, agent_types)
+    }
+
+    // Adds, normalizes and checks for uniqueness
+    fn add_component_agent_types(
+        all_agent_types: &mut ExtractedAgentTypes,
+        component_name: &ComponentName,
+        agent_types: Vec<AgentType>,
+    ) -> anyhow::Result<Vec<AgentType>> {
+        let agent_types = AgentType::normalized_vec(agent_types);
+        for agent_type in &agent_types {
+            {
+                let component_names = all_agent_types
+                    .agent_type_wrapper_name_sources
+                    .entry(agent_type.wrapper_type_name())
+                    .or_default();
+                component_names.insert(component_name.clone());
+                if component_names.len() > 1 {
+                    bail!(
+                        "Wrapper agent type name {} is defined by multiple components: {}",
+                        agent_type.wrapper_type_name().log_color_highlight(),
+                        component_names
+                            .iter()
+                            .map(|s| s.as_str().log_color_highlight())
+                            .join(", ")
+                    );
+                }
+            }
+
+            {
+                let component_names = all_agent_types
+                    .agent_type_name_sources
+                    .entry(agent_type.type_name.clone())
+                    .or_default();
+                component_names.insert(component_name.clone());
+                if component_names.len() > 1 {
+                    bail!(
+                        "Agent type name {} is defined by multiple components: {}",
+                        agent_type.type_name.as_str().log_color_highlight(),
+                        component_names
+                            .iter()
+                            .map(|s| s.as_str().log_color_highlight())
+                            .join(", ")
+                    );
+                }
+            }
+        }
+        all_agent_types.component_agent_types.insert(
+            component_name.clone(),
+            ExtractedComponentAgentTypes::Extracted(agent_types.clone()),
+        );
+        Ok(agent_types)
+    }
+
+    pub async fn get_all_extracted_agent_type_names(&self) -> Vec<AgentTypeName> {
+        self.agent_types
+            .read()
+            .await
+            .agent_type_name_sources
+            .keys()
+            .cloned()
+            .collect()
     }
 
     fn validate_package_names(&self, validation: &mut ValidationBuilder) {
         if self.package_to_component.len() != self.components.len() {
             let mut package_names_to_component_names =
-                BTreeMap::<&PackageName, Vec<&AppComponentName>>::new();
+                BTreeMap::<&PackageName, Vec<&ComponentName>>::new();
             for (component_name, component) in &self.components {
                 package_names_to_component_names
                     .entry(&component.main_package_name)
@@ -417,7 +487,7 @@ impl ResolvedWitApplication {
 
     fn add_resolved_component(
         &mut self,
-        component_name: AppComponentName,
+        component_name: ComponentName,
         resolved_component: ResolvedWitComponent,
     ) {
         self.package_to_component.insert(
@@ -439,14 +509,14 @@ impl ResolvedWitApplication {
         &mut self,
         validation: &mut ValidationBuilder,
         app: &Application,
-        profile: Option<&BuildProfileName>,
         tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
     ) {
         for component_name in app.component_names() {
             validation.push_context("component name", component_name.to_string());
 
-            let source_wit = app.component_source_wit(component_name, profile);
-            let generated_wit_dir = app.component_generated_wit(component_name, profile);
+            let component = app.component(component_name);
+            let source_wit = component.source_wit();
+            let generated_wit_dir = component.generated_wit();
 
             let app_component_deps = app
                 .component_dependencies(component_name)
@@ -505,10 +575,10 @@ impl ResolvedWitApplication {
     }
 
     fn resolve_using_wit_dir(
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         source_wit_dir: &Path,
         generated_wit_dir: &Path,
-        app_component_deps: HashSet<AppComponentName>,
+        app_component_deps: HashSet<ComponentName>,
     ) -> anyhow::Result<ResolvedWitComponent> {
         let unresolved_source_package_group = UnresolvedPackageGroup::parse_dir(source_wit_dir)
             .with_context(|| {
@@ -563,8 +633,8 @@ impl ResolvedWitApplication {
     }
 
     async fn resolve_using_base_wasm(
-        component_name: &AppComponentName,
-        app_component_deps: HashSet<AppComponentName>,
+        component_name: &ComponentName,
+        app_component_deps: HashSet<ComponentName>,
         source_wasm_path: &Path,
         tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
     ) -> anyhow::Result<ResolvedWitComponent> {
@@ -579,18 +649,23 @@ impl ResolvedWitApplication {
             }
         }
 
-        let source_wasm = std::fs::read(source_wasm_path)
-            .with_context(|| anyhow!("Failed to read the source WIT path as a file"))?;
+        let source_wasm = std::fs::read(source_wasm_path).with_context(|| {
+            anyhow!(
+                "Failed to read the source WIT path as a file: {}",
+                source_wasm_path.log_color_error_highlight()
+            )
+        })?;
         let wasm = wit_parser::decoding::decode(&source_wasm).with_context(|| {
             anyhow!(
                 "Failed to decode the source WIT path as a WASM component: {}",
-                source_wasm_path.log_color_highlight()
+                source_wasm_path.log_color_error_highlight()
             )
         })?;
 
         // The WASM has no root package name (always root:component with world root) so
         // we use the app component name as a main package name
-        let main_package_name = component_name.to_package_name()?;
+        let main_package_name =
+            naming::wit::parser_package_name_from_component_name(component_name)?;
 
         // When using a WASM as a "source WIT", we are currently not supporting transforming
         // that into a generated WIT dir, just treat it as a static interface definition for
@@ -638,9 +713,9 @@ impl ResolvedWitApplication {
         fn component_deps<
             'a,
             I: IntoIterator<Item = &'a PackageName>,
-            O: FromIterator<AppComponentName>,
+            O: FromIterator<ComponentName>,
         >(
-            known_package_deps: &HashMap<PackageName, AppComponentName>,
+            known_package_deps: &HashMap<PackageName, ComponentName>,
             dep_package_names: I,
         ) -> O {
             dep_package_names
@@ -650,11 +725,8 @@ impl ResolvedWitApplication {
         }
 
         let mut deps = HashMap::<
-            AppComponentName,
-            (
-                BTreeSet<AppComponentName>,
-                Option<HashSet<AppComponentName>>,
-            ),
+            ComponentName,
+            (BTreeSet<ComponentName>, Option<HashSet<ComponentName>>),
         >::new();
         for (component_name, component) in &self.components {
             deps.insert(
@@ -680,12 +752,12 @@ impl ResolvedWitApplication {
         }
 
         for (component_name, component) in &self.components {
-            let main_deps: HashSet<AppComponentName> = component_deps(
+            let main_deps: HashSet<ComponentName> = component_deps(
                 &self.package_to_component,
                 &component.source_referenced_package_deps,
             );
 
-            let stub_deps: HashSet<AppComponentName> = component_deps(
+            let stub_deps: HashSet<ComponentName> = component_deps(
                 &self.stub_package_to_component,
                 &component.source_referenced_package_deps,
             );
@@ -696,7 +768,7 @@ impl ResolvedWitApplication {
                 {
                     validation.push_context(
                         "source",
-                        app.component_source(component_name).display().to_string(),
+                        app.component(component_name).source().display().to_string(),
                     );
                 }
 
@@ -749,12 +821,12 @@ impl ResolvedWitApplication {
     fn sort_components_by_source_deps(&mut self, validation: &mut ValidationBuilder) {
         struct Visit<'a> {
             resolved_app: &'a ResolvedWitApplication,
-            component_names_by_id: Vec<&'a AppComponentName>,
-            component_names_to_id: HashMap<&'a AppComponentName, usize>,
+            component_names_by_id: Vec<&'a ComponentName>,
+            component_names_to_id: HashMap<&'a ComponentName, usize>,
             visited: HashSet<usize>,
             visiting: HashSet<usize>,
             path: Vec<usize>,
-            component_order: Vec<AppComponentName>,
+            component_order: Vec<ComponentName>,
         }
 
         impl<'a> Visit<'a> {
@@ -777,7 +849,7 @@ impl ResolvedWitApplication {
                 }
             }
 
-            fn visit_all(mut self) -> Result<Vec<AppComponentName>, Vec<&'a AppComponentName>> {
+            fn visit_all(mut self) -> Result<Vec<ComponentName>, Vec<&'a ComponentName>> {
                 for (component_id, &component_name) in
                     self.component_names_by_id.clone().iter().enumerate()
                 {
@@ -794,7 +866,7 @@ impl ResolvedWitApplication {
                 Ok(self.component_order)
             }
 
-            fn visit(&mut self, component_id: usize, component_name: &AppComponentName) -> bool {
+            fn visit(&mut self, component_id: usize, component_name: &ComponentName) -> bool {
                 if self.visited.contains(&component_id) {
                     true
                 } else if self.visiting.contains(&component_id) {
@@ -841,20 +913,23 @@ impl ResolvedWitApplication {
         }
     }
 
-    fn extract_agent_types(&mut self, validation: &mut ValidationBuilder) {
+    async fn search_for_agent_types(&mut self, validation: &mut ValidationBuilder) {
         for (name, component) in &self.components {
             if let Some(resolved_wit_dir) = &component.resolved_wit_dir {
                 match resolved_wit_dir.is_agent() {
                     Ok(true) => {
                         log_action(
-                            "Extracting",
+                            "Marked",
                             format!(
-                                "agent types defined in {}",
+                                "{} for agent type extraction",
                                 name.as_str().log_color_highlight()
                             ),
                         );
                         self.agent_types
-                            .insert(name.clone(), ExtractedAgentTypes::ToBeExtracted);
+                            .write()
+                            .await
+                            .component_agent_types
+                            .insert(name.clone(), ExtractedComponentAgentTypes::ToBeExtracted);
                     }
                     Ok(false) => {
                         log_action(
@@ -865,7 +940,11 @@ impl ResolvedWitApplication {
                             ),
                         );
                         self.agent_types
-                            .insert(name.clone(), ExtractedAgentTypes::NotAnAgent);
+                            .write()
+                            .await
+                            .component_agent_types
+                            .insert(name.clone(), ExtractedComponentAgentTypes::NotAnAgent);
+                        self.non_agent_components.insert(name.clone());
                     }
                     Err(err) => {
                         validation.add_error(format!(
@@ -879,17 +958,17 @@ impl ResolvedWitApplication {
         }
     }
 
-    pub fn component_order(&self) -> &[AppComponentName] {
+    pub fn component_order(&self) -> &[ComponentName] {
         &self.component_order
     }
 
-    pub fn component_order_cloned(&self) -> Vec<AppComponentName> {
+    pub fn component_order_cloned(&self) -> Vec<ComponentName> {
         self.component_order.clone()
     }
 
     pub fn component(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
     ) -> Result<&ResolvedWitComponent, Error> {
         self.components.get(component_name).ok_or_else(|| {
             anyhow!(
@@ -903,7 +982,7 @@ impl ResolvedWitApplication {
     //       component interface packages, as those are added from stubs
     pub fn missing_generic_source_package_deps(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
     ) -> anyhow::Result<Vec<PackageName>> {
         let component = self.component(component_name)?;
         Ok(component
@@ -923,8 +1002,8 @@ impl ResolvedWitApplication {
 
     pub fn component_exports_package_deps(
         &self,
-        component_name: &AppComponentName,
-    ) -> anyhow::Result<Vec<(PackageName, AppComponentName)>> {
+        component_name: &ComponentName,
+    ) -> anyhow::Result<Vec<(PackageName, ComponentName)>> {
         let component = self.component(component_name)?;
         Ok(component
             .source_referenced_package_deps
@@ -943,10 +1022,7 @@ impl ResolvedWitApplication {
     // NOTE: this does not mean that the dependencies themselves are up-to-date, rather
     //       only checks if there are difference in set of dependencies specified in the
     //       application model vs in wit dependencies
-    pub fn is_dep_graph_up_to_date(
-        &self,
-        component_name: &AppComponentName,
-    ) -> anyhow::Result<bool> {
+    pub fn is_dep_graph_up_to_date(&self, component_name: &ComponentName) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
         Ok(match &component.generated_component_deps {
             Some(generated_deps) => &component.app_component_deps == generated_deps,
@@ -958,8 +1034,8 @@ impl ResolvedWitApplication {
     //       only checks if it is present as wit package dependency
     pub fn has_as_wit_dep(
         &self,
-        component_name: &AppComponentName,
-        dep_component_name: &AppComponentName,
+        component_name: &ComponentName,
+        dep_component_name: &ComponentName,
     ) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
 
@@ -969,10 +1045,7 @@ impl ResolvedWitApplication {
         })
     }
 
-    pub fn root_package_name(
-        &self,
-        component_name: &AppComponentName,
-    ) -> anyhow::Result<PackageName> {
+    pub fn root_package_name(&self, component_name: &ComponentName) -> anyhow::Result<PackageName> {
         let component = self.component(component_name)?;
         Ok(component.main_package_name.clone())
     }
@@ -1145,13 +1218,12 @@ impl WitDepsResolver {
             let _indent = LogIndent::new();
 
             for source in self.package_sources(&package_name)? {
-                let source = PathExtra::new(source);
-                let source_parent = PathExtra::new(source.parent()?);
+                let source_parent = fs::parent_or_err(source)?;
 
                 let target = target_deps_dir
                     .join(naming::wit::DEPS_DIR)
-                    .join(source_parent.file_name_to_string()?)
-                    .join(source.file_name_to_string()?);
+                    .join(fs::file_name_to_str(source_parent)?)
+                    .join(fs::file_name_to_str(source)?);
 
                 log_action(
                     "Copying",

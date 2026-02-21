@@ -21,6 +21,8 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
 pub mod auth;
+pub mod bridge_gen;
+pub mod client;
 pub mod command;
 pub mod command_handler;
 pub mod config;
@@ -31,6 +33,7 @@ pub mod fs;
 pub mod fuzzy;
 pub mod log;
 pub mod model;
+pub mod process;
 pub mod validation;
 pub mod wasm_rpc_stubgen;
 
@@ -113,7 +116,7 @@ mod tests {
     use clap::{ArgAction, Command, CommandFactory};
 
     #[test]
-    fn dump_commands_v_1_2() {
+    fn dump_commands() {
         let command = GolemCliCommand::command();
         dump_command(0, &command);
     }

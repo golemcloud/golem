@@ -15,7 +15,9 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use anyhow::Error;
 use async_trait::async_trait;
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
@@ -24,16 +26,14 @@ use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
-use aws_sdk_s3::Client;
 use bytes::{Buf, Bytes};
-use futures::stream::BoxStream;
 use futures::TryFutureExt;
+use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
 use http_body::SizeHint;
-use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
-use std::error::Error;
+use http_body_util::combinators::BoxBody;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -58,15 +58,29 @@ impl S3BlobStorage {
             config_builder = config_builder.endpoint_url(endpoint_url);
         }
 
-        if config.use_minio_credentials {
-            let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
+        if let Some(credentials) = config.aws_credentials.clone() {
+            let creds = Credentials::new(
+                credentials.access_key_id,
+                credentials.secret_access_key,
+                None,
+                None,
+                credentials.provider_name.leak(),
+            );
             config_builder = config_builder.credentials_provider(creds);
         }
 
         let sdk_config = config_builder.load().await;
 
+        let s3_config: aws_sdk_s3::config::Config = (&sdk_config).into();
+
+        let s3_config = if let Some(path_style) = &config.aws_path_style {
+            s3_config.to_builder().force_path_style(*path_style).build()
+        } else {
+            s3_config
+        };
+
         Self {
-            client: aws_sdk_s3::Client::new(&sdk_config),
+            client: aws_sdk_s3::Client::from_conf(s3_config),
             config,
         }
     }
@@ -89,50 +103,50 @@ impl S3BlobStorage {
 
     fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         match namespace {
-            BlobStorageNamespace::CompilationCache { project_id }
-            | BlobStorageNamespace::CustomStorage { project_id }
-            | BlobStorageNamespace::InitialComponentFiles { project_id }
-            | BlobStorageNamespace::Components { project_id } => {
-                let project_id_string = project_id.to_string();
+            BlobStorageNamespace::CompilationCache { environment_id }
+            | BlobStorageNamespace::CustomStorage { environment_id }
+            | BlobStorageNamespace::InitialComponentFiles { environment_id }
+            | BlobStorageNamespace::Components { environment_id } => {
+                let environment_id_string = environment_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&project_id_string).to_path_buf()
+                    Path::new(&environment_id_string).to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(project_id_string)
+                        .join(environment_id_string)
                         .to_path_buf()
                 }
             }
             BlobStorageNamespace::OplogPayload {
-                project_id,
+                environment_id,
                 worker_id,
             } => {
-                let project_id_string = project_id.to_string();
+                let environment_id_string = environment_id.to_string();
                 let worker_id_string = worker_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&project_id_string)
+                    Path::new(&environment_id_string)
                         .join(worker_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(project_id_string)
+                        .join(environment_id_string)
                         .join(worker_id_string)
                         .to_path_buf()
                 }
             }
             BlobStorageNamespace::CompressedOplog {
-                project_id,
+                environment_id,
                 component_id,
                 ..
             } => {
-                let project_id_string = project_id.to_string();
+                let environment_id_string = environment_id.to_string();
                 let component_id_string = component_id.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&project_id_string)
+                    Path::new(&environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
-                        .join(project_id_string)
+                        .join(environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()
                 }
@@ -156,7 +170,7 @@ impl S3BlobStorage {
         op_label: &'static str,
         bucket: &str,
         prefix: &Path,
-    ) -> Result<Vec<Object>, String> {
+    ) -> Result<Vec<Object>, Error> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
 
@@ -187,8 +201,7 @@ impl S3BlobStorage {
                 Self::sdk_error_as_loggable_string,
                 false,
             )
-            .await
-            .map_err(|err| err.to_string())?;
+            .await?;
 
             result.extend(response.contents().iter().cloned());
             if let Some(cont_token) = response.next_continuation_token() {
@@ -253,7 +266,7 @@ impl S3BlobStorage {
         }
     }
 
-    fn error_string<T: Error>(error: &SdkError<T>) -> String {
+    fn error_string<T: std::error::Error>(error: &SdkError<T>) -> String {
         match error {
             SdkError::ConstructionFailure(inner) => format!("Construction failure: {inner:?}"),
             SdkError::TimeoutError(inner) => format!("Timeout: {inner:?}"),
@@ -270,7 +283,7 @@ impl S3BlobStorage {
         }
     }
 
-    fn sdk_error_as_loggable_string<T: Error>(error: &SdkError<T>) -> Option<String> {
+    fn sdk_error_as_loggable_string<T: std::error::Error>(error: &SdkError<T>) -> Option<String> {
         Some(Self::error_string(error))
     }
 
@@ -311,7 +324,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -340,16 +353,16 @@ impl BlobStorage for S3BlobStorage {
         match result {
             Ok(response) => {
                 let body = response.body;
-                let aggregated_bytes = body.collect().await.map_err(|err| err.to_string())?;
+                let aggregated_bytes = body.collect().await?;
                 let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
             }
-            Err(SdkError::ServiceError(service_error)) => match service_error.err() {
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 NoSuchKey(_) => Ok(None),
-                err => Err(err.to_string()),
+                err => Err(err.into()),
             },
-            Err(err) => Err(Self::error_string(&err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -359,7 +372,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, String>>>, String> {
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -388,17 +401,15 @@ impl BlobStorage for S3BlobStorage {
         match result {
             Ok(response) => {
                 let stream = futures::stream::unfold(response.body, |mut body| async {
-                    body.next()
-                        .await
-                        .map(|x| (x.map_err(|e| e.to_string()), body))
+                    body.next().await.map(|x| (x.map_err(|e| e.into()), body))
                 });
                 Ok(Some(Box::pin(stream)))
             }
-            Err(SdkError::ServiceError(service_error)) => match service_error.err() {
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 NoSuchKey(_) => Ok(None),
-                err => Err(err.to_string()),
+                err => Err(err.into()),
             },
-            Err(err) => Err(Self::error_string(&err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -410,7 +421,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -440,16 +451,16 @@ impl BlobStorage for S3BlobStorage {
         match result {
             Ok(response) => {
                 let body = response.body;
-                let aggregated_bytes = body.collect().await.map_err(|err| err.to_string())?;
+                let aggregated_bytes = body.collect().await?;
                 let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
             }
-            Err(SdkError::ServiceError(service_error)) => match service_error.err() {
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 NoSuchKey(_) => Ok(None),
-                err => Err(err.to_string()),
+                err => Err(err.into()),
             },
-            Err(err) => Err(Self::error_string(&err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -459,7 +470,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<BlobMetadata>, String> {
+    ) -> Result<Option<BlobMetadata>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let op_id = format!("{bucket} - {key:?}");
@@ -497,7 +508,7 @@ impl BlobStorage for S3BlobStorage {
                         as u64,
                 ),
             })),
-            Err(SdkError::ServiceError(service_error)) => match service_error.err() {
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
@@ -533,16 +544,18 @@ impl BlobStorage for S3BlobStorage {
                                     as u64,
                             ),
                         })),
-                        Err(SdkError::ServiceError(service_error)) => match service_error.err() {
-                            HeadObjectError::NotFound(_) => Ok(None),
-                            err => Err(err.to_string()),
-                        },
-                        Err(err) => Err(Self::error_string(&err)),
+                        Err(SdkError::ServiceError(service_error)) => {
+                            match service_error.into_err() {
+                                HeadObjectError::NotFound(_) => Ok(None),
+                                err => Err(err.into()),
+                            }
+                        }
+                        Err(err) => Err(err.into()),
                     }
                 }
-                err => Err(err.to_string()),
+                err => Err(err.into()),
             },
-            Err(err) => Err(Self::error_string(&err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -552,8 +565,8 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: Vec<u8>,
-    ) -> Result<(), String> {
+        data: &[u8],
+    ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -578,9 +591,9 @@ impl BlobStorage for S3BlobStorage {
             Self::sdk_error_as_loggable_string,
             false,
         )
-        .await
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+        .await?;
+
+        Ok(())
     }
 
     async fn put_stream(
@@ -589,8 +602,8 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
-    ) -> Result<(), String> {
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -599,7 +612,7 @@ impl BlobStorage for S3BlobStorage {
                 Client,
                 &String,
                 PathBuf,
-                &dyn ErasedReplayableStream<Item = Result<Bytes, String>, Error = String>,
+                &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
             ),
         ) -> Pin<
             Box<dyn Future<Output = Result<(), SdkErrorOrCustomError<PutObjectError>>> + 'a + Send>,
@@ -646,7 +659,9 @@ impl BlobStorage for S3BlobStorage {
             false,
         )
         .await
-        .map_err(SdkErrorOrCustomError::into_string)
+        .map_err(|e| e.erase())?;
+
+        Ok(())
     }
 
     async fn delete(
@@ -655,7 +670,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -679,8 +694,7 @@ impl BlobStorage for S3BlobStorage {
             Self::sdk_error_as_loggable_string,
             false,
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
 
         Ok(())
     }
@@ -691,7 +705,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let prefix = self.prefix_of(&namespace);
 
@@ -702,9 +716,9 @@ impl BlobStorage for S3BlobStorage {
                 ObjectIdentifier::builder()
                     .key(key.to_string_lossy())
                     .build()
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| e.into())
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, Error>>()?;
 
         with_retries_customized(
             target_label,
@@ -731,8 +745,7 @@ impl BlobStorage for S3BlobStorage {
             Self::sdk_error_as_loggable_string,
             false,
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
 
         Ok(())
     }
@@ -743,7 +756,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let marker = key.join("__dir_marker");
@@ -769,8 +782,7 @@ impl BlobStorage for S3BlobStorage {
             Self::sdk_error_as_loggable_string,
             false,
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
 
         Ok(())
     }
@@ -781,7 +793,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Error> {
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
         let key = namespace_root.join(path);
@@ -821,7 +833,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -830,12 +842,9 @@ impl BlobStorage for S3BlobStorage {
             .await?
             .iter()
             .flat_map(|obj| {
-                obj.key.as_ref().map(|k| {
-                    ObjectIdentifier::builder()
-                        .key(k)
-                        .build()
-                        .map_err(|e| e.to_string())
-                })
+                obj.key
+                    .as_ref()
+                    .map(|k| ObjectIdentifier::builder().key(k).build())
             })
             .collect::<Result<Vec<_>, _>>()?;
         let has_entries = !to_delete.is_empty();
@@ -866,8 +875,7 @@ impl BlobStorage for S3BlobStorage {
                 Self::sdk_error_as_loggable_string,
                 false,
             )
-            .await
-            .map_err(|err| err.to_string())?;
+            .await?;
         }
 
         Ok(has_entries)
@@ -879,7 +887,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<ExistsResult, String> {
+    ) -> Result<ExistsResult, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let op_id = format!("{bucket} - {key:?}");
@@ -907,7 +915,7 @@ impl BlobStorage for S3BlobStorage {
         .await;
         match file_head_result {
             Ok(_) => Ok(ExistsResult::File),
-            Err(SdkError::ServiceError(service_error)) => match service_error.err() {
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
@@ -933,16 +941,18 @@ impl BlobStorage for S3BlobStorage {
                     .await;
                     match dir_marker_head_result {
                         Ok(_) => Ok(ExistsResult::Directory),
-                        Err(SdkError::ServiceError(service_error)) => match service_error.err() {
-                            HeadObjectError::NotFound(_) => Ok(ExistsResult::DoesNotExist),
-                            err => Err(err.to_string()),
-                        },
-                        Err(err) => Err(Self::error_string(&err)),
+                        Err(SdkError::ServiceError(service_error)) => {
+                            match service_error.into_err() {
+                                HeadObjectError::NotFound(_) => Ok(ExistsResult::DoesNotExist),
+                                err => Err(err.into()),
+                            }
+                        }
+                        Err(err) => Err(err.into()),
                     }
                 }
-                err => Err(err.to_string()),
+                err => Err(err.into()),
             },
-            Err(err) => Err(Self::error_string(&err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -953,7 +963,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         from: &Path,
         to: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);
@@ -979,23 +989,34 @@ impl BlobStorage for S3BlobStorage {
             Self::sdk_error_as_loggable_string,
             false,
         )
-        .await
-        .map_err(|err| err.to_string())?;
+        .await?;
+
         Ok(())
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum SdkErrorOrCustomError<T> {
     SdkError(aws_sdk_s3::error::SdkError<T>),
-    CustomError(String),
+    CustomError(anyhow::Error),
 }
 
 impl<T> SdkErrorOrCustomError<T> {
+    fn erase(self) -> anyhow::Error
+    where
+        T: std::error::Error + Send + Sync + 'static,
+    {
+        match self {
+            Self::CustomError(inner) => inner.context("from CustomError"),
+            Self::SdkError(inner) => anyhow::Error::new(inner).context("from SdkError"),
+        }
+    }
+
     fn sdk_error(err: aws_sdk_s3::error::SdkError<T>) -> Self {
         SdkErrorOrCustomError::SdkError(err)
     }
 
-    fn custom_error(err: String) -> Self {
+    fn custom_error(err: anyhow::Error) -> Self {
         SdkErrorOrCustomError::CustomError(err)
     }
 
@@ -1011,23 +1032,13 @@ impl<T> SdkErrorOrCustomError<T> {
 
     fn as_loggable(&self) -> Option<String>
     where
-        T: Error,
+        T: std::error::Error,
     {
         match self {
             SdkErrorOrCustomError::SdkError(err) => {
                 S3BlobStorage::sdk_error_as_loggable_string(err)
             }
-            SdkErrorOrCustomError::CustomError(err) => Some(err.clone()),
-        }
-    }
-
-    fn into_string(self) -> String
-    where
-        T: Error,
-    {
-        match self {
-            SdkErrorOrCustomError::SdkError(err) => S3BlobStorage::error_string(&err),
-            SdkErrorOrCustomError::CustomError(err) => err,
+            SdkErrorOrCustomError::CustomError(err) => Some(format!("{err:#}")),
         }
     }
 }

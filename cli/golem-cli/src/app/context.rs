@@ -17,39 +17,84 @@ use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
 use crate::app::remote_components::RemoteComponents;
-use crate::config::ProfileName;
-use crate::fs::{compile_and_collect_globs, PathExtra};
+use crate::fs;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
-    includes_from_yaml_file, AppComponentName, Application, ApplicationComponentSelectMode,
-    ApplicationConfig, ApplicationSourceMode, BinaryComponentSource, BuildProfileName,
-    ComponentStubInterfaces, DependentComponent, DynamicHelpSections, DEFAULT_CONFIG_FILE_NAME,
+    includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
+    ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode,
+    BinaryComponentSource, BuildConfig, CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget,
+    DependentComponent, DynamicHelpSections, WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
+use crate::model::text::fmt::format_component_applied_layers;
+use crate::model::text::server::ToFormattedServerContext;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
-use anyhow::{anyhow, bail, Context};
-use colored::control::SHOULD_COLORIZE;
+use anyhow::{anyhow, bail};
 use colored::Colorize;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentName;
+use golem_common::model::environment::EnvironmentName;
+use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use tokio::sync::RwLockReadGuard;
 
-pub struct ApplicationContext {
-    pub loaded_with_warnings: bool,
-    pub config: ApplicationConfig,
-    pub application: Application,
-    pub wit: ResolvedWitApplication,
-    pub calling_working_dir: PathBuf,
-    component_stub_defs: HashMap<AppComponentName, StubDefinition>,
-    common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
-    component_generated_base_wit_deps: HashMap<AppComponentName, WitDepsResolver>,
-    selected_component_names: BTreeSet<AppComponentName>,
-    remote_components: RemoteComponents,
-    pub tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
+pub struct BuildContext<'a> {
+    application_context: &'a ApplicationContext,
+    build_config: &'a BuildConfig,
+}
+
+impl<'a> BuildContext<'a> {
+    pub fn new(application_context: &'a ApplicationContext, build_config: &'a BuildConfig) -> Self {
+        Self {
+            application_context,
+            build_config,
+        }
+    }
+
+    pub fn application_context(&self) -> &ApplicationContext {
+        self.application_context
+    }
+
+    pub fn application(&self) -> &Application {
+        &self.application_context.application
+    }
+
+    pub fn application_config(&self) -> &ApplicationConfig {
+        &self.application_context.config
+    }
+
+    pub async fn wit(&self) -> RwLockReadGuard<'_, ResolvedWitApplication> {
+        self.application_context.wit.read().await
+    }
+
+    pub fn build_config(&self) -> &BuildConfig {
+        self.build_config
+    }
+
+    pub fn should_run_step(&self, step: AppBuildStep) -> bool {
+        self.build_config().should_run_step(step)
+    }
+
+    pub fn custom_bridge_sdk_target(&self) -> Option<&CustomBridgeSdkTarget> {
+        self.build_config.custom_bridge_sdk_target.as_ref()
+    }
+
+    pub fn repl_bridge_sdk_target(&self) -> Option<&CustomBridgeSdkTarget> {
+        self.build_config.repl_bridge_sdk_target.as_ref()
+    }
+
+    pub fn skip_up_to_date_checks(&self) -> bool {
+        self.build_config.skip_up_to_date_checks
+    }
+
+    pub fn tools_with_ensured_common_deps(&self) -> &ToolsWithEnsuredCommonDeps {
+        &self.application_context.tools_with_ensured_common_deps
+    }
 }
 
 pub struct ToolsWithEnsuredCommonDeps {
@@ -98,39 +143,60 @@ impl ToolsWithEnsuredCommonDeps {
 pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
-    pub profiles: Option<BTreeMap<ProfileName, app_raw::Profile>>,
+    pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
+}
+
+// TODO: review pub fields?
+pub struct ApplicationContext {
+    loaded_with_warnings: bool,
+    config: ApplicationConfig,
+    application: Application,
+    wit: tokio::sync::RwLock<ResolvedWitApplication>,
+    calling_working_dir: PathBuf,
+    // component_stub_defs: HashMap<ComponentName, StubDefinition>, // TODO: WASM RPC cleanup
+    common_wit_deps: OnceLock<anyhow::Result<WitDepsResolver>>,
+    selected_component_names: BTreeSet<ComponentName>,
+    remote_components: RemoteComponents,
+    tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
 }
 
 impl ApplicationContext {
-    pub fn preload_sources_and_get_profiles(
+    pub fn preload_sources_and_get_environments(
         source_mode: ApplicationSourceMode,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match load_profiles(source_mode) {
-            Some(profiles) => to_anyhow(
-                "Failed to load application manifest profiles, see problems above",
-                profiles,
-                Some(|mut profiles| {
-                    profiles.loaded_with_warnings = true;
-                    profiles
+        match load_environments(source_mode) {
+            Some(environments) => to_anyhow(
+                "Failed to load application manifest environments, see problems above",
+                environments,
+                Some(|mut preload_result| {
+                    preload_result.loaded_with_warnings = true;
+                    preload_result
                 }),
             ),
             None => Ok(ApplicationPreloadResult {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
-                profiles: None,
+                application_name_and_environments: None,
             }),
         }
     }
 
     pub async fn new(
-        available_profiles: &BTreeSet<ProfileName>,
         source_mode: ApplicationSourceMode,
         config: ApplicationConfig,
+        application_name: WithSource<ApplicationName>,
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        component_presets: ComponentPresetSelector,
         file_download_client: reqwest::Client,
     ) -> anyhow::Result<Option<ApplicationContext>> {
-        let Some(app_and_calling_working_dir) = load_app(available_profiles, source_mode) else {
+        let Some(app_and_calling_working_dir) = load_app(
+            application_name,
+            environments,
+            component_presets,
+            source_mode,
+        ) else {
             return Ok(None);
         };
 
@@ -143,8 +209,6 @@ impl ApplicationContext {
             }),
         )?;
 
-        ctx.validate_build_profile()?;
-
         if ctx.config.offline {
             log_action("Using", "offline mode");
         }
@@ -152,114 +216,98 @@ impl ApplicationContext {
         Ok(Some(ctx))
     }
 
+    pub fn loaded_with_warnings(&self) -> bool {
+        self.loaded_with_warnings
+    }
+
+    pub fn application(&self) -> &Application {
+        &self.application
+    }
+
+    pub async fn wit(&self) -> RwLockReadGuard<'_, ResolvedWitApplication> {
+        self.wit.read().await
+    }
+
+    pub fn new_repl_bridge_sdk_target(&self, language: GuestLanguage) -> CustomBridgeSdkTarget {
+        let repl_root_bridge_sdk_dir = self.application.repl_root_bridge_sdk_dir(language);
+        CustomBridgeSdkTarget {
+            agent_type_names: Default::default(),
+            target_language: Some(language),
+            output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+        }
+    }
+
     async fn create_context(
         app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
         config: ApplicationConfig,
         file_download_client: reqwest::Client,
     ) -> ValidatedResult<ApplicationContext> {
-        let mut result = ValidatedResult::Ok(());
-
-        let (r, v) = result.merge_and_get(app_and_calling_working_dir);
-        result = r;
-        if let Some((application, calling_working_dir)) = v {
-            let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
-            let wit_result = ResolvedWitApplication::new(
-                &application,
-                config.build_profile.as_ref(),
-                &tools_with_ensured_common_deps,
-                config.enable_wasmtime_fs_cache,
-            )
-            .await;
-
-            let (r, v) = result.merge_and_get(wit_result);
-            result = r;
-            if let Some(wit) = v {
-                let temp_dir = application.temp_dir();
-                let offline = config.offline;
-                let ctx = ApplicationContext {
-                    loaded_with_warnings: false,
-                    config,
-                    application,
-                    wit,
-                    calling_working_dir,
-                    component_stub_defs: HashMap::new(),
-                    common_wit_deps: OnceLock::new(),
-                    component_generated_base_wit_deps: HashMap::new(),
-                    selected_component_names: BTreeSet::new(),
-                    remote_components: RemoteComponents::new(
-                        file_download_client,
-                        temp_dir,
-                        offline,
-                    ),
-                    tools_with_ensured_common_deps,
-                };
-                ValidatedResult::Ok(ctx)
-            } else {
-                result.expect_error()
-            }
-        } else {
-            result.expect_error()
-        }
+        let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
+        app_and_calling_working_dir
+            .and_then_async(async |(application, calling_working_dir)| {
+                ResolvedWitApplication::new(
+                    &application,
+                    &tools_with_ensured_common_deps,
+                    config.enable_wasmtime_fs_cache,
+                )
+                .await
+                .map(|wit| {
+                    let temp_dir = application.temp_dir().to_path_buf();
+                    let offline = config.offline;
+                    ApplicationContext {
+                        loaded_with_warnings: false,
+                        config,
+                        application,
+                        wit: tokio::sync::RwLock::new(wit),
+                        calling_working_dir,
+                        common_wit_deps: OnceLock::new(),
+                        selected_component_names: BTreeSet::new(),
+                        remote_components: RemoteComponents::new(
+                            file_download_client,
+                            temp_dir.to_path_buf(),
+                            offline,
+                        ),
+                        tools_with_ensured_common_deps,
+                    }
+                })
+            })
+            .await
     }
 
-    fn validate_build_profile(&self) -> anyhow::Result<()> {
-        let Some(profile) = &self.config.build_profile else {
-            return Ok(());
-        };
+    pub async fn update_wit_context(&self) -> anyhow::Result<()> {
+        let mut wit = self.wit.write().await;
+        let (result, new_wit) = ResolvedWitApplication::new(
+            &self.application,
+            &self.tools_with_ensured_common_deps,
+            self.config.enable_wasmtime_fs_cache,
+        )
+        .await
+        .take();
 
-        let all_profiles = self.application.all_build_profiles();
-        if all_profiles.is_empty() {
-            bail!(
-                "Build profile {} not found, no available build profiles",
-                profile.as_str().log_color_error_highlight(),
-            );
-        } else if !all_profiles.contains(profile) {
-            bail!(
-                "Build profile {} not found, available build profiles: {}",
-                profile.as_str().log_color_error_highlight(),
-                all_profiles
-                    .into_iter()
-                    .map(|s| s.as_str().log_color_highlight())
-                    .join(", ")
-            );
+        if let Some(new_wit) = new_wit {
+            *wit = new_wit;
         }
 
-        Ok(())
-    }
-
-    pub fn build_profile(&self) -> Option<&BuildProfileName> {
-        self.config.build_profile.as_ref()
-    }
-
-    pub async fn update_wit_context(&mut self) -> anyhow::Result<()> {
         to_anyhow(
             "Failed to update application wit context, see problems above",
-            ResolvedWitApplication::new(
-                &self.application,
-                self.build_profile(),
-                &self.tools_with_ensured_common_deps,
-                self.config.enable_wasmtime_fs_cache,
-            )
-            .await
-            .map(|wit| {
-                self.wit = wit;
-            }),
+            result,
             None,
         )
     }
 
+    // TODO: WASM RPC cleanup
+    /*
     pub fn component_stub_def(
-        &mut self,
-        component_name: &AppComponentName,
+        &self,
+        component_name: &ComponentName,
     ) -> anyhow::Result<&StubDefinition> {
         if !self.component_stub_defs.contains_key(component_name) {
+            let component = self.application.component(component_name);
             self.component_stub_defs.insert(
                 component_name.clone(),
                 StubDefinition::new(StubConfig {
-                    source_wit_root: self
-                        .application
-                        .component_generated_base_wit(component_name),
-                    client_root: self.application.client_temp_build_dir(component_name),
+                    source_wit_root: component.generated_base_wit(),
+                    client_root: component.client_temp_build_dir(),
                     selected_world: None,
                     stub_crate_version: golem_common::golem_version().to_string(),
                     golem_rust_override: self.config.golem_rust_override.clone(),
@@ -275,7 +323,7 @@ impl ApplicationContext {
 
     pub fn component_stub_interfaces(
         &mut self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
     ) -> anyhow::Result<ComponentStubInterfaces> {
         let stub_def = self.component_stub_def(component_name)?;
         let client_package_name = stub_def.client_parser_package_name();
@@ -293,6 +341,7 @@ impl ApplicationContext {
         };
         Ok(result)
     }
+    */
 
     pub fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
         match self
@@ -312,26 +361,14 @@ impl ApplicationContext {
     }
 
     pub fn component_base_output_wit_deps(
-        &mut self,
-        component_name: &AppComponentName,
-    ) -> anyhow::Result<&WitDepsResolver> {
-        // Not using the entry API, so we can skip copying the component name
-        if !self
-            .component_generated_base_wit_deps
-            .contains_key(component_name)
-        {
-            self.component_generated_base_wit_deps.insert(
-                component_name.clone(),
-                WitDepsResolver::new(vec![self
-                    .application
-                    .component_generated_base_wit(component_name)
-                    .join(naming::wit::DEPS_DIR)])?,
-            );
-        }
-        Ok(self
-            .component_generated_base_wit_deps
-            .get(component_name)
-            .unwrap())
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<WitDepsResolver> {
+        WitDepsResolver::new(vec![self
+            .application
+            .component(component_name)
+            .generated_base_wit()
+            .join(naming::wit::DEPS_DIR)])
     }
 
     pub fn select_components(
@@ -343,7 +380,7 @@ impl ApplicationContext {
 
         let current_dir = std::env::current_dir()?.canonicalize()?;
 
-        let selected_component_names: ValidatedResult<BTreeSet<AppComponentName>> =
+        let selected_component_names: ValidatedResult<BTreeSet<ComponentName>> =
             match component_select_mode {
                 ApplicationComponentSelectMode::CurrentDir => {
                     let called_from_project_root = self.calling_working_dir == current_dir;
@@ -360,7 +397,8 @@ impl ApplicationContext {
                                 .component_names()
                                 .filter(|component_name| {
                                     self.application
-                                        .component_source_dir(component_name)
+                                        .component(component_name)
+                                        .source_dir()
                                         .starts_with(self.calling_working_dir.as_path())
                                 })
                                 .cloned()
@@ -414,7 +452,7 @@ impl ApplicationContext {
         }
 
         {
-            log_action("Selected", "components:");
+            log_action("Selected", "components and layers:");
             let _indent = LogIndent::new();
 
             let padding = selected_component_names
@@ -425,44 +463,17 @@ impl ApplicationContext {
                 + 1;
 
             for component_name in &selected_component_names {
-                let property_source = self
-                    .application
-                    .component_effective_property_source(component_name, self.build_profile());
+                let component = self.application.component(component_name);
+                let applied_layers = component.applied_layers();
 
-                let property_configuration = {
-                    if property_source.template_name.is_none() && property_source.profile.is_none()
-                    {
-                        None
-                    } else {
-                        let mut configuration = String::with_capacity(10);
-                        if let Some(template_name) = &property_source.template_name {
-                            configuration.push_str(
-                                &template_name.as_str().log_color_highlight().to_string(),
-                            );
-                        }
-                        if property_source.template_name.is_some()
-                            && property_source.profile.is_some()
-                        {
-                            configuration.push(':');
-                        }
-                        if let Some(profile) = &property_source.profile {
-                            configuration
-                                .push_str(&profile.as_str().log_color_highlight().to_string());
-                        }
-
-                        Some(configuration)
-                    }
-                };
-
-                match property_configuration {
-                    Some(config) => logln(format!(
+                if applied_layers.is_empty() {
+                    logln(component_name.as_str().blue().to_string());
+                } else {
+                    logln(format!(
                         "{} {}",
                         format!("{:<padding$}", format!("{}:", component_name.as_str())).blue(),
-                        config
-                    )),
-                    None => {
-                        logln(component_name.as_str().blue().to_string());
-                    }
+                        format_component_applied_layers(applied_layers)
+                    ))
                 }
             }
         }
@@ -472,20 +483,32 @@ impl ApplicationContext {
         Ok(())
     }
 
-    pub fn selected_component_names(&self) -> &BTreeSet<AppComponentName> {
+    pub fn selected_component_names(&self) -> &BTreeSet<ComponentName> {
         &self.selected_component_names
     }
 
-    pub async fn build(&mut self) -> anyhow::Result<()> {
-        build_app(self).await
+    pub fn deployable_component_names(&self) -> BTreeSet<ComponentName> {
+        self.application
+            .component_names()
+            .filter(|name| self.application.component(name).is_deployable())
+            .cloned()
+            .collect()
     }
 
-    pub async fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
-        execute_custom_command(self, command_name).await
+    pub async fn build(&self, build_config: &BuildConfig) -> anyhow::Result<()> {
+        build_app(&BuildContext::new(self, build_config)).await
     }
 
-    pub fn clean(&self) -> anyhow::Result<()> {
-        clean_app(self)
+    pub async fn custom_command(
+        &self,
+        build_config: &BuildConfig,
+        command_name: &str,
+    ) -> Result<(), CustomCommandError> {
+        execute_custom_command(&BuildContext::new(self, build_config), command_name).await
+    }
+
+    pub fn clean(&self, build_config: &BuildConfig, mode: CleanMode) -> anyhow::Result<()> {
+        clean_app(&BuildContext::new(self, build_config), mode)
     }
 
     pub async fn resolve_binary_component_source(
@@ -494,10 +517,11 @@ impl ApplicationContext {
     ) -> anyhow::Result<PathBuf> {
         match &dep.source {
             BinaryComponentSource::AppComponent { name } => {
+                let component = self.application.component(name);
                 if dep.dep_type.is_wasm_rpc() {
-                    Ok(self.application.client_wasm(name))
+                    Ok(component.client_wasm().to_path_buf())
                 } else {
-                    Ok(self.application.component_wasm(name, self.build_profile()))
+                    Ok(component.wasm().to_path_buf())
                 }
             }
             BinaryComponentSource::LocalFile { path } => Ok(path.clone()),
@@ -506,52 +530,81 @@ impl ApplicationContext {
     }
 
     pub fn log_dynamic_help(&self, config: &DynamicHelpSections) -> anyhow::Result<()> {
-        static LABEL_SOURCE: &str = "Source";
-        static LABEL_SELECTED: &str = "Selected";
-        static LABEL_TEMPLATE: &str = "Template";
-        static LABEL_BUILD_PROFILES: &str = "Build Profiles";
-        static LABEL_COMPONENT_TYPE: &str = "Component Type";
-        static LABEL_DEPENDENCIES: &str = "Dependencies";
-
-        let label_padding = {
-            [
-                &LABEL_SOURCE,
-                &LABEL_SELECTED,
-                &LABEL_TEMPLATE,
-                &LABEL_BUILD_PROFILES,
-                &LABEL_COMPONENT_TYPE,
-                &LABEL_DEPENDENCIES,
-            ]
-            .map(|label| label.len())
-            .into_iter()
-            .max()
-            .unwrap_or(0)
-                + 1
-        };
-
-        let print_field = |label: &'static str, value: String| {
+        fn print_field(label_padding: usize, label: &'static str, value: String) {
             logln(format!(
                 "    {:<label_padding$} {}",
                 format!("{}:", label),
                 value
-            ))
-        };
+            ));
+        }
 
-        let should_colorize = SHOULD_COLORIZE.should_colorize();
+        fn padding(labels: &[&str]) -> usize {
+            labels.iter().map(|label| label.len()).max().unwrap_or(0) + 1
+        }
+
+        if config.environments() {
+            static LABEL_NAME: &str = "Name";
+            static LABEL_SELECTED: &str = "Selected";
+            static LABEL_SERVER: &str = "Server";
+            static LABEL_PRESETS: &str = "Presets";
+
+            let label_padding = padding(&[LABEL_NAME, LABEL_SELECTED, LABEL_SERVER, LABEL_PRESETS]);
+            let selected_environment_name = self.application.environment_name();
+
+            logln(format!(
+                "{}",
+                "Application environments:".log_color_help_group()
+            ));
+            for (environment_name, environment) in self.application.environments() {
+                logln(format!("  {}", environment_name.0.bold()));
+                print_field(
+                    label_padding,
+                    LABEL_SELECTED,
+                    if environment_name == selected_environment_name {
+                        "yes".green().bold().to_string()
+                    } else {
+                        "no".red().bold().to_string()
+                    },
+                );
+                print_field(
+                    label_padding,
+                    LABEL_SERVER,
+                    environment.to_formatted_server_context().bold().to_string(),
+                );
+                print_field(
+                    label_padding,
+                    LABEL_PRESETS,
+                    environment
+                        .component_presets
+                        .clone()
+                        .into_vec()
+                        .join(", ")
+                        .bold()
+                        .to_string(),
+                );
+                logln("")
+            }
+        }
 
         if config.components() {
             if self.application.has_any_component() {
+                static LABEL_SOURCE: &str = "Source";
+                static LABEL_SELECTED: &str = "Selected";
+                static LABEL_LAYERS: &str = "Layers";
+                static LABEL_DEPENDENCIES: &str = "Dependencies";
+
+                let label_padding = padding(&[LABEL_SOURCE, LABEL_LAYERS, LABEL_DEPENDENCIES]);
+
                 logln(format!(
                     "{}",
                     "Application components:".log_color_help_group()
                 ));
                 for component_name in self.application.component_names() {
+                    let component = self.application.component(component_name);
                     let selected = self.selected_component_names.contains(component_name);
-                    let effective_property_source = self
-                        .application
-                        .component_effective_property_source(component_name, self.build_profile());
                     logln(format!("  {}", component_name.as_str().bold()));
                     print_field(
+                        label_padding,
                         LABEL_SELECTED,
                         if selected {
                             "yes".green().bold().to_string()
@@ -560,45 +613,19 @@ impl ApplicationContext {
                         },
                     );
                     print_field(
+                        label_padding,
                         LABEL_SOURCE,
-                        self.application
-                            .component_source(component_name)
-                            .to_string_lossy()
+                        component
+                            .source()
+                            .display()
+                            .to_string()
                             .underline()
                             .to_string(),
                     );
-                    if let Some(template_name) = effective_property_source.template_name {
-                        print_field(LABEL_TEMPLATE, template_name.as_str().bold().to_string());
-                    }
-                    if let Some(selected_profile) = effective_property_source.profile {
-                        print_field(
-                            LABEL_BUILD_PROFILES,
-                            self.application
-                                .component_build_profiles(component_name)
-                                .iter()
-                                .map(|profile| {
-                                    if selected_profile == profile {
-                                        if should_colorize {
-                                            profile.as_str().bold().underline().to_string()
-                                        } else {
-                                            format!("*{}", profile.as_str())
-                                        }
-                                    } else {
-                                        profile.to_string()
-                                    }
-                                })
-                                .join(", "),
-                        );
-                    }
-
                     print_field(
-                        LABEL_COMPONENT_TYPE,
-                        self.application
-                            .component_properties(component_name, None)
-                            .component_type()
-                            .to_string()
-                            .bold()
-                            .to_string(),
+                        label_padding,
+                        LABEL_LAYERS,
+                        format_component_applied_layers(component.applied_layers()),
                     );
 
                     let dependencies = self.application.component_dependencies(component_name);
@@ -612,79 +639,53 @@ impl ApplicationContext {
                             ))
                         }
                     }
+                    logln("")
                 }
-                logln("")
             } else {
                 logln("No components found in the application.\n");
             }
         }
 
-        if config.api_definitions() {
-            if !self.application.http_api_definitions().is_empty() {
-                logln(format!(
-                    "{}",
-                    "Application API definitions:".log_color_help_group()
-                ));
-                for (name, def) in self.application.http_api_definitions() {
-                    logln(format!(
-                        "  {}@{}",
-                        name.as_str().log_color_highlight(),
-                        def.value.version.log_color_highlight(),
-                    ));
-                }
-                logln("");
-            } else {
-                logln("No API definitions found in the application.\n");
-            }
-        }
-
-        if let Some(profile) = config.api_deployments_profile() {
-            let http_api_deployments = self.application.http_api_deployments(profile);
+        if config.api_deployments() {
+            let environment_name = self.application.environment_name();
+            let http_api_deployments = self
+                .application
+                .http_api_deployments(self.application.environment_name());
             match http_api_deployments {
                 Some(http_api_deployments) => {
                     logln(format!(
                         "{}",
-                        format!("Application API deployments for profile {}:", profile.0)
-                            .log_color_help_group()
+                        format!(
+                            "Application API deployments for environment {}:",
+                            environment_name.0
+                        )
+                        .log_color_help_group()
                     ));
-                    for (site, definitions) in http_api_deployments {
+
+                    for (site, deployment) in http_api_deployments {
                         logln(format!("  {}", site.to_string().log_color_highlight(),));
-                        for definition in definitions.iter().flat_map(|defs| defs.value.iter()) {
-                            logln(format!("    {}", definition.as_str().log_color_highlight(),));
+                        for (agent_name, _) in deployment.value.agents.iter() {
+                            logln(format!("    {}", agent_name.as_str().log_color_highlight(),));
                         }
                     }
                     logln("");
                 }
                 None => {
                     logln(format!(
-                        "No API deployments found in the application for profile {}.\n",
-                        profile.0.log_color_highlight()
+                        "No API deployments found in the application for environment {}.\n",
+                        environment_name.0.log_color_highlight()
                     ));
                 }
             }
         }
 
         if config.custom_commands() {
-            for (profile, commands) in self
-                .application
-                .all_custom_commands_for_all_build_profiles()
-            {
-                if commands.is_empty() {
-                    continue;
-                }
-
-                match profile {
-                    None => logln(format!(
-                        "{}",
-                        "Application custom commands:".log_color_help_group()
-                    )),
-                    Some(profile) => logln(format!(
-                        "{}{}{}",
-                        "Custom commands for ".log_color_help_group(),
-                        profile.as_str().log_color_help_group(),
-                        " profile:".log_color_help_group(),
-                    )),
-                }
+            let commands = self.application.all_custom_commands();
+            if !commands.is_empty() {
+                logln(format!(
+                    "{}",
+                    "Application custom commands:".log_color_help_group()
+                ));
                 for command in commands {
                     logln(format!(
                         "  {}",
@@ -700,45 +701,45 @@ impl ApplicationContext {
                             command
                         )
                         .bold()
-                    ))
+                    ));
                 }
                 logln("")
             }
         }
-
-        // TODO: build profiles?
 
         Ok(())
     }
 }
 
 fn load_app(
-    available_profiles: &BTreeSet<ProfileName>,
+    application_name: WithSource<ApplicationName>,
+    environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::from_raw_apps(available_profiles, raw_apps)
+            Application::from_raw_apps(application_name, environments, component_presets, raw_apps)
                 .map(|app| (app, calling_working_dir))
         })
     })
 }
 
-fn load_profiles(
+fn load_environments(
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::profiles_from_raw_apps(raw_apps.as_slice()).map(|profiles| {
-                ApplicationPreloadResult {
+            Application::environments_from_raw_apps(raw_apps.as_slice()).map(
+                |application_name_and_environments| ApplicationPreloadResult {
                     source_mode: ApplicationSourceMode::Preloaded {
                         raw_apps,
                         calling_working_dir,
                     },
                     loaded_with_warnings: false,
-                    profiles: Some(profiles),
-                }
-            })
+                    application_name_and_environments: Some(application_name_and_environments),
+                },
+            )
         })
     })
 }
@@ -787,8 +788,8 @@ fn collect_sources_and_switch_to_app_root(
     let _indent = LogIndent::new();
 
     fn collect_by_main_source(source: &Path) -> Option<ValidatedResult<BTreeSet<PathBuf>>> {
-        let source_ext = PathExtra::new(&source);
-        let source_dir = source_ext.parent().unwrap();
+        let source_dir =
+            fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
         std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
@@ -796,12 +797,11 @@ fn collect_sources_and_switch_to_app_root(
             Some(ValidatedResult::Ok(BTreeSet::from([source.to_path_buf()])))
         } else {
             Some(
-                ValidatedResult::from_result(compile_and_collect_globs(source_dir, &includes)).map(
-                    |mut sources| {
+                ValidatedResult::from_result(fs::compile_and_collect_globs(source_dir, &includes))
+                    .map(|mut sources| {
                         sources.insert(0, source.to_path_buf());
                         sources.into_iter().collect()
-                    },
-                ),
+                    }),
             )
         }
     }

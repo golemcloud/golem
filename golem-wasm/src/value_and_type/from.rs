@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::analysis::AnalysedType;
-use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{Value, ValueAndType, WitValue};
+use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use std::str::FromStr;
+use uuid::Uuid;
 
 pub trait FromValue: Sized {
     fn from_value(value: Value) -> Result<Self, String>;
@@ -197,6 +196,19 @@ impl<S: FromValue> FromValue for Result<S, ()> {
     }
 }
 
+impl FromValue for Result<(), ()> {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Result(result) => match result {
+                Ok(None) => Ok(Ok(())),
+                Err(None) => Ok(Err(())),
+                _ => Err(format!("Invalid Result<S, ()> value: {result:?}")),
+            },
+            _ => Err(format!("Expected Result<(), ()> value, got {value:?}")),
+        }
+    }
+}
+
 impl<T: FromValue> FromValue for Box<T> {
     fn from_value(value: Value) -> Result<Self, String> {
         Ok(Box::new(T::from_value(value)?))
@@ -251,30 +263,38 @@ impl<T: FromValue> FromValue for Vec<T> {
     }
 }
 
-impl<A: FromValue, B: FromValue> FromValue for (A, B) {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Tuple(values) if values.len() == 2 => Ok((
-                A::from_value(values[0].clone())?,
-                B::from_value(values[1].clone())?,
-            )),
-            _ => Err(format!("Expected Tuple of 2 elements, got {value:?}")),
+macro_rules! impl_from_value_for_tuples {
+    ($($ty:ident),*) => {
+        impl<$($ty: FromValue),*> FromValue for ($($ty,)*) {
+            fn from_value(value: Value) -> Result<Self, String> {
+                const EXPECTED_LEN: usize = [$(stringify!($ty)),*].len();
+                match value {
+                    Value::Tuple(values) if values.len() == EXPECTED_LEN => {
+                        let mut iter = values.into_iter();
+                        Ok((
+                            $(
+                                $ty::from_value(iter.next().unwrap())?,
+                            )*
+                        ))
+                    }
+                    _ => Err(format!("Expected Tuple of {EXPECTED_LEN} elements, got {value:?}")),
+                }
+            }
         }
-    }
+    };
 }
 
-impl<A: FromValue, B: FromValue, C: FromValue> FromValue for (A, B, C) {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Tuple(values) if values.len() == 3 => Ok((
-                A::from_value(values[0].clone())?,
-                B::from_value(values[1].clone())?,
-                C::from_value(values[2].clone())?,
-            )),
-            _ => Err(format!("Expected Tuple of 3 elements, got {value:?}")),
-        }
-    }
-}
+impl_from_value_for_tuples!(A, B);
+impl_from_value_for_tuples!(A, B, C);
+impl_from_value_for_tuples!(A, B, C, D);
+impl_from_value_for_tuples!(A, B, C, D, E);
+impl_from_value_for_tuples!(A, B, C, D, E, F);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I, J);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K);
+impl_from_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 impl<K: FromValue + Eq + std::hash::Hash, V: FromValue> FromValue
     for std::collections::HashMap<K, V>
@@ -358,6 +378,21 @@ impl FromValue for uuid::Uuid {
     }
 }
 
+impl FromValue for UuidRecord {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(mut fields) if fields.len() == 1 => {
+                let value = Uuid::from_value(fields.remove(0))?;
+                Ok(UuidRecord { value })
+            }
+            _ => Err(format!(
+                "Expected Record with value for UuidRecord, got {value:?}"
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "host")]
 impl FromValue for crate::WitValue {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -372,6 +407,7 @@ impl FromValue for crate::WitValue {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitNode {
     fn from_value(value: Value) -> Result<Self, String> {
         use crate::WitNode;
@@ -437,6 +473,7 @@ impl FromValue for crate::WitNode {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::Uri {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -449,6 +486,7 @@ impl FromValue for crate::Uri {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitTypeNode {
     fn from_value(value: Value) -> Result<Self, String> {
         use crate::WitTypeNode;
@@ -583,14 +621,15 @@ impl FromValue for crate::WitTypeNode {
     }
 }
 
-impl FromValue for NamedWitTypeNode {
+#[cfg(feature = "host")]
+impl FromValue for crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 3 => {
                 let name = Option::<String>::from_value(fields.remove(0))?;
                 let owner = Option::<String>::from_value(fields.remove(0))?;
                 let type_ = crate::WitTypeNode::from_value(fields.remove(0))?;
-                Ok(NamedWitTypeNode { name, owner, type_ })
+                Ok(crate::golem_rpc_0_2_x::types::NamedWitTypeNode { name, owner, type_ })
             }
             _ => Err(format!(
                 "Expected Record for NamedWitTypeNode, got {value:?}"
@@ -619,6 +658,7 @@ impl FromValue for std::time::Duration {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::ResourceMode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -632,6 +672,7 @@ impl FromValue for crate::ResourceMode {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::RpcError {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
@@ -655,26 +696,29 @@ impl FromValue for crate::RpcError {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for Value {
     fn from_value(value: Value) -> Result<Self, String> {
-        let wit_value = WitValue::from_value(value)?;
+        let wit_value = crate::WitValue::from_value(value)?;
         Ok(wit_value.into())
     }
 }
 
-impl FromValue for AnalysedType {
+#[cfg(feature = "host")]
+impl FromValue for crate::analysis::AnalysedType {
     fn from_value(value: Value) -> Result<Self, String> {
         let wit_type: crate::WitType = crate::WitType::from_value(value)?;
         Ok(wit_type.into())
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for ValueAndType {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 2 => {
                 let value = Value::from_value(fields.remove(0))?;
-                let typ = AnalysedType::from_value(fields.remove(0))?;
+                let typ = crate::analysis::AnalysedType::from_value(fields.remove(0))?;
                 Ok(ValueAndType { value, typ })
             }
             _ => Err(format!(
@@ -770,11 +814,14 @@ impl FromValue for url::Url {
     }
 }
 
+#[cfg(feature = "host")]
 impl FromValue for crate::WitType {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 1 => {
-                let nodes = Vec::<NamedWitTypeNode>::from_value(fields.remove(0))?;
+                let nodes = Vec::<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>::from_value(
+                    fields.remove(0),
+                )?;
                 Ok(crate::WitType { nodes })
             }
             _ => Err(format!(

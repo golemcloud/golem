@@ -12,48 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::authorised_grpc_request;
+use super::golem_config::WorkerServiceGrpcConfig;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response,
+    complete_promise_response, fork_worker_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, revert_worker_response,
     update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest,
+    ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
     InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, RevertWorkerTarget,
-    WorkerId,
-};
+use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::GrpcClient;
+use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::{Value, ValueAndType, WitValue};
-use http::Uri;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::debug;
-use uuid::Uuid;
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
     async fn start(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn invoke_and_await(
@@ -63,10 +61,10 @@ pub trait WorkerProxy: Send + Sync {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
+        caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError>;
 
     async fn invoke(
@@ -76,39 +74,48 @@ pub trait WorkerProxy: Send + Sync {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         mode: UpdateMode,
+        disable_wakeup: bool,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
-    async fn resume(&self, owned_worker_id: &WorkerId, force: bool)
-        -> Result<(), WorkerProxyError>;
+    async fn resume(
+        &self,
+        owned_worker_id: &WorkerId,
+        force: bool,
+        caller_account_id: AccountId,
+    ) -> Result<(), WorkerProxyError>;
 
     async fn fork_worker(
         &self,
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn revert(
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
     async fn complete_promise(
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
+        caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError>;
 }
 
@@ -204,33 +211,27 @@ impl From<WorkerExecutorError> for WorkerProxyError {
 }
 
 pub struct RemoteWorkerProxy {
-    client: GrpcClient<WorkerServiceClient<OtelGrpcService<Channel>>>,
-    access_token: Uuid,
+    worker_service_client: GrpcClient<WorkerServiceClient<OtelGrpcService<Channel>>>,
 }
 
 impl RemoteWorkerProxy {
-    pub fn new(
-        endpoint: Uri,
-        access_token: Uuid,
-        retry_config: RetryConfig,
-        connect_timeout: Duration,
-    ) -> Self {
+    pub fn new(config: &WorkerServiceGrpcConfig) -> Self {
         Self {
-            client: GrpcClient::new(
+            worker_service_client: GrpcClient::new(
                 "worker_service",
                 |channel| {
                     WorkerServiceClient::new(channel)
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
                 },
-                endpoint,
-                GrpcClientConfig {
-                    retries_on_unavailable: retry_config,
-                    connect_timeout,
-                },
+                config.uri(),
+                config.client_config.clone(),
             ),
-            access_token,
         }
+    }
+
+    fn get_auth_ctx(&self, account_id: AccountId) -> AuthCtx {
+        AuthCtx::impersonated_user(account_id)
     }
 }
 
@@ -239,29 +240,27 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn start(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_worker_id=%owned_worker_id, "Starting remote worker");
 
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+
         let response: LaunchNewWorkerResponse = self
-            .client
+            .worker_service_client
             .call("launch_new_worker", move |client| {
-                let caller_args = caller_args.clone();
                 let caller_env = caller_env.clone();
                 let caller_wasi_config_vars = caller_wasi_config_vars.clone();
-                Box::pin(client.launch_new_worker(authorised_grpc_request(
-                    LaunchNewWorkerRequest {
-                        component_id: Some(owned_worker_id.component_id().into()),
-                        name: owned_worker_id.worker_name(),
-                        args: caller_args,
-                        env: caller_env,
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
-                        ignore_already_existing: true,
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
+                    component_id: Some(owned_worker_id.component_id().into()),
+                    name: owned_worker_id.worker_name(),
+                    env: caller_env,
+                    wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                    ignore_already_existing: true,
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();
@@ -285,14 +284,16 @@ impl WorkerProxy for RemoteWorkerProxy {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
+        caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
         debug!(
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
         );
+
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let proto_params = function_params
             .into_iter()
@@ -305,31 +306,28 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let response: InvokeAndAwaitTypedResponse = self
-            .client
-            .call("invoke_and_await_typed", move |client| {
-                Box::pin(client.invoke_and_await_typed(authorised_grpc_request(
-                    InvokeAndAwaitRequest {
-                        worker_id: Some(owned_worker_id.worker_id().into()),
-                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        function: function_name.clone(),
-                        invoke_parameters: invoke_parameters.clone(),
-                        context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                            parent: Some(caller_worker_id.clone().into()),
-                            args: caller_args.clone(),
-                            env: caller_env.clone(),
-                            wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
-                            tracing: Some(caller_stack.clone().into()),
-                        }),
-                    },
-                    &self.access_token,
-                )))
+        let response: InvokeAndAwaitResponse = self
+            .worker_service_client
+            .call("invoke_and_await", move |client| {
+                Box::pin(client.invoke_and_await(InvokeAndAwaitRequest {
+                    worker_id: Some(owned_worker_id.worker_id().into()),
+                    idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                    function: function_name.clone(),
+                    invoke_parameters: invoke_parameters.clone(),
+                    context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                        parent: Some(caller_worker_id.clone().into()),
+                        env: caller_env.clone(),
+                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        tracing: Some(caller_stack.clone().into()),
+                    }),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();
 
         match response.result {
-            Some(invoke_and_await_typed_response::Result::Success(result)) => {
+            Some(invoke_and_await_response::Result::Success(result)) => {
                 let result = result
                     .result
                     .map(|proto_vnt| {
@@ -342,7 +340,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     .transpose()?;
                 Ok(result)
             }
-            Some(invoke_and_await_typed_response::Result::Error(error)) => Err(error.into()),
+            Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),
@@ -356,12 +354,14 @@ impl WorkerProxy for RemoteWorkerProxy {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
+
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let proto_params = function_params
             .into_iter()
@@ -375,24 +375,21 @@ impl WorkerProxy for RemoteWorkerProxy {
         });
 
         let response: InvokeResponse = self
-            .client
+            .worker_service_client
             .call("invoke", move |client| {
-                Box::pin(client.invoke(authorised_grpc_request(
-                    InvokeRequest {
-                        worker_id: Some(owned_worker_id.worker_id().into()),
-                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        function: function_name.clone(),
-                        invoke_parameters: invoke_parameters.clone(),
-                        context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                            parent: Some(caller_worker_id.clone().into()),
-                            args: caller_args.clone(),
-                            env: caller_env.clone(),
-                            wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
-                            tracing: Some(caller_stack.clone().into()),
-                        }),
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.invoke(InvokeRequest {
+                    worker_id: Some(owned_worker_id.worker_id().into()),
+                    idempotency_key: idempotency_key.clone().map(|k| k.into()),
+                    function: function_name.clone(),
+                    invoke_parameters: invoke_parameters.clone(),
+                    context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                        parent: Some(caller_worker_id.clone().into()),
+                        env: caller_env.clone(),
+                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        tracing: Some(caller_stack.clone().into()),
+                    }),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();
@@ -409,22 +406,25 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         mode: UpdateMode,
+        disable_wakeup: bool,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
-        debug!("Updating remote worker to version {target_version} in {mode:?} mode");
+        debug!("Updating remote worker to revision {target_revision} in {mode:?} mode");
+
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response: UpdateWorkerResponse = self
-            .client
+            .worker_service_client
             .call("update_worker", move |client| {
-                Box::pin(client.update_worker(authorised_grpc_request(
-                    UpdateWorkerRequest {
-                        worker_id: Some(owned_worker_id.worker_id().into()),
-                        target_version,
-                        mode: mode as i32,
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.update_worker(UpdateWorkerRequest {
+                    worker_id: Some(owned_worker_id.worker_id().into()),
+                    target_revision: target_revision.into(),
+                    mode: mode as i32,
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    disable_wakeup,
+                }))
             })
             .await?
             .into_inner();
@@ -438,19 +438,24 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> Result<(), WorkerProxyError> {
+    async fn resume(
+        &self,
+        worker_id: &WorkerId,
+        force: bool,
+        caller_account_id: AccountId,
+    ) -> Result<(), WorkerProxyError> {
         debug!("Resuming remote worker");
 
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+
         let response: ResumeWorkerResponse = self
-            .client
+            .worker_service_client
             .call("resume_worker", move |client| {
-                Box::pin(client.resume_worker(authorised_grpc_request(
-                    ResumeWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                        force: Some(force),
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.resume_worker(ResumeWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    force: Some(force),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();
@@ -469,20 +474,21 @@ impl WorkerProxy for RemoteWorkerProxy {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cutoff: &OplogIndex,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
 
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+
         let response = self
-            .client
+            .worker_service_client
             .call("fork_worker", move |client| {
-                Box::pin(client.fork_worker(authorised_grpc_request(
-                    ForkWorkerRequest {
-                        source_worker_id: Some(source_worker_id.clone().into()),
-                        target_worker_id: Some(target_worker_id.clone().into()),
-                        oplog_index_cutoff: u64::from(*oplog_index_cutoff),
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.fork_worker(ForkWorkerRequest {
+                    source_worker_id: Some(source_worker_id.clone().into()),
+                    target_worker_id: Some(target_worker_id.clone().into()),
+                    oplog_index_cutoff: u64::from(*oplog_index_cutoff),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();
@@ -502,17 +508,18 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
+        caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+
         let response: RevertWorkerResponse = self
-            .client
+            .worker_service_client
             .call("revert_worker", move |client| {
-                Box::pin(client.revert_worker(authorised_grpc_request(
-                    RevertWorkerRequest {
-                        worker_id: Some(worker_id.clone().into()),
-                        target: Some(target.clone().into()),
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.revert_worker(RevertWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    target: Some(target.clone().into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();
@@ -530,20 +537,21 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
+        caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError> {
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+
         let response: CompletePromiseResponse = self
-            .client
+            .worker_service_client
             .call("complete_promise", move |client| {
-                Box::pin(client.complete_promise(authorised_grpc_request(
-                    CompletePromiseRequest {
-                        worker_id: Some(promise_id.worker_id.clone().into()),
-                        complete_parameters: Some(CompleteParameters {
-                            oplog_idx: promise_id.oplog_idx.into(),
-                            data: data.clone(),
-                        }),
-                    },
-                    &self.access_token,
-                )))
+                Box::pin(client.complete_promise(CompletePromiseRequest {
+                    worker_id: Some(promise_id.worker_id.clone().into()),
+                    complete_parameters: Some(CompleteParameters {
+                        oplog_idx: promise_id.oplog_idx.into(),
+                        data: data.clone(),
+                    }),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
             })
             .await?
             .into_inner();

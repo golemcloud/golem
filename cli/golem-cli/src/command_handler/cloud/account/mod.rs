@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod grant;
-
 use crate::command::cloud::account::AccountSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
+use crate::log::log_error;
 use crate::log::log_warn_action;
 use crate::model::text::account::{AccountGetView, AccountNewView};
-use crate::model::text::fmt::log_error;
-use crate::model::AccountId;
 use anyhow::bail;
 use golem_client::api::AccountClient;
-use golem_client::model::{Account, AccountData};
+use golem_client::model::{Account, AccountCreation, AccountUpdate};
+use golem_common::model::account::{AccountEmail, AccountId};
 use std::sync::Arc;
 
 pub struct CloudAccountCommandHandler {
@@ -55,12 +53,6 @@ impl CloudAccountCommandHandler {
             AccountSubcommand::Delete { account_id } => {
                 self.cmd_delete(account_id.account_id).await
             }
-            AccountSubcommand::Grant { subcommand } => {
-                self.ctx
-                    .cloud_account_grant_handler()
-                    .handle_command(subcommand)
-                    .await
-            }
         }
     }
 
@@ -82,7 +74,6 @@ impl CloudAccountCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        // TODO: this should have a proper update endpoint instead of getting then updating...
         let account = self.get(account_id).await?;
         let account = self
             .ctx
@@ -90,10 +81,11 @@ impl CloudAccountCommandHandler {
             .await?
             .account
             .update_account(
-                &account.id,
-                &AccountData {
-                    name: account_name.unwrap_or(account.name),
-                    email: account_email.unwrap_or(account.email),
+                &account.id.0,
+                &AccountUpdate {
+                    current_revision: account.revision,
+                    name: account_name,
+                    email: account_email.map(AccountEmail),
                 },
             )
             .await
@@ -110,9 +102,9 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .create_account(&AccountData {
+            .create_account(&AccountCreation {
                 name: account_name,
-                email: account_email,
+                email: AccountEmail(account_email),
             })
             .await
             .map_service_error()?;
@@ -136,7 +128,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .delete_account(&account.id)
+            .delete_account(&account.id.0, account.revision.into())
             .await
             .map_service_error()?;
 
@@ -156,7 +148,7 @@ impl CloudAccountCommandHandler {
     }
 
     pub async fn account_id_or_err(&self) -> anyhow::Result<AccountId> {
-        Ok(self.ctx.golem_clients().await?.account_id())
+        Ok(*self.ctx.golem_clients().await?.account_id())
     }
 
     pub async fn select_account_id_or_err(

@@ -14,34 +14,13 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use desert_rust::BinaryCodec;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::ToJSON;
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromParameter, ParseResult, Type};
-use serde::de::Error;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::borrow::Cow;
-use std::ops::{Deref, DerefMut};
 
-/// Represents a binary data encoded with base64.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Default, BinaryCodec)]
-#[desert(transparent)]
-pub struct Base64(pub Vec<u8>);
-
-impl Deref for Base64 {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Base64 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
+pub use crate::base_model::base64::*;
 
 impl Type for Base64 {
     const IS_REQUIRED: bool = true;
@@ -94,29 +73,5 @@ impl ToJSON for Base64 {
     fn to_json(&self) -> Option<Value> {
         let b64 = STANDARD.encode(&self.0);
         Some(Value::String(b64))
-    }
-}
-
-impl Serialize for Base64 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let b64 = STANDARD.encode(&self.0);
-        serializer.serialize_str(&b64)
-    }
-}
-
-impl<'de> Deserialize<'de> for Base64 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let b64: String = String::deserialize(deserializer)?;
-        Ok(Base64(
-            STANDARD
-                .decode(b64)
-                .map_err(|err| Error::custom(err.to_string()))?,
-        ))
     }
 }

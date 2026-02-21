@@ -19,7 +19,6 @@ use test_r::test;
 use crate::stubgen::test_data_path;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
-use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_cli::wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use golem_cli::wasm_rpc_stubgen::wit_generate::{
@@ -29,6 +28,7 @@ use golem_cli::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_cli::wasm_rpc_stubgen::{
     GOLEM_RPC_WIT, GOLEM_RPC_WIT_VERSION, WASI_CLOCKS_WIT, WASI_IO_WIT, WASI_WIT_VERSION,
 };
+use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use semver::Version;
 use std::path::{Path, PathBuf};
@@ -588,7 +588,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         golem_rust_override: RustDependencyOverride::default(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
-        component_name: AppComponentName::from("test:component"),
+        component_name: ComponentName("test:component".to_string()),
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();
@@ -604,7 +604,7 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         golem_rust_override: RustDependencyOverride::default(),
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
-        component_name: AppComponentName::from("test:component"),
+        component_name: ComponentName("test:component".to_string()),
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();

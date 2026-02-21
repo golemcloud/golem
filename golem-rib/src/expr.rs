@@ -30,6 +30,7 @@ use combine::parser::char::spaces;
 use combine::stream::position;
 use combine::Parser;
 use combine::{eof, EasyParser};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
@@ -39,7 +40,8 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub enum Expr {
     Let {
         variable_id: VariableId,
@@ -1806,7 +1808,8 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub enum Range {
     Range { from: Box<Expr>, to: Box<Expr> },
     RangeInclusive { from: Box<Expr>, to: Box<Expr> },
@@ -1851,7 +1854,8 @@ impl Range {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, PartialEq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct Number {
     pub value: BigDecimal,
 }
@@ -1882,7 +1886,8 @@ impl Display for Number {
     }
 }
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct MatchArm {
     pub arm_pattern: ArmPattern,
     pub arm_resolution_expr: Box<Expr>,
@@ -1896,7 +1901,9 @@ impl MatchArm {
         }
     }
 }
-#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub enum ArmPattern {
     WildCard,
     As(String, Box<ArmPattern>),

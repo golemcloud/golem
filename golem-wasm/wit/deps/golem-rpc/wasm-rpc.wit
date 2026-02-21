@@ -17,6 +17,24 @@ interface types {
     uuid: uuid,
   }
 
+  /// Represents a Golem account
+  /// FIXME: move into golem:api/host
+  record account-id {
+      uuid: uuid
+  }
+
+  /// An index into the persistent log storing all performed operations of an agent
+  /// FIXME: move into golem:api/host
+  type oplog-index = u64;
+
+  /// A promise ID is a value that can be passed to an external Golem API to complete that promise
+  /// from an arbitrary external source, while Golem agents can await for this completion.
+  /// FIXME: move into golem:api/host
+  record promise-id {
+      agent-id: agent-id,
+      oplog-idx: oplog-index,
+  }
+
   /// UUID
   record uuid {
     high-bits: u64,

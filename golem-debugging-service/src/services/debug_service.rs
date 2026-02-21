@@ -12,30 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::auth::AuthService;
+use super::auth::{AuthService, AuthServiceError};
 use crate::debug_context::DebugContext;
 use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
-use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
-use golem_common::base_model::ProjectId;
-use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
+use golem_common::model::{OwnedWorkerId, WorkerId, WorkerMetadata};
+use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::model::auth::AuthCtx;
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::oplog::Oplog;
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use golem_worker_executor::services::{
-    All, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService, HasShardService,
-    HasWorkerForkService, HasWorkerService,
+    All, HasComponentService, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService,
+    HasShardService, HasWorkerForkService, HasWorkerService,
 };
 use golem_worker_executor::worker::Worker;
 use log::debug;
-use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -46,12 +46,12 @@ pub trait DebugService: Send + Sync {
         &self,
         authentication_context: &AuthCtx,
         source_worker_id: &WorkerId,
-    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>;
+    ) -> Result<(ConnectResult, AccountId, OwnedWorkerId, WorkerEventReceiver), DebugServiceError>;
 
     async fn playback(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -60,14 +60,14 @@ pub trait DebugService: Send + Sync {
     async fn rewind(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError>;
 
     async fn fork(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         source_owned_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -85,7 +85,6 @@ pub trait DebugService: Send + Sync {
 pub enum DebugServiceError {
     Internal {
         worker_id: Option<WorkerId>,
-        message: String,
     },
     Unauthorized {
         message: String,
@@ -94,24 +93,10 @@ pub enum DebugServiceError {
         worker_id: WorkerId,
         message: String,
     },
-
     ValidationFailed {
         worker_id: Option<WorkerId>,
         errors: Vec<String>,
     },
-}
-
-impl Display for DebugServiceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DebugServiceError::Internal { message, .. } => write!(f, "Internal error: {message}"),
-            DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {message}"),
-            DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {message}"),
-            DebugServiceError::ValidationFailed { errors, .. } => {
-                write!(f, "Validation failed: {:?}", errors.join(", "))
-            }
-        }
-    }
 }
 
 impl DebugServiceError {
@@ -124,7 +109,8 @@ impl DebugServiceError {
     }
 
     pub fn internal(message: String, worker_id: Option<WorkerId>) -> Self {
-        DebugServiceError::Internal { worker_id, message }
+        tracing::warn!("internal error in debugging service: {message}");
+        DebugServiceError::Internal { worker_id }
     }
 
     pub fn validation_failed(errors: Vec<String>, worker_id: Option<WorkerId>) -> Self {
@@ -139,48 +125,50 @@ impl DebugServiceError {
             DebugServiceError::ValidationFailed { worker_id, .. } => (*worker_id).clone(),
         }
     }
+}
 
-    pub fn to_rpc_error(&self) -> JsonRpcError {
+impl SafeDisplay for DebugServiceError {
+    fn to_safe_string(&self) -> String {
         match self {
-            DebugServiceError::Internal { message, .. } => JsonRpcError::new(
-                JsonRpcErrorReason::InternalError,
-                message.to_string(),
-                Value::Null,
-            ),
-            DebugServiceError::Unauthorized { message } => JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(-32001),
-                message.to_string(),
-                Value::Null,
-            ),
-            DebugServiceError::Conflict { message, .. } => JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(-32002),
-                message.to_string(),
-                Value::Null,
-            ),
-            DebugServiceError::ValidationFailed { errors, .. } => JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(-32004),
-                errors.join(", "),
-                Value::Null,
-            ),
+            DebugServiceError::Internal { .. } => "Internal error".to_string(),
+            DebugServiceError::Unauthorized { .. } => self.to_string(),
+            DebugServiceError::Conflict { .. } => self.to_string(),
+            DebugServiceError::ValidationFailed { .. } => self.to_string(),
+        }
+    }
+}
+
+impl Display for DebugServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DebugServiceError::Internal { .. } => write!(f, "Internal error"),
+            DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {message}"),
+            DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {message}"),
+            DebugServiceError::ValidationFailed { errors, .. } => {
+                write!(f, "Validation failed: {:?}", errors.join(", "))
+            }
         }
     }
 }
 
 pub struct DebugServiceDefault {
-    worker_auth_service: Arc<dyn AuthService>,
+    component_service: Arc<dyn ComponentService>,
     debug_session: Arc<dyn DebugSessions>,
+    auth_service: Arc<dyn AuthService>,
     all: All<DebugContext>,
 }
 
 impl DebugServiceDefault {
     pub fn new(all: All<DebugContext>) -> Self {
+        let component_service = all.component_service();
         let extra_deps = all.extra_deps();
         let debug_session = extra_deps.debug_session();
-        let worker_auth_service = extra_deps.auth_service();
+        let auth_service = extra_deps.auth_service();
 
         Self {
-            worker_auth_service,
+            component_service,
             debug_session,
+            auth_service,
             all,
         }
     }
@@ -190,18 +178,28 @@ impl DebugServiceDefault {
     async fn connect_worker(
         &self,
         worker_id: WorkerId,
-        account_id: &AccountId,
-        project_id: &ProjectId,
+        account_id: AccountId,
+        enironment_id: EnvironmentId,
     ) -> Result<(WorkerMetadata, WorkerEventReceiver), DebugServiceError> {
-        let owned_worker_id = OwnedWorkerId::new(project_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(enironment_id, &worker_id);
 
         // This get will only look at the oplogs to see if a worker presumably exists in the real executor.
         // This is only used to get the existing metadata that was/is running in the real executor
-        let existing_metadata = self.all.worker_service().get(&owned_worker_id).await;
+        self.all
+            .worker_service()
+            .get(&owned_worker_id)
+            .await
+            .ok_or_else(|| {
+                DebugServiceError::conflict(
+                    worker_id.clone(),
+                    "Worker doesn't exist in live/real worker executor for it to connect to"
+                        .to_string(),
+                )
+            })?;
 
         let host = gethostname().to_string_lossy().to_string();
 
-        let port = self.all.config().port;
+        let port = self.all.config().grpc.port;
 
         info!(
             "Registering worker {} with host {} and port {}",
@@ -220,33 +218,24 @@ impl DebugServiceDefault {
             &shard_assignment.shard_ids,
         );
 
-        if existing_metadata.is_some() {
-            let worker = Worker::get_or_create_suspended(
-                &self.all,
-                account_id,
-                &owned_worker_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-            )
-            .await
-            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+        let worker = Worker::get_or_create_suspended(
+            &self.all,
+            account_id,
+            &owned_worker_id,
+            None,
+            None,
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+        )
+        .await
+        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
-            let metadata = worker.get_latest_worker_metadata().await;
+        let metadata = worker.get_latest_worker_metadata().await;
 
-            let receiver = worker.event_service().receiver();
+        let receiver = worker.event_service().receiver();
 
-            Ok((metadata, receiver))
-        } else {
-            Err(DebugServiceError::internal(
-                "Worker doesn't exist in live/real worker executor for it to connect to"
-                    .to_string(),
-                Some(worker_id.clone()),
-            ))
-        }
+        Ok((metadata, receiver))
     }
 
     pub async fn validate_playback_overrides(
@@ -318,19 +307,25 @@ impl DebugService for DebugServiceDefault {
         &self,
         auth_ctx: &AuthCtx,
         worker_id: &WorkerId,
-    ) -> Result<(ConnectResult, OwnedWorkerId, Namespace, WorkerEventReceiver), DebugServiceError>
+    ) -> Result<(ConnectResult, AccountId, OwnedWorkerId, WorkerEventReceiver), DebugServiceError>
     {
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(
-                &worker_id.component_id,
-                ProjectAction::UpdateWorker,
-                auth_ctx,
-            )
+        let component = self
+            .component_service
+            .get_metadata(worker_id.component_id, None)
             .await
-            .map_err(|e| DebugServiceError::unauthorized(format!("Unauthorized: {e}")))?;
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
-        let owned_worker_id = OwnedWorkerId::new(&namespace.project_id, worker_id);
+        self.auth_service
+            .check_user_allowed_to_debug_in_environment(component.environment_id, auth_ctx)
+            .await
+            .map_err(|e| match e {
+                AuthServiceError::DebuggingNotAllowed => DebugServiceError::Unauthorized {
+                    message: e.to_safe_string(),
+                },
+                e => DebugServiceError::internal(e.to_string(), Some(worker_id.clone())),
+            })?;
+
+        let owned_worker_id = OwnedWorkerId::new(component.environment_id, worker_id);
 
         let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
 
@@ -345,8 +340,8 @@ impl DebugService for DebugServiceDefault {
         let (worker_metadata, worker_event_receiver) = self
             .connect_worker(
                 worker_id.clone(),
-                &namespace.account_id,
-                &namespace.project_id,
+                component.account_id,
+                component.environment_id,
             )
             .await?;
 
@@ -364,13 +359,13 @@ impl DebugService for DebugServiceDefault {
 
         let connect_result = ConnectResult {
             worker_id: worker_id.clone(),
-            message: format!("Worker {worker_id} connected to namespace {namespace}"),
+            message: format!("Worker {worker_id} connected"),
         };
 
         Ok((
             connect_result,
+            component.account_id,
             owned_worker_id,
-            namespace,
             worker_event_receiver,
         ))
     }
@@ -378,7 +373,7 @@ impl DebugService for DebugServiceDefault {
     async fn playback(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -415,14 +410,13 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(session_data.worker_metadata.args.clone()),
             Some(session_data.worker_metadata.env.clone()),
             Some(session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
                 session_data
                     .worker_metadata
                     .last_known_status
-                    .component_version,
+                    .component_revision,
             ),
             session_data.worker_metadata.parent.clone(),
             &InvocationContextStack::fresh(),
@@ -508,7 +502,7 @@ impl DebugService for DebugServiceDefault {
     async fn rewind(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        account_id: &AccountId,
+        account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError> {
@@ -543,14 +537,13 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(debug_session_data.worker_metadata.args.clone()),
             Some(debug_session_data.worker_metadata.env.clone()),
             Some(debug_session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
                 debug_session_data
                     .worker_metadata
                     .last_known_status
-                    .component_version,
+                    .component_revision,
             ),
             debug_session_data.worker_metadata.parent.clone(),
             &InvocationContextStack::fresh(),
@@ -615,7 +608,7 @@ impl DebugService for DebugServiceDefault {
 
     async fn fork(
         &self,
-        account_id: &AccountId,
+        account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -624,6 +617,8 @@ impl DebugService for DebugServiceDefault {
             "Forking worker {} to new worker {}",
             source_worker_id.worker_id, target_worker_id
         );
+
+        // TODO: authorize here
 
         // Fork internally proxies the resume of worker using worker-proxy
         // making sure the worker is initiated in the regular worker executor, and not

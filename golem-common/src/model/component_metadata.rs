@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::model::agent::wit_naming::ToWitNaming;
-use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
+use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
+use crate::model::diff;
 use crate::{virtual_exports, SafeDisplay};
-use desert_rust::BinaryCodec;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -25,18 +25,19 @@ use golem_wasm::analysis::{
 };
 use golem_wasm::metadata::Producers as WasmAstProducers;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
-#[derive(Clone, Default, BinaryCodec)]
-#[desert(evolution())]
-pub struct ComponentMetadata {
-    data: Arc<ComponentMetadataInnerData>,
-    #[transient(Default::default())]
-    cache: Arc<std::sync::Mutex<ComponentMetadataInnerCache>>,
+pub use crate::base_model::component_metadata::*;
+
+/// Describes an exported function that can be invoked on a worker
+#[derive(Debug, Clone)]
+pub struct InvokableFunction {
+    pub name: ParsedFunctionName,
+    pub analysed_export: AnalysedFunction,
+    pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
 impl ComponentMetadata {
@@ -133,7 +134,10 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
             .unwrap()
@@ -142,7 +146,7 @@ impl ComponentMetadata {
 
     pub fn find_agent_type_by_wrapper_name(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
@@ -152,57 +156,12 @@ impl ComponentMetadata {
 
     pub fn find_wrapper_function_by_agent_constructor(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         self.cache
             .lock()
             .unwrap()
             .find_wrapper_function_by_agent_constructor(&self.data, agent_type)
-    }
-}
-
-impl Debug for ComponentMetadata {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ComponentMetadata")
-            .field("exports", &self.data.exports)
-            .field("producers", &self.data.producers)
-            .field("memories", &self.data.memories)
-            .field("binary_wit_len", &self.data.binary_wit.len())
-            .field("root_package_name", &self.data.root_package_name)
-            .field("root_package_version", &self.data.root_package_version)
-            .field("dynamic_linking", &self.data.dynamic_linking)
-            .field("agent_types", &self.data.agent_types)
-            .finish()
-    }
-}
-
-impl PartialEq for ComponentMetadata {
-    fn eq(&self, other: &Self) -> bool {
-        self.data == other.data
-    }
-}
-
-impl Eq for ComponentMetadata {}
-
-impl Serialize for ComponentMetadata {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.data.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ComponentMetadata {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let data = ComponentMetadataInnerData::deserialize(deserializer)?;
-        Ok(Self {
-            data: Arc::new(data),
-            cache: Arc::default(),
-        })
     }
 }
 
@@ -289,27 +248,6 @@ impl poem_openapi::types::ToYAML for ComponentMetadata {
     }
 }
 
-#[derive(
-    Clone, Default, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
-#[oai(rename = "ComponentMetadata", rename_all = "camelCase")]
-#[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
-pub struct ComponentMetadataInnerData {
-    pub exports: Vec<AnalysedExport>,
-    pub producers: Vec<Producers>,
-    pub memories: Vec<LinearMemory>,
-    #[serde(default)]
-    pub binary_wit: Base64,
-    pub root_package_name: Option<String>,
-    pub root_package_version: Option<String>,
-
-    #[serde(default)]
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-
-    #[serde(default)]
-    pub agent_types: Vec<AgentType>,
-}
-
 impl ComponentMetadataInnerData {
     pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
         self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
@@ -366,28 +304,31 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(
+        &self,
+        agent_type: &AgentTypeName,
+    ) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
-            .find(|t| t.type_name == agent_type)
+            .find(|t| &t.type_name == agent_type)
             .cloned())
     }
 
     pub fn find_agent_type_by_wrapper_name(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
-            .find(|t| t.type_name.to_wit_naming() == agent_type)
+            .find(|t| &t.type_name.to_wit_naming() == agent_type)
             .cloned())
     }
 
     pub fn find_wrapper_function_by_agent_constructor(
         &self,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         let agent_type = self
             .find_agent_type_by_name(agent_type)?
@@ -568,14 +509,15 @@ impl ComponentMetadataInnerData {
 }
 
 #[derive(Default)]
-struct ComponentMetadataInnerCache {
+pub(crate) struct ComponentMetadataInnerCache {
     load_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types_by_type_name: HashMap<String, Result<Option<AgentType>, String>>,
-    agent_types_by_wrapper_type_name: HashMap<String, Result<Option<AgentType>, String>>,
-    functions_by_agent_constructor: HashMap<String, Result<Option<InvokableFunction>, String>>,
+    agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
+    agent_types_by_wrapper_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
+    functions_by_agent_constructor:
+        HashMap<AgentTypeName, Result<Option<InvokableFunction>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -638,14 +580,14 @@ impl ComponentMetadataInnerCache {
     pub fn find_agent_type_by_name(
         &mut self,
         data: &ComponentMetadataInnerData,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_agent_type_by_name(agent_type);
             self.agent_types_by_type_name
-                .insert(agent_type.to_string(), result.clone());
+                .insert(agent_type.clone(), result.clone());
             result
         }
     }
@@ -653,14 +595,14 @@ impl ComponentMetadataInnerCache {
     pub fn find_agent_type_by_wrapper_name(
         &mut self,
         data: &ComponentMetadataInnerData,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<AgentType>, String> {
         if let Some(cached) = self.agent_types_by_wrapper_type_name.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_agent_type_by_wrapper_name(agent_type);
             self.agent_types_by_wrapper_type_name
-                .insert(agent_type.to_string(), result.clone());
+                .insert(agent_type.clone(), result.clone());
             result
         }
     }
@@ -668,69 +610,17 @@ impl ComponentMetadataInnerCache {
     pub fn find_wrapper_function_by_agent_constructor(
         &mut self,
         data: &ComponentMetadataInnerData,
-        agent_type: &str,
+        agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         if let Some(cached) = self.functions_by_agent_constructor.get(agent_type) {
             cached.clone()
         } else {
             let result = data.find_wrapper_function_by_agent_constructor(agent_type);
             self.functions_by_agent_constructor
-                .insert(agent_type.to_string(), result.clone());
+                .insert(agent_type.clone(), result.clone());
             result
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum AgentMethodOrConstructor {
-    Method(AgentMethod),
-    Constructor(AgentConstructor),
-}
-
-/// Describes an exported function that can be invoked on a worker
-#[derive(Debug, Clone)]
-pub struct InvokableFunction {
-    pub name: ParsedFunctionName,
-    pub analysed_export: AnalysedFunction,
-    pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
-#[oai(discriminator_name = "type", one_of = true)]
-#[serde(tag = "type")]
-#[desert(evolution())]
-pub enum DynamicLinkedInstance {
-    WasmRpc(DynamicLinkedWasmRpc),
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct DynamicLinkedWasmRpc {
-    /// Maps resource names within the dynamic linked interface to target information
-    pub targets: HashMap<String, WasmRpcTarget>,
-}
-
-impl DynamicLinkedWasmRpc {
-    pub fn target(&self, stub_resource: &str) -> Result<WasmRpcTarget, String> {
-        self.targets.get(stub_resource).cloned().ok_or_else(|| {
-            format!("Resource '{stub_resource}' not found in dynamic linked interface")
-        })
-    }
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WasmRpcTarget {
-    pub interface_name: String,
-    pub component_name: String,
 }
 
 impl WasmRpcTarget {
@@ -743,85 +633,6 @@ impl Display for WasmRpcTarget {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}@{}", self.interface_name, self.component_name)
     }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct ProducerField {
-    pub name: String,
-    pub values: Vec<VersionedName>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct VersionedName {
-    pub name: String,
-    pub version: String,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct Producers {
-    pub fields: Vec<ProducerField>,
-}
-
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
-#[desert(evolution())]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct LinearMemory {
-    /// Initial size of the linear memory in bytes
-    pub initial: u64,
-    /// Optional maximal size of the linear memory in bytes
-    pub maximum: Option<u64>,
-}
-
-impl LinearMemory {
-    const PAGE_SIZE: u64 = 65536;
 }
 
 impl From<wasmparser::MemoryType> for LinearMemory {
@@ -1372,4 +1183,31 @@ mod protobuf {
             })
         }
     }
+}
+
+pub fn dynamic_linking_to_diffable(
+    dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+) -> BTreeMap<String, BTreeMap<String, diff::ComponentWasmRpcTarget>> {
+    dynamic_linking
+        .iter()
+        .map(|(link_name, link)| {
+            (
+                link_name.clone(),
+                match link {
+                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => targets
+                        .iter()
+                        .map(|(target_name, target)| {
+                            (
+                                target_name.clone(),
+                                diff::ComponentWasmRpcTarget {
+                                    interface_name: target.interface_name.clone(),
+                                    component_name: target.component_name.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                },
+            )
+        })
+        .collect()
 }

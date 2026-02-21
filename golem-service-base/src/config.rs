@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::config::{ConfigLoader, ConfigLoaderConfig};
 use golem_common::model::RetryConfig;
-use golem_common::SafeDisplay;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Write, path::PathBuf, time::Duration};
 
@@ -97,16 +97,48 @@ impl BlobStorageConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct S3BlobStorageCredentialsConfig {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub provider_name: String,
+}
+
+impl S3BlobStorageCredentialsConfig {
+    pub fn new(
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+        provider_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            provider_name: provider_name.into(),
+        }
+    }
+}
+
+impl SafeDisplay for S3BlobStorageCredentialsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "access key id: ****");
+        let _ = writeln!(&mut result, "secret access key: ****");
+        let _ = writeln!(&mut result, "provider name: {}", self.provider_name);
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct S3BlobStorageConfig {
     pub retries: RetryConfig,
     pub region: String,
     pub object_prefix: String,
     pub aws_endpoint_url: Option<String>,
+    pub aws_credentials: Option<S3BlobStorageCredentialsConfig>,
+    pub aws_path_style: Option<bool>,
     pub compilation_cache_bucket: String,
     pub custom_data_bucket: String,
     pub oplog_payload_bucket: String,
     pub compressed_oplog_buckets: Vec<String>,
-    pub use_minio_credentials: bool,
     pub initial_component_files_bucket: String,
     pub components_bucket: String,
     pub plugin_wasm_files_bucket: String,
@@ -122,6 +154,13 @@ impl SafeDisplay for S3BlobStorageConfig {
         let _ = writeln!(&mut result, "object_prefix: {}", self.object_prefix);
         if let Some(endpoint_url) = &self.aws_endpoint_url {
             let _ = writeln!(&mut result, "aws_endpoint_url: {endpoint_url}");
+        }
+        if let Some(aws_credentials) = &self.aws_credentials {
+            let _ = writeln!(&mut result, "aws_credentials:");
+            let _ = writeln!(&mut result, "{}", aws_credentials.to_safe_string_indented());
+        }
+        if let Some(path_style) = &self.aws_path_style {
+            let _ = writeln!(&mut result, "aws_path_style: {path_style}");
         }
         let _ = writeln!(
             &mut result,
@@ -142,11 +181,6 @@ impl SafeDisplay for S3BlobStorageConfig {
             &mut result,
             "compressed oplog buckets: {:?}",
             self.compressed_oplog_buckets
-        );
-        let _ = writeln!(
-            &mut result,
-            "use MinIO credentials: {}",
-            self.use_minio_credentials
         );
         let _ = writeln!(
             &mut result,
@@ -174,8 +208,9 @@ impl Default for S3BlobStorageConfig {
             oplog_payload_bucket: "oplog-payload".to_string(),
             object_prefix: "".to_string(),
             aws_endpoint_url: None,
+            aws_credentials: None,
+            aws_path_style: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
-            use_minio_credentials: false,
             initial_component_files_bucket: "golem-initial-component-files".to_string(),
             components_bucket: "component-store".to_string(),
             plugin_wasm_files_bucket: "golem-plugin-wasm-files".to_string(),
@@ -308,7 +343,9 @@ impl<T: ConfigLoaderConfig> MergedConfigLoaderOrDumper<T> {
             },
             None => match config_loader.load_or_dump_config() {
                 Some(_) => {
-                    panic!("illegal state while loading, got config for '{name}', while expected dumping");
+                    panic!(
+                        "illegal state while loading, got config for '{name}', while expected dumping"
+                    );
                 }
                 None => None,
             },

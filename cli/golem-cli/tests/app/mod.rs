@@ -28,7 +28,7 @@ sequential_suite!(plugins);
 
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group4);
+tag_suite!(agents, group3);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
@@ -36,6 +36,7 @@ inherit_test_dep!(Tracing);
 use crate::{crate_path, workspace_path, Tracing};
 use assert2::assert;
 use colored::Colorize;
+use golem_cli::fs::{read_to_string, write_str};
 use golem_client::api::HealthCheckClient;
 use golem_client::Security;
 use itertools::Itertools;
@@ -57,16 +58,17 @@ use tracing::info;
 use url::Url;
 
 mod cmd {
-    pub static ADD_DEPENDENCY: &str = "add-dependency";
+    pub static NO_ARGS: &[&str] = &[];
+
     pub static AGENT: &str = "agent";
-    pub static APP: &str = "app";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
+    pub static GENERATE_BRIDGE: &str = "generate-bridge";
     pub static GET: &str = "get";
-    pub static LIST: &str = "list";
     pub static INVOKE: &str = "invoke";
+    pub static LIST: &str = "list";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -75,10 +77,11 @@ mod cmd {
 }
 
 mod flag {
+    pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
     pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
-    pub static REDEPLOY_ALL: &str = "--redeploy-all";
+    pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
     pub static TEMPLATE_GROUP: &str = "--template-group";
@@ -86,22 +89,20 @@ mod flag {
 }
 
 mod pattern {
-    pub static ERROR: &str = "error";
     pub static HELP_APPLICATION_COMPONENTS: &str = "Application components:";
     pub static HELP_APPLICATION_CUSTOM_COMMANDS: &str = "Application custom commands:";
-    pub static HELP_COMMANDS: &str = "Commands:";
     pub static HELP_USAGE: &str = "Usage:";
 }
 
+#[derive(Debug, Clone)]
 enum CommandOutput {
     Stdout(String),
     Stderr(String),
 }
 
 pub struct Output {
-    pub status: ExitStatus,
-    pub stdout: Vec<String>,
-    pub stderr: Vec<String>,
+    status: ExitStatus,
+    output: Vec<CommandOutput>,
 }
 
 impl Output {
@@ -152,19 +153,28 @@ impl Output {
 
         drop(tx);
 
-        let mut stdout = vec![];
-        let mut stderr = vec![];
+        let mut output = vec![];
         while let Some(item) = rx.recv().await {
-            match item {
-                CommandOutput::Stdout(line) => stdout.push(line),
-                CommandOutput::Stderr(line) => stderr.push(line),
-            }
+            output.push(item);
         }
 
         Ok(Self {
             status: child.wait().await?,
-            stdout,
-            stderr,
+            output,
+        })
+    }
+
+    fn stdout(&self) -> impl Iterator<Item = &str> {
+        self.output.iter().filter_map(|output| match output {
+            CommandOutput::Stdout(line) => Some(line.as_str()),
+            CommandOutput::Stderr(_) => None,
+        })
+    }
+
+    fn stderr(&self) -> impl Iterator<Item = &str> {
+        self.output.iter().filter_map(|output| match output {
+            CommandOutput::Stdout(_) => None,
+            CommandOutput::Stderr(line) => Some(line.as_str()),
         })
     }
 
@@ -174,16 +184,34 @@ impl Output {
     }
 
     #[must_use]
+    fn success_or_dump(&self) -> bool {
+        let success = self.status.success();
+        if !success {
+            let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
+            let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
+            for output in &self.output {
+                match output {
+                    CommandOutput::Stdout(line) => {
+                        println!("{} {}", std_out_prefix, line);
+                    }
+                    CommandOutput::Stderr(line) => {
+                        println!("{} {}", std_err_prefix, line);
+                    }
+                }
+            }
+        }
+        success
+    }
+
+    #[must_use]
     fn stdout_contains<S: AsRef<str>>(&self, text: S) -> bool {
-        self.stdout
-            .iter()
+        self.stdout()
             .map(strip_ansi_escapes::strip_str)
             .any(|line| line.contains(text.as_ref()))
     }
 
     fn stdout_contains_row_with_cells(&self, expected_cells: &[&str]) -> bool {
-        self.stdout
-            .iter()
+        self.stdout()
             .map(strip_ansi_escapes::strip_str)
             .any(|line| {
                 let cells = line.split('|').map(str::trim).collect::<HashSet<_>>();
@@ -193,8 +221,7 @@ impl Output {
 
     #[must_use]
     fn stderr_contains<S: AsRef<str>>(&self, text: S) -> bool {
-        self.stderr
-            .iter()
+        self.stderr()
             .map(strip_ansi_escapes::strip_str)
             .any(|line| line.contains(text.as_ref()))
     }
@@ -204,7 +231,7 @@ impl Output {
         &self,
         patterns: I,
     ) -> bool {
-        contains_ordered(&self.stdout, patterns)
+        contains_ordered(self.stdout(), patterns)
     }
 
     #[must_use]
@@ -212,42 +239,23 @@ impl Output {
         &self,
         patterns: I,
     ) -> bool {
-        contains_ordered(&self.stderr, patterns)
+        contains_ordered(self.stderr(), patterns)
     }
 
     #[allow(dead_code)]
     #[must_use]
     fn stdout_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
-        self.stdout
-            .iter()
+        self.stdout()
             .filter(|line| line.contains(text.as_ref()))
             .count()
     }
 
     #[must_use]
+    #[allow(dead_code)]
     fn stderr_count_lines_containing<S: AsRef<str>>(&self, text: S) -> usize {
-        self.stderr
-            .iter()
+        self.stderr()
             .filter(|line| line.contains(text.as_ref()))
             .count()
-    }
-}
-
-impl From<std::process::Output> for Output {
-    fn from(output: std::process::Output) -> Self {
-        fn to_lines(bytes: Vec<u8>) -> Vec<String> {
-            String::from_utf8(bytes)
-                .unwrap()
-                .lines()
-                .map(|s| s.to_string())
-                .collect()
-        }
-
-        Self {
-            status: output.status,
-            stdout: to_lines(output.stdout),
-            stderr: to_lines(output.stderr),
-        }
     }
 }
 
@@ -306,17 +314,6 @@ impl TestContext {
             }
         }
 
-        // TODO: remove before 1.3.A release
-        if !env.contains_key("GOLEM_RUST_PATH") && !env.contains_key("GOLEM_RUST_VERSION") {
-            env.insert(
-                "GOLEM_RUST_PATH".to_string(),
-                workspace_path()
-                    .join("sdks/rust/golem-rust")
-                    .to_string_lossy()
-                    .to_string(),
-            );
-        }
-
         let ctx = Self {
             quiet,
             golem_path: {
@@ -360,6 +357,7 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
+    #[allow(dead_code)]
     fn use_generic_template_group(&mut self) {
         self.use_template_group("generic")
     }
@@ -498,6 +496,10 @@ impl TestContext {
         self.working_dir = self.working_dir.join(path.as_ref());
     }
 
+    fn cwd_path(&self) -> &Path {
+        &self.working_dir
+    }
+
     fn cwd_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         self.working_dir.join(path)
     }
@@ -524,17 +526,20 @@ fn check_component_metadata(
 }
 
 #[must_use]
-fn contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
-    lines: &[String],
-    patterns: I,
-) -> bool {
+fn contains_ordered<LS, L, PS, P>(lines: L, patterns: P) -> bool
+where
+    LS: AsRef<str>,
+    L: IntoIterator<Item = LS>,
+    PS: AsRef<str>,
+    P: IntoIterator<Item = PS>,
+{
     let mut patterns = patterns.into_iter();
     let mut pattern = patterns.next();
     let mut pattern_str = pattern.as_ref().map(|s| s.as_ref());
     for line in lines {
         match pattern_str {
             Some(p) => {
-                if line.contains(p) {
+                if line.as_ref().contains(p) {
                     pattern = patterns.next();
                     pattern_str = pattern.as_ref().map(|s| s.as_ref());
                 }
@@ -556,4 +561,20 @@ fn contains_ordered<S: AsRef<str>, I: IntoIterator<Item = S>>(
         }
     }
     remaining_patterns.is_empty()
+}
+
+pub fn replace_strings_in_file(
+    path: impl AsRef<Path>,
+    replace: &[(&str, &str)],
+) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    let mut content = read_to_string(path)?;
+    for (from, to) in replace {
+        content = content.replace(from, to);
+    }
+    write_str(path, content)
+}
+
+pub fn replace_string_in_file(path: impl AsRef<Path>, from: &str, to: &str) -> anyhow::Result<()> {
+    replace_strings_in_file(path, &[(from, to)])
 }

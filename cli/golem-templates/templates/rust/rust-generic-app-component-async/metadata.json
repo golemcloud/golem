@@ -1,5 +1,0 @@
-{
-  "description": "Rust component template with async support",
-  "appComponentGroup": "generic",
-  "devOnly": true
-}

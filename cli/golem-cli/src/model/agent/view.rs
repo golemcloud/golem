@@ -14,7 +14,7 @@
 
 use crate::model::component::render_agent_constructor;
 use cli_table::Table;
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::DeployedRegisteredAgentType;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize, Table)]
@@ -29,10 +29,10 @@ pub struct AgentTypeView {
 }
 
 impl AgentTypeView {
-    pub fn new(value: &RegisteredAgentType) -> Self {
+    pub fn new(value: &DeployedRegisteredAgentType, wrapper_naming: bool) -> Self {
         Self {
-            agent_type: value.agent_type.type_name.clone(),
-            constructor: render_agent_constructor(&value.agent_type, false),
+            agent_type: value.agent_type.type_name.to_string(),
+            constructor: render_agent_constructor(&value.agent_type, wrapper_naming, false),
             description: value.agent_type.description.clone(),
         }
     }

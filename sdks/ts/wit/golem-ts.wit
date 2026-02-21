@@ -1,5 +1,0 @@
-package golem:ts;
-
-world golem-ts{
-  import golem:api/host@1.3.0;
-}

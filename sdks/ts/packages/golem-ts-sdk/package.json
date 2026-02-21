@@ -1,0 +1,80 @@
+{
+  "name": "@golemcloud/golem-ts-sdk",
+  "type": "module",
+  "version": "0.0.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "types",
+    "dist",
+    "wasm"
+  ],
+  "main": "dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "agentic-guest": [
+        "types/exports.d.ts"
+      ],
+      "golem:agent/common": [
+        "types/golem_agent_common.d.ts"
+      ],
+      "golem:agent/host": [
+        "types/golem_agent_host.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types",
+    "clean-test-data": "rm -rf .metadata",
+    "generate-sample-agents-types": "node ../golem-ts-typegen/dist/bin/golem-typegen ./tsconfig.json --files tests/**/*.ts --include-class-decorators agent",
+    "prebuild": "npm run clean-test-data && pnpm run generate-dts && pnpm run generate-sample-agents-types",
+    "build": "pnpm run prebuild && tsc --noEmit && rollup -c",
+    "clean": "rm -rf .metadata agent-template dist node_modules package-lock.json && printf '\\nRun `npm install` before building again.\\n\\n'",
+    "test": "npm run build && tsc --noEmit && vitest run",
+    "dev": "rollup -c -w",
+    "generate-agent-template": "wasm-rquickjs generate-wrapper-crate --wit ../../wit --output agent-template --world agent-guest --js-modules '@golemcloud/golem-ts-sdk=dist/index.mjs' --js-modules 'user=@composition'",
+    "compile-agent-template": "cargo component build --manifest-path=agent-template/Cargo.toml --release",
+    "copy-agent-template": "cp agent-template/target/wasm32-wasip1/release/agent_guest.wasm ./wasm/agent_guest.wasm",
+    "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
+  },
+  "keywords": [],
+  "sideEffects": [
+    "src/index.ts"
+  ],
+  "author": "",
+  "license": "SEE LICENSE IN LICENSE",
+  "description": "",
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@types/node": "^24.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
+    "eslint": "^9.33.0",
+    "fast-check": "^4.2.0",
+    "prettier": "^3.6.2",
+    "reflect-metadata": "^0.1.14",
+    "rollup": "^4.46.2",
+    "rollup-plugin-dts": "^6.2.1",
+    "rollup-plugin-typescript2": "^0.36.0",
+    "ts-morph": "^26.0.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.39.0",
+    "vitest": "^3.2.4"
+  },
+  "private": false,
+  "dependencies": {
+    "@golemcloud/golem-ts-types-core": "workspace:*"
+  },
+  "repository": "https://github.com/golemcloud/golem"
+}

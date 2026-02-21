@@ -17,12 +17,12 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-use crate::model::agent::{DataValue, RegisteredAgentType};
+use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType};
+use crate::model::component::ComponentRevision;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
 };
-use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
     SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
@@ -31,15 +31,13 @@ use crate::model::oplog::types::{
     SerializableStreamError,
 };
 use crate::model::oplog::PayloadId;
-use crate::model::{
-    ComponentId, ComponentVersion, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
-    RevertWorkerTarget, WorkerId,
-};
+use crate::model::worker::RevertWorkerTarget;
+use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
 use crate::oplog_payload;
 use crate::serialization::serialize;
 use desert_rust::{
-    BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
 };
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_wasm::{IntoValueAndType, ValueAndType};
@@ -109,11 +107,11 @@ oplog_payload! {
         },
         GolemApiUpdateAgent {
             agent_id: WorkerId,
-            target_version: ComponentVersion,
+            target_revision: ComponentRevision,
             mode: UpdateMode
         },
         GolemAgentGetAgentType {
-            agent_type_name: String
+            agent_type_name: AgentTypeName
         },
         GolemRdbmsRequest {
             request: Option<SerializableRdbmsRequest>
@@ -124,8 +122,8 @@ oplog_payload! {
             function_name: String,
             function_params: Vec<ValueAndType>,
             #[from_value(skip)]
-            #[transient(None::<String>)]
-            remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
+            #[transient(None::<AgentTypeName>)]
+            remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry
             #[transient(None::<DataValue>)]
             #[from_value(skip)]
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
@@ -137,8 +135,8 @@ oplog_payload! {
             function_params: Vec<ValueAndType>,
             datetime: SerializableDateTime,
             #[from_value(skip)]
-            #[transient(None::<String>)]
-            remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
+            #[transient(None::<AgentTypeName>)]
+            remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry
             #[from_value(skip)]
             #[transient(None::<DataValue>)]
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
@@ -214,6 +212,9 @@ oplog_payload! {
         },
         FileSystemStat {
             result: Result<SerializableFileTimes, FileSystemError>,
+        },
+        GolemAgentWebhookUrl {
+            result: Result<String, String>
         },
         GolemApiAgentId {
             result: Result<Option<WorkerId>, String>
@@ -408,6 +409,7 @@ pub mod host_functions {
         (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
+        (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),

@@ -6,9 +6,9 @@ use crate::services::{HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::{
-    ComponentId, ProjectId, ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
-};
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{info, Instrument};
@@ -71,7 +71,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
 pub trait WorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
@@ -102,7 +102,7 @@ impl DefaultWorkerEnumerationService {
 
     async fn get_internal(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
@@ -113,7 +113,7 @@ impl DefaultWorkerEnumerationService {
 
         let (new_cursor, keys) = self
             .oplog_service
-            .scan_for_component(project_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
 
@@ -124,29 +124,24 @@ impl DefaultWorkerEnumerationService {
                 .instrument(tracing::info_span!("get_worker_metadata"))
                 .await;
 
-            if let Some((initial_worker_metadata, last_known_status)) =
-                worker_metadata.and_then(|wm| {
-                    wm.last_known_status
-                        .map(|lks| (wm.initial_worker_metadata, lks))
-                })
-            {
+            if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
                     let last_known_status = calculate_last_known_status_for_existing_worker(
                         self,
                         &owned_worker_id,
-                        Some(last_known_status),
+                        worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await;
 
                     WorkerMetadata {
                         last_known_status,
-                        ..initial_worker_metadata
+                        ..worker_metadata.initial_worker_metadata
                     }
                 } else {
                     WorkerMetadata {
-                        last_known_status,
-                        ..initial_worker_metadata
+                        last_known_status: worker_metadata.last_known_status.unwrap_or_default(),
+                        ..worker_metadata.initial_worker_metadata
                     }
                 };
 
@@ -182,7 +177,7 @@ impl HasConfig for DefaultWorkerEnumerationService {
 impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         cursor: ScanCursor,
@@ -190,7 +185,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         info!(
-            project_id = %project_id,
+            environment_id = %environment_id,
             component_id = %component_id,
             filter = filter
                 .clone()
@@ -209,7 +204,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
             let (next_cursor, workers_page) = self
                 .get_internal(
-                    project_id,
+                    environment_id,
                     component_id,
                     filter.clone(),
                     new_cursor.unwrap_or_default(),

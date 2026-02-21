@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
 #[cfg(test)]
 test_r::enable!();
 
@@ -32,8 +28,8 @@ pub mod bindings {
         pub_export_macro: true,
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock
+            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
         }
     });
 }
@@ -50,34 +46,24 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
 
             "golem:api/host@1.3.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.3.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.3.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.3.0": crate::bindings::golem::durability::durability,
-            "golem:rdbms/mysql@0.0.1": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@0.0.1": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@0.0.1": crate::bindings::golem::rdbms::types,
+            "golem:rdbms/mysql@0.0.2": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@0.0.2": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@0.0.2": crate::bindings::golem::rdbms::types,
             "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
             "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
             "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:clocks/monotonic-clock@0.2.3": crate::bindings::wasi::clocks::monotonic_clock,
-            "wasi:filesystem/preopens@0.2.3": crate::bindings::wasi::filesystem::preopens,
-            "wasi:filesystem/types@0.2.3": crate::bindings::wasi::filesystem::types,
-            "wasi:http/types@0.2.3": crate::bindings::wasi::http::types,
-            "wasi:http/outgoing-handler@0.2.3": crate::bindings::wasi::http::outgoing_handler,
-            "wasi:io/error@0.2.3": crate::bindings::wasi::io::error,
-            "wasi:io/streams@0.2.3": crate::bindings::wasi::io::streams,
             "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
             "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:sockets/ip-name-lookup@0.2.3": crate::bindings::wasi::sockets::ip_name_lookup,
-            "wasi:sockets/instance-network@0.2.3": crate::bindings::wasi::sockets::instance_network,
-            "wasi:sockets/network@0.2.3": crate::bindings::wasi::sockets::network,
         }
     });
 
@@ -96,34 +82,24 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
 
             "golem:api/host@1.3.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.3.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.3.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.3.0": crate::bindings::golem::durability::durability,
-            "golem:rdbms/mysql@0.0.1": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@0.0.1": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@0.0.1": crate::bindings::golem::rdbms::types,
+            "golem:rdbms/mysql@0.0.2": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@0.0.2": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@0.0.2": crate::bindings::golem::rdbms::types,
             "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
             "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
             "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:clocks/monotonic-clock@0.2.3": crate::bindings::wasi::clocks::monotonic_clock,
-            "wasi:filesystem/preopens@0.2.3": crate::bindings::wasi::filesystem::preopens,
-            "wasi:filesystem/types@0.2.3": crate::bindings::wasi::filesystem::types,
-            "wasi:http/types@0.2.3": crate::bindings::wasi::http::types,
-            "wasi:http/outgoing-handler@0.2.3": crate::bindings::wasi::http::outgoing_handler,
-            "wasi:io/error@0.2.3": crate::bindings::wasi::io::error,
-            "wasi:io/streams@0.2.3": crate::bindings::wasi::io::streams,
             "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
             "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:sockets/ip-name-lookup@0.2.3": crate::bindings::wasi::sockets::ip_name_lookup,
-            "wasi:sockets/instance-network@0.2.3": crate::bindings::wasi::sockets::instance_network,
-            "wasi:sockets/network@0.2.3": crate::bindings::wasi::sockets::network,
         }
     });
 
@@ -140,36 +116,27 @@ pub mod golem_agentic {
         generate_all,
         generate_unused_types: true,
         pub_export_macro: true,
+
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
 
             "golem:api/host@1.3.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.3.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.3.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.3.0": crate::bindings::golem::durability::durability,
-            "golem:rdbms/mysql@0.0.1": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@0.0.1": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@0.0.1": crate::bindings::golem::rdbms::types,
+            "golem:rdbms/mysql@0.0.2": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@0.0.2": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@0.0.2": crate::bindings::golem::rdbms::types,
             "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
             "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
             "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:clocks/monotonic-clock@0.2.3": crate::bindings::wasi::clocks::monotonic_clock,
-            "wasi:filesystem/preopens@0.2.3": crate::bindings::wasi::filesystem::preopens,
-            "wasi:filesystem/types@0.2.3": crate::bindings::wasi::filesystem::types,
-            "wasi:http/types@0.2.3": crate::bindings::wasi::http::types,
-            "wasi:http/outgoing-handler@0.2.3": crate::bindings::wasi::http::outgoing_handler,
-            "wasi:io/error@0.2.3": crate::bindings::wasi::io::error,
-            "wasi:io/streams@0.2.3": crate::bindings::wasi::io::streams,
             "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
             "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:sockets/ip-name-lookup@0.2.3": crate::bindings::wasi::sockets::ip_name_lookup,
-            "wasi:sockets/instance-network@0.2.3": crate::bindings::wasi::sockets::instance_network,
-            "wasi:sockets/network@0.2.3": crate::bindings::wasi::sockets::network,
         }
     });
 
@@ -188,34 +155,25 @@ pub mod golem_ai {
         pub_export_macro: true,
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
+            "wasi:io/error@0.2.3": wstd::wasi::io::error,
+            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
 
             "golem:api/host@1.3.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.3.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.3.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.3.0": crate::bindings::golem::durability::durability,
-            "golem:rdbms/mysql@0.0.1": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@0.0.1": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@0.0.1": crate::bindings::golem::rdbms::types,
+            "golem:rdbms/mysql@0.0.2": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@0.0.2": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@0.0.2": crate::bindings::golem::rdbms::types,
             "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
             "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
             "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:clocks/monotonic-clock@0.2.3": crate::bindings::wasi::clocks::monotonic_clock,
-            "wasi:filesystem/preopens@0.2.3": crate::bindings::wasi::filesystem::preopens,
-            "wasi:filesystem/types@0.2.3": crate::bindings::wasi::filesystem::types,
-            "wasi:http/types@0.2.3": crate::bindings::wasi::http::types,
-            "wasi:http/outgoing-handler@0.2.3": crate::bindings::wasi::http::outgoing_handler,
-            "wasi:io/error@0.2.3": crate::bindings::wasi::io::error,
-            "wasi:io/streams@0.2.3": crate::bindings::wasi::io::streams,
             "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
             "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:sockets/ip-name-lookup@0.2.3": crate::bindings::wasi::sockets::ip_name_lookup,
-            "wasi:sockets/instance-network@0.2.3": crate::bindings::wasi::sockets::instance_network,
-            "wasi:sockets/network@0.2.3": crate::bindings::wasi::sockets::network,
         }
     });
 }
@@ -238,34 +196,24 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
 
             "golem:api/host@1.3.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.3.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.3.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.3.0": crate::bindings::golem::durability::durability,
-            "golem:rdbms/mysql@0.0.1": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@0.0.1": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@0.0.1": crate::bindings::golem::rdbms::types,
+            "golem:rdbms/mysql@0.0.2": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@0.0.2": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@0.0.2": crate::bindings::golem::rdbms::types,
             "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
             "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
             "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:clocks/monotonic-clock@0.2.3": crate::bindings::wasi::clocks::monotonic_clock,
-            "wasi:filesystem/preopens@0.2.3": crate::bindings::wasi::filesystem::preopens,
-            "wasi:filesystem/types@0.2.3": crate::bindings::wasi::filesystem::types,
-            "wasi:http/types@0.2.3": crate::bindings::wasi::http::types,
-            "wasi:http/outgoing-handler@0.2.3": crate::bindings::wasi::http::outgoing_handler,
-            "wasi:io/error@0.2.3": crate::bindings::wasi::io::error,
-            "wasi:io/streams@0.2.3": crate::bindings::wasi::io::streams,
             "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
             "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
             "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
             "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
             "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:sockets/ip-name-lookup@0.2.3": crate::bindings::wasi::sockets::ip_name_lookup,
-            "wasi:sockets/instance-network@0.2.3": crate::bindings::wasi::sockets::instance_network,
-            "wasi:sockets/network@0.2.3": crate::bindings::wasi::sockets::network,
         }
     });
 
@@ -289,44 +237,39 @@ pub mod value_and_type;
 
 use bindings::golem::api::host::*;
 
-pub use golem_wasm as wasm_rpc;
+pub use golem_wasm;
 
-pub use bindings::golem::api::host::{fork, oplog_commit};
-pub use bindings::golem::api::host::{ForkResult, PersistenceLevel};
+pub use bindings::golem::api::host::{
+    complete_promise, create_promise, fork, get_promise, oplog_commit,
+};
+pub use bindings::golem::api::host::{ForkResult, PersistenceLevel, PromiseId};
 
 pub use transaction::*;
 
 #[cfg(feature = "macro")]
 pub use golem_rust_macro::*;
 
-impl Display for PromiseId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
-    }
+/// Awaits a promise blocking the execution of the agent. The agent is going to be
+/// suspended until the promise is completed.
+///
+/// Use `await_promise` for an async version of this function, allowing to interleave
+/// awaiting of the promise with other operations.
+pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
+    let promise = get_promise(promise_id);
+    let pollable = promise.subscribe();
+    pollable.block();
+    promise.get().unwrap()
 }
 
-impl FromStr for PromiseId {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() == 2 {
-            let agent_id = AgentId::from_str(parts[0]).map_err(|_| {
-                format!("invalid agent id: {s} - expected format: <component_id>/<agent_id>")
-            })?;
-            let oplog_idx = parts[1]
-                .parse()
-                .map_err(|_| format!("invalid oplog index: {s} - expected integer"))?;
-            Ok(Self {
-                agent_id,
-                oplog_idx,
-            })
-        } else {
-            Err(format!(
-                "invalid promise id: {s} - expected format: <agent_id>/<oplog_idx>"
-            ))
-        }
-    }
+/// Awaits a promise.
+///
+/// If only promises or timeouts are awaited simultaneously, the agent is going to be
+/// suspended until any of them completes.
+pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
+    let promise = get_promise(promise_id);
+    let pollable = promise.subscribe();
+    wstd::io::AsyncPollable::new(pollable).wait_for().await;
+    promise.get().unwrap()
 }
 
 #[derive(Clone, Debug, PartialEq)]

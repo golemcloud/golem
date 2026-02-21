@@ -12,22 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::WorkerExecutorTestDependencies;
-use assert2::check;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
+use golem_common::model::component::ComponentId;
+use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
+use golem_worker_executor::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
-    IndexedStorage, IndexedStorageNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
 };
+use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
+use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
-use std::fmt::Debug;
-use std::sync::Arc;
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, Mutex};
+use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use uuid::Uuid;
 
@@ -132,41 +136,115 @@ async fn sqlite_storage(
     Arc::new(SqliteIndexedStorageWrapper)
 }
 
+struct MultiSqliteIndexedStorageWrapper {
+    tempdirs: Arc<Mutex<Vec<TempDir>>>,
+}
+
+impl MultiSqliteIndexedStorageWrapper {
+    fn new() -> Self {
+        Self {
+            tempdirs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl Debug for MultiSqliteIndexedStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MultiSqliteIndexedStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
+    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().to_path_buf();
+        self.tempdirs.lock().unwrap().push(tempdir);
+
+        let storage = MultiSqliteIndexedStorage::new(&path, 10, true);
+        Arc::new(storage)
+    }
+}
+
+#[test_dep(tagged_as = "multi_sqlite")]
+async fn multi_sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetIndexedStorage + Send + Sync> {
+    Arc::new(MultiSqliteIndexedStorageWrapper::new())
+}
+
+#[derive(Debug, Clone)]
+struct IndexedStorageNamespaces {
+    ns: IndexedStorageNamespace,
+    ns_other: IndexedStorageNamespace,
+    meta: IndexedStorageMetaNamespace,
+}
+
 #[test_dep(tagged_as = "ns1")]
-fn ns() -> IndexedStorageNamespace {
-    IndexedStorageNamespace::OpLog
+fn ns() -> IndexedStorageNamespaces {
+    IndexedStorageNamespaces {
+        ns: IndexedStorageNamespace::OpLog {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test".to_string(),
+            },
+        },
+        ns_other: IndexedStorageNamespace::OpLog {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test2".to_string(),
+            },
+        },
+        meta: IndexedStorageMetaNamespace::Oplog,
+    }
 }
 
 #[test_dep(tagged_as = "ns2")]
-fn ns2() -> IndexedStorageNamespace {
-    IndexedStorageNamespace::CompressedOpLog { level: 1 }
+fn ns2() -> IndexedStorageNamespaces {
+    IndexedStorageNamespaces {
+        ns: IndexedStorageNamespace::CompressedOpLog {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test".to_string(),
+            },
+            level: 1,
+        },
+        ns_other: IndexedStorageNamespace::CompressedOpLog {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test2".to_string(),
+            },
+            level: 1,
+        },
+        meta: IndexedStorageMetaNamespace::CompressedOplog { level: 1 },
+    }
 }
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite");
+define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite");
 
 #[test]
 #[tracing::instrument]
 async fn exists_append(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    let result1 = is.exists("svc", "api", ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1)
+    let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    let result2 = is.exists("svc", "api", ns.clone(), key1).await.unwrap();
+    let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
-    check!(result1 == false);
-    check!(result2 == true);
+    assert_eq!(result1, false);
+    assert_eq!(result2, true);
 }
 
 #[test]
@@ -174,20 +252,20 @@ async fn exists_append(
 async fn namespaces_are_separate(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns1: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns1: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns1.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns1.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    let result = is.exists("svc", "api", ns2.clone(), key1).await.unwrap();
+    let result = is.exists("svc", "api", ns2.ns.clone(), key1).await.unwrap();
 
-    check!(result == false);
+    assert_eq!(result, false);
 }
 
 #[test]
@@ -195,8 +273,8 @@ async fn namespaces_are_separate(
 async fn can_append_and_get(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -205,22 +283,46 @@ async fn can_append_and_get(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 2, value2.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 3, value3.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        2,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        3,
+        value3.clone(),
+    )
+    .await
+    .unwrap();
 
     let result = is
-        .read("svc", "api", "entity", ns.clone(), key1, 1, 3)
+        .read("svc", "api", "entity", ns.ns.clone(), key1, 1, 3)
         .await
         .unwrap();
 
-    check!(result == vec![(1, value1), (2, value2), (3, value3)]);
+    assert_eq!(result, vec![(1, value1), (2, value2), (3, value3)]);
 }
 
 #[test]
@@ -228,8 +330,8 @@ async fn can_append_and_get(
 async fn append_cannot_overwrite(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -237,14 +339,14 @@ async fn append_cannot_overwrite(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
     let result1 = is
-        .append("svc", "api", "entity", ns.clone(), key1, 1, value2)
+        .append("svc", "api", "entity", ns.ns.clone(), key1, 1, value2)
         .await;
 
-    check!(result1.is_err());
+    assert!(result1.is_err());
 }
 
 #[test]
@@ -252,8 +354,8 @@ async fn append_cannot_overwrite(
 async fn append_can_skip(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -261,19 +363,35 @@ async fn append_can_skip(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 4, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 8, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        4,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        8,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
 
     let result = is
-        .read("svc", "api", "entity", ns.clone(), key1, 1, 10)
+        .read("svc", "api", "entity", ns.ns.clone(), key1, 1, 10)
         .await
         .unwrap();
 
-    check!(result == vec![(4, value1), (8, value2)]);
+    assert_eq!(result, vec![(4, value1), (8, value2)]);
 }
 
 #[test]
@@ -281,8 +399,8 @@ async fn append_can_skip(
 async fn length(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -290,19 +408,19 @@ async fn length(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    let result1 = is.length("svc", "api", ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 4, value1)
+    let result1 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 4, value1)
         .await
         .unwrap();
-    let result2 = is.length("svc", "api", ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 8, value2)
+    let result2 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 8, value2)
         .await
         .unwrap();
-    let result3 = is.length("svc", "api", ns.clone(), key1).await.unwrap();
+    let result3 = is.length("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
-    check!(result1 == 0);
-    check!(result2 == 1);
-    check!(result3 == 2);
+    assert_eq!(result1, 0);
+    assert_eq!(result2, 1);
+    assert_eq!(result3, 2);
 }
 
 #[test]
@@ -310,8 +428,8 @@ async fn length(
 async fn scan_empty(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -319,7 +437,7 @@ async fn scan_empty(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "*", cursor, 10)
+            .scan("svc", "api", ns.meta.clone(), "*", cursor, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -329,7 +447,7 @@ async fn scan_empty(
         }
     }
 
-    check!(result == Vec::<String>::new());
+    assert_eq!(result, Vec::<String>::new());
 }
 
 #[test]
@@ -337,8 +455,8 @@ async fn scan_empty(
 async fn scan_with_no_pattern_single_paged(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -347,10 +465,10 @@ async fn scan_with_no_pattern_single_paged(
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
         .await
         .unwrap();
 
@@ -358,7 +476,7 @@ async fn scan_with_no_pattern_single_paged(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "*", cursor, 10)
+            .scan("svc", "api", ns.meta.clone(), "*", cursor, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -369,8 +487,8 @@ async fn scan_with_no_pattern_single_paged(
     }
 
     result.sort();
-    check!(result.contains(&key1.to_string()));
-    check!(result.contains(&key2.to_string()));
+    assert!(result.contains(&key1.to_string()));
+    assert!(result.contains(&key2.to_string()));
 }
 
 #[test]
@@ -378,31 +496,68 @@ async fn scan_with_no_pattern_single_paged(
 async fn scan_with_no_pattern_paginated(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
     let key2 = "key2";
+    let key3 = "key2";
     let value1 = "value1".as_bytes().to_vec();
     let value2 = "value2".as_bytes().to_vec();
+    let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 2, value2.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key2, 1, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        1,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        2,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns2.ns.clone(),
+        key2,
+        1,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns_other.clone(),
+        key3,
+        3,
+        value3.clone(),
+    )
+    .await
+    .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
             .await
             .unwrap();
         r1.extend(chunk);
@@ -416,7 +571,7 @@ async fn scan_with_no_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
             .await
             .unwrap();
         r2.extend(chunk);
@@ -427,16 +582,32 @@ async fn scan_with_no_pattern_paginated(
         }
     }
 
+    let mut r3: Vec<String> = Vec::new();
+    loop {
+        let (next, chunk) = is
+            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
+            .await
+            .unwrap();
+        r3.extend(chunk);
+        cursor = next;
+
+        if cursor == 0 {
+            break;
+        }
+    }
+
     let mut all = Vec::new();
     all.extend(r1.clone());
     all.extend(r2.clone());
+    all.extend(r3.clone());
     all.sort();
 
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
     // check!(r1.len() == 1);
     // check!(r2.len() == 1);
-    check!(all.contains(&key1.to_string()));
-    check!(all.contains(&key2.to_string()));
+    assert!(all.contains(&key1.to_string()));
+    assert!(all.contains(&key2.to_string()));
+    assert!(all.contains(&key3.to_string()));
 }
 
 #[test]
@@ -444,8 +615,8 @@ async fn scan_with_no_pattern_paginated(
 async fn scan_with_prefix_pattern_single_paged(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -456,13 +627,13 @@ async fn scan_with_prefix_pattern_single_paged(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key3, 1, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3)
         .await
         .unwrap();
 
@@ -470,7 +641,7 @@ async fn scan_with_prefix_pattern_single_paged(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "key*", cursor, 10)
+            .scan("svc", "api", ns.meta.clone(), "key*", cursor, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -481,8 +652,8 @@ async fn scan_with_prefix_pattern_single_paged(
     }
 
     result.sort();
-    check!(result.contains(&key1.to_string()));
-    check!(result.contains(&key3.to_string()));
+    assert!(result.contains(&key1.to_string()));
+    assert!(result.contains(&key3.to_string()));
 }
 
 #[test]
@@ -490,8 +661,8 @@ async fn scan_with_prefix_pattern_single_paged(
 async fn scan_with_prefix_pattern_paginated(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -502,13 +673,13 @@ async fn scan_with_prefix_pattern_paginated(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key2, 1, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key2, 1, value2)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key3, 1, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key3, 1, value3)
         .await
         .unwrap();
 
@@ -516,7 +687,7 @@ async fn scan_with_prefix_pattern_paginated(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "key*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), "key*", cursor, 1)
             .await
             .unwrap();
         r1.extend(chunk);
@@ -530,7 +701,7 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.clone(), "key*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), "key*", cursor, 1)
             .await
             .unwrap();
         r2.extend(chunk);
@@ -549,8 +720,8 @@ async fn scan_with_prefix_pattern_paginated(
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
     // check!(r1.len() == 1);
     // check!(r2.len() == 1);
-    check!(all.contains(&key1.to_string()));
-    check!(all.contains(&key3.to_string()));
+    assert!(all.contains(&key1.to_string()));
+    assert!(all.contains(&key3.to_string()));
 }
 
 #[test]
@@ -558,23 +729,23 @@ async fn scan_with_prefix_pattern_paginated(
 async fn exists_append_delete(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    let result1 = is.exists("svc", "api", ns.clone(), key1).await.unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 1, value1)
+    let result1 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    is.delete("svc", "api", ns.clone(), key1).await.unwrap();
-    let result2 = is.exists("svc", "api", ns.clone(), key1).await.unwrap();
+    is.delete("svc", "api", ns.ns.clone(), key1).await.unwrap();
+    let result2 = is.exists("svc", "api", ns.ns.clone(), key1).await.unwrap();
 
-    check!(result1 == false);
-    check!(result2 == false);
+    assert_eq!(result1, false);
+    assert_eq!(result2, false);
 }
 
 #[test]
@@ -582,21 +753,21 @@ async fn exists_append_delete(
 async fn delete_is_per_namespace(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns1: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns1: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
     let value1 = "value1".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns1.clone(), key1, 1, value1)
+    is.append("svc", "api", "entity", ns1.ns.clone(), key1, 1, value1)
         .await
         .unwrap();
-    is.delete("svc", "api", ns2.clone(), key1).await.unwrap();
-    let result = is.exists("svc", "api", ns1.clone(), key1).await.unwrap();
+    is.delete("svc", "api", ns2.ns.clone(), key1).await.unwrap();
+    let result = is.exists("svc", "api", ns1.ns.clone(), key1).await.unwrap();
 
-    check!(result == true);
+    assert_eq!(result, true);
 }
 
 #[test]
@@ -604,16 +775,16 @@ async fn delete_is_per_namespace(
 async fn delete_non_existing(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
     let key1 = "key1";
 
-    let result = is.delete("svc", "api", ns.clone(), key1).await;
+    let result = is.delete("svc", "api", ns.ns.clone(), key1).await;
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -621,8 +792,8 @@ async fn delete_non_existing(
 async fn first(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -631,22 +802,38 @@ async fn first(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is
-        .first("svc", "api", "entity", ns.clone(), key1)
+        .first("svc", "api", "entity", ns.ns.clone(), key1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 5, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 7, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        5,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        7,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
     let result2 = is
-        .first("svc", "api", "entity", ns.clone(), key1)
+        .first("svc", "api", "entity", ns.ns.clone(), key1)
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((5, value1)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((5, value1)));
 }
 
 #[test]
@@ -654,8 +841,8 @@ async fn first(
 async fn last(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -664,22 +851,38 @@ async fn last(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is
-        .last("svc", "api", "entity", ns.clone(), key1)
+        .last("svc", "api", "entity", ns.ns.clone(), key1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 5, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 7, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        5,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        7,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
     let result2 = is
-        .last("svc", "api", "entity", ns.clone(), key1)
+        .last("svc", "api", "entity", ns.ns.clone(), key1)
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((7, value2)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((7, value2)));
 }
 
 #[test]
@@ -687,8 +890,8 @@ async fn last(
 async fn closest_low(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -697,22 +900,38 @@ async fn closest_low(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 3)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 3)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 5, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 7, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        5,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        7,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
     let result2 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 3)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 3)
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((5, value1)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((5, value1)));
 }
 
 #[test]
@@ -720,8 +939,8 @@ async fn closest_low(
 async fn closest_match(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -730,22 +949,38 @@ async fn closest_match(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 5)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 5)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 5, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 7, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        5,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        7,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
     let result2 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 5)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 5)
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((5, value1)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((5, value1)));
 }
 
 #[test]
@@ -753,8 +988,8 @@ async fn closest_match(
 async fn closest_mid(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -763,22 +998,38 @@ async fn closest_mid(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 6)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 6)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 5, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 7, value2.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        5,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        7,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
     let result2 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 6)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 6)
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some((7, value2)));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some((7, value2)));
 }
 
 #[test]
@@ -786,8 +1037,8 @@ async fn closest_mid(
 async fn closest_high(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -796,22 +1047,22 @@ async fn closest_high(
     let value2 = "value2".as_bytes().to_vec();
 
     let result1 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 10)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 10)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 5, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 5, value1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 7, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 7, value2)
         .await
         .unwrap();
     let result2 = is
-        .closest("svc", "api", "entity", ns.clone(), key1, 10)
+        .closest("svc", "api", "entity", ns.ns.clone(), key1, 10)
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == None);
+    assert_eq!(result1, None);
+    assert_eq!(result2, None);
 }
 
 #[test]
@@ -819,8 +1070,8 @@ async fn closest_high(
 async fn drop_prefix_no_match(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -829,25 +1080,49 @@ async fn drop_prefix_no_match(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 10, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 11, value2.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 12, value3.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        10,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        11,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        12,
+        value3.clone(),
+    )
+    .await
+    .unwrap();
 
-    is.drop_prefix("svc", "api", ns.clone(), key1, 5)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 5)
         .await
         .unwrap();
     let result = is
-        .read("svc", "api", "entity", ns.clone(), key1, 1, 100)
+        .read("svc", "api", "entity", ns.ns.clone(), key1, 1, 100)
         .await
         .unwrap();
 
-    check!(result == vec![(10, value1), (11, value2), (12, value3)]);
+    assert_eq!(result, vec![(10, value1), (11, value2), (12, value3)]);
 }
 
 #[test]
@@ -855,8 +1130,8 @@ async fn drop_prefix_no_match(
 async fn drop_prefix_partial(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -865,25 +1140,49 @@ async fn drop_prefix_partial(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 10, value1.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 11, value2.clone())
-        .await
-        .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 12, value3.clone())
-        .await
-        .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        10,
+        value1.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        11,
+        value2.clone(),
+    )
+    .await
+    .unwrap();
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key1,
+        12,
+        value3.clone(),
+    )
+    .await
+    .unwrap();
 
-    is.drop_prefix("svc", "api", ns.clone(), key1, 10)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 10)
         .await
         .unwrap();
     let result = is
-        .read("svc", "api", "entity", ns.clone(), key1, 1, 100)
+        .read("svc", "api", "entity", ns.ns.clone(), key1, 1, 100)
         .await
         .unwrap();
 
-    check!(result == vec![(11, value2), (12, value3)]);
+    assert_eq!(result, vec![(11, value2), (12, value3)]);
 }
 
 #[test]
@@ -891,8 +1190,8 @@ async fn drop_prefix_partial(
 async fn drop_prefix_full(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-    #[tagged_as("ns1")] ns: &IndexedStorageNamespace,
-    #[tagged_as("ns2")] ns2: &IndexedStorageNamespace,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+    #[tagged_as("ns2")] ns2: &IndexedStorageNamespaces,
 ) {
     let is = is.get_indexed_storage().await;
 
@@ -901,23 +1200,23 @@ async fn drop_prefix_full(
     let value2 = "value2".as_bytes().to_vec();
     let value3 = "value3".as_bytes().to_vec();
 
-    is.append("svc", "api", "entity", ns.clone(), key1, 10, value1)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 10, value1)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 11, value2)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 11, value2)
         .await
         .unwrap();
-    is.append("svc", "api", "entity", ns.clone(), key1, 12, value3)
+    is.append("svc", "api", "entity", ns.ns.clone(), key1, 12, value3)
         .await
         .unwrap();
 
-    is.drop_prefix("svc", "api", ns.clone(), key1, 20)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20)
         .await
         .unwrap();
     let result = is
-        .read("svc", "api", "entity", ns.clone(), key1, 1, 100)
+        .read("svc", "api", "entity", ns.ns.clone(), key1, 1, 100)
         .await
         .unwrap();
 
-    check!(result == vec![]);
+    assert_eq!(result, vec![]);
 }

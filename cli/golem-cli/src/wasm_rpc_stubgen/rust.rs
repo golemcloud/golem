@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::fs;
-use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::{FunctionResultStub, FunctionStub, StubDefinition};
@@ -24,6 +23,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use semver::Version;
 use std::collections::{HashMap, HashSet};
+use tracing::debug;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
     Enum, Flags, Handle, PackageName, Record, Result_, Tuple, Type, TypeDef, TypeDefKind,
@@ -48,15 +48,15 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let additional_fields = if entity.is_resource() {
             vec![quote! {
                 id: u64,
-                uri: golem_rust::wasm_rpc::Uri
+                uri: golem_rust::golem_wasm::Uri
             }]
         } else {
             vec![]
         };
         let struct_fns: Vec<TokenStream> = if entity.is_resource() {
             vec![quote! {
-                pub fn from_remote_handle(uri: golem_rust::wasm_rpc::Uri, id: u64) -> Self {
-                    let agent_id: golem_rust::wasm_rpc::AgentId = uri.clone().try_into().expect(
+                pub fn from_remote_handle(uri: golem_rust::golem_wasm::Uri, id: u64) -> Self {
+                    let agent_id: golem_rust::golem_wasm::AgentId = uri.clone().try_into().expect(
                         &format!("Invalid agent uri in remote resource handle: {}", uri.value)
                     );
                     Self {
@@ -143,10 +143,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     naming::rust::result_wrapper_interface_ident(function, entity);
 
                 let subscribe = quote! {
-                    fn subscribe(&self) -> golem_rust::wasm_rpc::Pollable {
+                    fn subscribe(&self) -> golem_rust::golem_wasm::Pollable {
                         let pollable = self.future_invoke_result.subscribe();
                         let pollable = unsafe {
-                            golem_rust::wasm_rpc::Pollable::from_handle(
+                            golem_rust::golem_wasm::Pollable::from_handle(
                                 pollable.take_handle()
                             )
                         };
@@ -257,7 +257,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
                     }
                 }
 
-                fn custom(agent_id: golem_rust::wasm_rpc::AgentId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
+                fn custom(agent_id: golem_rust::golem_wasm::AgentId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
                     crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
                         Self {
                             rpc: WasmRpc::new(&agent_id)
@@ -307,7 +307,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let lib = quote! {
         #![allow(warnings)]
 
-        use golem_rust::wasm_rpc::*;
+        use golem_rust::golem_wasm::*;
 
         #[allow(dead_code)]
         mod bindings;
@@ -322,14 +322,14 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let syntax_tree = syn::parse2(lib)?;
     let src = prettyplease::unparse(&syntax_tree);
 
-    let target_rust_path = PathExtra::new(def.client_rust_path());
+    let target_rust_path = def.client_rust_path();
 
     log_action(
         "Generating",
         format!("stub source to {}", target_rust_path.log_color_highlight()),
     );
-    println!("target: {:?}", target_rust_path.as_path());
-    fs::create_dir_all(target_rust_path.parent()?)?;
+    debug!("target: {:?}", target_rust_path.as_path());
+    fs::create_dir_all(fs::parent_or_err(&target_rust_path)?)?;
     fs::write(def.client_rust_path(), src)?;
     Ok(())
 }
@@ -387,7 +387,7 @@ fn generate_function_stub_source(
     if mode == FunctionMode::Constructor {
         params.push(quote! { wasm_rpc_agent_id: String });
     } else if mode == FunctionMode::CustomConstructor {
-        params.push(quote! { wasm_rpc_agent_id: golem_rust::wasm_rpc::AgentId });
+        params.push(quote! { wasm_rpc_agent_id: golem_rust::golem_wasm::AgentId });
     } else if mode == FunctionMode::Method {
         input_values.push(quote! {
             WitValue::builder().handle(self.uri.clone(), self.id)
@@ -547,8 +547,8 @@ fn generate_function_stub_source(
         quote! {
             fn #function_name(
                 #(#params),*,
-                #schedule_for_param: golem_rust::wasm_rpc::wasi::clocks::wall_clock::Datetime
-            ) -> golem_rust::wasm_rpc::golem_rpc_0_2_x::types::CancellationToken {
+                #schedule_for_param: golem_rust::golem_wasm::wasi::clocks::wall_clock::Datetime
+            ) -> golem_rust::golem_wasm::golem_rpc_0_2_x::types::CancellationToken {
                 #init
                 #rpc.schedule_cancelable_invocation(
                     #schedule_for_param,
@@ -1685,7 +1685,7 @@ impl Default for BindingMapping {
             BindingMappingEntry {
                 module_path: vec![
                     "golem_rust".to_string(),
-                    "wasm_rpc".to_string(),
+                    "golem_wasm".to_string(),
                     "wasi".to_string(),
                     "io".to_string(),
                     "poll".to_string(),
@@ -1704,7 +1704,7 @@ impl Default for BindingMapping {
             BindingMappingEntry {
                 module_path: vec![
                     "golem_rust".to_string(),
-                    "wasm_rpc".to_string(),
+                    "golem_wasm".to_string(),
                     "wasi".to_string(),
                     "clocks".to_string(),
                     "wall_clock".to_string(),
@@ -1723,7 +1723,7 @@ impl Default for BindingMapping {
             BindingMappingEntry {
                 module_path: vec![
                     "golem_rust".to_string(),
-                    "wasm_rpc".to_string(),
+                    "golem_wasm".to_string(),
                     "golem_rpc_0_2_x".to_string(),
                     "types".to_string(),
                 ],

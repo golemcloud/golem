@@ -1,33 +1,27 @@
 {
-  "name": "@golemcloud/golem-ts",
-  "version": "1.5.0",
-  "description": "A library that help writing Golem programs by providing higher level wrappers for Golem's runtime APIs, including functions for defining and performing operations transactionally.",
-  "repository": {
-    "url": "git+https://github.com/golemcloud/golem-ts.git",
-    "directory": "lib"
-  },
-  "license": "Apache-2.0",
-  "keywords": [
-    "golem",
-    "typescript",
-    "runtime"
-  ],
-  "main": "out/index.js",
-  "types": "out/index.d.ts",
-  "files": [
-    "out/"
-  ],
+  "name": "golem-agentic",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "update-wit-deps": "wit-deps -d wit/deps -m wit/deps.toml -l wit/deps.lock",
-    "generate-types": "rm -rf types && jco guest-types wit -o types",
-    "build": "tsc",
-    "check": "npx @biomejs/biome check",
-    "fix": "npx @biomejs/biome check --write"
+    "build": "pnpm --filter @golemcloud/golem-ts-types-core run build && pnpm --filter @golemcloud/golem-ts-typegen run build && pnpm --filter @golemcloud/golem-ts-sdk run build && pnpm --filter @golemcloud/golem-ts-repl run build",
+    "build-agent-template": "pnpm --filter @golemcloud/golem-ts-sdk run build-agent-template",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "clean": "rm -rf dist node_modules packages/*/dist packages/*/node_modules packages/*/.metadata packages/golem-ts-sdk/agent-template"
   },
   "devDependencies": {
-    "@biomejs/biome": "1.9.4",
-    "@bytecodealliance/jco": "1.10.2",
-    "@types/node": "^22.10.5",
-    "typescript": "^5.7.2"
-  }
+    "@eslint/js": "^9.35.0",
+    "@typescript-eslint/eslint-plugin": "^8.42.0",
+    "@typescript-eslint/parser": "^8.42.0",
+    "eslint": "^9.35.0",
+    "globals": "^16.3.0",
+    "pnpm": "^8.10.0",
+    "prettier": "^3.6.2",
+    "rollup": "^4.46.2",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3"
+  },
+  "packageManager": "pnpm@10.17.1+sha512.17c560fca4867ae9473a3899ad84a88334914f379be46d455cbf92e5cf4b39d34985d452d2583baf19967fa76cb5c17bc9e245529d0b98745721aa7200ecaf7a"
 }

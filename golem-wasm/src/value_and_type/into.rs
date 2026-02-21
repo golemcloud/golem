@@ -13,17 +13,11 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case,
-    unit_result, variant,
+    bool, case, field, list, option, record, result, result_err, result_ok, str, tuple, u32,
+    unit_case, unit_result, variant,
 };
-use crate::analysis::{
-    analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
-    TypeFlags,
-};
-use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{
-    NodeIndex, ResourceMode, RpcError, Value, ValueAndType, WitNode, WitType, WitTypeNode, WitValue,
-};
+use crate::analysis::{analysed_type, AnalysedType, NameTypePair};
+use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{Datelike, Offset, Timelike};
@@ -45,6 +39,21 @@ pub trait IntoValueAndType {
 impl<T: IntoValue + Sized> IntoValueAndType for T {
     fn into_value_and_type(self) -> ValueAndType {
         ValueAndType::new(self.into_value(), Self::get_type())
+    }
+}
+
+/// Helper trait for converting values to `ValueAndType` without double-encoding.
+///
+/// This is used by the `data_value!` macro. For `ValueAndType` values, the inherent
+/// method on `ValueAndType` takes priority (returning self), while for all other types
+/// this trait's blanket impl delegates to `into_value_and_type()`.
+pub trait ConvertToValueAndType {
+    fn convert_to_value_and_type(self) -> ValueAndType;
+}
+
+impl<T: IntoValue + Sized> ConvertToValueAndType for T {
+    fn convert_to_value_and_type(self) -> ValueAndType {
+        self.into_value_and_type()
     }
 }
 
@@ -237,6 +246,19 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     }
 }
 
+impl IntoValue for Result<(), ()> {
+    fn into_value(self) -> Value {
+        match self {
+            Ok(_) => Value::Result(Ok(None)),
+            Err(_) => Value::Result(Err(None)),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        unit_result()
+    }
+}
+
 impl<T: IntoValue> IntoValue for Box<T> {
     fn into_value(self) -> Value {
         (*self).into_value()
@@ -297,29 +319,33 @@ impl<T: IntoValue> IntoValue for Vec<T> {
     }
 }
 
-impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![self.0.into_value(), self.1.into_value()])
-    }
+macro_rules! impl_into_value_for_tuples {
+    ($($ty:ident),*) => {
+        impl<$($ty: IntoValue),*> IntoValue for ($($ty,)*) {
+            fn into_value(self) -> Value {
+                #[allow(non_snake_case)]
+                let ($($ty,)*) = self;
+                Value::Tuple(vec![$($ty.into_value()),*])
+            }
 
-    fn get_type() -> AnalysedType {
-        tuple(vec![A::get_type(), B::get_type()])
-    }
+            fn get_type() -> AnalysedType {
+                tuple(vec![$($ty::get_type()),*])
+            }
+        }
+    };
 }
 
-impl<A: IntoValue, B: IntoValue, C: IntoValue> IntoValue for (A, B, C) {
-    fn into_value(self) -> Value {
-        Value::Tuple(vec![
-            self.0.into_value(),
-            self.1.into_value(),
-            self.2.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        tuple(vec![A::get_type(), B::get_type(), C::get_type()])
-    }
-}
+impl_into_value_for_tuples!(A, B);
+impl_into_value_for_tuples!(A, B, C);
+impl_into_value_for_tuples!(A, B, C, D);
+impl_into_value_for_tuples!(A, B, C, D, E);
+impl_into_value_for_tuples!(A, B, C, D, E, F);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I, J);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K);
+impl_into_value_for_tuples!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
     fn into_value(self) -> Value {
@@ -369,6 +395,16 @@ impl IntoValue for Uuid {
     }
 }
 
+impl IntoValue for UuidRecord {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![field("value", Uuid::get_type())])
+    }
+}
+
 impl<K: AsRef<str>> IntoValueAndType for super::Record<K> {
     fn into_value_and_type(self) -> ValueAndType {
         let mut field_types = Vec::<NameTypePair>::with_capacity(self.0.len());
@@ -389,6 +425,7 @@ impl<K: AsRef<str>> IntoValueAndType for super::Record<K> {
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for crate::WitValue {
     fn into_value(self) -> Value {
         // NOTE: this is different from From<WitValue> for Value. That conversion creates
@@ -405,7 +442,8 @@ impl IntoValue for crate::WitValue {
     }
 }
 
-impl IntoValue for WitNode {
+#[cfg(feature = "host")]
+impl IntoValue for crate::WitNode {
     fn into_value(self) -> Value {
         use crate::WitNode;
 
@@ -549,6 +587,7 @@ impl IntoValue for WitNode {
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for crate::Uri {
     fn into_value(self) -> Value {
         Value::Record(vec![Value::String(self.value)])
@@ -559,7 +598,8 @@ impl IntoValue for crate::Uri {
     }
 }
 
-impl IntoValue for WitType {
+#[cfg(feature = "host")]
+impl IntoValue for crate::WitType {
     fn into_value(self) -> Value {
         Value::Record(vec![self.nodes.into_value()])
     }
@@ -567,12 +607,13 @@ impl IntoValue for WitType {
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![analysed_type::field(
             "nodes",
-            list(NamedWitTypeNode::get_type()),
+            list(crate::golem_rpc_0_2_x::types::NamedWitTypeNode::get_type()),
         )])
     }
 }
 
-impl IntoValue for NamedWitTypeNode {
+#[cfg(feature = "host")]
+impl IntoValue for crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
     fn into_value(self) -> Value {
         Value::Record(vec![
             self.name.into_value(),
@@ -585,99 +626,100 @@ impl IntoValue for NamedWitTypeNode {
         analysed_type::record(vec![
             analysed_type::field("name", option(analysed_type::str())),
             analysed_type::field("owner", option(analysed_type::str())),
-            analysed_type::field("type", WitTypeNode::get_type()),
+            analysed_type::field("type", crate::WitTypeNode::get_type()),
         ])
     }
 }
 
-impl IntoValue for WitTypeNode {
+#[cfg(feature = "host")]
+impl IntoValue for crate::WitTypeNode {
     fn into_value(self) -> Value {
         match self {
-            WitTypeNode::RecordType(field_types) => Value::Variant {
+            crate::WitTypeNode::RecordType(field_types) => Value::Variant {
                 case_idx: 0,
                 case_value: Some(Box::new(field_types.into_value())),
             },
-            WitTypeNode::VariantType(case_types) => Value::Variant {
+            crate::WitTypeNode::VariantType(case_types) => Value::Variant {
                 case_idx: 1,
                 case_value: Some(Box::new(case_types.into_value())),
             },
-            WitTypeNode::EnumType(names) => Value::Variant {
+            crate::WitTypeNode::EnumType(names) => Value::Variant {
                 case_idx: 2,
                 case_value: Some(Box::new(names.into_value())),
             },
-            WitTypeNode::FlagsType(names) => Value::Variant {
+            crate::WitTypeNode::FlagsType(names) => Value::Variant {
                 case_idx: 3,
                 case_value: Some(Box::new(names.into_value())),
             },
-            WitTypeNode::TupleType(types) => Value::Variant {
+            crate::WitTypeNode::TupleType(types) => Value::Variant {
                 case_idx: 4,
                 case_value: Some(Box::new(types.into_value())),
             },
-            WitTypeNode::ListType(elem) => Value::Variant {
+            crate::WitTypeNode::ListType(elem) => Value::Variant {
                 case_idx: 5,
                 case_value: Some(Box::new(elem.into_value())),
             },
-            WitTypeNode::OptionType(elem) => Value::Variant {
+            crate::WitTypeNode::OptionType(elem) => Value::Variant {
                 case_idx: 6,
                 case_value: Some(Box::new(elem.into_value())),
             },
-            WitTypeNode::ResultType((ok, err)) => Value::Variant {
+            crate::WitTypeNode::ResultType((ok, err)) => Value::Variant {
                 case_idx: 7,
                 case_value: Some(Box::new((ok, err).into_value())),
             },
-            WitTypeNode::PrimU8Type => Value::Variant {
+            crate::WitTypeNode::PrimU8Type => Value::Variant {
                 case_idx: 8,
                 case_value: None,
             },
-            WitTypeNode::PrimU16Type => Value::Variant {
+            crate::WitTypeNode::PrimU16Type => Value::Variant {
                 case_idx: 9,
                 case_value: None,
             },
-            WitTypeNode::PrimU32Type => Value::Variant {
+            crate::WitTypeNode::PrimU32Type => Value::Variant {
                 case_idx: 10,
                 case_value: None,
             },
-            WitTypeNode::PrimU64Type => Value::Variant {
+            crate::WitTypeNode::PrimU64Type => Value::Variant {
                 case_idx: 11,
                 case_value: None,
             },
-            WitTypeNode::PrimS8Type => Value::Variant {
+            crate::WitTypeNode::PrimS8Type => Value::Variant {
                 case_idx: 12,
                 case_value: None,
             },
-            WitTypeNode::PrimS16Type => Value::Variant {
+            crate::WitTypeNode::PrimS16Type => Value::Variant {
                 case_idx: 13,
                 case_value: None,
             },
-            WitTypeNode::PrimS32Type => Value::Variant {
+            crate::WitTypeNode::PrimS32Type => Value::Variant {
                 case_idx: 14,
                 case_value: None,
             },
-            WitTypeNode::PrimS64Type => Value::Variant {
+            crate::WitTypeNode::PrimS64Type => Value::Variant {
                 case_idx: 15,
                 case_value: None,
             },
-            WitTypeNode::PrimF32Type => Value::Variant {
+            crate::WitTypeNode::PrimF32Type => Value::Variant {
                 case_idx: 16,
                 case_value: None,
             },
-            WitTypeNode::PrimF64Type => Value::Variant {
+            crate::WitTypeNode::PrimF64Type => Value::Variant {
                 case_idx: 17,
                 case_value: None,
             },
-            WitTypeNode::PrimCharType => Value::Variant {
+            crate::WitTypeNode::PrimCharType => Value::Variant {
                 case_idx: 18,
                 case_value: None,
             },
-            WitTypeNode::PrimBoolType => Value::Variant {
+            crate::WitTypeNode::PrimBoolType => Value::Variant {
                 case_idx: 19,
                 case_value: None,
             },
-            WitTypeNode::PrimStringType => Value::Variant {
+            crate::WitTypeNode::PrimStringType => Value::Variant {
                 case_idx: 20,
                 case_value: None,
             },
-            WitTypeNode::HandleType(handle) => Value::Variant {
+            crate::WitTypeNode::HandleType(handle) => Value::Variant {
                 case_idx: 21,
                 case_value: Some(Box::new(handle.into_value())),
             },
@@ -688,22 +730,22 @@ impl IntoValue for WitTypeNode {
         variant(vec![
             case(
                 "record-type",
-                list(tuple(vec![str(), NodeIndex::get_type()])),
+                list(tuple(vec![str(), crate::NodeIndex::get_type()])),
             ),
             case(
                 "variant-type",
-                list(tuple(vec![str(), option(NodeIndex::get_type())])),
+                list(tuple(vec![str(), option(crate::NodeIndex::get_type())])),
             ),
             case("enum-type", list(str())),
             case("flags-type", list(str())),
-            case("tuple-type", list(NodeIndex::get_type())),
-            case("list-type", NodeIndex::get_type()),
-            case("option-type", NodeIndex::get_type()),
+            case("tuple-type", list(crate::NodeIndex::get_type())),
+            case("list-type", crate::NodeIndex::get_type()),
+            case("option-type", crate::NodeIndex::get_type()),
             case(
                 "result-type",
                 tuple(vec![
-                    option(NodeIndex::get_type()),
-                    option(NodeIndex::get_type()),
+                    option(crate::NodeIndex::get_type()),
+                    option(crate::NodeIndex::get_type()),
                 ]),
             ),
             unit_case("prim-u8-type"),
@@ -721,7 +763,7 @@ impl IntoValue for WitTypeNode {
             unit_case("prim-string-type"),
             case(
                 "handle-type",
-                tuple(vec![analysed_type::u64(), ResourceMode::get_type()]),
+                tuple(vec![analysed_type::u64(), crate::ResourceMode::get_type()]),
             ),
         ])
     }
@@ -747,11 +789,12 @@ impl IntoValue for Duration {
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for crate::ResourceMode {
     fn into_value(self) -> Value {
         match self {
-            ResourceMode::Owned => Value::Enum(0),
-            ResourceMode::Borrowed => Value::Enum(1),
+            crate::ResourceMode::Owned => Value::Enum(0),
+            crate::ResourceMode::Borrowed => Value::Enum(1),
         }
     }
 
@@ -760,22 +803,23 @@ impl IntoValue for crate::ResourceMode {
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for crate::RpcError {
     fn into_value(self) -> Value {
         match self {
-            RpcError::ProtocolError(value) => Value::Variant {
+            crate::RpcError::ProtocolError(value) => Value::Variant {
                 case_idx: 0,
                 case_value: Some(Box::new(Value::String(value))),
             },
-            RpcError::Denied(value) => Value::Variant {
+            crate::RpcError::Denied(value) => Value::Variant {
                 case_idx: 1,
                 case_value: Some(Box::new(Value::String(value))),
             },
-            RpcError::NotFound(value) => Value::Variant {
+            crate::RpcError::NotFound(value) => Value::Variant {
                 case_idx: 2,
                 case_value: Some(Box::new(Value::String(value))),
             },
-            RpcError::RemoteInternalError(value) => Value::Variant {
+            crate::RpcError::RemoteInternalError(value) => Value::Variant {
                 case_idx: 3,
                 case_value: Some(Box::new(Value::String(value))),
             },
@@ -794,53 +838,61 @@ impl IntoValue for crate::RpcError {
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for ValueAndType {
     fn into_value(self) -> Value {
-        let wit_value: WitValue = self.value.into();
-        let wit_type: WitType = self.typ.into();
+        let wit_value: crate::WitValue = self.value.into();
+        let wit_type: crate::WitType = self.typ.into();
         Value::Record(vec![wit_value.into_value(), wit_type.into_value()])
     }
 
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![
-            analysed_type::field("value", WitValue::get_type()),
-            analysed_type::field("type", WitType::get_type()),
+            analysed_type::field("value", crate::WitValue::get_type()),
+            analysed_type::field("type", crate::WitType::get_type()),
         ])
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for Value {
     fn into_value(self) -> Value {
-        let wit_value: WitValue = self.into();
+        let wit_value: crate::WitValue = self.into();
         wit_value.into_value()
     }
 
     fn get_type() -> AnalysedType {
-        WitValue::get_type()
+        crate::WitValue::get_type()
     }
 }
 
+#[cfg(feature = "host")]
 impl IntoValue for AnalysedType {
     fn into_value(self) -> Value {
-        let wit_type: WitType = self.into();
+        let wit_type: crate::WitType = self.into();
         wit_type.into_value()
     }
 
     fn get_type() -> AnalysedType {
-        WitType::get_type()
+        crate::WitType::get_type()
     }
 }
 
-impl From<WitType> for AnalysedType {
-    fn from(value: WitType) -> Self {
+#[cfg(feature = "host")]
+impl From<crate::WitType> for AnalysedType {
+    fn from(value: crate::WitType) -> Self {
         assert!(!value.nodes.is_empty());
         build_tree(&value.nodes[0], &value.nodes)
     }
 }
 
-fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedType {
+#[cfg(feature = "host")]
+fn build_tree(
+    node: &crate::golem_rpc_0_2_x::types::NamedWitTypeNode,
+    nodes: &[crate::golem_rpc_0_2_x::types::NamedWitTypeNode],
+) -> AnalysedType {
     match &node.type_ {
-        WitTypeNode::RecordType(fields) => {
+        crate::WitTypeNode::RecordType(fields) => {
             let fields = fields
                 .iter()
                 .map(|(name, idx)| {
@@ -850,7 +902,7 @@ fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedTy
                 .collect();
             analysed_type::record(fields).with_optional_name(node.name.clone())
         }
-        WitTypeNode::VariantType(cases) => {
+        crate::WitTypeNode::VariantType(cases) => {
             let cases = cases
                 .iter()
                 .map(|(name, idx)| match idx {
@@ -863,32 +915,32 @@ fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedTy
                 .collect();
             variant(cases).with_optional_name(node.name.clone())
         }
-        WitTypeNode::EnumType(names) => AnalysedType::Enum(TypeEnum {
+        crate::WitTypeNode::EnumType(names) => AnalysedType::Enum(crate::analysis::TypeEnum {
             cases: names.clone(),
             name: node.name.clone(),
             owner: node.owner.clone(),
         }),
-        WitTypeNode::FlagsType(names) => AnalysedType::Flags(TypeFlags {
+        crate::WitTypeNode::FlagsType(names) => AnalysedType::Flags(crate::analysis::TypeFlags {
             names: names.clone(),
             name: node.name.clone(),
             owner: node.owner.clone(),
         }),
-        WitTypeNode::TupleType(types) => {
+        crate::WitTypeNode::TupleType(types) => {
             let types = types
                 .iter()
                 .map(|idx| build_tree(&nodes[*idx as usize], nodes))
                 .collect();
             tuple(types).with_optional_name(node.name.clone())
         }
-        WitTypeNode::ListType(elem_type) => {
+        crate::WitTypeNode::ListType(elem_type) => {
             let elem_type = build_tree(&nodes[*elem_type as usize], nodes);
             list(elem_type).with_optional_name(node.name.clone())
         }
-        WitTypeNode::OptionType(inner_type) => {
+        crate::WitTypeNode::OptionType(inner_type) => {
             let inner_type = build_tree(&nodes[*inner_type as usize], nodes);
             option(inner_type).with_optional_name(node.name.clone())
         }
-        WitTypeNode::ResultType((ok_type, err_type)) => match (ok_type, err_type) {
+        crate::WitTypeNode::ResultType((ok_type, err_type)) => match (ok_type, err_type) {
             (Some(ok_type), Some(err_type)) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
@@ -902,33 +954,34 @@ fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedTy
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
                 result_ok(ok_type).with_optional_name(node.name.clone())
             }
-            (None, None) => unit_result().with_optional_name(node.name.clone()),
+            (None, None) => analysed_type::unit_result().with_optional_name(node.name.clone()),
         },
-        WitTypeNode::PrimU8Type => analysed_type::u8(),
-        WitTypeNode::PrimU16Type => analysed_type::u16(),
-        WitTypeNode::PrimU32Type => analysed_type::u32(),
-        WitTypeNode::PrimU64Type => analysed_type::u64(),
-        WitTypeNode::PrimS8Type => analysed_type::s8(),
-        WitTypeNode::PrimS16Type => analysed_type::s16(),
-        WitTypeNode::PrimS32Type => analysed_type::s32(),
-        WitTypeNode::PrimS64Type => analysed_type::s64(),
-        WitTypeNode::PrimF32Type => analysed_type::f32(),
-        WitTypeNode::PrimF64Type => analysed_type::f64(),
-        WitTypeNode::PrimCharType => analysed_type::chr(),
-        WitTypeNode::PrimBoolType => analysed_type::bool(),
-        WitTypeNode::PrimStringType => analysed_type::str(),
-        WitTypeNode::HandleType((id, mode)) => analysed_type::handle(
-            AnalysedResourceId(*id),
+        crate::WitTypeNode::PrimU8Type => analysed_type::u8(),
+        crate::WitTypeNode::PrimU16Type => analysed_type::u16(),
+        crate::WitTypeNode::PrimU32Type => analysed_type::u32(),
+        crate::WitTypeNode::PrimU64Type => analysed_type::u64(),
+        crate::WitTypeNode::PrimS8Type => analysed_type::s8(),
+        crate::WitTypeNode::PrimS16Type => analysed_type::s16(),
+        crate::WitTypeNode::PrimS32Type => analysed_type::s32(),
+        crate::WitTypeNode::PrimS64Type => analysed_type::s64(),
+        crate::WitTypeNode::PrimF32Type => analysed_type::f32(),
+        crate::WitTypeNode::PrimF64Type => analysed_type::f64(),
+        crate::WitTypeNode::PrimCharType => analysed_type::chr(),
+        crate::WitTypeNode::PrimBoolType => analysed_type::bool(),
+        crate::WitTypeNode::PrimStringType => analysed_type::str(),
+        crate::WitTypeNode::HandleType((id, mode)) => analysed_type::handle(
+            crate::analysis::AnalysedResourceId(*id),
             match mode {
-                crate::ResourceMode::Owned => AnalysedResourceMode::Owned,
-                crate::ResourceMode::Borrowed => AnalysedResourceMode::Borrowed,
+                crate::ResourceMode::Owned => crate::analysis::AnalysedResourceMode::Owned,
+                crate::ResourceMode::Borrowed => crate::analysis::AnalysedResourceMode::Borrowed,
             },
         )
         .with_optional_name(node.name.clone()),
     }
 }
 
-impl From<AnalysedType> for WitType {
+#[cfg(feature = "host")]
+impl From<AnalysedType> for crate::WitType {
     fn from(value: AnalysedType) -> Self {
         let mut builder = WitTypeBuilder::new();
         builder.add(value);
@@ -936,11 +989,13 @@ impl From<AnalysedType> for WitType {
     }
 }
 
+#[cfg(feature = "host")]
 struct WitTypeBuilder {
-    nodes: Vec<NamedWitTypeNode>,
+    nodes: Vec<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>,
     mapping: HashMap<AnalysedType, usize>,
 }
 
+#[cfg(feature = "host")]
 impl WitTypeBuilder {
     pub fn new() -> Self {
         Self {
@@ -950,18 +1005,21 @@ impl WitTypeBuilder {
     }
 
     pub fn add(&mut self, typ: AnalysedType) -> usize {
+        use crate::WitTypeNode;
+
         if let Some(idx) = self.mapping.get(&typ) {
             *idx
         } else {
             let idx = self.nodes.len();
-            self.nodes.push(NamedWitTypeNode {
-                name: None,
-                owner: None,
-                type_: WitTypeNode::PrimBoolType,
-            }); // placeholder, to be replaced
+            self.nodes
+                .push(crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
+                    name: None,
+                    owner: None,
+                    type_: crate::WitTypeNode::PrimBoolType,
+                }); // placeholder, to be replaced
             let name = typ.name().map(|n| n.to_string());
             let owner = typ.owner().map(|o| o.to_string());
-            let node: WitTypeNode = match typ {
+            let node: crate::WitTypeNode = match typ {
                 AnalysedType::Variant(variant) => {
                     let mut cases = Vec::new();
                     for pair in variant.cases {
@@ -1015,12 +1073,14 @@ impl WitTypeBuilder {
                 AnalysedType::Handle(handle) => WitTypeNode::HandleType((
                     handle.resource_id.0,
                     match handle.mode {
-                        AnalysedResourceMode::Owned => ResourceMode::Owned,
-                        AnalysedResourceMode::Borrowed => ResourceMode::Borrowed,
+                        crate::analysis::AnalysedResourceMode::Owned => crate::ResourceMode::Owned,
+                        crate::analysis::AnalysedResourceMode::Borrowed => {
+                            crate::ResourceMode::Borrowed
+                        }
                     },
                 )),
             };
-            self.nodes[idx] = NamedWitTypeNode {
+            self.nodes[idx] = crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
                 name,
                 owner,
                 type_: node,
@@ -1029,11 +1089,12 @@ impl WitTypeBuilder {
         }
     }
 
-    pub fn build(self) -> WitType {
-        WitType { nodes: self.nodes }
+    pub fn build(self) -> crate::WitType {
+        crate::WitType { nodes: self.nodes }
     }
 }
 
+#[cfg(feature = "host")]
 impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
     fn from(value: crate::golem_rpc_0_2_x::types::ValueAndType) -> Self {
         Self {
@@ -1043,6 +1104,7 @@ impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
     }
 }
 
+#[cfg(feature = "host")]
 impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
     fn from(value: ValueAndType) -> Self {
         Self {
@@ -1154,6 +1216,7 @@ impl IntoValue for Url {
     }
 }
 
+#[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
     use crate::analysis::AnalysedType;

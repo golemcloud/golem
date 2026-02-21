@@ -1,12 +1,12 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.3.0-rc1/golem.schema.json
-# Schema for vscode-yaml
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0-rc1/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
 
 # See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
 # For creating APIs see https://learn.golem.cloud/invoke/making-custom-apis
 
-templates:
+componentTemplates:
   ts:
     build:
     - command: npx tsc --noEmit false --emitDeclarationOnly --declaration --outFile ../../golem-temp/ts-check/{{ component_name | to_kebab_case }}/main.d.ts

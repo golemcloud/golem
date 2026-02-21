@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem.auth;
+
+enum EnvironmentRole {
+  ENVIRONMENT_ROLE_UNSPECIFIED = 0;
+  ENVIRONMENT_ROLE_ADMIN = 1;
+  ENVIRONMENT_ROLE_VIEWER = 2;
+  ENVIRONMENT_ROLE_DEPLOYER = 3;
+}

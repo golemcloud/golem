@@ -13,45 +13,32 @@
 // limitations under the License.
 
 use super::*;
-use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
+use crate::config::{CompileWorkerConfig, RegistryServiceConfig, StaticRegistryServiceConfig};
 use crate::model::*;
-use async_trait::async_trait;
-use golem_common::model::{ComponentId, ProjectId};
-use golem_worker_executor::services::compiled_component::CompiledComponentService;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wasmtime::Engine;
 
-#[async_trait]
-pub trait CompilationService {
-    async fn enqueue_compilation(
-        &self,
-        component_id: ComponentId,
-        component_version: u64,
-        project_id: ProjectId,
-        sender: Option<StaticComponentServiceConfig>,
-    ) -> Result<(), CompilationError>;
-}
-
 #[derive(Clone)]
-pub struct ComponentCompilationServiceImpl {
+pub struct ComponentCompilationService {
     queue: mpsc::Sender<CompilationRequest>,
 }
 
-impl ComponentCompilationServiceImpl {
+impl ComponentCompilationService {
     pub async fn new(
         compile_worker: CompileWorkerConfig,
-        component_service: ComponentServiceConfig,
-
+        registry_service: RegistryServiceConfig,
         engine: Engine,
-
         compiled_component_service: Arc<dyn CompiledComponentService>,
     ) -> Self {
         let (compile_tx, compile_rx) = mpsc::channel(100);
         let (upload_tx, upload_rx) = mpsc::channel(100);
 
         CompileWorker::start(
-            component_service.static_config(),
+            registry_service.static_config(),
             compile_worker,
             engine.clone(),
             compiled_component_service.clone(),
@@ -64,28 +51,25 @@ impl ComponentCompilationServiceImpl {
 
         Self { queue: compile_tx }
     }
-}
 
-#[async_trait]
-impl CompilationService for ComponentCompilationServiceImpl {
-    async fn enqueue_compilation(
+    pub async fn enqueue_compilation(
         &self,
         component_id: ComponentId,
-        component_version: u64,
-        project_id: ProjectId,
-        sender: Option<StaticComponentServiceConfig>,
+        component_revision: ComponentRevision,
+        environment_id: EnvironmentId,
+        sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
             component_id = component_id.to_string(),
-            component_version = component_version.to_string(),
+            component_revision = component_revision.to_string(),
             "Enqueueing compilation for component",
         );
         let request = CompilationRequest {
-            component: ComponentWithVersion {
+            component: ComponentIdAndRevision {
                 id: component_id,
-                version: component_version,
+                revision: component_revision,
             },
-            project_id,
+            environment_id,
             sender,
         };
         self.queue.send(request).await?;

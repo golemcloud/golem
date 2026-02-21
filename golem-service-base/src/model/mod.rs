@@ -13,41 +13,33 @@
 // limitations under the License.
 
 pub mod auth;
+pub mod plugin_registration;
 
-use applying::Apply;
-use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
-use golem_common::model::{
-    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter, WorkerId,
+use derive_more::Display;
+use desert_rust::BinaryCodec;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
+use golem_common::model::component::{
+    ComponentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
-use golem_wasm::json::OptionallyValueAndTypeJson;
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::worker::{
+    FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
+};
+use golem_common::model::{OplogIndex, ScanCursor, WorkerFilter, WorkerId};
 use golem_wasm::ValueAndType;
-use poem_openapi::{Enum, NewType, Object, Union};
+use golem_wasm::json::OptionallyValueAndTypeJson;
+use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
-use std::{collections::HashMap, fmt::Display, fmt::Formatter};
+use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerCreationResponse {
     pub worker_id: WorkerId,
-    pub component_version: ComponentVersion,
-}
-
-// TODO: Add validations (non-empty, no "/", no " ", ...)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
-pub struct ComponentName(pub String);
-
-impl Display for ComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
+    pub component_revision: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -74,6 +66,9 @@ pub struct InvokeParameters {
     pub params: Vec<OptionallyValueAndTypeJson>,
 }
 
+// TODO: move these reponse types to common and configure the client generator to use them.
+// TODO: replace empty responses with NoContentResponse
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct DeleteWorkerResponse {}
 
@@ -99,6 +94,9 @@ pub struct DeactivatePluginResponse {}
 pub struct RevertWorkerResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct ForkWorkerResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct CancelInvocationResponse {
     pub canceled: bool,
 }
@@ -120,24 +118,137 @@ pub struct GetFilesResponse {
     pub nodes: Vec<FlatComponentFileSystemNode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub enum FlatComponentFileSystemNodeKind {
-    Directory,
-    File,
+pub struct UpdateWorkerRequest {
+    pub mode: WorkerUpdateMode,
+    pub target_revision: ComponentRevision,
+    #[serde(default)]
+    #[oai(default)]
+    pub disable_wakeup: bool,
 }
 
-// Flat, worse typed version ComponentFileSystemNode for rest representation
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct FlatComponentFileSystemNode {
+pub struct ForkWorkerRequest {
+    pub target_worker_id: WorkerId,
+    pub oplog_index_cutoff: OplogIndex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct WorkersMetadataRequest {
+    pub filter: Option<WorkerFilter>,
+    pub cursor: Option<ScanCursor>,
+    pub count: Option<u64>,
+    pub precise: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct InvokeResult {
+    pub result: Option<ValueAndType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceLimits {
+    pub available_fuel: u64,
+    pub max_memory_per_worker: u64,
+}
+
+impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
+    fn from(value: ResourceLimits) -> Self {
+        Self {
+            available_fuel: value.available_fuel,
+            max_memory_per_worker: value.max_memory_per_worker,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
+    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
+        Self {
+            available_fuel: value.available_fuel,
+            max_memory_per_worker: value.max_memory_per_worker,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountResourceLimits(pub HashMap<AccountId, ResourceLimits>);
+
+impl TryFrom<golem_api_grpc::proto::golem::common::AccountResourceLimits>
+    for AccountResourceLimits
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::AccountResourceLimits,
+    ) -> Result<Self, Self::Error> {
+        let entries: HashMap<AccountId, ResourceLimits> = value
+            .entries
+            .into_iter()
+            .map(|e| {
+                let account_id: AccountId =
+                    e.account_id.ok_or("missing account_id field")?.try_into()?;
+                let resource_limits: ResourceLimits = e
+                    .resource_limits
+                    .ok_or("missing resource_limits field")?
+                    .into();
+                Ok::<_, Self::Error>((account_id, resource_limits))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self(entries))
+    }
+}
+
+impl From<AccountResourceLimits> for golem_api_grpc::proto::golem::common::AccountResourceLimits {
+    fn from(value: AccountResourceLimits) -> Self {
+        Self {
+            entries: value
+                .0
+                .into_iter()
+                .map(|(account_id, resource_limits)| {
+                    golem_api_grpc::proto::golem::common::AccountResourceLimitsEntry {
+                        account_id: Some(account_id.into()),
+                        resource_limits: Some(resource_limits.into()),
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct BatchPluginInstallationUpdates {
+    pub actions: Vec<PluginInstallationAction>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GetFileSystemNodeResult {
+    Ok(Vec<ComponentFileSystemNode>),
+    File(ComponentFileSystemNode),
+    NotFound,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ComponentFileSystemNodeDetails {
+    File {
+        permissions: ComponentFilePermissions,
+        size: u64,
+    },
+    Directory,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComponentFileSystemNode {
     pub name: String,
-    pub last_modified: u64,
-    pub kind: FlatComponentFileSystemNodeKind,
-    pub permissions: Option<ComponentFilePermissions>, // only for files
-    pub size: Option<u64>,                             // only for files
+    pub last_modified: SystemTime,
+    pub details: ComponentFileSystemNodeDetails,
 }
 
 impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
@@ -166,315 +277,180 @@ impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct PublicOplogEntryWithIndex {
-    pub oplog_index: OplogIndex,
-    pub entry: PublicOplogEntry,
-}
+impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::FileSystemNode {
+    fn from(value: ComponentFileSystemNode) -> Self {
+        let last_modified = value
+            .last_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-impl TryFrom<OplogEntryWithIndex> for PublicOplogEntryWithIndex {
-    type Error = String;
-
-    fn try_from(value: OplogEntryWithIndex) -> Result<Self, Self::Error> {
-        Ok(Self {
-            oplog_index: OplogIndex::from_u64(value.oplog_index),
-            entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
-        })
-    }
-}
-
-impl TryFrom<PublicOplogEntryWithIndex> for OplogEntryWithIndex {
-    type Error = String;
-
-    fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
-        Ok(Self {
-            oplog_index: value.oplog_index.into(),
-            entry: Some(value.entry.try_into()?),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
-pub enum WorkerUpdateMode {
-    Automatic,
-    Manual,
-}
-
-impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
-    fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
-                WorkerUpdateMode::Automatic
-            }
-            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => WorkerUpdateMode::Manual,
+        match value.details {
+            ComponentFileSystemNodeDetails::File { permissions, size } =>
+                golem_api_grpc::proto::golem::worker::FileSystemNode {
+                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
+                        golem_api_grpc::proto::golem::worker::FileFileSystemNode {
+                            name: value.name,
+                            last_modified,
+                            size,
+                            permissions:
+                            golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
+                        }
+                    ))
+                },
+            ComponentFileSystemNodeDetails::Directory =>
+                golem_api_grpc::proto::golem::worker::FileSystemNode {
+                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
+                        golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
+                            name: value.name,
+                            last_modified,
+                        }
+                    ))
+                }
         }
     }
 }
 
-impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
-    fn from(value: WorkerUpdateMode) -> Self {
-        match value {
-            WorkerUpdateMode::Automatic => {
-                golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
-            }
-            WorkerUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct UpdateWorkerRequest {
-    pub mode: WorkerUpdateMode,
-    pub target_version: ComponentVersion,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkersMetadataRequest {
-    pub filter: Option<WorkerFilter>,
-    pub cursor: Option<ScanCursor>,
-    pub count: Option<u64>,
-    pub precise: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union)]
-#[serde(rename_all = "camelCase")]
-#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
-pub enum UpdateRecord {
-    PendingUpdate(PendingUpdate),
-    SuccessfulUpdate(SuccessfulUpdate),
-    FailedUpdate(FailedUpdate),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct PendingUpdate {
-    timestamp: Timestamp,
-    target_version: ComponentVersion,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct SuccessfulUpdate {
-    timestamp: Timestamp,
-    target_version: ComponentVersion,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct FailedUpdate {
-    timestamp: Timestamp,
-    target_version: ComponentVersion,
-    details: Option<String>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecord {
-    type Error = String;
+impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for ComponentFileSystemNode {
+    type Error = anyhow::Error;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::worker::UpdateRecord,
+        value: golem_api_grpc::proto::golem::worker::FileSystemNode,
     ) -> Result<Self, Self::Error> {
-        match value.update.ok_or("Missing update field")? {
-            golem_api_grpc::proto::golem::worker::update_record::Update::Failed(failed) => {
-                Ok(Self::FailedUpdate(FailedUpdate {
-                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                    target_version: value.target_version,
-                    details: { failed.details },
-                }))
-            }
-            golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
-                Ok(Self::PendingUpdate(PendingUpdate {
-                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                    target_version: value.target_version,
-                }))
-            }
-            golem_api_grpc::proto::golem::worker::update_record::Update::Successful(_) => {
-                Ok(Self::SuccessfulUpdate(SuccessfulUpdate {
-                    timestamp: value.timestamp.ok_or("Missing timestamp")?.into(),
-                    target_version: value.target_version,
-                }))
-            }
+        match value.value {
+            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
+                golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
+                    name,
+                    last_modified,
+                },
+            )) => Ok(ComponentFileSystemNode {
+                name,
+                last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
+                details: ComponentFileSystemNodeDetails::Directory,
+            }),
+            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
+                golem_api_grpc::proto::golem::worker::FileFileSystemNode {
+                    name,
+                    last_modified,
+                    size,
+                    permissions,
+                },
+            )) => Ok(ComponentFileSystemNode {
+                name,
+                last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions:
+                        golem_api_grpc::proto::golem::component::ComponentFilePermissions::try_from(
+                            permissions,
+                        )?
+                        .into(),
+                    size,
+                },
+            }),
+            None => Err(anyhow::anyhow!("Missing value")),
         }
     }
 }
 
-impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
-    fn from(value: UpdateRecord) -> Self {
-        match value {
-            UpdateRecord::FailedUpdate(FailedUpdate {
-                timestamp,
-                target_version,
-                details,
-            }) => Self {
-                timestamp: Some(timestamp.into()),
-                target_version,
-                update: Some(
-                    golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
-                        golem_api_grpc::proto::golem::worker::FailedUpdate { details },
-                    ),
-                ),
-            },
-            UpdateRecord::PendingUpdate(PendingUpdate {
-                timestamp,
-                target_version,
-            }) => Self {
-                timestamp: Some(timestamp.into()),
-                target_version,
-                update: Some(
-                    golem_api_grpc::proto::golem::worker::update_record::Update::Pending(
-                        golem_api_grpc::proto::golem::worker::PendingUpdate {},
-                    ),
-                ),
-            },
-            UpdateRecord::SuccessfulUpdate(SuccessfulUpdate {
-                timestamp,
-                target_version,
-            }) => Self {
-                timestamp: Some(timestamp.into()),
-                target_version,
-                update: Some(
-                    golem_api_grpc::proto::golem::worker::update_record::Update::Successful(
-                        golem_api_grpc::proto::golem::worker::SuccessfulUpdate {},
-                    ),
-                ),
-            },
-        }
+/// Index type that can be safely converted to usize and conveniently sent over the wire due to fixed size.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Display, BinaryCodec)]
+#[desert(transparent)]
+pub struct SafeIndex(u32);
+
+const _: () = {
+    assert!(
+        usize::BITS >= u32::BITS,
+        "SafeIndex is backed to a u32 but needs to be able to be converted to a usize losslessly"
+    );
+};
+
+impl SafeIndex {
+    pub fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InvokeResult {
-    pub result: Option<ValueAndType>,
+impl From<u32> for SafeIndex {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct Component {
-    pub owner: ComponentOwner,
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
+impl From<SafeIndex> for u32 {
+    fn from(value: SafeIndex) -> Self {
+        value.0
+    }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
+impl From<SafeIndex> for usize {
+    fn from(value: SafeIndex) -> Self {
+        // Safe due to assertion above
+        value.get() as usize
+    }
+}
+
+impl TryFrom<usize> for SafeIndex {
     type Error = String;
 
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::Component,
-    ) -> Result<Self, Self::Error> {
-        let account_id = value.account_id.ok_or("missing account_id")?.into();
-
-        let project_id = value
-            .project_id
-            .ok_or("missing project_id")?
-            .try_into()
-            .map_err(|_| "Failed to convert project_id".to_string())?;
-
-        let created_at = value
-            .created_at
-            .ok_or("missing created_at")?
-            .apply(SystemTime::try_from)
-            .map_err(|_| "Failed to convert timestamp".to_string())?
-            .into();
-
-        let files = value
-            .files
-            .into_iter()
-            .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let installed_plugins = value
-            .installed_plugins
-            .into_iter()
-            .map(|p| p.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Self {
-            owner: ComponentOwner {
-                account_id,
-                project_id,
-            },
-            versioned_component_id: value
-                .versioned_component_id
-                .ok_or("Missing versioned_component_id")?
-                .try_into()?,
-            component_name: ComponentName(value.component_name.clone()),
-            component_size: value.component_size,
-            metadata: value
-                .metadata
-                .clone()
-                .ok_or("Missing metadata")?
-                .try_into()?,
-            created_at,
-            files,
-            installed_plugins,
-            env: value.env,
-        })
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        Ok(SafeIndex::new(value.try_into().map_err(|_| {
+            format!("PathSegmentIndex overflow: {value}")
+        })?))
     }
 }
 
-impl From<Component> for golem_api_grpc::proto::golem::component::Component {
-    fn from(value: Component) -> Self {
+impl<T> std::ops::Index<SafeIndex> for [T] {
+    type Output = T;
+
+    fn index(&self, index: SafeIndex) -> &Self::Output {
+        &self[usize::from(index)]
+    }
+}
+impl std::ops::AddAssign<u32> for SafeIndex {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
+    }
+}
+
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
+pub struct AgentDeploymentDetails {
+    pub agent_type_name: AgentTypeName,
+    /// Webhook callback url of the agent missing the protocol in the front and `/{promise_id}` at the end.
+    pub webhook_prefix_authority_and_path: Option<String>,
+}
+
+impl From<DeployedRegisteredAgentType> for AgentDeploymentDetails {
+    fn from(value: DeployedRegisteredAgentType) -> Self {
         Self {
-            account_id: Some(value.owner.account_id.into()),
-            project_id: Some(value.owner.project_id.into()),
-            versioned_component_id: Some(value.versioned_component_id.into()),
-            component_name: value.component_name.0,
-            component_size: value.component_size,
-            metadata: Some(value.metadata.into()),
-            created_at: Some(SystemTime::from(value.created_at).into()),
-            files: value.files.into_iter().map(Into::into).collect(),
-            installed_plugins: value
-                .installed_plugins
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            env: value.env,
+            agent_type_name: value.agent_type.type_name,
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ResourceLimits {
-    pub available_fuel: i64,
-    pub max_memory_per_worker: i64,
-}
-
-impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
-    fn from(value: ResourceLimits) -> Self {
+impl From<AgentDeploymentDetails>
+    for golem_api_grpc::proto::golem::registry::AgentDeploymentDetails
+{
+    fn from(value: AgentDeploymentDetails) -> Self {
         Self {
-            available_fuel: value.available_fuel,
-            max_memory_per_worker: value.max_memory_per_worker,
+            agent_type_name: value.agent_type_name.0,
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
     }
 }
 
-impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimits {
-    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
+impl From<golem_api_grpc::proto::golem::registry::AgentDeploymentDetails>
+    for AgentDeploymentDetails
+{
+    fn from(value: golem_api_grpc::proto::golem::registry::AgentDeploymentDetails) -> Self {
         Self {
-            available_fuel: value.available_fuel,
-            max_memory_per_worker: value.max_memory_per_worker,
+            agent_type_name: AgentTypeName(value.agent_type_name),
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct BatchPluginInstallationUpdates {
-    pub actions: Vec<PluginInstallationAction>,
 }

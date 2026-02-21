@@ -12,13 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
-use tracing::Instrument;
-
-use crate::service::CompilationService;
-
-use crate::config::{ComponentServiceConfig, StaticComponentServiceConfig};
+use crate::config::{RegistryServiceConfig, StaticRegistryServiceConfig};
+use crate::service::ComponentCompilationService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component;
@@ -27,22 +22,25 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_error, component_compilation_response, ComponentCompilationError,
     ComponentCompilationRequest, ComponentCompilationResponse,
 };
-use golem_common::grpc::proto_component_id_string;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::ComponentId;
+use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
+use golem_service_base::grpc::proto_component_id_string;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
+use tracing::Instrument;
 
 #[derive(Clone)]
 pub struct CompileGrpcService {
-    service: Arc<dyn CompilationService + Send + Sync>,
-    component_service_config: ComponentServiceConfig,
+    service: Arc<ComponentCompilationService>,
+    component_service_config: RegistryServiceConfig,
 }
 
 impl CompileGrpcService {
     pub fn new(
-        service: Arc<dyn CompilationService + Send + Sync>,
-        component_service_config: ComponentServiceConfig,
+        service: Arc<ComponentCompilationService>,
+        component_service_config: RegistryServiceConfig,
     ) -> Self {
         Self {
             service,
@@ -72,11 +70,10 @@ impl GrpcCompilationServer for CompileGrpcService {
             remote_addr,
             component_service_port,
         ) {
-            (ComponentServiceConfig::Dynamic(config), Some(addr), Some(port)) => {
-                Some(StaticComponentServiceConfig {
+            (RegistryServiceConfig::Dynamic(_), Some(addr), Some(port)) => {
+                Some(StaticRegistryServiceConfig {
                     host: addr.ip().to_string(),
                     port: port as u16,
-                    access_token: config.access_token,
                 })
             }
             _ => None,
@@ -90,7 +87,7 @@ impl GrpcCompilationServer for CompileGrpcService {
             Ok(()) => record.succeed(component_compilation_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 component_compilation_response::Result::Failure(error.clone()),
-                &ComponentCompilationTraceErrorKind(&error),
+                &mut ComponentCompilationTraceErrorKind(&error),
             ),
         };
 
@@ -104,13 +101,16 @@ impl CompileGrpcService {
     async fn enqueue_compilation_impl(
         &self,
         request: ComponentCompilationRequest,
-        sender: Option<StaticComponentServiceConfig>,
+        sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
-        let component_version = request.component_version;
-        let project_id = make_project_id(request.project_id)?;
+        let component_revision = request
+            .component_revision
+            .try_into()
+            .map_err(|e| bad_request_error(format!("missing component version: {e}")))?;
+        let environment_id = make_environment_id(request.environment_id)?;
         self.service
-            .enqueue_compilation(component_id, component_version, project_id, sender)
+            .enqueue_compilation(component_id, component_revision, environment_id, sender)
             .await?;
         Ok(())
     }
@@ -148,11 +148,11 @@ fn make_component_id(
     Ok(id)
 }
 
-fn make_project_id(
-    id: Option<golem_api_grpc::proto::golem::common::ProjectId>,
-) -> Result<golem_common::model::ProjectId, ComponentCompilationError> {
+fn make_environment_id(
+    id: Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
+) -> Result<golem_common::model::environment::EnvironmentId, ComponentCompilationError> {
     let id = id.ok_or_else(|| bad_request_error("Missing project id"))?;
-    let id: golem_common::model::ProjectId = id
+    let id: golem_common::model::environment::EnvironmentId = id
         .try_into()
         .map_err(|_| bad_request_error("Invalid project id"))?;
     Ok(id)
@@ -174,7 +174,7 @@ impl Debug for ComponentCompilationTraceErrorKind<'_> {
     }
 }
 
-impl TraceErrorKind for ComponentCompilationTraceErrorKind<'_> {
+impl ApiErrorDetails for ComponentCompilationTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",
@@ -195,5 +195,9 @@ impl TraceErrorKind for ComponentCompilationTraceErrorKind<'_> {
                 component_compilation_error::Error::InternalError(_) => false,
             },
         }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        None
     }
 }

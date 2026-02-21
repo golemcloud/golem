@@ -13,37 +13,19 @@
 // limitations under the License.
 
 pub mod api;
-pub mod aws_config;
-pub mod aws_load_balancer;
+pub mod bootstrap;
 pub mod config;
-pub mod gateway_api_definition;
-pub mod gateway_api_definition_transformer;
-pub mod gateway_api_deployment;
-pub mod gateway_binding;
-pub mod gateway_execution;
-pub mod gateway_middleware;
-pub mod gateway_request;
-pub mod gateway_rib_compiler;
-pub mod gateway_rib_interpreter;
-pub mod gateway_security;
-pub mod getter;
+pub mod custom_api;
 pub mod grpcapi;
-pub mod headers;
-pub mod http_invocation_context;
 pub mod metrics;
 pub mod model;
 pub mod path;
-pub mod repo;
 pub mod service;
 
+use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
-use crate::service::Services;
-use anyhow::{anyhow, Context};
-use golem_common::config::DbConfig;
+use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
-use golem_service_base::db;
-use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use include_dir::{include_dir, Dir};
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
@@ -51,14 +33,11 @@ use poem::listener::Listener;
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 #[cfg(test)]
 test_r::enable!();
-
-static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -84,24 +63,7 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
-        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-
-        match &config.db {
-            DbConfig::Postgres(c) => {
-                db::postgres::migrate(c, migrations.postgres_migrations())
-                    .await
-                    .context("Postgres DB migration")?;
-            }
-            DbConfig::Sqlite(c) => {
-                db::sqlite::migrate(c, migrations.sqlite_migrations())
-                    .await
-                    .context("Sqlite DB migration")?;
-            }
-        };
-
-        let services: Services = Services::new(&config)
-            .await
-            .map_err(|err| anyhow!(err).context("Service initialization"))?;
+        let services: Services = Services::new(&config).await?;
 
         Ok(Self {
             config,
@@ -151,13 +113,9 @@ impl WorkerService {
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<u16, anyhow::Error> {
-        grpcapi::start_grpc_server(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.worker_grpc_port).into(),
-            self.services.clone(),
-            join_set,
-        )
-        .await
-        .map_err(|err| anyhow!(err).context("gRPC server failed"))
+        grpcapi::start_grpc_server(&self.config.grpc, self.services.clone(), join_set)
+            .await
+            .context("gRPC server failed")
     }
 
     async fn start_http_server(
@@ -214,7 +172,7 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let route = Route::new()
-            .nest("/", api::custom_http_request_api(&self.services))
+            .nest("/", custom_api::make_custom_api_endpoint(&self.services))
             .with(OpenTelemetryMetrics::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())

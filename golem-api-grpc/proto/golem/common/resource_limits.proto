@@ -2,7 +2,18 @@ syntax = "proto3";
 
 package golem.common;
 
+import "golem/common/account_id.proto";
+
 message ResourceLimits {
-  int64 available_fuel = 1;
-  int64 max_memory_per_worker = 2;
+  uint64 available_fuel = 1;
+  uint64 max_memory_per_worker = 2;
+}
+
+message AccountResourceLimitsEntry {
+  AccountId account_id = 1;
+  ResourceLimits resource_limits = 2;
+}
+
+message AccountResourceLimits {
+  repeated AccountResourceLimitsEntry entries = 1;
 }

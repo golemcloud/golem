@@ -1,6 +1,7 @@
 use crate::services::{HasConfig, HasOplogService};
 use async_recursion::async_recursion;
-use golem_common::base_model::{OplogIndex, PluginInstallationId};
+use golem_common::base_model::OplogIndex;
+use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{
     OplogEntry, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
@@ -127,25 +128,22 @@ pub fn update_status_with_new_entries(
         &new_entries,
     );
 
-    let pending_invocations = calculate_pending_invocations(
-        last_known.pending_invocations,
-        &deleted_regions,
-        &new_entries,
-    );
+    let pending_invocations =
+        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
     let (
         pending_updates,
         failed_updates,
         successful_updates,
-        component_version,
+        component_revision,
         component_size,
-        component_version_for_replay,
+        component_revision_for_replay,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
         last_known.successful_updates,
-        last_known.component_version,
+        last_known.component_revision,
         last_known.component_size,
-        last_known.component_version_for_replay,
+        last_known.component_revision_for_replay,
         &deleted_regions,
         &new_entries,
     );
@@ -183,13 +181,13 @@ pub fn update_status_with_new_entries(
         successful_updates,
         invocation_results,
         current_idempotency_key,
-        component_version,
+        component_revision,
         component_size,
         owned_resources,
         total_linear_memory_size,
         active_plugins,
         deleted_regions,
-        component_version_for_replay,
+        component_revision_for_replay,
         current_retry_count,
     };
 
@@ -420,15 +418,23 @@ fn calculate_skipped_regions(
 
 fn calculate_pending_invocations(
     initial: Vec<TimestampedWorkerInvocation>,
-    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedWorkerInvocation> {
     let mut result = initial;
-    for (idx, entry) in entries {
-        // Skipping entries in deleted regions (by revert) but not by skipped regions (by jumps and updates)
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
+    for entry in entries.values() {
+        // Here we are handling two categories of oplog entries:
+        // - "input" entries adding items to pending queues (PendingWorkerInvocation, PendingUpdate)
+        // - "output" entries removing items from pending queues when they got processed (ExportedFunctionInvoked, SuccessfulUpdate, FailedUpdate)
+        //
+        // Skipped regions does not matter for us - they are representing jumps and updates, and anything that happens in these regions
+        // is part of the history and we take it into accout (for example a new pending invocation comes in the previous iteration of a retried
+        // transaction, etc).
+        //
+        // Deleted regions are created by reverting some oplog entries; Even then, we still want to take both the input and output
+        // entries into account in deleted regions in the following way:
+        // - Incoming pending invocation or update that has not been processed yet is NOT affected by revert - they remain pending
+        // - If a pending invocation or update was attempted (no matter if succeeded or not) in the reverted region, we remove it from
+        //   the pending queue, so the revert will not make them retried.
 
         match entry {
             OplogEntry::PendingWorkerInvocation {
@@ -457,32 +463,35 @@ fn calculate_pending_invocations(
                 });
             }
             OplogEntry::PendingUpdate {
-                description: UpdateDescription::SnapshotBased { target_version, .. },
+                description:
+                    UpdateDescription::SnapshotBased {
+                        target_revision, ..
+                    },
                 ..
             } => result.retain(|invocation| match invocation {
                 TimestampedWorkerInvocation {
                     invocation:
                         WorkerInvocation::ManualUpdate {
-                            target_version: version,
+                            target_revision: revision,
                             ..
                         },
                     ..
-                } => version != target_version,
+                } => revision != target_revision,
                 _ => true,
             }),
-            OplogEntry::FailedUpdate { target_version, .. } => {
-                result.retain(|invocation| match invocation {
-                    TimestampedWorkerInvocation {
-                        invocation:
-                            WorkerInvocation::ManualUpdate {
-                                target_version: version,
-                                ..
-                            },
-                        ..
-                    } => version != target_version,
-                    _ => true,
-                })
-            }
+            OplogEntry::FailedUpdate {
+                target_revision, ..
+            } => result.retain(|invocation| match invocation {
+                TimestampedWorkerInvocation {
+                    invocation:
+                        WorkerInvocation::ManualUpdate {
+                            target_revision: revision,
+                            ..
+                        },
+                    ..
+                } => revision != target_revision,
+                _ => true,
+            }),
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
@@ -508,25 +517,25 @@ fn calculate_update_fields(
     initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
-    initial_version: u64,
+    initial_revision: ComponentRevision,
     initial_component_size: u64,
-    initial_component_version_for_replay: u64,
+    initial_component_revision_for_replay: ComponentRevision,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
+    ComponentRevision,
     u64,
-    u64,
-    u64,
+    ComponentRevision,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
-    let mut version = initial_version;
+    let mut revision = initial_revision;
     let mut size = initial_component_size;
-    let mut component_version_for_replay = initial_component_version_for_replay;
+    let mut component_revision_for_replay = initial_component_revision_for_replay;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -536,12 +545,12 @@ fn calculate_update_fields(
 
         match entry {
             OplogEntry::Create {
-                component_version,
+                component_revision,
                 component_size,
                 ..
             } => {
-                version = *component_version;
-                component_version_for_replay = *component_version;
+                revision = *component_revision;
+                component_revision_for_replay = *component_revision;
                 size = *component_size;
             }
             OplogEntry::PendingUpdate {
@@ -557,27 +566,27 @@ fn calculate_update_fields(
             }
             OplogEntry::FailedUpdate {
                 timestamp,
-                target_version,
+                target_revision,
                 details,
             } => {
                 failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
-                    target_version: *target_version,
+                    target_revision: *target_revision,
                     details: details.clone(),
                 });
                 pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
-                target_version,
+                target_revision,
                 new_component_size,
                 ..
             } => {
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
-                    target_version: *target_version,
+                    target_revision: *target_revision,
                 });
-                version = *target_version;
+                revision = *target_revision;
                 size = *new_component_size;
 
                 let applied_update = pending_updates.pop_front();
@@ -588,7 +597,7 @@ fn calculate_update_fields(
                         ..
                     })
                 ) {
-                    component_version_for_replay = *target_version
+                    component_revision_for_replay = *target_revision
                 }
             }
             _ => {}
@@ -598,9 +607,9 @@ fn calculate_update_fields(
         pending_updates,
         failed_updates,
         successful_updates,
-        version,
+        revision,
         size,
-        component_version_for_replay,
+        component_revision_for_replay,
     )
 }
 
@@ -714,10 +723,10 @@ fn collect_resources(
 }
 
 fn calculate_active_plugins(
-    initial: HashSet<PluginInstallationId>,
+    initial: HashSet<PluginPriority>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashSet<PluginInstallationId> {
+) -> HashSet<PluginPriority> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
@@ -726,11 +735,15 @@ fn calculate_active_plugins(
         }
 
         match entry {
-            OplogEntry::ActivatePlugin { plugin, .. } => {
-                result.insert(plugin.clone());
+            OplogEntry::ActivatePlugin {
+                plugin_priority, ..
+            } => {
+                result.insert(*plugin_priority);
             }
-            OplogEntry::DeactivatePlugin { plugin, .. } => {
-                result.remove(plugin);
+            OplogEntry::DeactivatePlugin {
+                plugin_priority, ..
+            } => {
+                result.remove(plugin_priority);
             }
             OplogEntry::SuccessfulUpdate {
                 new_active_plugins, ..
@@ -768,6 +781,9 @@ mod test {
     };
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
@@ -776,8 +792,7 @@ mod test {
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
-        AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-        OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig, ScanCursor,
+        FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, ScanCursor,
         SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
@@ -852,7 +867,9 @@ mod test {
     #[test]
     async fn single_auto_update_for_running() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: 2 };
+        let update1 = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
@@ -880,8 +897,12 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: 2 };
-        let update2 = UpdateDescription::Automatic { target_version: 3 };
+        let update1 = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+        let update2 = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(3).unwrap(),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
@@ -914,7 +935,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -927,7 +948,9 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            })
             .imported_function_invoked(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
@@ -949,7 +972,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -962,7 +985,9 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            })
             .imported_function_invoked(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
@@ -984,7 +1009,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update2 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -997,7 +1022,9 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            })
             .failed_update(update2)
             .exported_function_invoked("c", vec![], k2.clone())
             .exported_function_completed(None, k2)
@@ -1009,8 +1036,12 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump_and_revert() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: 2 };
-        let update2 = UpdateDescription::Automatic { target_version: 3 };
+        let update1 = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+        let update2 = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(3).unwrap(),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", vec![], k1.clone())
@@ -1044,7 +1075,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -1057,7 +1088,9 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            })
             .imported_function_invoked(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
@@ -1080,11 +1113,11 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
         let update2 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -1097,7 +1130,9 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            })
             .imported_function_invoked(
                 "b",
                 HostRequest::NoInput(HostRequestNoInput {}),
@@ -1108,7 +1143,9 @@ mod test {
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .exported_function_invoked("c", vec![], k2.clone())
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            })
             .exported_function_completed(None, k2)
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
@@ -1172,11 +1209,11 @@ mod test {
 
     #[test]
     async fn non_existing_oplog() {
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new();
         let owned_worker_id = OwnedWorkerId::new(
-            &project_id,
+            environment_id,
             &WorkerId {
-                component_id: ComponentId::new_v4(),
+                component_id: ComponentId::new(),
                 worker_name: "test-worker".to_string(),
             },
         );
@@ -1199,11 +1236,11 @@ mod test {
         pub fn new(
             account_id: AccountId,
             owned_worker_id: OwnedWorkerId,
-            component_version: ComponentVersion,
+            component_revision: ComponentRevision,
         ) -> Self {
             let status = WorkerStatusRecord {
-                component_version,
-                component_version_for_replay: component_version,
+                component_revision,
+                component_revision_for_replay: component_revision,
                 component_size: 100,
                 total_linear_memory_size: 200,
                 oplog_idx: OplogIndex::INITIAL,
@@ -1213,11 +1250,10 @@ mod test {
                 entries: vec![TestEntry {
                     oplog_entry: OplogEntry::create(
                         owned_worker_id.worker_id(),
-                        component_version,
+                        component_revision,
                         vec![],
-                        vec![],
-                        owned_worker_id.project_id(),
-                        account_id.clone(),
+                        owned_worker_id.environment_id(),
+                        account_id,
                         None,
                         100,
                         200,
@@ -1338,7 +1374,7 @@ mod test {
                 .clone();
             self.add(OplogEntry::jump(region.clone()), move |mut status| {
                 status.status = old_status.status;
-                status.component_version = old_status.component_version;
+                status.component_revision = old_status.component_revision;
                 status.current_idempotency_key = old_status.current_idempotency_key;
                 status.total_linear_memory_size = old_status.total_linear_memory_size;
                 status.component_size = old_status.component_size;
@@ -1366,17 +1402,15 @@ mod test {
                 status.deleted_regions.add(region);
 
                 status.status = old_status.status;
-                status.component_version = old_status.component_version;
+                status.component_revision = old_status.component_revision;
                 status.current_idempotency_key = old_status.current_idempotency_key;
                 status.total_linear_memory_size = old_status.total_linear_memory_size;
                 status.component_size = old_status.component_size;
                 status.owned_resources = old_status.owned_resources;
-                status.pending_invocations = old_status.pending_invocations;
-                status.pending_updates = old_status.pending_updates;
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
-                status.component_version_for_replay = old_status.component_version_for_replay;
+                status.component_revision_for_replay = old_status.component_revision_for_replay;
 
                 status
             })
@@ -1453,11 +1487,11 @@ mod test {
             self,
             update_description: UpdateDescription,
             new_component_size: u64,
-            new_active_plugins: &HashSet<PluginInstallationId>,
+            new_active_plugins: &HashSet<PluginPriority>,
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
             let entry = OplogEntry::successful_update(
-                *update_description.target_version(),
+                *update_description.target_revision(),
                 new_component_size,
                 new_active_plugins.clone(),
             )
@@ -1466,10 +1500,10 @@ mod test {
                 let _ = status.pending_updates.pop_front();
                 status.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: entry.timestamp(),
-                    target_version: *update_description.target_version(),
+                    target_revision: *update_description.target_revision(),
                 });
                 status.component_size = new_component_size;
-                status.component_version = *update_description.target_version();
+                status.component_revision = *update_description.target_revision();
                 status.active_plugins = new_active_plugins.clone();
 
                 if status.skipped_regions.is_overridden() {
@@ -1478,9 +1512,11 @@ mod test {
                     status.owned_resources = HashMap::new();
                 }
 
-                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                if let UpdateDescription::SnapshotBased {
+                    target_revision, ..
+                } = update_description
                 {
-                    status.component_version_for_replay = target_version;
+                    status.component_revision_for_replay = target_revision;
                 };
 
                 status
@@ -1489,14 +1525,14 @@ mod test {
 
         pub fn failed_update(self, update_description: UpdateDescription) -> Self {
             let entry = OplogEntry::failed_update(
-                *update_description.target_version(),
+                *update_description.target_revision(),
                 Some("details".to_string()),
             )
             .rounded();
             self.add(entry.clone(), move |mut status| {
                 status.failed_updates.push(FailedUpdateRecord {
                     timestamp: entry.timestamp(),
-                    target_version: *update_description.target_version(),
+                    target_revision: *update_description.target_revision(),
                     details: Some("details".to_string()),
                 });
                 status.pending_updates.pop_front();
@@ -1505,7 +1541,9 @@ mod test {
                     status.skipped_regions.drop_override();
                 }
 
-                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                if let UpdateDescription::SnapshotBased {
+                    target_revision, ..
+                } = update_description
                 {
                     status
                         .pending_invocations
@@ -1513,11 +1551,11 @@ mod test {
                             TimestampedWorkerInvocation {
                                 invocation:
                                     WorkerInvocation::ManualUpdate {
-                                        target_version: version,
+                                        target_revision: revision,
                                         ..
                                     },
                                 ..
-                            } => *version != target_version,
+                            } => *revision != target_revision,
                             _ => true,
                         });
                 };
@@ -1560,19 +1598,21 @@ mod test {
     }
 
     impl TestCase {
-        pub fn builder(initial_component_version: ComponentVersion) -> TestCaseBuilder {
-            let project_id = ProjectId::new_v4();
-            let account_id = AccountId {
-                value: "test-account".to_string(),
-            };
+        pub fn builder(initial_component_version: u64) -> TestCaseBuilder {
+            let environment_id = EnvironmentId::new();
+            let account_id = AccountId::new();
             let owned_worker_id = OwnedWorkerId::new(
-                &project_id,
+                environment_id,
                 &WorkerId {
-                    component_id: ComponentId::new_v4(),
+                    component_id: ComponentId::new(),
                     worker_name: "test-worker".to_string(),
                 },
             );
-            TestCaseBuilder::new(account_id, owned_worker_id, initial_component_version)
+            TestCaseBuilder::new(
+                account_id,
+                owned_worker_id,
+                initial_component_version.try_into().unwrap(),
+            )
         }
     }
 
@@ -1636,7 +1676,7 @@ mod test {
 
         async fn scan_for_component(
             &self,
-            _project_id: &ProjectId,
+            _environment_id: &EnvironmentId,
             _component_id: &ComponentId,
             _cursor: ScanCursor,
             _count: u64,

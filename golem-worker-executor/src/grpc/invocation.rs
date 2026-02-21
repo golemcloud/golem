@@ -15,12 +15,13 @@
 use crate::services::HasComponentService;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
-use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::WorkerId;
+use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
+use golem_common::model::{IdempotencyKey, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::Component;
+use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::protobuf::Val;
@@ -31,17 +32,15 @@ use std::sync::Arc;
 use tracing::warn;
 
 pub trait CanStartWorker {
-    fn account_id(&self) -> Result<AccountId, WorkerExecutorError>;
-    fn account_limits(&self) -> Option<GrpcResourceLimits>;
-    fn project_id(&self) -> Result<ProjectId, WorkerExecutorError>;
+    fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
-    fn args(&self) -> Option<Vec<String>>;
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn parent(&self) -> Option<WorkerId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
     }
+    fn auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError>;
 }
 
 pub trait GrpcInvokeRequest: CanStartWorker {
@@ -55,32 +54,20 @@ pub trait GrpcInvokeRequest: CanStartWorker {
 }
 
 trait ProtobufInvocationDetails {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId>;
-    fn proto_account_limits(&self)
-        -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits>;
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId>;
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId>;
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId>;
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx>;
 }
 
 impl<T: ProtobufInvocationDetails> CanStartWorker for T {
-    fn account_id(&self) -> Result<AccountId, WorkerExecutorError> {
-        Ok(self
-            .proto_account_id()
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
-            .into())
-    }
-
-    fn account_limits(&self) -> Option<GrpcResourceLimits> {
-        *self.proto_account_limits()
-    }
-
-    fn project_id(&self) -> Result<ProjectId, WorkerExecutorError> {
-        (*self.proto_project_id())
-            .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?
+    fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError> {
+        (*self.proto_environment_id())
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)
     }
@@ -91,12 +78,6 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .ok_or(WorkerExecutorError::invalid_request("worker_id not found"))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        self.proto_invocation_context()
-            .as_ref()
-            .map(|ctx| ctx.args.clone())
     }
 
     fn env(&self) -> Option<Vec<(String, String)>> {
@@ -126,55 +107,47 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
                 .and_then(|worker_id| worker_id.clone().try_into().ok())
         })
     }
+
+    fn auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
+        self.proto_auth_ctx()
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
+    }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSystemNodeRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
-    }
-
-    fn proto_account_limits(
-        &self,
-    ) -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits> {
-        &self.account_limits
-    }
-
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &None
+    }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
-    }
-
-    fn proto_account_limits(
-        &self,
-    ) -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits> {
-        &self.account_limits
-    }
-
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -182,89 +155,75 @@ impl ProtobufInvocationDetails
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &None
     }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
+    }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeWorkerRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
-    }
-
-    fn proto_account_limits(
-        &self,
-    ) -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits> {
-        &self.account_limits
-    }
-
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
-    }
-
-    fn proto_account_limits(
-        &self,
-    ) -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits> {
-        &self.account_limits
-    }
-
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAndAwaitWorkerJsonRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
-    }
-
-    fn proto_account_limits(
-        &self,
-    ) -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits> {
-        &self.account_limits
-    }
-
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
@@ -292,28 +251,22 @@ impl GrpcInvokeRequest for golem_api_grpc::proto::golem::workerexecutor::v1::Inv
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeJsonWorkerRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
-    }
-
-    fn proto_account_limits(
-        &self,
-    ) -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits> {
-        &self.account_limits
-    }
-
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
@@ -386,18 +339,18 @@ impl GrpcInvokeRequest
     }
 }
 
-/// Assumes what component version a worker will execute the next enqueued invocation with
-fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersion {
-    let mut version = metadata.last_known_status.component_version;
+/// Assumes what component revision a worker will execute the next enqueued invocation with
+fn assume_future_component_revision(metadata: &WorkerMetadata) -> ComponentRevision {
+    let mut revision = metadata.last_known_status.component_revision;
     for pending_update in &metadata.last_known_status.pending_updates {
         // Assuming this update will succeed
-        version = *pending_update.description.target_version();
+        revision = *pending_update.description.target_revision();
     }
-    version
+    revision
 }
 
 fn resolve_function<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), WorkerExecutorError> {
     let parsed =
@@ -417,7 +370,7 @@ fn resolve_function<'t>(
             }
             AnalysedExport::Function(ref f @ AnalysedFunction { name, .. }) => {
                 if parsed.site() == &ParsedFunctionSite::Global
-                    && &parsed.function().function_name() == name
+                    && parsed.function().function_name() == *name
                 {
                     functions.push(f);
                 }
@@ -444,12 +397,12 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
 ) -> Result<Vec<Val>, WorkerExecutorError> {
     let metadata = worker.get_latest_worker_metadata().await;
-    let assumed_component_version = assume_future_component_version(&metadata);
+    let assumed_component_revision = assume_future_component_revision(&metadata);
     let component_metadata = worker
         .component_service()
         .get_metadata(
-            &metadata.worker_id.component_id,
-            Some(assumed_component_version),
+            metadata.worker_id.component_id,
+            Some(assumed_component_revision),
         )
         .await?;
     let (function, _parsed) = resolve_function(&component_metadata, function_name)?;

@@ -18,7 +18,6 @@ use crate::context::Context;
 use std::sync::Arc;
 
 pub mod account;
-pub mod project;
 pub mod token;
 
 pub struct CloudCommandHandler {
@@ -32,12 +31,6 @@ impl CloudCommandHandler {
 
     pub async fn handle_command(&self, subcommand: CloudSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            CloudSubcommand::Project { subcommand } => {
-                self.ctx
-                    .cloud_project_handler()
-                    .handle_command(subcommand)
-                    .await
-            }
             CloudSubcommand::Account { subcommand } => {
                 self.ctx
                     .cloud_account_handler()

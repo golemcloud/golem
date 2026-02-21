@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod provided;
+pub mod spawned;
+
 use crate::components::redis::Redis;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 use anyhow::anyhow;
@@ -27,32 +30,17 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::Level;
 
-pub mod provided;
-pub mod spawned;
-
 #[async_trait]
 pub trait ShardManager: Send + Sync {
     async fn client(&self) -> ShardManagerServiceClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
+        new_client(&self.grpc_host(), self.grpc_port()).await
     }
 
-    fn private_host(&self) -> String;
-    fn private_http_port(&self) -> u16;
-    fn private_grpc_port(&self) -> u16;
-
-    fn public_host(&self) -> String {
-        self.private_host()
-    }
-
-    fn public_http_port(&self) -> u16 {
-        self.private_http_port()
-    }
-
-    fn public_grpc_port(&self) -> u16 {
-        self.private_grpc_port()
-    }
+    fn grpc_host(&self) -> String;
+    fn grpc_port(&self) -> u16;
 
     async fn kill(&self);
+
     async fn restart(&self, number_of_shards_override: Option<usize>);
 
     async fn get_routing_table(&self) -> crate::Result<RoutingTable> {
@@ -97,7 +85,7 @@ async fn env_vars(
     otlp: bool,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
-        .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
+        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
         .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())

@@ -21,14 +21,14 @@ use crate::config::{
 };
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
+use crate::log::log_error;
 use crate::log::{log_action, log_warn_action, LogColorize};
-use crate::model::text::fmt::log_error;
-use crate::model::{Format, ProfileView};
+use crate::model::format::Format;
+use crate::model::ProfileView;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use url::Url;
-use uuid::Uuid;
 
 pub struct ProfileCommandHandler {
     ctx: Arc<Context>,
@@ -44,18 +44,16 @@ impl ProfileCommandHandler {
             ProfileSubcommand::New {
                 name,
                 set_active,
-                component_url,
+                url,
                 worker_url,
-                cloud_url,
                 default_format,
                 allow_insecure,
                 static_token,
             } => self.cmd_new(
                 name,
                 set_active,
-                component_url,
+                url,
                 worker_url,
-                cloud_url,
                 default_format,
                 allow_insecure,
                 static_token,
@@ -80,12 +78,11 @@ impl ProfileCommandHandler {
         &self,
         name: Option<ProfileName>,
         set_active: bool,
-        component_url: Option<Url>,
+        custom_url: Option<Url>,
         worker_url: Option<Url>,
-        cloud_url: Option<Url>,
         default_format: Format,
         allow_insecure: bool,
-        static_token: Option<Uuid>,
+        static_token: Option<String>,
     ) -> anyhow::Result<()> {
         let (name, profile, set_active) = match name {
             Some(name) => {
@@ -102,8 +99,7 @@ impl ProfileCommandHandler {
                 };
 
                 let profile = Profile {
-                    custom_url: component_url,
-                    custom_cloud_url: cloud_url,
+                    custom_url,
                     custom_worker_url: worker_url,
                     allow_insecure,
                     config: ProfileConfig { default_format },

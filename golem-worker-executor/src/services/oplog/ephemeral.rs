@@ -15,7 +15,7 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CommitLevel, Oplog};
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,

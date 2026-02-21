@@ -27,13 +27,13 @@ use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 use url::Url;
 
-pub mod cloud_service;
+pub mod blob_storage;
 pub mod component_compilation_service;
-pub mod component_service;
 mod docker;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
+pub mod registry_service;
 pub mod service;
 pub mod shard_manager;
 pub mod worker_executor;
@@ -169,6 +169,39 @@ pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeo
     }
 }
 
+pub async fn wait_for_startup_http_any_response(
+    host: &str,
+    http_port: u16,
+    name: &str,
+    timeout: Duration,
+) {
+    info!(
+        "Waiting for {name} (HTTP) start on host {host}:{http_port}, timeout: {}s",
+        timeout.as_secs()
+    );
+    let start = Instant::now();
+    let client = reqwest::Client::new();
+    let url = reqwest::Url::parse(&format!("http://{host}:{http_port}")).unwrap();
+    loop {
+        let success = match client.get(url.clone()).send().await {
+            Ok(_) => true,
+            Err(err) => {
+                debug!("request for {name} resulted in an error: {err:?}");
+                false
+            }
+        };
+
+        if success {
+            break;
+        } else {
+            if start.elapsed() > timeout {
+                panic!("Failed to verify that {name} is running");
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+}
+
 struct EnvVarBuilder {
     env_vars: HashMap<String, String>,
 }
@@ -214,7 +247,7 @@ impl EnvVarBuilder {
                 h2=warn,\
                 hyper=warn,\
                 tower=warn,\
-                fred=error"
+                fred=warn"
             ),
         )
     }

@@ -1,4 +1,4 @@
 {
-  "description": "The default component template for Rust",
+  "description": "A simple agent implementing a counter",
   "appComponentGroup": "default"
 }

@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::logln;
 use crate::model::text::fmt::*;
-use golem_client::model::{Account, Role};
+use golem_client::model::Account;
 use serde::{Deserialize, Serialize};
 
 fn account_fields(account: &Account) -> Vec<(String, String)> {
@@ -73,6 +72,8 @@ impl MessageWithFields for AccountUpdateView {
     }
 }
 
+// TODO: atomic
+/*
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct GrantGetView(pub Vec<Role>);
 
@@ -88,3 +89,4 @@ impl TextView for GrantGetView {
         }
     }
 }
+*/

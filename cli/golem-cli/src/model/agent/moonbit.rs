@@ -15,9 +15,9 @@
 use crate::model::agent::wit::AgentWrapperGeneratorContext;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
-use golem_client::model::AnalysedType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
+use golem_wasm::analysis::AnalysedType;
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
     to_moonbit_ident, MoonBitComponent, MoonBitPackage, PackageName, Warning, WarningControl,
@@ -116,7 +116,7 @@ pub fn generate_moonbit_wrapper(
 
     for agent in &ctx.agent_types {
         let agent_stub = generate_agent_stub(&ctx, agent)?;
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         component.set_warning_control(
             &format!(
@@ -407,7 +407,7 @@ fn setup_dependencies(
     }
 
     for agent in agent_types {
-        let agent_name = agent.type_name.to_lower_camel_case();
+        let agent_name = agent.type_name.0.to_lower_camel_case();
 
         depends_on_golem_agent_common(
             component,
@@ -541,9 +541,10 @@ fn generate_agent_stub(
         "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", msg); panic(); }}"
     )?;
     writeln!(result, "    }}")?;
+    // Fixme: thread the correct value through once we have new invocation api
     writeln!(
         result,
-        "  match @guest.initialize(\"{original_agent_name}\", encoded_params) {{"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params, @common.Principal::Anonymous) {{"
     )?;
     writeln!(result, "    Ok(result) => result")?;
     writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
@@ -578,9 +579,10 @@ fn generate_agent_stub(
         )?;
         writeln!(result, "    }}")?;
 
+        // Fixme: thread the correct value through once we have new invocation api
         writeln!(
             result,
-            "  let result = match @guest.invoke(\"{original_method_name}\", input) {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input, @common.Principal::Anonymous) {{"
         )?;
         writeln!(result, "    Ok(result) => result")?;
         writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;
@@ -1499,7 +1501,8 @@ mod tests {
         reproducer_for_multiple_types_called_element,
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
-    use crate::model::app::AppComponentName;
+    use golem_common::model::component::ComponentName;
+    use golem_templates::model::GuestLanguage;
     use tempfile::NamedTempFile;
     use test_r::test;
 
@@ -1518,7 +1521,7 @@ mod tests {
 
     #[test]
     fn multi_agent_example(_trace: &Trace) {
-        let component_name: AppComponentName = "example:multi1".into();
+        let component_name = ComponentName("example:multi1".to_string());
         let agent_types = test::multi_agent_wrapper_2_types();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1528,7 +1531,7 @@ mod tests {
 
     #[test]
     fn single_agent_with_wit_keywords(_trace: &Trace) {
-        let component_name: AppComponentName = "example:single1".into();
+        let component_name = ComponentName("example:single1".to_string());
         let agent_types = test::agent_type_with_wit_keywords();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1538,7 +1541,7 @@ mod tests {
 
     #[test]
     fn bug_multiple_types_called_element() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = reproducer_for_multiple_types_called_element();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1548,7 +1551,7 @@ mod tests {
 
     #[test]
     fn single_agent_with_test_in_package_name(_trace: &Trace) {
-        let component_name: AppComponentName = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = test::agent_type_with_wit_keywords();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1558,7 +1561,7 @@ mod tests {
 
     #[test]
     fn enum_type() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = reproducer_for_issue_with_enums();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1568,7 +1571,7 @@ mod tests {
 
     #[test]
     fn bug_result_types() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = reproducer_for_issue_with_result_types();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1578,7 +1581,7 @@ mod tests {
 
     #[test]
     pub fn multimodal_untagged_variant_in_out() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = test::multimodal_untagged_variant_in_out();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1588,7 +1591,7 @@ mod tests {
 
     #[test]
     pub fn char_type() {
-        let component_name = "example:bug".into();
+        let component_name = "example:bug".try_into().unwrap();
         let agent_types = test::char_type();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1598,8 +1601,18 @@ mod tests {
 
     #[test]
     pub fn unit_result_type() {
-        let component_name = "example:bug".into();
+        let component_name = "example:bug".try_into().unwrap();
         let agent_types = test::unit_result_type();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    pub fn ts_code_first_snippets() {
+        let component_name = "example:code-first-snippets".try_into().unwrap();
+        let agent_types = test::code_first_snippets_agent_types(GuestLanguage::TypeScript);
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

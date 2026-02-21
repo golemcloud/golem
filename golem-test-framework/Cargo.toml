@@ -15,11 +15,12 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
-golem-common = { workspace = true }
+golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
+applying = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bytes = { workspace = true }
@@ -30,11 +31,12 @@ colored = { workspace = true }
 futures = { workspace = true }
 humantime-serde = { workspace = true }
 itertools = { workspace = true }
+prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_with = "3.15.1"
+serde_with = { workspace = true }
 serde_yaml = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }

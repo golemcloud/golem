@@ -1,7 +1,7 @@
 [package]
 name = "golem-service-base"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 
 homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
@@ -16,12 +16,13 @@ harness = false
 
 [features]
 default = []
-worker-executor = [ "dep:wasmtime-wasi" ]
+worker-executor = [ "dep:wasmtime", "dep:wasmtime-wasi" ]
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true }
-golem-wasm = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
@@ -32,21 +33,30 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
+base64.workspace = true
+bigdecimal.workspace = true
 bitflags = { workspace = true }
+blake3.workspace = true
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+derive_more.workspace = true
 desert_rust = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
 headers = { workspace = true }
 hex = { workspace = true }
+hmac.workspace = true
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
+indexmap.workspace = true
 lazy_static = { workspace = true }
+nom.workspace = true
+openapiv3.workspace = true
+openidconnect.workspace = true
 pin-project = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
@@ -54,30 +64,38 @@ poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 prost-types = { workspace = true }
 reqwest = { workspace = true }
+rustc-hash = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2.workspace = true
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
     "uuid",
     "migrate",
+    "bigdecimal",
     "chrono",
 ] }
+strum = { workspace = true }
+strum_macros = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = [ "_tls-any" ] }
 tonic-tracing-opentelemetry = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 
 [dev-dependencies]
+assert2.workspace = true
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }

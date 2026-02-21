@@ -12,36 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::is_up_to_date;
 use crate::app::build::task_result_marker::{LinkRpcMarkerHash, TaskResultMarker};
-use crate::app::context::ApplicationContext;
+use crate::app::build::up_to_date_check::is_up_to_date;
+use crate::app::context::BuildContext;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::DependencyType;
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 
-pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
+pub async fn link(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
     log_action("Linking", "dependencies");
     let _indent = LogIndent::new();
 
-    for component_name in ctx.selected_component_names() {
+    for component_name in ctx.application_context().selected_component_names() {
         let static_wasm_rpc_dependencies = ctx
-            .application
+            .application()
             .component_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::StaticWasmRpc)
             .collect::<BTreeSet<_>>();
         let library_dependencies = ctx
-            .application
+            .application()
             .component_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::Wasm)
             .collect::<BTreeSet<_>>();
         let dynamic_wasm_rpc_dependencies = ctx
-            .application
+            .application()
             .component_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
@@ -51,23 +51,28 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
         for static_dep in &static_wasm_rpc_dependencies {
             plugs.push(Plug {
                 name: static_dep.source.to_string(),
-                wasm: ctx.resolve_binary_component_source(static_dep).await?,
+                wasm: ctx
+                    .application_context()
+                    .resolve_binary_component_source(static_dep)
+                    .await?,
             });
         }
         for library_dep in &library_dependencies {
             plugs.push(Plug {
                 name: library_dep.source.to_string(),
-                wasm: ctx.resolve_binary_component_source(library_dep).await?,
+                wasm: ctx
+                    .application_context()
+                    .resolve_binary_component_source(library_dep)
+                    .await?,
             });
         }
 
-        let component_wasm = ctx
-            .application
-            .component_wasm(component_name, ctx.build_profile());
-        let linked_wasm = ctx.application.component_temp_linked_wasm(component_name);
+        let component = ctx.application().component(component_name);
+        let component_wasm = component.wasm();
+        let linked_wasm = component.temp_linked_wasm();
 
         let task_result_marker = TaskResultMarker::new(
-            &ctx.application.task_result_marker_dir(),
+            &ctx.application().task_result_marker_dir(),
             LinkRpcMarkerHash {
                 component_name,
                 static_wasm_rpc_dependencies: &static_wasm_rpc_dependencies,
@@ -119,7 +124,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
         }
 
         if is_up_to_date(
-            ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
+            ctx.skip_up_to_date_checks() || !task_result_marker.is_up_to_date(),
             || {
                 plugs
                     .iter()
@@ -165,14 +170,21 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     );
                     let _indent = LogIndent::new();
 
-                    commands::composition::compose(
-                        ctx.application
-                            .component_wasm(component_name, ctx.build_profile())
-                            .as_path(),
+                    let unused_plugs = commands::composition::compose(
+                        &component_wasm,
                         plugs,
                         linked_wasm.as_path(),
                     )
-                    .await
+                    .await?;
+
+                    for plug_name in unused_plugs {
+                        log_warn_action(
+                            "Skipping",
+                            format!("{}, not used", plug_name.log_color_highlight()),
+                        );
+                    }
+
+                    Ok(())
                 }
             }
             .await,

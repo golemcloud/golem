@@ -1,14 +1,48 @@
-use crate::config::ProfileName;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::fs;
 use crate::log::LogColorize;
+use crate::model::cascade::property::map::MapMergeMode;
+use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
-use crate::model::Format;
+use crate::model::format::Format;
 use anyhow::{anyhow, Context};
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::diff;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentName;
+use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_templates::model::GuestLanguage;
+use golem_templates::APP_MANIFEST_JSON_SCHEMA;
+use indexmap::IndexMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use strum::IntoEnumIterator;
 use url::Url;
+
+static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    let schema = serde_json::from_str::<serde_json::Value>(APP_MANIFEST_JSON_SCHEMA)
+        .expect("Invalid Application manifest JSON schema: cannot parse as JSON");
+    jsonschema::validator_for(&schema)
+        .expect("Invalid Application manifest JSON schema: cannot create validator")
+});
 
 #[derive(Clone, Debug)]
 pub struct ApplicationWithSource {
@@ -18,14 +52,14 @@ pub struct ApplicationWithSource {
 
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        Self::from_yaml_string(file.clone(), fs::read_to_string(file.clone())?)
+        Self::from_yaml_string(file.clone(), &fs::read_to_string(file.clone())?)
             .with_context(|| anyhow!("Failed to load source {}", file.log_color_highlight()))
     }
 
-    pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {
+    pub fn from_yaml_string(source: PathBuf, string: &str) -> anyhow::Result<Self> {
         Ok(Self {
             source,
-            application: Application::from_yaml_str(string.as_str())?,
+            application: Application::from_yaml_str(string)?,
         })
     }
 
@@ -34,34 +68,138 @@ impl ApplicationWithSource {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Application {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temp_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wit_deps: Vec<String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub templates: HashMap<String, ComponentTemplate>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub components: HashMap<String, Component>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub dependencies: HashMap<String, Vec<Dependency>>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub component_templates: IndexMap<String, ComponentTemplate>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub components: IndexMap<String, Component>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_api: Option<HttpApi>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<ProfileName, Profile>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub environments: IndexMap<String, Environment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<BridgeSdks>,
 }
 
+#[derive(Debug)]
+struct JsonSchemaValidationError {
+    schema: String,
+    error: String,
+}
+
+#[derive(Debug)]
+pub struct DeserializationError {
+    serde_yaml_error: serde_yaml::Error,
+    json_schema_validation_errors_by_path: BTreeMap<String, Vec<JsonSchemaValidationError>>,
+}
+
+impl DeserializationError {
+    fn new(
+        serde_yaml_error: serde_yaml::Error,
+        json_schema_evaluation: Option<jsonschema::Evaluation>,
+    ) -> Self {
+        match json_schema_evaluation {
+            Some(evaluation) => {
+                if evaluation.flag().valid {
+                    serde_yaml_error.into()
+                } else {
+                    let mut schema_errors =
+                        BTreeMap::<String, Vec<JsonSchemaValidationError>>::new();
+
+                    for error in evaluation.iter_errors() {
+                        let path = format!(".{}", error.instance_location);
+                        schema_errors
+                            .entry(path)
+                            .or_default()
+                            .push(JsonSchemaValidationError {
+                                schema: error.schema_location.to_string(),
+                                error: error.error.to_string(),
+                            })
+                    }
+
+                    Self {
+                        serde_yaml_error,
+                        json_schema_validation_errors_by_path: schema_errors,
+                    }
+                }
+            }
+            None => serde_yaml_error.into(),
+        }
+    }
+}
+
+impl From<serde_yaml::Error> for DeserializationError {
+    fn from(value: serde_yaml::Error) -> Self {
+        Self {
+            serde_yaml_error: value,
+            json_schema_validation_errors_by_path: BTreeMap::new(),
+        }
+    }
+}
+
+impl Display for DeserializationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.json_schema_validation_errors_by_path.is_empty() {
+            write!(f, "{}", self.serde_yaml_error)
+        } else {
+            writeln!(f, "Failed to deserialize application manifest:")?;
+            writeln!(
+                f,
+                "  {}",
+                "YAML deserialization error:".log_color_help_group()
+            )?;
+            writeln!(
+                f,
+                "    {}",
+                self.serde_yaml_error
+                    .to_string()
+                    .log_color_error_highlight()
+            )?;
+            writeln!(
+                f,
+                "  {}",
+                "Schema validation hint(s):".log_color_help_group()
+            )?;
+            for (path, errors) in &self.json_schema_validation_errors_by_path {
+                writeln!(f, "    path: {}", path.log_color_highlight())?;
+                for error in errors {
+                    writeln!(f, "      - schema: {}", error.schema)?;
+                    writeln!(f, "        error: {}", error.error.log_color_warn())?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+impl Error for DeserializationError {}
+
 impl Application {
-    pub fn from_yaml_str(yaml: &str) -> serde_yaml::Result<Self> {
-        serde_yaml::from_str(yaml)
+    pub fn from_yaml_str(yaml: &str) -> Result<Self, DeserializationError> {
+        match serde_yaml::from_str(yaml) {
+            Ok(app) => Ok(app),
+            Err(err) => Err(DeserializationError::new(
+                err,
+                serde_yaml::from_str::<serde_json::Value>(yaml)
+                    .ok()
+                    .map(json_value_without_null_fields)
+                    .map(|app| JSON_SCHEMA_VALIDATOR.evaluate(&app)),
+            )),
+        }
     }
 
     pub fn to_yaml_string(&self) -> String {
@@ -72,170 +210,165 @@ impl Application {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
     #[serde(flatten)]
-    pub component_properties: ComponentProperties,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<String, ComponentProperties>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_profile: Option<String>,
-}
-
-impl ComponentTemplate {
-    pub fn merge_common_properties_into_profiles(self) -> Self {
-        Self {
-            component_properties: self.component_properties.clone(),
-            profiles: self
-                .profiles
-                .into_iter()
-                .map(|(name, profile)| {
-                    (
-                        name,
-                        self.component_properties
-                            .clone()
-                            .merge_with_overrides(profile),
-                    )
-                })
-                .collect(),
-            default_profile: self.default_profile,
-        }
-    }
+    pub component_properties: ComponentLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, ComponentLayerProperties>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub template: Option<String>,
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
     #[serde(flatten)]
-    pub component_properties: ComponentProperties,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<String, ComponentProperties>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_profile: Option<String>,
-}
-
-impl Component {
-    pub fn merge_common_properties_into_profiles<'a, I: IntoIterator<Item = &'a String>>(
-        mut self,
-        profile_names: I,
-    ) -> Self {
-        Self {
-            template: self.template.clone(),
-            component_properties: self.component_properties.clone(),
-            profiles: {
-                profile_names
-                    .into_iter()
-                    .map(|name| {
-                        (
-                            name.clone(),
-                            match self.profiles.remove(name) {
-                                Some(profile) => self
-                                    .component_properties
-                                    .clone()
-                                    .merge_with_overrides(profile),
-                                None => self.component_properties.clone(),
-                            },
-                        )
-                    })
-                    .collect()
-            },
-            default_profile: self.default_profile,
-        }
-    }
+    pub component_properties: ComponentLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, ComponentLayerProperties>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApi {
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub definitions: HashMap<String, HttpApiDefinition>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub deployments: HashMap<ProfileName, Vec<HttpApiDeployment>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDefinition {
-    pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routes: Vec<HttpApiDefinitionRoute>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDefinitionRoute {
-    pub method: String,
-    pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub security: Option<String>,
-    pub binding: HttpApiDefinitionBinding,
-}
-
-#[derive(Clone, Copy, Default, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum HttpApiDefinitionBindingType {
-    #[default]
-    Default,
-    CorsPreflight,
-    FileServer,
-    HttpHandler,
-    SwaggerUi,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HttpApiDefinitionBinding {
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub type_: Option<HttpApiDefinitionBindingType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_version: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation_context: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub response: Option<String>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub deployments: IndexMap<EnvironmentName, Vec<HttpApiDeployment>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDeployment {
-    pub host: String,
+    pub domain: Domain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subdomain: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub definitions: Vec<String>,
+    pub webhook_url: Option<String>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Environment {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default: Option<Marker>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub server: Option<Server>,
+    #[serde(skip_serializing_if = "LenientTokenList::is_empty", default)]
+    pub component_presets: LenientTokenList,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cli: Option<CliOptions>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deployment: Option<DeploymentOptions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum Server {
+    Builtin(BuiltinServer),
+    Custom(Box<CustomServer>),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum BuiltinServer {
+    Local,
+    Cloud,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Profile {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub default: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub project: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+pub struct CustomServer {
+    pub url: Url,
     pub worker_url: Option<Url>,
+    pub allow_insecure: Option<bool>,
+    pub auth: CustomServerAuth,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum CustomServerAuth {
+    OAuth2 {
+        oauth2: Marker,
+    },
+    #[serde[rename_all = "camelCase"]]
+    Static {
+        static_token: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CliOptions {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub format: Option<Format>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub build_profile: Option<String>,
+    pub auto_confirm: Option<Marker>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub auto_confirm: Option<bool>,
+    pub redeploy_agents: Option<Marker>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_agents: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_http_api: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_all: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub reset: Option<bool>,
+    pub reset: Option<Marker>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeploymentOptions {
+    pub compatibility_check: Option<bool>,
+    pub version_check: Option<bool>,
+    pub security_overrides: Option<bool>,
+}
+
+impl DeploymentOptions {
+    pub fn new_local() -> Self {
+        Self {
+            compatibility_check: Some(false),
+            version_check: Some(false),
+            security_overrides: Some(true),
+        }
+    }
+
+    pub fn new_cloud() -> Self {
+        Self {
+            compatibility_check: None,
+            version_check: None,
+            security_overrides: None,
+        }
+    }
+
+    pub fn with_defaults_from(mut self, other: Self) -> Self {
+        if self.compatibility_check.is_none() {
+            self.compatibility_check = other.compatibility_check;
+        }
+        if self.version_check.is_none() {
+            self.version_check = other.version_check;
+        }
+        if self.security_overrides.is_none() {
+            self.security_overrides = other.security_overrides;
+        }
+        self
+    }
+
+    pub fn compatibility_check(&self) -> bool {
+        self.compatibility_check.unwrap_or(true)
+    }
+
+    pub fn version_check(&self) -> bool {
+        // TODO: atomic: switch to true, once versioning is implemented
+        self.version_check.unwrap_or(false)
+    }
+
+    pub fn security_overrides(&self) -> bool {
+        self.security_overrides.unwrap_or(false)
+    }
+
+    pub fn to_diffable(&self) -> diff::Environment {
+        diff::Environment {
+            compatibility_check: self.compatibility_check(),
+            version_check: self.version_check(),
+            security_overrides: self.security_overrides(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -248,7 +381,9 @@ pub struct InitialComponentFile {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ComponentProperties {
+pub struct ComponentLayerProperties {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_wit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,69 +392,41 @@ pub struct ComponentProperties {
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub build: Vec<BuildCommand>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub custom_commands: HashMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_type: Option<AppComponentType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<HashMap<String, String>>,
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<Dependency>>,
 }
 
-impl ComponentProperties {
-    pub fn merge_with_overrides(mut self, overrides: ComponentProperties) -> Self {
-        if overrides.source_wit.is_some() {
-            self.source_wit = overrides.source_wit;
-        }
-
-        if overrides.generated_wit.is_some() {
-            self.generated_wit = overrides.generated_wit;
-        }
-
-        if overrides.component_wasm.is_some() {
-            self.component_wasm = overrides.component_wasm;
-        }
-
-        if overrides.linked_wasm.is_some() {
-            self.linked_wasm = overrides.linked_wasm;
-        }
-
-        if !overrides.build.is_empty() {
-            self.build = overrides.build;
-        }
-
-        if !overrides.custom_commands.is_empty() {
-            self.custom_commands.extend(overrides.custom_commands)
-        }
-
-        if overrides.component_type.is_some() {
-            self.component_type = overrides.component_type;
-        }
-
-        let files = overrides.files.unwrap_or_default();
-        if !files.is_empty() {
-            self.files.get_or_insert_with(Vec::new).extend(files);
-        }
-
-        let plugins = overrides.plugins.unwrap_or_default();
-        if !plugins.is_empty() {
-            self.plugins.get_or_insert_with(Vec::new).extend(plugins);
-        }
-
-        let env = overrides.env.unwrap_or_default();
-        if !env.is_empty() {
-            self.env.get_or_insert_with(HashMap::new).extend(env);
-        }
-
-        self
-    }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpApiDeploymentAgentOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<SecuritySchemeName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_session_header_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -441,8 +548,164 @@ pub struct Dependency {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginInstallation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub name: String,
     pub version: String,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub parameters: HashMap<String, String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust: Option<BridgeSdkLanguageTargets>,
+}
+
+impl BridgeSdks {
+    pub fn for_language(&self, language: GuestLanguage) -> Option<&BridgeSdkLanguageTargets> {
+        match language {
+            GuestLanguage::Rust => self.rust.as_ref(),
+            GuestLanguage::TypeScript => self.ts.as_ref(),
+        }
+    }
+
+    pub fn for_all_languages(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, Option<&BridgeSdkLanguageTargets>)> {
+        GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
+    }
+
+    pub fn for_all_used_languages(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
+        self.for_all_languages().filter_map(|(lang, targets)| {
+            targets.and_then(|targets| (!targets.agents.is_empty()).then_some((lang, targets)))
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub agents: LenientTokenList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Marker;
+
+impl Serialize for Marker {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for Marker {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match bool::deserialize(deserializer)? {
+            true => Ok(Marker),
+            false => Err(serde::de::Error::custom(
+                "value must be `true`, `false` is not allowed",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
+pub enum LenientTokenList {
+    #[default]
+    None,
+    String(String),
+    List(Vec<String>),
+}
+
+impl LenientTokenList {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            LenientTokenList::None => true,
+            LenientTokenList::String(s) => Self::parse(s).next().is_none(),
+            LenientTokenList::List(l) => l.is_empty(),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::None => vec![],
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l,
+        }
+    }
+
+    pub fn into_set(self) -> BTreeSet<String> {
+        match self {
+            Self::None => BTreeSet::new(),
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l.into_iter().collect(),
+        }
+    }
+
+    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
+        s.split([',', '\n', '\r'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    }
+}
+
+fn json_value_without_null_fields(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => value,
+        serde_json::Value::Array(array) => array
+            .into_iter()
+            .map(json_value_without_null_fields)
+            .collect::<Vec<_>>()
+            .into(),
+        serde_json::Value::Object(map) => map
+            .into_iter()
+            .filter_map(|(k, v)| {
+                if v != serde_json::Value::Null {
+                    Some((k, json_value_without_null_fields(v)))
+                } else {
+                    None
+                }
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into(),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    mod app_manifest_json_schema_validation {
+        use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
+        use assert2::assert;
+        use test_r::test;
+
+        #[test]
+        fn schema_is_loadable_and_validates_empty_app() {
+            let app = Application {
+                app: Some("app-name".to_string()),
+                ..Default::default()
+            };
+
+            assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+        }
+    }
 }

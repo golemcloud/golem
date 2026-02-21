@@ -2,19 +2,19 @@
 resolver = "2"
 
 members = [
-    "cloud-service",
     "golem-api-grpc",
     "golem-client",
     "golem-common",
     "golem-debugging-service",
     "golem-service-base",
-    "golem-component-service",
     "golem-component-compilation-service",
+    "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor",
+    "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
     "golem-wasm",
@@ -26,57 +26,9 @@ members = [
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "test-components/app-and-library",
-    "test-components/shopping-cart",
-    "test-components/write-stdout",
-    "test-components/blob-store-service",
-    "test-components/clock-service",
-    "test-components/clocks",
-    "test-components/component-resolve",
-    "test-components/directories",
-    "test-components/durability-overhead",
-    "test-components/environment-service",
-    "test-components/failing-component",
-    "test-components/file-service",
-    "test-components/file-write-read-delete",
-    "test-components/flags-service",
-    "test-components/golem-rust-tests",
-    "test-components/high-volume-logging",
-    "test-components/http-client",
-    "test-components/http-client-2",
-    "test-components/http-client-3",
-    "test-components/ifs-update",
-    "test-components/ifs-update-inside-exported-function",
-    "test-components/interruption",
-    "test-components/initial-file-read-write",
-    "test-components/key-value-service",
-    "test-components/logging",
-    "test-components/networking",
+    "test-components/host-api-tests",
+    "test-components/http-tests",
     "test-components/oplog-processor",
-    "test-components/option-service",
-    "test-components/promise",
-    "test-components/read-stdin",
-    "test-components/runtime-service",
-    "test-components/rust-echo",
-    "test-components/rust-service",
-    "test-components/scheduled-invocation",
-    "test-components/shopping-cart",
-    "test-components/shopping-cart-resource",
-    "test-components/stdio-cc",
-    "test-components/update-test-v1",
-    "test-components/update-test-v2-11",
-    "test-components/update-test-v3-11",
-    "test-components/update-test-v3-sdk",
-    "test-components/update-test-v4",
-    "test-components/update-test-env-var",
-    "test-components/variant-service",
-    "test-components/wasi-config",
-    "test-components/wasi-http-incoming-request-handler",
-    "test-components/wasi-http-incoming-request-handler-echo",
-    "test-components/wasi-http-incoming-request-handler-state",
-    "test-components/write-stderr",
-    "test-components/write-stdout",
-    "test-components/rdbms-service",
     "sdks/golem-rust"
 ]
 
@@ -87,19 +39,20 @@ license-file = "LICENSE"
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
-golem-common = { version = "=0.0.0", path = "golem-common" }
+golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
-golem-component-service = { path = "golem-component-service" }
-golem-openapi-client-generator = "=0.0.16"
+golem-openapi-client-generator = { version = "=0.0.17" }
+golem-registry-service = { path = "golem-registry-service" }
 golem-rib = { version = "=0.0.0", path = "golem-rib" }
 golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
-golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
+golem-wasm = { version = "=0.0.0", path = "golem-wasm", default-features = false }
 golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
+golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
 
 
@@ -107,12 +60,9 @@ anyhow = "1.0.97"
 applying = "1.0.1"
 arbitrary = "1.4.1"
 assert2 = "0.3.15"
-async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio", ] }
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-lock = "3.4.0"
-async-mutex = "1.4.0"
 async-recursion = "1.1.1"
 async-rwlock = "1.3.0"
 async-scoped = "0.9.0"
@@ -127,7 +77,7 @@ base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
-blake3 = "1.5.5"
+blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
 camino = "1.1.10"
 cap-std = "3.4.2" # keep in sync with wasmtime
@@ -141,13 +91,13 @@ clap = { version = "4.5.32", features = ["derive", "suggestions", "color", "help
 clap-verbosity-flag = { version = "3.0.2", features = ["tracing"] }
 clap_complete = "4.5.45"
 cli-table = "0.4.9"
-cloud-service = { path = "cloud-service" }
 colored = "3.0.0"
 colored-diff = "0.2.3"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"
 convert_case = "0.8.0"
+cookie = "0.18.1"
 criterion = "0.5"
 crossterm = "0.28.1"
 darling = "0.20.11"
@@ -172,9 +122,11 @@ gag = "1.0.0"
 gethostname = "1.0.0"
 git-version = "0.3.9"
 goldenfile = "1.8.0"
+half = "2"
 headers = "0.4.0"
 heck = "0.5.0"
 hex = "0.4.3"
+hmac = "0.12.1"
 http = "1.3.1"
 http-body = "1.0.1"
 http-body-util = "0.1.3"
@@ -183,12 +135,13 @@ humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
 ident-mash = "0.1.0"
 include_dir = "0.7.4"
-indexmap = "2.10.0"
-indoc = "2.0.5"
+indexmap = { version = "2.12.0", features = ["serde"] }
+indoc = "2.0.6"
 inquire = "0.7.5"
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
+jsonschema = "0.38.1"
 jsonwebtoken = "9.2.0"
 k8s-openapi = { version = "0.24.0", features = ["earliest"] }
 kill_tree = "0.2.4"
@@ -206,9 +159,9 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.9", features = ["get-script"] }
+moonbit-component-generator = { version = "0.0.10", features = ["get-script"] }
 nanoid = "0.4.0"
-native-tls = "0.2.13"
+native-tls = "=0.2.13"
 nom = "7.1.3"
 nondestructive = "0.0.26"
 nonempty-collections = "0.3.0"
@@ -216,12 +169,15 @@ num-traits = "0.2.19"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "3.5.0"
+openssl = "=0.10.73"
+openssl-sys = "=0.9.109"
 opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0" }
 opentelemetry-prometheus-text-exporter = "=0.2.0"
 opentelemetry_sdk = "0.30.0"
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
+pgvector = { version = "0.4", features = ["sqlx", "halfvec"] }
 poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
 poem-derive = { version = "=3.1.12" }
 poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }
@@ -241,6 +197,7 @@ protox = "0.9.0"
 quote = "1.0.37"
 rand = "0.9.0"
 range-set-blaze = "0.1.16"
+rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
@@ -254,7 +211,7 @@ rusoto_elbv2 = "0.48.0"
 rusoto_route53 = "0.48.0"
 rusoto_sts = "0.48.0"
 rustc-hash = "2.1.1"
-rustls = { version = "0.23.23" }
+rustls = { version = "0.23.23", features = ["ring"] }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
 scc = "3.3.2"
@@ -315,14 +272,14 @@ tryhard = "0.5.1"
 typed-path = "0.10.0"
 url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
-uuid = { version = "1.15.1", features = ["serde", "v4", "v5"] }
+uuid = { version = "1.15.1", features = ["serde", "v4", "v5", "v7"] }
 version-compare = "0.2.0"
 wac-graph = "=0.6.1"
 walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
-wasm-rquickjs = "0.0.21"
+wasm-rquickjs = "0.0.23"
 wasm-wave = "0.235"
 wasmparser = "0.229.0"
 wasmprinter = "0.229.0"
@@ -353,6 +310,13 @@ panic = "abort"
 inherits = "dev"
 incremental = false
 strip = "debuginfo"
+
+[profile.dev-release]
+inherits = "release"
+opt-level = 1
+codegen-units = 256
+incremental = true
+debug = true
 
 [profile.release]
 panic = "abort"

@@ -18,12 +18,12 @@
 
 use crate::stubgen::{cargo_component_build, golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
-use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::composition::{compose, Plug};
 use golem_cli::wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_cli::wasm_rpc_stubgen::wit_generate::UpdateCargoToml;
+use golem_common::model::component::ComponentName;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use test_r::test;
@@ -84,7 +84,7 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
         golem_rust_override: golem_rust_override(),
         extract_source_exports_package: true,
         seal_cargo_workspace: true,
-        component_name: AppComponentName::from("test:component"),
+        component_name: ComponentName("test:component".to_string()),
     })
     .unwrap();
     let wasm_path = generate_and_build_client(&def, false).await.unwrap();

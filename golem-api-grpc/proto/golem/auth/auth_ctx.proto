@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package golem.auth;
+
+import "golem/common/account_id.proto";
+import "golem/account/plan_id.proto";
+import "golem/auth/account_role.proto";
+import "golem/common/empty.proto";
+
+message UserAuthCtx {
+  golem.common.AccountId account_id = 1;
+  golem.account.PlanId plan_id = 2;
+  repeated AccountRole account_roles = 3;
+}
+
+message ImpersonatedUserAuthCtx {
+  golem.common.AccountId account_id = 1;
+}
+
+message AuthCtx {
+  oneof value {
+    golem.common.Empty system = 1;
+    UserAuthCtx user = 2;
+    ImpersonatedUserAuthCtx impersonated_user = 3;
+  }
+}

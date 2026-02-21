@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::Tracing;
+use anyhow::anyhow;
+use golem_common::{agent_id, data_value};
+use golem_test_framework::dsl::TestDsl;
+use golem_wasm::Value;
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
+use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
-
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use assert2::check;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm::{IntoValueAndType, Value};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -31,41 +33,52 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("blob-store-service").store().await;
-    let worker_name = "blob-store-service-1";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{create-container}",
-            vec![format!("{component_id}-{worker_name}-container").into_value_and_type()],
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
         )
-        .await
-        .unwrap();
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("blob-store", "blob-store-service-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let container_name = format!("{}-blob-store-service-1-container", component.id);
+
+    executor
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{container-exists}",
-            vec![format!("{component_id}-{worker_name}-container").into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "container_exists",
+            data_value!(container_name),
         )
-        .await
-        .unwrap();
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
 
-    check!(result == vec![Value::Bool(true)]);
+    assert_eq!(result, Value::Bool(true));
+
+    Ok(())
 }
 
 #[test]
@@ -74,30 +87,38 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("blob-store-service").store().await;
-    let worker_name = "blob-store-service-1";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("blob-store", "blob-store-service-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{container-exists}",
-            vec![format!("{component_id}-{worker_name}-container").into_value_and_type()],
+        .invoke_and_await_agent(
+            &component.id,
+            &agent_id,
+            "container_exists",
+            data_value!(format!("{}-blob-store-service-1-container", component.id)),
         )
-        .await
-        .unwrap();
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
 
-    check!(result == vec![Value::Bool(false)]);
+    assert_eq!(result, Value::Bool(false));
+    Ok(())
 }

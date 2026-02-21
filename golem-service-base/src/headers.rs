@@ -114,7 +114,7 @@ mod test {
     use crate::headers::{TraceContextHeaders, TraceFlags};
     use golem_common::model::invocation_context::{SpanId, TraceId};
     use http::{HeaderMap, HeaderValue};
-    use std::num::{NonZeroU128, NonZeroU64};
+    use std::num::{NonZeroU64, NonZeroU128};
     use test_r::test;
 
     #[test]

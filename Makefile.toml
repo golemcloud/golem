@@ -121,6 +121,7 @@ mkdir sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
 glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
 glob_cp wit/deps/**/* sdks/ts/wit/deps
+glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 """
 
 [tasks.wit-golem-cli]
@@ -142,35 +143,13 @@ private = true
 script_runner = "@duckscript"
 script = """
 components = array
+array_push ${components} agent-counters/.wit
+array_push ${components} agent-invocation-context/.wit
+array_push ${components} agent-updates-v1/.wit
+array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks
-array_push ${components} blob-store-service
-array_push ${components} component-resolve
-array_push ${components} component-transformer-example1/adapter
-array_push ${components} custom-durability
-array_push ${components} file-service
-array_push ${components} high-volume-logging
-array_push ${components} http-client
-array_push ${components} ifs-update
-array_push ${components} ifs-update-inside-exported-function
-array_push ${components} invocation-context
-array_push ${components} key-value-service
-array_push ${components} networking
+array_push ${components} initial-file-system/.wit
 array_push ${components} oplog-processor
-array_push ${components} promise
-array_push ${components} rdbms-service
-array_push ${components} rpc
-array_push ${components} runtime-service
-array_push ${components} scheduled-invocation
-array_push ${components} shopping-cart
-array_push ${components} update-test-env-var
-array_push ${components} update-test-v2-11
-array_push ${components} update-test-v3-11
-array_push ${components} update-test-v3-sdk
-array_push ${components} update-test-v4
-array_push ${components} wasi-config
-array_push ${components} wasi-http-incoming-request-handler
-array_push ${components} wasi-http-incoming-request-handler-echo
-array_push ${components} wasi-http-incoming-request-handler-state
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"
@@ -256,26 +235,15 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-worker-service"] }]
 
-[tasks.build-component-service]
-dependencies = ["wit"]
-description = "Builds the component-service"
+[tasks.build-registry-service]
+description = "Builds registry service"
 command = "cargo"
-args = ["build", "-p", "golem-component-service"]
+args = ["build", "-p", "golem-registry-service"]
 
-[tasks.build-component-service-non-ci]
+[tasks.build-registry-service-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
-run_task = [{ name = ["build-component-service"] }]
-
-[tasks.build-cloud-service]
-description = "Builds cloud service"
-command = "cargo"
-args = ["build", "-p", "cloud-service"]
-
-[tasks.build-cloud-service-non-ci]
-private = true
-condition = { env_not_set = ["CI"] }
-run_task = [{ name = ["build-cloud-service"] }]
+run_task = [{ name = ["build-registry-service"] }]
 
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
@@ -339,6 +307,24 @@ args = [
     "golem",
 ]
 
+[tasks.build-sdk-ts]
+description = "Builds the TypeScript SDK if dist or agent_guest.wasm doesn't exist"
+cwd = "./sdks/ts"
+condition_script = ["test ! -d packages/golem-ts-sdk/dist || test ! -f packages/golem-ts-sdk/wasm/agent_guest.wasm"]
+script = '''
+pnpm clean
+pnpm install
+pnpm run build
+pnpm run build-agent-template
+'''
+
+[tasks.clean-sdk-ts]
+description = "Cleans the TypeScript SDK"
+cwd = "./sdks/ts"
+script = '''
+pnpm clean
+'''
+
 ## ** CHECK **
 
 [tasks.check]
@@ -361,7 +347,8 @@ args = ["clippy", "--all-targets", "--", "--no-deps", "-Dwarnings"]
 
 [tasks.fix]
 description = "Runs rustfmt and clippy checks and applies fixes"
-dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
+#dependencies = ["wit", "fix-clippy", "fix-rustfmt"]
+dependencies = ["fix-clippy", "fix-rustfmt"]
 
 [tasks.fix-rustfmt]
 description = "Runs rustfmt checks and applies fixes"
@@ -386,6 +373,16 @@ args = [
 
 ## ** TEST **
 
+[tasks.setup-sdk-overrides]
+private = true
+script_runner = "@duckscript"
+script = """
+# NOTE: when we reach a stable phase during a release cycle, then these env vars should be commented
+
+set_env GOLEM_RUST_PATH ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/rust/golem-rust
+set_env GOLEM_TS_PACKAGES_PATH ${CARGO_MAKE_CURRENT_TASK_INITIAL_MAKEFILE_DIRECTORY}/sdks/ts/packages
+"""
+
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
@@ -396,7 +393,7 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
-dependencies = ["wit"]
+dependencies = ["setup-sdk-overrides", "wit"]
 description = "Runs unit tests only"
 script = '''
 cargo-test-r run --workspace --lib --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
@@ -448,11 +445,12 @@ dependencies = [
     "integration-tests-group1",
     "integration-tests-group2",
     "integration-tests-group3",
+    "integration-tests-group4",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/3)"
+description = "Runs integration tests (group 1/4)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -460,23 +458,30 @@ cargo-test-r run --package integration-tests --test integration -- --nocapture -
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/3)"
+description = "Runs integration tests (group 2/4)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group3]
+description = "Runs integration tests (group 3/4)"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo-test-r run --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-cargo-test-r run --package golem-component-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
 '''
 
-[tasks.integration-tests-group3]
-description = "Runs integration tests (group 3/3)"
+[tasks.integration-tests-group4]
+description = "Runs integration tests (group 4/4)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script = '''
-cargo-test-r run --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test sharding -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -488,8 +493,9 @@ dependencies = [
 ]
 
 [tasks.cli-integration-tests-group1]
-dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (1/4)"
+dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+description = "Run CLI integration tests (1/3)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
@@ -497,8 +503,8 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 '''
 
 [tasks.cli-integration-tests-group2]
-dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (2/4)"
+dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+description = "Run CLI integration tests (2/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -506,21 +512,21 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 '''
 
 [tasks.cli-integration-tests-group3]
-dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (3/4)"
+dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+description = "Run CLI integration tests (3/3)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
-[tasks.cli-integration-tests-group4]
-dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (4/4)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+[tasks.cli-integration-tests-update-golden-files]
+dependencies = ["setup-sdk-overrides", "build-bins-all-non-ci", "build-sdk-ts"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group4 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_ts_code_first_with_rpc_and_all_types -- --nocapture
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_rust_code_first_with_rpc_and_all_types -- --nocapture
 '''
 
 [tasks.sharding-tests-debug]
@@ -534,6 +540,8 @@ export RUST_BACKTRACE=1
 export GOLEM__TRACING__FILE_DIR=../logs
 export GOLEM__TRACING__FILE_TRUNCATE=false
 export GOLEM__TRACING__FILE__ENABLED=true
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS=20
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY="1s"
 
 cargo-test-r run \
 --package integration-tests \
@@ -561,6 +569,18 @@ script = '''
 cargo-test-r run --package integration-tests --test api  :tag: -- --nocapture --report-time $JUNIT_OPTS
 '''
 
+[tasks.registry-repo-coverage]
+description = "Run registry service tests with covarage report for repository sources"
+script = '''
+cargo tarpaulin \
+    --skip-clean \
+    --target-dir target-tarpaulin \
+    --package golem-registry-service \
+    --include-files "golem-registry-service/src/repo/*" \
+    --out html \
+    --output-dir target-tarpaulin/reports
+'''
+
 ## ** CHECK-OPENAPI **
 
 [tasks.check-openapi]
@@ -581,25 +601,17 @@ script = '''
       diff openapi/golem-service.yaml target/golem-service.yaml
       exit 1
   fi
-  if diff openapi/cloud-spec.yaml target/cloud-spec.yaml  >/dev/null 2>&1
+  if diff openapi/golem-registry-service.yaml target/golem-registry-service.yaml  >/dev/null 2>&1
     then
-      echo "Latest Golem OpenAPI spec version detected."
+      echo "Latest Golem Registry Service OpenAPI spec version detected."
     else
-      echo "openapi/cloud-spec.yaml is not the same as produced by cloud-service." 1>&2
-      echo "Run cargo make generate-openapi to generate new spec." 1>&2
-      exit 1
-  fi
-  if diff openapi/golem-component-service.yaml target/golem-component-service.yaml  >/dev/null 2>&1
-    then
-      echo "Latest Golem OpenAPI spec version detected."
-    else
-      echo "openapi/golem-component-service.yaml is not the same as produced by golem-component-service." 1>&2
+      echo "openapi/golem-registry-service.yaml is not the same as produced by golem-registry-service." 1>&2
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
   if diff openapi/golem-worker-service.yaml target/golem-worker-service.yaml  >/dev/null 2>&1
     then
-      echo "Latest Golem OpenAPI spec version detected."
+      echo "Latest Golem Worker Service OpenAPI spec version detected."
     else
       echo "openapi/golem-worker-service.yaml is not the same as produced by golem-worker-service." 1>&2
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
@@ -613,6 +625,15 @@ script = '''
 dependencies = ["merge-openapi", "store-openapi"]
 description = "Generates openapi spec from the code and saves it to the openapi directory"
 
+[tasks.generate-registry-service-openapi]
+description = "Generates openapi spec for registry service"
+dependencies = ["build-registry-service-non-ci"]
+cwd = "./target/debug"
+script = '''
+mkdir -pv ../data
+./golem-registry-service --dump-openapi-yaml > ../golem-registry-service.yaml
+'''
+
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
 dependencies = ["build-worker-service-non-ci"]
@@ -622,38 +643,18 @@ mkdir -pv ../data
 ./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
 '''
 
-[tasks.generate-component-service-openapi]
-description = "Generates openapi spec for component service"
-dependencies = ["build-component-service-non-ci"]
-cwd = "./target/debug"
-script = '''
-mkdir -pv ../data
-./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
-'''
-
-[tasks.generate-cloud-service-openapi]
-description = "Generates openapi spec for cloud service"
-dependencies = ["build-cloud-service-non-ci"]
-cwd = "./target/debug"
-script = '''
-mkdir -pv ../data
-./cloud-service --dump-openapi-yaml > ../cloud-spec.yaml
-'''
-
 [tasks.merge-openapi]
 dependencies = [
-    "generate-worker-service-openapi",
-    "generate-component-service-openapi",
-    "generate-cloud-service-openapi",
+    "generate-registry-service-openapi",
+    "generate-worker-service-openapi"
 ]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
 command = "golem-openapi-client-generator"
 args = [
     "merge",
     "--spec-yaml",
-    "./target/golem-component-service.yaml",
+    "./target/golem-registry-service.yaml",
     "./target/golem-worker-service.yaml",
-    "./target/cloud-spec.yaml",
     "--output-yaml",
     "./target/golem-service.yaml",
 ]
@@ -663,8 +664,7 @@ description = "Stores the generated openapi spec in the openapi directory"
 dependencies = ["merge-openapi"]
 script = [
     "cp -v ./target/golem-service.yaml ./openapi/golem-service.yaml",
-    "cp -v ./target/cloud-spec.yaml ./openapi/",
-    "cp -v ./target/golem-component-service.yaml ./openapi/",
+    "cp -v ./target/golem-registry-service.yaml ./openapi/",
     "cp -v ./target/golem-worker-service.yaml ./openapi/",
 ]
 
@@ -672,6 +672,7 @@ script = [
 [tasks.publish]
 description = "Publishes packages to crates.io"
 dependencies = [
+    "set-version",
     "publish-golem-wasm-derive",
     "publish-golem-wasm",
 ]
@@ -748,11 +749,10 @@ command = "tar"
 args = [
     "-cvf",
     "${PLATFORM_TARGET}.tar",
-    "${PLATFORM_TARGET}/release/cloud-service",
+    "${PLATFORM_TARGET}/release/golem-registry-service",
     "${PLATFORM_TARGET}/release/golem-shard-manager",
     "${PLATFORM_TARGET}/release/worker-executor",
     "${PLATFORM_TARGET}/release/golem-debugging-service",
-    "${PLATFORM_TARGET}/release/golem-component-service",
     "${PLATFORM_TARGET}/release/golem-worker-service",
     "${PLATFORM_TARGET}/release/golem-component-compilation-service",
 ]
@@ -787,7 +787,7 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "Disabled" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "Disabled" }
 
 script = { file = "./local-run/start.sh" }
 
@@ -802,33 +802,36 @@ condition = { env_set = [
 
 condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
-env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "OAuth2" }
+env = { "GOLEM_REGISTRY_SERVICE_LOGIN_TYPE" = "OAuth2" }
 
 script = { file = "./local-run/start.sh" }
 
 ## ** GENERATE CONFIGS **
 
 [tasks.generate-configs]
-description = "Generates default and exmaple config files"
+description = "Generates default and example config files"
 dependencies = ["build-bins-non-ci"]
 
 script = '''
 export RUST_BACKTRACE=1
 
+./target/debug/golem-registry-service --dump-config-default-toml > golem-registry-service/config/registry-service.toml
+./target/debug/golem-registry-service --dump-config-default-env-var > golem-registry-service/config/registry-service.sample.env
+
 ./target/debug/golem-shard-manager --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
 ./target/debug/golem-shard-manager --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
+
 ./target/debug/golem-component-compilation-service --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
 ./target/debug/golem-component-compilation-service --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
-./target/debug/golem-component-service --dump-config-default-toml > golem-component-service/config/component-service.toml
-./target/debug/golem-component-service --dump-config-default-env-var > golem-component-service/config/component-service.sample.env
+
 ./target/debug/golem-worker-service --dump-config-default-toml > golem-worker-service/config/worker-service.toml
 ./target/debug/golem-worker-service --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
+
 ./target/debug/worker-executor --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
 ./target/debug/worker-executor --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+
 ./target/debug/golem-debugging-service --dump-config-default-toml > golem-debugging-service/config/debug-worker-executor.toml
 ./target/debug/golem-debugging-service --dump-config-default-env-var > golem-debugging-service/config/debug-worker-executor.sample.env
-./target/debug/cloud-service --dump-config-default-toml > cloud-service/config/cloud-service.toml
-./target/debug/cloud-service --dump-config-default-env-var > cloud-service/config/cloud-service.sample.env
 '''
 
 ## ** CHECK CONFIGS **
@@ -839,20 +842,18 @@ dependencies = ["generate-configs"]
 
 script = '''
 git diff --exit-code \
+    golem-registry-service/config/registry-service.toml \
+    golem-registry-service/config/registry-service.sample.env \
     golem-shard-manager/config/shard-manager.toml \
     golem-shard-manager/config/shard-manager.sample.env \
     golem-component-compilation-service/config/component-compilation-service.toml \
     golem-component-compilation-service/config/component-compilation-service.sample.env \
-    golem-component-service/config/component-service.toml \
-    golem-component-service/config/component-service.sample.env \
     golem-worker-service/config/worker-service.toml \
     golem-worker-service/config/worker-service.sample.env \
     golem-worker-executor/config/worker-executor.toml \
     golem-worker-executor/config/worker-executor.sample.env \
     golem-debugging-service/config/debug-worker-executor.toml \
-    golem-debugging-service/config/debug-worker-executor.sample.env \
-    cloud-service/config/cloud-service.toml \
-    cloud-service/config/cloud-service.sample.env
+    golem-debugging-service/config/debug-worker-executor.sample.env
 '''
 
 ## ** Elastic tasks **
@@ -892,6 +893,29 @@ description = "Install golem (debug)"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** INSTALL - DEV RELEASE **
+
+[tasks.install-dev-release]
+description = "Install bins in dev-release mode"
+dependencies = ["install-golem-cli-dev-release", "install-golem-dev-release"]
+
+[tasks.install-golem-cli-dev-release]
+description = "Install golem-cli (dev-release)"
+script_runner = "@duckscript"
+env = { GOLEM_BUILD_SKIP_SHADOW = 1 }
+script = '''
+exec --fail-on-error cargo install --profile dev-release --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+# Requires lld to be installed, e.g., on macOS `brew install lld` can be used
+[tasks.install-golem-dev-release]
+description = "Install golem (dev-release)"
+env = { GOLEM_BUILD_SKIP_SHADOW = 1, RUSTFLAGS = "-C link-arg=-fuse-ld=lld" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --profile dev-release --path cli/golem --bin golem --target-dir target --locked --offline
 '''
 
 ## ** INSTALL - RELEASE **

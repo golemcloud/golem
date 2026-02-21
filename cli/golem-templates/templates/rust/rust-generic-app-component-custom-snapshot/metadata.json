@@ -1,5 +1,0 @@
-{
-  "description": "A Rust component implementing the custom save/load snapshot interface",
-  "appComponentGroup": "generic",
-  "devOnly": true
-}

@@ -15,13 +15,15 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentMode, AgentTypeName};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{AccountId, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
+use golem_common::model::{OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -59,28 +61,25 @@ impl ShardAssignmentCheck for ShardAssignment {
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
-    pub args: Vec<String>,
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
-    pub component_version_for_replay: u64,
+    pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub initial_wasi_config_vars: BTreeMap<String, String>,
 }
 
 impl WorkerConfig {
     pub fn new(
-        worker_args: Vec<String>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
-        component_version_for_replay: u64,
+        component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
         WorkerConfig {
-            args: worker_args,
             deleted_regions,
             total_linear_memory_size,
-            component_version_for_replay,
+            component_revision_for_replay,
             created_by,
             initial_wasi_config_vars,
         }
@@ -92,27 +91,27 @@ impl WorkerConfig {
                 && key != "GOLEM_AGENT_TYPE"
                 && key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
-                && key != "GOLEM_COMPONENT_VERSION"
+                && key != "GOLEM_COMPONENT_REVISION"
         });
     }
 
     pub(crate) fn enrich_env(
         worker_env: &mut Vec<(String, String)>,
         worker_id: &WorkerId,
-        agent_type: &Option<String>,
-        target_component_version: u64,
+        agent_type: &Option<AgentTypeName>,
+        target_component_revision: ComponentRevision,
     ) {
         let worker_name = worker_id.worker_name.clone();
         let component_id = &worker_id.component_id;
-        let component_version = target_component_version.to_string();
+        let component_revision = target_component_revision.to_string();
 
         Self::remove_dynamic_vars(worker_env);
         worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
-        worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
+        worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
         if let Some(agent_type) = agent_type {
-            worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.clone()));
+            worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.to_string()));
         }
     }
 }
@@ -121,18 +120,9 @@ impl WorkerConfig {
 #[derive(Debug, Clone)]
 pub struct CurrentResourceLimits {
     /// The available fuel to borrow
-    pub fuel: i64,
+    pub fuel: u64,
     /// The maximum amount of memory that can be used by the worker
     pub max_memory: usize,
-}
-
-impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResourceLimits {
-    fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
-        Self {
-            fuel: value.available_fuel,
-            max_memory: value.max_memory_per_worker as usize,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -672,7 +662,7 @@ impl Debug for InvocationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::ComponentId;
+    use golem_common::model::component::ComponentId;
     use test_r::test;
     use tracing::info;
     use uuid::Uuid;

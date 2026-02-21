@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::recursion::is_recursive;
 use heck::ToKebabCase;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
@@ -19,6 +20,14 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields, Lit, LitStr, Variant};
 
 pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> TokenStream {
+    let is_recursive = is_recursive(ast);
+
+    if is_recursive {
+        return syn::Error::new_spanned(&ast.ident, "Cannot derive IntoValue for recursive types")
+            .to_compile_error()
+            .into();
+    }
+
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -368,6 +377,17 @@ pub fn derive_from_value_and_type(
     ast: &DeriveInput,
     golem_rust_crate_ident: &Ident,
 ) -> TokenStream {
+    let is_recursive = is_recursive(ast);
+
+    if is_recursive {
+        return syn::Error::new_spanned(
+            &ast.ident,
+            "Cannot derive FromValueAndType for recursive types",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -504,7 +524,7 @@ pub fn derive_from_value_and_type(
 
                                         quote! {
                                             #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &<#golem_rust_crate_ident::wasm_rpc::WitNodePointer as #golem_rust_crate_ident::value_and_type::WitValueExtractor>::field(&inner, #idx).ok_or_else(|| #missing_field_error.to_string())?
+                                                &<#golem_rust_crate_ident::golem_wasm::WitNodePointer as #golem_rust_crate_ident::value_and_type::WitValueExtractor>::field(&inner, #idx).ok_or_else(|| #missing_field_error.to_string())?
                                             )?
                                         }
                                     })

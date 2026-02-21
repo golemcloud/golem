@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent_webhooks::AgentWebhooksService;
 use super::file_loader::FileLoader;
+use super::HasAgentWebhooksService;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -29,23 +29,24 @@ use crate::services::{
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService,
-    HasPlugins, HasProjectService, HasPromiseService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
+    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
     HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
 };
-use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::{Timestamp, WorkerMetadata};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -54,17 +55,19 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
+    // TODO: this should be restricted to targets within the same component
     async fn fork(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError>;
 
+    // TODO: this should be restricted to targets within the same component
     async fn fork_and_write_fork_result(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -76,6 +79,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc>,
     pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
+    pub agent_webhooks: Arc<AgentWebhooksService>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
@@ -97,10 +101,8 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     pub events: Arc<Events>,
     pub file_loader: Arc<FileLoader>,
-    pub plugins: Arc<dyn Plugins>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
-    pub project_service: Arc<dyn ProjectService>,
     pub extra_deps: Ctx::ExtraDeps,
 }
 
@@ -119,6 +121,12 @@ impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasAgentTypesService for DefaultWorkerFork<Ctx> {
     fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService> {
         self.agent_types.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasAgentWebhooksService for DefaultWorkerFork<Ctx> {
+    fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
+        self.agent_webhooks.clone()
     }
 }
 
@@ -252,12 +260,6 @@ impl<Ctx: WorkerCtx> HasFileLoader for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasPlugins for DefaultWorkerFork<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins> {
-        self.plugins.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DefaultWorkerFork<Ctx> {
     fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin> {
         self.oplog_processor_plugin.clone()
@@ -270,18 +272,13 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasProjectService for DefaultWorkerFork<Ctx> {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
             rpc: self.rpc.clone(),
             active_workers: self.active_workers.clone(),
             agent_types: self.agent_types.clone(),
+            agent_webhooks: self.agent_webhooks.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -302,10 +299,8 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
-            plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
-            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -338,17 +333,17 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
+        agent_webhooks: Arc<AgentWebhooksService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             rpc,
             active_workers,
             agent_types,
+            agent_webhooks,
             engine,
             linker,
             runtime,
@@ -369,17 +364,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             worker_activator,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
-            project_service,
             extra_deps,
         }
     }
 
     async fn validate_worker_forking(
         &self,
-        project_id: &ProjectId,
+        environment_id: EnvironmentId,
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -392,7 +385,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        let owned_target_worker_id = OwnedWorkerId::new(project_id, target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(environment_id, target_worker_id);
 
         let target_metadata = self.worker_service.get(&owned_target_worker_id).await;
 
@@ -406,7 +399,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // We assume the source worker belongs to this executor
         self.shard_service.check_worker(source_worker_id)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(project_id, source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(environment_id, source_worker_id);
 
         self.worker_service
             .get(&owned_source_worker_id)
@@ -420,7 +413,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
     async fn copy_source_oplog(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -431,7 +424,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
-                &source_worker_id.project_id,
+                source_worker_id.environment_id,
                 &source_worker_id.worker_id,
                 target_worker_id,
                 oplog_index_cut_off,
@@ -439,13 +432,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?;
 
         let target_worker_id = owned_target_worker_id.worker_id.clone();
-        let project_id = owned_target_worker_id.project_id.clone();
+        let environment_id = owned_target_worker_id.environment_id;
 
         let source_worker_instance = Worker::get_or_create_suspended(
             self,
             fork_account_id,
             &owned_source_worker_id,
-            None,
             None,
             None,
             None,
@@ -458,10 +450,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
-            created_by: fork_account_id.clone(),
-            project_id,
+            created_by: fork_account_id,
+            environment_id,
             env: initial_source_worker_metadata.env.clone(),
-            args: initial_source_worker_metadata.args.clone(),
             wasi_config_vars: initial_source_worker_metadata.wasi_config_vars.clone(),
             created_at: Timestamp::now_utc(),
             parent: None,
@@ -512,10 +503,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
-                component_version,
-                args,
+                component_revision,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,
@@ -527,10 +517,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 worker_id: worker_id.clone(),
-                component_version,
-                args,
+                component_revision,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,
@@ -548,7 +537,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -569,7 +558,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true)
+            .resume(target_worker_id, true, fork_account_id)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
@@ -580,7 +569,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
 
     async fn fork_and_write_fork_result(
         &self,
-        fork_account_id: &AccountId,
+        fork_account_id: AccountId,
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -623,7 +612,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true)
+            .resume(target_worker_id, true, fork_account_id)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())

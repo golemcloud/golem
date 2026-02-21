@@ -13,12 +13,19 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use futures::StreamExt;
 use futures::future::BoxFuture;
+use futures::pin_mut;
 use futures::stream::BoxStream;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
+use golem_common::model::diff;
 use std::convert::Infallible;
 use std::fmt::{Debug, Display};
 use std::future::Future;
+use std::sync::Arc;
+use tempfile::NamedTempFile;
+use tokio::task::spawn_blocking;
+use tokio_util::io::ReaderStream;
 
 pub trait ReplayableStream: Send + Sync {
     type Item: 'static;
@@ -28,7 +35,7 @@ pub trait ReplayableStream: Send + Sync {
         &self,
     ) -> impl Future<Output = Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error>> + Send;
 
-    fn length(&self) -> impl Future<Output = Result<u64, String>> + Send;
+    fn length(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send;
 
     fn erased(self) -> internal::Erased<Self>
     where
@@ -79,7 +86,7 @@ impl<T: ReplayableStream + ?Sized> ReplayableStream for &'_ T {
         <T as ReplayableStream>::make_stream(*self)
     }
 
-    fn length(&self) -> impl Future<Output = Result<u64, String>> + Send {
+    fn length(&self) -> impl Future<Output = Result<u64, Self::Error>> + Send {
         <T as ReplayableStream>::length(*self)
     }
 }
@@ -93,16 +100,14 @@ pub trait ErasedReplayableStream: Send + Sync {
         &self,
     ) -> BoxFuture<'_, Result<BoxStream<'static, Self::Item>, Self::Error>>;
 
-    fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>>;
+    fn length_erased(&self) -> BoxFuture<'_, Result<u64, Self::Error>>;
 }
 
 pub type BoxReplayableStream<'a, Item, Error> =
     Box<dyn ErasedReplayableStream<Item = Item, Error = Error> + 'a>;
 
 /// Specialized impls for the two common ways of using dynsafe objects
-impl<Item: 'static, Error> ReplayableStream
-    for &'_ dyn ErasedReplayableStream<Item = Item, Error = Error>
-{
+impl<Item: 'static, Error> ReplayableStream for &'_ dyn ErasedReplayableStream<Item = Item, Error = Error> {
     type Item = Item;
     type Error = Error;
 
@@ -112,7 +117,7 @@ impl<Item: 'static, Error> ReplayableStream
         self.make_stream_erased().await
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> Result<u64, Self::Error> {
         self.length_erased().await
     }
 }
@@ -128,7 +133,7 @@ impl<Item: 'static, Error> ReplayableStream for BoxReplayableStream<'_, Item, Er
         self.make_stream_erased().await
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> Result<u64, Self::Error> {
         self.length_erased().await
     }
 }
@@ -139,58 +144,86 @@ impl ReplayableStream for Bytes {
 
     async fn make_stream(
         &self,
-    ) -> Result<impl Stream<Item = Result<Bytes, Infallible>> + Send + 'static, Infallible> {
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Infallible> {
         let data = self.clone();
         Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
     }
 
-    async fn length(&self) -> Result<u64, String> {
+    async fn length(&self) -> Result<u64, Self::Error> {
         Ok(self.len() as u64)
+    }
+}
+
+impl ReplayableStream for Vec<u8> {
+    type Error = Infallible;
+    type Item = Result<Vec<u8>, Infallible>;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Infallible> {
+        let data = self.clone();
+        Ok(Box::pin(futures::stream::once(async move { Ok(data) })))
+    }
+
+    async fn length(&self) -> Result<u64, Self::Error> {
+        Ok(self.len() as u64)
+    }
+}
+
+impl ReplayableStream for Arc<NamedTempFile> {
+    type Error = anyhow::Error;
+    type Item = Result<Bytes, Self::Error>;
+
+    async fn make_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error> {
+        let temp_file = self.clone();
+        let file = spawn_blocking(move || temp_file.reopen()).await??;
+        Ok(ReaderStream::new(tokio::fs::File::from_std(file)).map_err(|e| e.into()))
+    }
+
+    async fn length(&self) -> Result<u64, Self::Error> {
+        let temp_file = self.clone();
+        let result =
+            spawn_blocking(move || Ok::<_, anyhow::Error>(temp_file.as_file().metadata()?.len()))
+                .await??;
+        Ok(result)
     }
 }
 
 pub trait ContentHash {
     type Error;
 
-    fn content_hash(&self) -> impl Future<Output = Result<String, Self::Error>> + Send;
+    fn content_hash(&self) -> impl Future<Output = Result<diff::Hash, Self::Error>> + Send;
 }
 
-impl<Error, Stream> ContentHash for Stream
+impl<Error, Data, Stream> ContentHash for Stream
 where
-    Error: Debug + Display + Send + 'static,
-    Stream: ReplayableStream<Error = Error, Item = Result<Bytes, Error>>,
+    Error: Debug + Display + Send,
+    Data: AsRef<[u8]>,
+    Stream: ReplayableStream<Error = Error, Item = Result<Data, Error>>,
 {
     type Error = Error;
 
-    async fn content_hash(&self) -> Result<String, Self::Error> {
-        let stream = self
-            .map_item(|i| i.map(|b| b.to_vec()).map_err(HashingError))
-            .make_stream()
-            .await?;
-        let hash = async_hash::hash_try_stream::<async_hash::Sha256, _, _, _>(stream)
-            .await
-            .map_err(|HashingError(inner)| inner)?;
-        Ok(hex::encode(hash))
+    async fn content_hash(&self) -> Result<diff::Hash, Self::Error> {
+        let mut hasher = blake3::Hasher::new();
+        let stream = self.make_stream().await?;
+        pin_mut!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            hasher.update(chunk?.as_ref());
+        }
+
+        Ok(hasher.finalize().into())
     }
 }
-
-#[derive(Debug)]
-struct HashingError<E>(E);
-
-impl<E: Display> std::fmt::Display for HashingError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Hashing error: {}", self.0)
-    }
-}
-
-impl<E: Debug + Display> std::error::Error for HashingError<E> {}
 
 pub mod internal {
     use super::{ErasedReplayableStream, ReplayableStream};
-    use futures::future::BoxFuture;
-    use futures::stream::BoxStream;
     use futures::Stream;
     use futures::StreamExt;
+    use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
 
     pub struct Erased<T>(pub(super) T);
 
@@ -204,7 +237,7 @@ pub mod internal {
             Box::pin(async move { self.0.make_stream().await.map(|s| s.boxed()) })
         }
 
-        fn length_erased(&self) -> BoxFuture<'_, Result<u64, String>> {
+        fn length_erased(&self) -> BoxFuture<'_, Result<u64, Self::Error>> {
             Box::pin(self.0.length())
         }
     }
@@ -230,7 +263,7 @@ pub mod internal {
             Ok(stream.map(self.map_item.clone()))
         }
 
-        async fn length(&self) -> Result<u64, String> {
+        async fn length(&self) -> Result<u64, Self::Error> {
             self.inner.length().await
         }
     }
@@ -254,8 +287,8 @@ pub mod internal {
             self.inner.make_stream().await.map_err(self.map_err.clone())
         }
 
-        async fn length(&self) -> Result<u64, String> {
-            self.inner.length().await
+        async fn length(&self) -> Result<u64, Self::Error> {
+            self.inner.length().await.map_err(self.map_err.clone())
         }
     }
 }

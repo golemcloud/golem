@@ -15,36 +15,41 @@
 mod error;
 mod worker;
 
+use crate::bootstrap::Services;
+use crate::config::GrpcApiConfig;
 use crate::grpcapi::worker::WorkerGrpcApi;
-use crate::service::Services;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServiceServer;
 use golem_api_grpc::proto::golem::worker::v1::{
-    worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
+    WorkerError, WorkerExecutionError, worker_error, worker_execution_error,
 };
-use golem_common::model::{ComponentFilePath, WorkerId};
+use golem_common::model::WorkerId;
+use golem_common::model::component::ComponentFilePath;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_wasm::json::OptionallyValueAndTypeJson;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
-use tonic::Status;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
 
 pub async fn start_grpc_server(
-    addr: SocketAddr,
+    config: &GrpcApiConfig,
     services: Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
+    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.port);
     let listener = TcpListener::bind(addr).await?;
+
     let port = listener.local_addr()?.port();
 
     health_reporter
@@ -56,30 +61,26 @@ pub async fn start_grpc_server(
         .build_v1()
         .unwrap();
 
-    join_set.spawn(
-        async move {
-            Server::builder()
-                .layer(
-                    middleware::server::OtelGrpcLayer::default()
-                        .filter(filters::reject_healthcheck),
-                )
-                .add_service(reflection_service)
-                .add_service(health_service)
-                .add_service(
-                    WorkerServiceServer::new(WorkerGrpcApi::new(
-                        services.component_service.clone(),
-                        services.worker_service.clone(),
-                        services.worker_auth_service.clone(),
-                    ))
+    join_set.spawn({
+        let mut server = Server::builder();
+
+        if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
+            server = server.tls_config(tls.to_tonic())?;
+        };
+
+        server
+            .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
+            .add_service(reflection_service)
+            .add_service(health_service)
+            .add_service(
+                WorkerServiceServer::new(WorkerGrpcApi::new(services.worker_service.clone()))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip),
-                )
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .map_err(anyhow::Error::from)
-                .await
-        }
-        .in_current_span(),
-    );
+            )
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span()
+    });
 
     Ok(port)
 }
@@ -95,15 +96,6 @@ pub fn validate_protobuf_worker_id(
         component_id: worker_id.component_id,
         worker_name: worker_id.worker_name,
     })
-}
-
-pub fn validate_protobuf_plugin_installation_id(
-    plugin_installation_id: Option<golem_api_grpc::proto::golem::common::PluginInstallationId>,
-) -> Result<golem_common::model::PluginInstallationId, WorkerError> {
-    plugin_installation_id
-        .ok_or_else(|| bad_request_error("Missing plugin installation id"))?
-        .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid plugin installation id: {e}")))
 }
 
 pub fn validate_component_file_path(file_path: String) -> Result<ComponentFilePath, WorkerError> {
@@ -165,11 +157,11 @@ pub fn error_to_status(error: WorkerError) -> Status {
                 }
                 worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
                     "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
-                    err.component_id, err.component_version, err.reason
+                    err.component_id, err.component_revision, err.reason
                 ),
                 worker_execution_error::Error::ComponentParseFailed(err) => format!(
                     "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
-                    err.component_id, err.component_version, err.reason
+                    err.component_id, err.component_revision, err.reason
                 ),
                 worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
                     "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",

@@ -18,6 +18,8 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, Redis
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
+use golem_service_base::grpc::client::GrpcClientConfig;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -30,7 +32,7 @@ pub struct ShardManagerConfig {
     pub worker_executors: WorkerExecutorServiceConfig,
     pub health_check: HealthCheckConfig,
     pub http_port: u16,
-    pub grpc_port: u16,
+    pub grpc: GrpcApiConfig,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
 }
@@ -59,7 +61,10 @@ impl SafeDisplay for ShardManagerConfig {
             self.health_check.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
-        let _ = writeln!(&mut result, "gRPC port: {}", self.grpc_port);
+
+        let _ = writeln!(&mut result, "grpc:");
+        let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
+
         let _ = writeln!(&mut result, "number of shards: {}", self.number_of_shards);
         let _ = writeln!(
             &mut result,
@@ -78,7 +83,7 @@ impl Default for ShardManagerConfig {
             worker_executors: WorkerExecutorServiceConfig::default(),
             health_check: HealthCheckConfig::default(),
             http_port: 8081,
-            grpc_port: 9002,
+            grpc: GrpcApiConfig::default(),
             number_of_shards: 1024,
             rebalance_threshold: 0.1,
         }
@@ -104,6 +109,34 @@ impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GrpcApiConfig {
+    pub port: u16,
+    pub tls: GrpcServerTlsConfig,
+}
+
+impl SafeDisplay for GrpcApiConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "port: {}", self.port);
+
+        let _ = writeln!(&mut result, "tls:");
+        let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
+
+        result
+    }
+}
+
+impl Default for GrpcApiConfig {
+    fn default() -> Self {
+        Self {
+            port: 9092,
+            tls: GrpcServerTlsConfig::disabled(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorServiceConfig {
     #[serde(with = "humantime_serde")]
     pub assign_shards_timeout: Duration,
@@ -112,8 +145,8 @@ pub struct WorkerExecutorServiceConfig {
     #[serde(with = "humantime_serde")]
     pub revoke_shards_timeout: Duration,
     pub retries: RetryConfig,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
+    #[serde(flatten)]
+    pub client_config: GrpcClientConfig,
 }
 
 impl SafeDisplay for WorkerExecutorServiceConfig {
@@ -134,9 +167,9 @@ impl SafeDisplay for WorkerExecutorServiceConfig {
             "revoke shards timeout: {:?}",
             self.revoke_shards_timeout
         );
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
 }
@@ -148,7 +181,10 @@ impl Default for WorkerExecutorServiceConfig {
             health_check_timeout: Duration::from_secs(2),
             revoke_shards_timeout: Duration::from_secs(5),
             retries: RetryConfig::max_attempts_5(),
-            connect_timeout: Duration::from_secs(10),
+            client_config: GrpcClientConfig {
+                connect_timeout: Duration::from_secs(10),
+                ..Default::default()
+            },
         }
     }
 }

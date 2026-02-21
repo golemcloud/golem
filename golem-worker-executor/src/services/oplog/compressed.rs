@@ -14,12 +14,17 @@
 
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
-use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -62,7 +67,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
         self.indexed_storage
             .with("compressed_oplog", "delete")
-            .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &Self::compressed_oplog_key(&owned_worker_id.worker_id))
+            .delete(IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level }, &Self::compressed_oplog_key(&owned_worker_id.worker_id))
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
@@ -83,7 +88,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         self.indexed_storage
             .with("compressed_oplog", "exists")
             .exists(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level },
                 &Self::compressed_oplog_key(&owned_worker_id.worker_id),
             )
             .await
@@ -94,7 +99,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 
     async fn scan_for_component(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -104,7 +109,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .indexed_storage
             .with("compressed_oplog", "scan")
             .scan(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageMetaNamespace::CompressedOplog { level: self.level },
                 &PrimaryOplogService::key_pattern(component_id),
                 cursor,
                 count,
@@ -119,7 +124,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
-                    project_id: project_id.clone(),
+                    environment_id: *environment_id,
                 })
                 .collect(),
         ))
@@ -130,7 +135,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
-                .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &key)
+                .last_id(IndexedStorageNamespace::CompressedOpLog { worker_id: owned_worker_id.worker_id(), level: self.level }, &key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to get last entry from compressed oplog for worker {owned_worker_id} in indexed storage: {err}")
@@ -179,16 +184,20 @@ impl CompressedOplogArchive {
         &self,
         beginning_of_range: OplogIndex,
         end_of_range: OplogIndex,
-    ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, String> {
+    ) -> anyhow::Result<Option<Vec<(OplogIndex, OplogEntry)>>> {
         let (last_idx_in_chunk, chunk) = if let Some((last_idx_in_chunk, chunk)) = self
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageNamespace::CompressedOpLog {
+                    worker_id: self.worker_id.clone(),
+                    level: self.level,
+                },
                 &self.key,
                 end_of_range.into(),
             )
-            .await?
+            .await
+            .map_err(|e| anyhow!(e))?
         {
             (last_idx_in_chunk, chunk)
         } else {
@@ -300,7 +309,7 @@ impl OplogArchive for CompressedOplogArchive {
             self.indexed_storage
                 .with_entity("compressed_oplog", "append", "compressed_entry")
                 .append(
-                    IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                    IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level },
                     &self.key,
                     last_id.into(),
                     &compressed_chunk,
@@ -319,7 +328,7 @@ impl OplogArchive for CompressedOplogArchive {
         OplogIndex::from_u64(
             self.indexed_storage
                 .with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
-                .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
+                .last_id(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to get the last entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -331,7 +340,7 @@ impl OplogArchive for CompressedOplogArchive {
         let worker_id = &self.worker_id;
         let before = self.length().await;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
-            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key, last_dropped_id.into())
+            .drop_prefix(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key, last_dropped_id.into())
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to drop prefix from compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -339,7 +348,7 @@ impl OplogArchive for CompressedOplogArchive {
         let remaining = self.length().await;
         if remaining == 0 {
             self.indexed_storage.with("compressed_oplog", "drop_prefix")
-                .delete(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
+                .delete(IndexedStorageNamespace::CompressedOpLog { worker_id: self.worker_id.clone(), level: self.level }, &self.key)
                 .await
                 .unwrap_or_else(|err| {
                     panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
@@ -352,7 +361,10 @@ impl OplogArchive for CompressedOplogArchive {
         self.indexed_storage
             .with("compressed_oplog", "length")
             .length(
-                IndexedStorageNamespace::CompressedOpLog { level: self.level },
+                IndexedStorageNamespace::CompressedOpLog {
+                    worker_id: self.worker_id.clone(),
+                    level: self.level,
+                },
                 &self.key,
             )
             .await
@@ -389,10 +401,10 @@ impl CompressedOplogChunk {
         })
     }
 
-    pub fn decompress(&self) -> Result<Vec<OplogEntry>, String> {
+    pub fn decompress(&self) -> anyhow::Result<Vec<OplogEntry>> {
         let uncompressed_data = zstd::decode_all(&*self.compressed_data)
-            .map_err(|err| format!("failed to decompress oplog chunk: {err}"))?;
+            .map_err(|err| anyhow!("failed to decompress oplog chunk: {err}"))?;
         deserialize(&uncompressed_data)
-            .map_err(|err| format!("failed to deserialize oplog chunk: {err}"))
+            .map_err(|err| anyhow!("failed to deserialize oplog chunk: {err}"))
     }
 }

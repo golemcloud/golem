@@ -1,0 +1,44 @@
+[package]
+name = "golem-worker-executor-test-utils"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+description = "Test utilities for the worker-executor"
+repository = "https://github.com/golemcloud/golem"
+
+license-file = "../LICENSE"
+
+[lib]
+harness = false
+
+[dependencies]
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-service-base = { workspace = true, features = ["worker-executor"] }
+golem-test-framework = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
+golem-worker-executor = { workspace = true }
+
+anyhow = { workspace = true }
+applying = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+prometheus = { workspace = true }
+regex = { workspace = true }
+scc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

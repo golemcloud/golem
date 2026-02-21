@@ -12,31 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
-
+use crate::service::worker::WorkerServiceError;
 use async_trait::async_trait;
-use tokio::task::JoinSet;
-use tokio::time::{sleep, Instant};
-use tonic::transport::Channel;
-use tonic::Status;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::{debug, error, info, trace, warn, Instrument};
-
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_common::client::MultiTargetGrpcClient;
+use golem_common::SafeDisplay;
 use golem_common::model::RetryConfig;
 use golem_common::model::{Pod, ShardId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
-use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
-
-use crate::service::worker::WorkerServiceError;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
+use tokio::task::JoinSet;
+use tokio::time::{Instant, sleep};
+use tonic::Status;
+use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tracing::{Instrument, debug, error, info, trace, warn};
 
 #[async_trait]
 pub trait RoutingLogic {
@@ -52,6 +49,7 @@ pub trait RoutingLogic {
         Out: Send + 'static,
         R: Send,
         Target: CallOnExecutor<Out> + Send,
+        <Target as CallOnExecutor<Out>>::ResultOut: Debug,
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
@@ -115,21 +113,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
 
         match routing_table.lookup(self) {
             None => Ok((None, None)),
-            Some(pod) => Ok((
-                Some(
-                    context
-                        .worker_executor_clients()
-                        .call(description, pod.uri(), f)
-                        .await
-                        .map_err(|err| {
-                            CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                err,
-                                pod.clone(),
-                            )
-                        })?,
-                ),
-                Some(pod.clone()),
-            )),
+            Some(pod) => {
+                let clients = context.worker_executor_clients();
+
+                Ok((
+                    Some(
+                        clients
+                            .call(description, pod.uri(clients.uses_tls()), f)
+                            .await
+                            .map_err(|err| {
+                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
+                                    err,
+                                    pod.clone(),
+                                )
+                            })?,
+                    ),
+                    Some(pod.clone()),
+                ))
+            }
         }
     }
 
@@ -168,21 +169,24 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
 
         match routing_table.random() {
             None => Ok((None, None)),
-            Some(pod) => Ok((
-                Some(
-                    context
-                        .worker_executor_clients()
-                        .call(description, pod.uri(), f)
-                        .await
-                        .map_err(|status| {
-                            CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                status,
-                                pod.clone(),
-                            )
-                        })?,
-                ),
-                Some(pod.clone()),
-            )),
+            Some(pod) => {
+                let clients = context.worker_executor_clients();
+
+                Ok((
+                    Some(
+                        clients
+                            .call(description, pod.uri(clients.uses_tls()), f)
+                            .await
+                            .map_err(|status| {
+                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
+                                    status,
+                                    pod.clone(),
+                                )
+                            })?,
+                    ),
+                    Some(pod.clone()),
+                ))
+            }
         }
     }
 
@@ -234,7 +238,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                         let description = description.clone();
                         async move {
                             worker_executor_clients
-                                .call(description, pod.uri(), f)
+                                .call(description, pod.uri(worker_executor_clients.uses_tls()), f)
                                 .await
                                 .map_err(|err| (err, pod))
                         }
@@ -345,6 +349,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
         Out: Send + 'static,
         R: Send,
         Target: CallOnExecutor<Out> + Send,
+        <Target as CallOnExecutor<Out>>::ResultOut: Debug,
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
@@ -429,6 +434,7 @@ impl SafeDisplay for CallWorkerExecutorError {
     }
 }
 
+#[derive(Debug)]
 pub struct CallWorkerExecutorErrorWithContext {
     error: CallWorkerExecutorError,
     pod: Option<Pod>,
@@ -511,6 +517,7 @@ impl<'a> RetryState<'a> {
                     invalidated,
                     ?error,
                     ?pod,
+                    attempt = self.attempt,
                     delay_ms = delay.as_millis(),
                     op = self.op,
                     "Retry calling executor after delay"
@@ -573,7 +580,7 @@ impl<'a> RetryState<'a> {
 }
 
 fn format_pod(pod: &Option<Pod>) -> String {
-    format!("{:?}", pod.as_ref().map(|p| p.uri()))
+    format!("{:?}", pod.as_ref())
 }
 
 struct RetrySpan {

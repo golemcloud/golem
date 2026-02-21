@@ -18,6 +18,7 @@ use crate::{
     CallType, DynamicParsedFunctionName, DynamicParsedFunctionReference, FunctionTypeRegistry,
     InferredType, ParsedFunctionSite, RegistryKey, RegistryValue, SemVer,
 };
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
@@ -28,7 +29,8 @@ use std::fmt::{Debug, Display, Formatter};
 // Unlike FunctionTypeRegistry, the function names in `FunctionDictionary` is closer to Rib grammar
 // of invoking functions. Example: A RegistryKey of `[constructor]cart` in FunctionTypeRegistry becomes
 // FunctionName::ResourceConstructor(cart) in FunctionDictionary
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, Default, BinaryCodec)]
+#[desert(evolution())]
 pub struct FunctionDictionary {
     pub name_and_types: Vec<(FunctionName, FunctionType)>,
 }
@@ -100,7 +102,8 @@ impl FunctionDictionary {
 // if the instance is a resource creation.
 // Given the Dictionaries do become part of InferredType (InferredType::InstanceType::Dictionaries)
 // order of component loading into the rib context shouldn't change it's type.
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub struct ResourceMethodDictionary {
     pub map: BTreeMap<FullyQualifiedResourceMethod, FunctionType>,
 }
@@ -338,7 +341,8 @@ fn get_resource_method_name(function_name: &str) -> Result<Option<(String, Strin
     }
 }
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub enum FunctionName {
     Variant(String),
     Enum(String),
@@ -475,7 +479,8 @@ impl FunctionName {
     }
 }
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct FullyQualifiedResourceConstructor {
     pub package_name: Option<PackageName>,
     pub interface_name: Option<InterfaceName>,
@@ -508,14 +513,16 @@ impl FullyQualifiedResourceConstructor {
     }
 }
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct FullyQualifiedFunctionName {
     pub package_name: Option<PackageName>,
     pub interface_name: Option<InterfaceName>,
     pub function_name: String,
 }
 
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct FullyQualifiedResourceMethod {
     pub package_name: Option<PackageName>,
     pub interface_name: Option<InterfaceName>,
@@ -584,7 +591,8 @@ impl Display for FullyQualifiedFunctionName {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct FunctionType {
     pub parameter_types: Vec<InferredType>,
     pub return_type: Option<InferredType>,

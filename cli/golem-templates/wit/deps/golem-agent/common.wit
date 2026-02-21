@@ -1,7 +1,7 @@
 package golem:agent;
 
 interface common {
-  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value};
+  use golem:rpc/types@0.2.2.{value-and-type, wit-type, wit-value, agent-id, account-id, component-id};
 
   type url = string;
 
@@ -17,6 +17,13 @@ interface common {
     methods:      list<agent-method>,
     dependencies: list<agent-dependency>,
     mode:         agent-mode,
+    http-mount:   option<http-mount-details>,
+  }
+
+  /// Associates an agent type with a component that implements it
+  record registered-agent-type {
+    agent-type: agent-type,
+    implemented-by: component-id
   }
 
   record agent-dependency {
@@ -29,9 +36,105 @@ interface common {
   record agent-method {
     name:          string,
     description:   string,
+    http-endpoint: list<http-endpoint-details>,
     prompt-hint:   option<string>,
     input-schema:  data-schema,
     output-schema: data-schema,
+  }
+
+  record http-mount-details {
+    path-prefix:    list<path-segment>,
+    auth-details:   option<auth-details>,
+    phantom-agent:  bool,
+    cors-options:   cors-options,
+    webhook-suffix: list<path-segment>,
+  }
+
+  record cors-options {
+    allowed-patterns: list<string>,
+  }
+
+  record http-endpoint-details {
+    http-method: http-method,
+    path-suffix:  list<path-segment>,
+    header-vars:  list<header-variable>,
+    query-vars:   list<query-variable>,
+    auth-details: option<auth-details>,
+    cors-options: cors-options,
+  }
+
+  variant http-method {
+    get,
+    head,
+    post,
+    put,
+    delete,
+    connect,
+    options,
+    trace,
+    patch,
+    custom(string),
+  }
+
+  variant path-segment {
+    literal(string),
+    system-variable(system-variable),
+    path-variable(path-variable),
+    // only allowed as the last segment
+    remaining-path-variable(path-variable)
+  }
+
+  enum system-variable {
+    agent-type,
+    agent-version
+  }
+
+  record path-variable {
+    variable-name: string,
+  }
+
+  record header-variable {
+    header-name: string,
+    variable-name: string,
+  }
+
+  record query-variable {
+    query-param-name: string,
+    variable-name: string,
+  }
+
+  record auth-details {
+    required: bool,
+  }
+
+  variant principal {
+    oidc(oidc-principal),
+    agent(agent-principal),
+    golem-user(golem-user-principal),
+    anonymous
+  }
+
+  record oidc-principal {
+    sub:      string,
+    issuer: string,
+
+    email:    option<string>,
+    name:     option<string>,
+    email-verified: option<bool>,
+    given-name:     option<string>,
+    family-name:    option<string>,
+    picture:        option<string>,
+    preferred-username:       option<string>,
+
+    claims: string,
+  }
+
+  record agent-principal {
+    agent-id: agent-id,
+  }
+
+  record golem-user-principal {
+    account-id: account-id
   }
 
   record agent-constructor {

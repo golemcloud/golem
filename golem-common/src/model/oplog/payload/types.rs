@@ -13,22 +13,23 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::model::component::ComponentRevision;
+use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
-use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, RdbmsPoolKey,
-    ScheduleId, ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId, ScheduledAction, WorkerId,
+    WorkerMetadata, WorkerStatus,
 };
 use anyhow::anyhow;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use desert_rust::{
-    BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
 };
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;
@@ -1101,7 +1102,7 @@ pub struct AgentMetadataForGuests {
     pub env: Vec<(String, String)>,
     pub config_vars: BTreeMap<String, String>,
     pub status: WorkerStatus,
-    pub component_version: ComponentVersion,
+    pub component_revision: ComponentRevision,
     pub retry_count: u64,
 }
 
@@ -1109,11 +1110,11 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
     fn from(value: WorkerMetadata) -> Self {
         Self {
             agent_id: value.worker_id,
-            args: value.args,
+            args: vec![],
             env: value.env,
             config_vars: value.wasi_config_vars,
             status: value.last_known_status.status,
-            component_version: value.last_known_status.component_version,
+            component_revision: value.last_known_status.component_revision,
             retry_count: value
                 .last_known_status
                 .current_retry_count
@@ -1282,7 +1283,7 @@ pub enum SerializableRpcError {
 pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
     pub account_id: AccountId,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
@@ -1305,7 +1306,7 @@ impl SerializableScheduledInvocation {
             } => Ok(Self {
                 timestamp: schedule_id.timestamp,
                 account_id,
-                project_id: owned_worker_id.project_id,
+                environment_id: owned_worker_id.environment_id,
                 worker_id: owned_worker_id.worker_id,
                 idempotency_key,
                 full_function_name,
@@ -1324,7 +1325,7 @@ impl SerializableScheduledInvocation {
             action: ScheduledAction::Invoke {
                 account_id: self.account_id,
                 owned_worker_id: OwnedWorkerId {
-                    project_id: self.project_id,
+                    environment_id: self.environment_id,
                     worker_id: self.worker_id,
                 },
                 idempotency_key: self.idempotency_key,
@@ -1587,6 +1588,9 @@ pub enum SerializableDbValueNode {
     Range(SerializableRange),
     Set(String),
     Null,
+    Vector(Vec<f32>),
+    Halfvec(Vec<f32>),
+    Sparsevec(SparseVec),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
@@ -1762,6 +1766,51 @@ pub struct SerializableDomain {
 pub struct SerializableRange {
     pub name: String,
     pub value: ValuesRange<NodeIndex>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SparseVec {
+    pub dim: i32,
+    pub indices: Vec<i32>,
+    pub values: Vec<f32>,
+}
+
+impl SparseVec {
+    pub fn try_new(dim: i32, indices: Vec<i32>, values: Vec<f32>) -> Result<Self, String> {
+        if indices.len() != values.len() {
+            Err("Indices and values must have the same length".to_string())
+        } else if indices.len() > dim as usize {
+            Err("Indices must be less than or equal to dim".to_string())
+        } else {
+            Ok(SparseVec {
+                dim,
+                indices,
+                values,
+            })
+        }
+    }
+
+    pub fn to_map(&self) -> HashMap<&i32, &f32> {
+        let mut map = HashMap::new();
+        for (idx, val) in self.indices.iter().zip(self.values.iter()) {
+            map.insert(idx, val);
+        }
+        map
+    }
+}
+
+impl Display for SparseVec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{")?;
+        for (i, (idx, val)) in self.indices.iter().zip(self.values.iter()).enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, "{}:{}", idx, val)?;
+        }
+        write!(f, "}}/{}", self.dim)
+    }
 }
 
 impl<T> From<ValuesRange<T>> for PgRange<T> {
@@ -1985,6 +2034,9 @@ pub enum SerializableDbColumnTypeNode {
     Array(NodeIndex),
     Range(SerializableRangeType),
     Null,
+    Vector,
+    Halfvec,
+    Sparsevec,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]

@@ -15,14 +15,17 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app::{AppComponentName, DependentComponent};
+use crate::model::app::DependentComponent;
+use crate::model::app_raw;
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
-use crate::model::ProjectId;
-use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -45,7 +48,7 @@ pub trait TaskResultMarkerHashSource {
     /// Specifying the id is optional, as some tasks are their own identity, like external commands.
     /// In those cases we can skip calculating values and hashes twice.
     ///
-    /// The main difference between id and hash is that it should not include
+    /// The main difference between id and source is that it should not include
     /// generic "task properties", only ids for the task. E.g.: the hash_input for rpc linking
     /// should contain all the main and dependency component names and types, while the id should
     /// only contain the main component name which the dependencies are linked into.
@@ -196,7 +199,7 @@ impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_>
 }
 
 pub struct ComponentGeneratorMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub generator_kind: &'a str,
 }
 
@@ -218,7 +221,7 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
 }
 
 pub struct LinkRpcMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub static_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
     pub dynamic_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
     pub library_dependencies: &'a BTreeSet<&'a DependentComponent>,
@@ -264,7 +267,7 @@ impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
 }
 
 pub struct AddMetadataMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub root_package_name: PackageName,
 }
 
@@ -283,9 +286,9 @@ impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
 }
 
 pub struct GetServerComponentHash<'a> {
-    pub project_id: Option<&'a ProjectId>,
+    pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     // NOTE: use None for querying
     pub component_hash: Option<&'a str>,
 }
@@ -298,7 +301,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}",
-            self.project_id, self.component_name, self.component_version
+            self.environment_id, self.component_name, self.component_revision
         )))
     }
 
@@ -311,9 +314,9 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
 }
 
 pub struct GetServerIfsFileHash<'a> {
-    pub project_id: Option<&'a ProjectId>,
+    pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     pub target_path: &'a str,
     // NOTE: use None for querying
     pub file_hash: Option<&'a str>,
@@ -327,7 +330,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}#{}",
-            self.project_id, self.component_name, self.component_version, self.target_path
+            self.environment_id, self.component_name, self.component_revision, self.target_path
         )))
     }
 
@@ -340,6 +343,68 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
                 self.target_path
             ),
         }
+    }
+}
+
+pub struct GenerateBridgeSdkMarkerHash<'a> {
+    pub component_name: &'a ComponentName,
+    pub agent_type_name: &'a AgentTypeName,
+    pub language: &'a GuestLanguage,
+}
+
+impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GenerateBridgeSdkMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(format!(
+            "{}-{}-{}",
+            self.component_name, self.agent_type_name, self.language
+        )))
+    }
+}
+
+pub struct ExtractAgentTypeMarkerHash<'a> {
+    pub component_name: &'a ComponentName,
+}
+
+impl TaskResultMarkerHashSource for ExtractAgentTypeMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "ExtractAgentTypeMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(self.component_name.to_string()))
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBridgeReplMarkerHash<'a> {
+    pub language: GuestLanguage,
+    pub agent_type_names: &'a [&'a AgentTypeName],
+}
+
+impl TaskResultMarkerHashSource for GenerateBridgeReplMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GenerateBridgeReplMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some(self.language.to_string()))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
     }
 }
 

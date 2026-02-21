@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use chrono::{DateTime, Utc};
 
 #[allow(unused)]
 #[rustfmt::skip]
@@ -21,6 +20,8 @@ mod bindings;
 
 #[cfg(test)]
 test_r::enable!();
+
+pub mod agentic;
 
 pub mod analysis;
 
@@ -37,7 +38,7 @@ mod builder;
 mod extractor;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
-#[cfg(feature = "host")]
+#[cfg(any(feature = "host", feature = "client"))]
 pub mod json;
 
 /// The metadata module defines data structures for representing various metadata extracted from WASM binaries.
@@ -84,7 +85,7 @@ pub mod derive {
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::wasi;
+pub use wstd::wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
@@ -93,13 +94,13 @@ pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use golem_rpc_0_2_x::types::{
-    AgentId, ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, Uuid,
-    WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
+    AccountId, AgentId, ComponentId, FutureInvokeResult, NodeIndex, PromiseId, ResourceMode,
+    RpcError, Uri, Uuid, WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::wasi::io::poll::Pollable;
+pub use wstd::wasi::io::poll::Pollable;
 
 #[cfg(feature = "host")]
 pub use wasmtime_wasi::p2::DynPollable;
@@ -131,27 +132,18 @@ pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host")]
 pub use golem_rpc_0_2_x::types::{
-    AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode,
-    WitType, WitTypeNode, WitValue,
+    AccountId, AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, PromiseId, ResourceMode,
+    RpcError, Uri, Uuid, WitNode, WitType, WitTypeNode, WitValue,
 };
 
-use std::fmt;
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
-impl From<wasi::clocks::wall_clock::Datetime> for DateTime<Utc> {
-    fn from(value: wasi::clocks::wall_clock::Datetime) -> DateTime<Utc> {
-        DateTime::from_timestamp(value.seconds as i64, value.nanoseconds)
-            .expect("Received invalid datetime from wasi")
-    }
-}
-
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<Uuid> for uuid::Uuid {
     fn from(value: Uuid) -> Self {
         uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<uuid::Uuid> for Uuid {
     fn from(uuid: uuid::Uuid) -> Self {
         let (high_bits, low_bits) = uuid.as_u64_pair();
@@ -497,19 +489,22 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     }
 }
 
-impl From<uuid::Uuid> for ComponentId {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl From<uuid::Uuid> for AccountId {
     fn from(value: uuid::Uuid) -> Self {
         Self { uuid: value.into() }
     }
 }
 
-impl From<ComponentId> for uuid::Uuid {
-    fn from(value: ComponentId) -> Self {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl From<AccountId> for uuid::Uuid {
+    fn from(value: AccountId) -> Self {
         value.uuid.into()
     }
 }
 
-impl FromStr for ComponentId {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for AccountId {
     type Err = uuid::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -517,20 +512,54 @@ impl FromStr for ComponentId {
     }
 }
 
-impl Display for ComponentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for AccountId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let uuid: uuid::Uuid = self.uuid.into();
         write!(f, "{uuid}")
     }
 }
 
-impl Display for AgentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl From<uuid::Uuid> for ComponentId {
+    fn from(value: uuid::Uuid) -> Self {
+        Self { uuid: value.into() }
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl From<ComponentId> for uuid::Uuid {
+    fn from(value: ComponentId) -> Self {
+        value.uuid.into()
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for ComponentId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(uuid::Uuid::parse_str(s)?.into())
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for ComponentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let uuid: uuid::Uuid = self.uuid.into();
+        write!(f, "{uuid}")
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.component_id, self.agent_id)
     }
 }
 
-impl FromStr for AgentId {
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for AgentId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -551,6 +580,7 @@ impl FromStr for AgentId {
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
 impl TryFrom<Uri> for AgentId {
     type Error = String;
 
@@ -563,6 +593,7 @@ impl TryFrom<Uri> for AgentId {
             let parts: Vec<&str> = remaining.split('/').collect();
             match parts.len() {
                 2 => {
+                    use std::str::FromStr;
                     let component_id = ComponentId::from_str(parts[0]).map_err(|err|
                         format!("Invalid URN: expected UUID for component_id: {err}")
                     )?;
@@ -580,6 +611,39 @@ impl TryFrom<Uri> for AgentId {
     }
 }
 
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::fmt::Display for PromiseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
+impl std::str::FromStr for PromiseId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 2 {
+            let agent_id = AgentId::from_str(parts[0]).map_err(|_| {
+                format!("invalid agent id: {s} - expected format: <component_id>/<agent_id>")
+            })?;
+            let oplog_idx = parts[1]
+                .parse()
+                .map_err(|_| format!("invalid oplog index: {s} - expected integer"))?;
+            Ok(Self {
+                agent_id,
+                oplog_idx,
+            })
+        } else {
+            Err(format!(
+                "invalid promise id: {s} - expected format: <agent_id>/<oplog_idx>"
+            ))
+        }
+    }
+}
+
+#[cfg(any(feature = "host", feature = "stub"))]
 #[cfg(test)]
 mod tests {
     use test_r::test;

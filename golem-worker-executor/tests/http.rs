@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use assert2::{check, let_assert};
+use crate::Tracing;
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
-use golem_common::model::{IdempotencyKey, RetryConfig};
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_common::model::IdempotencyKey;
+use golem_common::{agent_id, data_value};
+use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -41,13 +41,9 @@ async fn http_client(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -68,32 +64,33 @@ async fn http_client(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
+    let agent_id = agent_id!("http-client");
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-1", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    let rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     drop(rx);
     http_server.abort();
 
-    check!(
-        result
-            == Ok(vec![Value::String(
-                "200 response is test-header test-body".to_string()
-            )])
-    );
+    assert_eq!(result, data_value!("200 response is test-header test-body"));
+    Ok(())
 }
 
 #[test]
@@ -102,13 +99,10 @@ async fn http_client_using_reqwest(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
+
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -140,31 +134,41 @@ async fn http_client_using_reqwest(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-2").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
+    let agent_id = agent_id!("http-client2");
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env, vec![])
-        .await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
+
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
-    check!(result == vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
-    check!(
-        captured_body
-            == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-                .to_string()
+    assert_eq!(
+        result,
+        data_value!(
+            "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
+        )
     );
+    assert_eq!(
+        captured_body,
+        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}".to_string()
+    );
+    Ok(())
 }
 
 #[test]
@@ -173,13 +177,10 @@ async fn http_client_using_reqwest_async(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
+
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -211,37 +212,41 @@ async fn http_client_using_reqwest_async(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-3").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
+    let agent_id = agent_id!("http-client3");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "http-client-reqwest-async-1",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .await?;
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
-    check!(result == vec![Value::String("200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }".to_string())]);
-    check!(
-        captured_body
-            == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
-                .to_string()
+    assert_eq!(
+        result,
+        data_value!(
+            "200 ExampleResponse { percentage: 0.25, message: Some(\"response message Golem\") }"
+        )
     );
+    assert_eq!(
+        captured_body,
+        "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}".to_string()
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -250,13 +255,9 @@ async fn http_client_using_reqwest_async_parallel(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
 
@@ -288,75 +289,74 @@ async fn http_client_using_reqwest_async_parallel(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-3").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
+    let agent_id = agent_id!("http-client3");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "http-client-reqwest-async-2",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{run-parallel}",
-            vec![32u16.into_value_and_type()],
-        )
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "run_parallel", data_value!(32u16))
+        .await?;
     let mut captured_body = captured_body.lock().unwrap().clone();
     captured_body.sort();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
-    let_assert!(Value::List(lst) = &result[0]);
-    check!(lst.len() == 32);
-    check!(
-        captured_body
-            == vec![
-                r#"{"name":"Something","amount":0,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":1,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":10,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":11,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":12,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":13,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":14,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":15,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":16,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":17,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":18,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":19,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":2,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":20,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":21,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":22,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":23,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":24,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":25,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":26,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":27,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":28,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":29,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":3,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":30,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":31,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":4,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":5,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":6,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":7,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":8,"comments":["Hello","World"]}"#.to_string(),
-                r#"{"name":"Something","amount":9,"comments":["Hello","World"]}"#.to_string(),
-            ]
+    let return_value = result.into_return_value().expect("Expected a return value");
+    let golem_wasm::Value::List(lst) = &return_value else {
+        panic!("Expected List, got {:?}", &return_value)
+    };
+    assert_eq!(lst.len(), 32);
+    assert_eq!(
+        captured_body,
+        vec![
+            r#"{"name":"Something","amount":0,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":1,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":10,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":11,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":12,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":13,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":14,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":15,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":16,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":17,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":18,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":19,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":2,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":20,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":21,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":22,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":23,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":24,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":25,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":26,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":27,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":28,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":29,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":3,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":30,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":31,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":4,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":5,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":6,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":7,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":8,"comments":["Hello","World"]}"#.to_string(),
+            r#"{"name":"Something","amount":9,"comments":["Hello","World"]}"#.to_string(),
+        ]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -365,13 +365,9 @@ async fn outgoing_http_contains_idempotency_key(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -398,67 +394,33 @@ async fn outgoing_http_contains_idempotency_key(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-2").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_http_tests_debug")
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
+    let agent_id = agent_id!("http-client2");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "outgoing-http-contains-idempotency-key",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
 
     let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
     let result = executor
-        .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent_with_key(&component.id, &agent_id, &key, "run", data_value!())
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
     assert_eq!(
-        result, vec![Value::String(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"839d5653-b8c4-598a-a04a-0f45ebe592f1\") }"
-                    .to_string()
-            )]
+        result, data_value!(
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"29e89d8e-585f-519d-a57b-fd8650d59edb\") }"
+            )
     );
-}
-
-#[test]
-async fn http_response_request_chaining(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries()))
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
-
-    let component_id = executor.component("fetch").store().await;
-    let mut env = HashMap::new();
-    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-
-    let worker_id = executor
-        .start_worker_with(&component_id, "fetch-test-4", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output(&worker_id).await;
-
-    let result = executor.invoke_and_await(&worker_id, "test4", vec![]).await;
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
-    drop(rx);
-
-    check!(result.is_ok());
+    Ok(())
 }

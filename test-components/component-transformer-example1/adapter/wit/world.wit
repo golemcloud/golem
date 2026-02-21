@@ -1,6 +1,0 @@
-package component:adapter;
-
-world example {
-  import wasi:logging/logging;
-  export wasi:logging/logging;
-}

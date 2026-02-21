@@ -14,20 +14,25 @@
 
 use crate::WorkerExecutorTestDependencies;
 use async_trait::async_trait;
-use golem_common::base_model::ProjectId;
 use golem_common::config::RedisConfig;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::storage::keyvalue::memory::InMemoryKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 #[async_trait]
 trait GetKeyValueStorage: Debug {
@@ -122,11 +127,48 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
     }
 }
 
+struct MultiSqliteKeyValueStorageWrapper {
+    tempdirs: Arc<Mutex<Vec<TempDir>>>,
+}
+
+impl MultiSqliteKeyValueStorageWrapper {
+    fn new() -> Self {
+        Self {
+            tempdirs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl Debug for MultiSqliteKeyValueStorageWrapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MultiSqliteKeyValueStorageWrapper")
+    }
+}
+
+#[async_trait]
+impl GetKeyValueStorage for MultiSqliteKeyValueStorageWrapper {
+    async fn get_key_value_storage(&self) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().to_path_buf();
+        self.tempdirs.lock().unwrap().push(tempdir);
+
+        let kvs = MultiSqliteKeyValueStorage::new(&path, 10, true);
+        Arc::new(kvs)
+    }
+}
+
 #[test_dep(tagged_as = "sqlite")]
 async fn sqlite_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
     Arc::new(SqliteKeyValueStorageWrapper)
+}
+
+#[test_dep(tagged_as = "multi_sqlite")]
+async fn multi_sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> Arc<dyn GetKeyValueStorage + Send + Sync> {
+    Arc::new(MultiSqliteKeyValueStorageWrapper::new())
 }
 
 #[derive(Debug)]
@@ -138,9 +180,14 @@ struct Namespaces {
 #[test_dep(tagged_as = "ns1")]
 fn ns() -> Namespaces {
     Namespaces {
-        ns: KeyValueStorageNamespace::Worker,
+        ns: KeyValueStorageNamespace::Worker {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test".to_string(),
+            },
+        },
         ns2: KeyValueStorageNamespace::UserDefined {
-            project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
             bucket: "test-bucket".to_string(),
         },
     }
@@ -150,16 +197,21 @@ fn ns() -> Namespaces {
 fn ns2() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::UserDefined {
-            project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
             bucket: "test-bucket".to_string(),
         },
-        ns2: KeyValueStorageNamespace::Worker,
+        ns2: KeyValueStorageNamespace::Worker {
+            worker_id: WorkerId {
+                component_id: ComponentId::new(),
+                worker_name: "test".to_string(),
+            },
+        },
     }
 }
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite");
+define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite");
 define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2");
 
 #[test]
@@ -573,22 +625,22 @@ async fn sets(
         .await
         .unwrap();
 
-    assert2::check!(s11 == Vec::<Vec<u8>>::new());
-    assert2::check!(s21 == Vec::<Vec<u8>>::new());
-    assert2::check!(s12.len() == 2);
-    assert2::check!(s12.contains(&value1.to_vec().into()));
-    assert2::check!(s12.contains(&value2.to_vec().into()));
-    assert2::check!(s22.len() == 2);
-    assert2::check!(s22.contains(&value2.to_vec().into()));
-    assert2::check!(s22.contains(&value3.to_vec().into()));
-    assert2::check!(s13.len() == 1);
-    assert2::check!(s13.contains(&value1.to_vec().into()));
-    assert2::check!(s23.len() == 1);
-    assert2::check!(s23.contains(&value3.to_vec().into()));
-    assert2::check!(s14.len() == 1);
-    assert2::check!(s14.contains(&value1.to_vec().into()));
-    assert2::check!(s24.len() == 1);
-    assert2::check!(s24.contains(&value3.to_vec().into()));
+    assert_eq!(s11, Vec::<Vec<u8>>::new());
+    assert_eq!(s21, Vec::<Vec<u8>>::new());
+    assert_eq!(s12.len(), 2);
+    assert!(s12.contains(&value1.to_vec().into()));
+    assert!(s12.contains(&value2.to_vec().into()));
+    assert_eq!(s22.len(), 2);
+    assert!(s22.contains(&value2.to_vec().into()));
+    assert!(s22.contains(&value3.to_vec().into()));
+    assert_eq!(s13.len(), 1);
+    assert!(s13.contains(&value1.to_vec().into()));
+    assert_eq!(s23.len(), 1);
+    assert!(s23.contains(&value3.to_vec().into()));
+    assert_eq!(s14.len(), 1);
+    assert!(s14.contains(&value1.to_vec().into()));
+    assert_eq!(s24.len(), 1);
+    assert!(s24.contains(&value3.to_vec().into()));
 }
 
 #[test]

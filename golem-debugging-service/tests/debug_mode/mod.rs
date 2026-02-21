@@ -1,67 +1,77 @@
-pub mod context;
 pub mod debug_bootstrap;
 pub mod debug_worker_executor;
 pub mod dsl;
 
-use golem_test_framework::config::TestDependencies;
-
-use crate::debug_mode::context::DebugExecutorTestContext;
 use crate::debug_mode::debug_bootstrap::TestDebuggingServerBootStrap;
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
-use crate::{get_golem_config, RegularExecutorTestContext, RegularWorkerExecutorTestDependencies};
-use golem_common::model::auth::TokenSecret;
-use golem_worker_executor::services::golem_config::GolemConfig;
+use golem_common::config::RedisConfig;
+use golem_debugging_service::config::DebugConfig;
+use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_service_base::service::compiled_component::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
+};
+use golem_worker_executor::services::golem_config::{
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, IndexedStorageConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
+};
 use golem_worker_executor::Bootstrap;
+use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
+use std::path::Path;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::debug;
 
 pub async fn start_debug_worker_executor(
     // Debug worker executor which is essentially per test needs to know a few details about the regular worker executor
-    regular_worker_dependencies: &RegularWorkerExecutorTestDependencies,
-    debug_context: &DebugExecutorTestContext,
+    test_worker_executor: &TestWorkerExecutor,
 ) -> anyhow::Result<DebugWorkerExecutorClient> {
-    let redis = regular_worker_dependencies.redis();
-    let redis_monitor = regular_worker_dependencies.redis_monitor();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-    let prometheus = golem_worker_executor::metrics::register_all();
-
-    let admin_account_id = regular_worker_dependencies.cloud_service.admin_account_id();
-
-    let config = get_golem_config(
-        redis.public_port(),
-        debug_context.redis_prefix(),
-        debug_context.grpc_port(),
-        debug_context.http_port(),
-        admin_account_id,
-    );
+    let config = DebugConfig {
+        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
+            port: test_worker_executor.deps.redis.public_port(),
+            key_prefix: test_worker_executor.context.redis_prefix(),
+            ..Default::default()
+        }),
+        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
+        blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+            root: Path::new("data/blobs").to_path_buf(),
+        }),
+        http_port: 0,
+        compiled_component_service: CompiledComponentServiceConfig::Enabled(
+            CompiledComponentServiceEnabledConfig {},
+        ),
+        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
+        engine: EngineConfig {
+            enable_fs_cache: true,
+        },
+        ..Default::default()
+    };
 
     let handle = Handle::current();
 
-    let http_port = config.http_port;
-
     let mut join_set = JoinSet::new();
 
-    run_debug_worker_executor(
+    let run_details = run_debug_worker_executor(
         config,
-        prometheus,
+        prometheus::Registry::new(),
         handle,
         &mut join_set,
-        debug_context.regular_worker_executor_context(),
+        test_worker_executor.clone(),
     )
     .await?;
 
     let start = std::time::Instant::now();
 
     loop {
-        let debug_worker_executor_result =
-            DebugWorkerExecutorClient::connect(http_port, TokenSecret::new(uuid::Uuid::new_v4()))
-                .await;
+        let debug_worker_executor_result = DebugWorkerExecutorClient::connect(
+            run_details.http_port,
+            test_worker_executor.context.account_token.clone(),
+        )
+        .await;
 
         match debug_worker_executor_result {
-            Ok(client) => {
+            Ok(mut client) => {
+                client.set_worker_executor_join_set(join_set);
                 break Ok(client);
             }
             Err(e) => {
@@ -76,14 +86,19 @@ pub async fn start_debug_worker_executor(
 }
 
 async fn run_debug_worker_executor(
-    golem_config: GolemConfig,
+    golem_config: DebugConfig,
     prometheus_registry: Registry,
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    regular_executor_context: RegularExecutorTestContext,
-) -> Result<(), anyhow::Error> {
-    TestDebuggingServerBootStrap::new(regular_executor_context)
-        .run(golem_config, prometheus_registry, runtime, join_set)
+    regular_executor_context: TestWorkerExecutor,
+) -> Result<golem_worker_executor::RunDetails, anyhow::Error> {
+    let run_details = TestDebuggingServerBootStrap::new(regular_executor_context)
+        .run(
+            golem_config.into_golem_config(),
+            prometheus_registry,
+            runtime,
+            join_set,
+        )
         .await?;
-    Ok(())
+    Ok(run_details)
 }

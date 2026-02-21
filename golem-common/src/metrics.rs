@@ -310,20 +310,12 @@ pub mod api {
         pub span: Span,
     }
 
-    pub trait TraceErrorKind {
+    pub trait ApiErrorDetails {
         fn trace_error_kind(&self) -> &'static str;
 
         fn is_expected(&self) -> bool;
-    }
 
-    impl TraceErrorKind for &'static str {
-        fn trace_error_kind(&self) -> &'static str {
-            self
-        }
-
-        fn is_expected(&self) -> bool {
-            false
-        }
+        fn take_cause(&mut self) -> Option<anyhow::Error>;
     }
 
     impl RecordedApiRequest {
@@ -336,25 +328,47 @@ pub mod api {
             }
         }
 
-        pub fn succeed<T>(mut self, result: T) -> T {
-            match self.start_time.take() {
-                Some(start) => self.span.in_scope(|| {
+        pub fn succeed<T>(self, result: T) -> T {
+            self.handle_success();
+            result
+        }
+
+        pub fn fail<T, E: Debug + ApiErrorDetails>(self, result: T, error: &mut E) -> T {
+            self.handle_failure(error);
+            result
+        }
+
+        pub fn result<T, E: ApiErrorDetails + Debug>(
+            self,
+            mut result: Result<T, E>,
+        ) -> Result<T, E> {
+            match &mut result {
+                Ok(_) => self.handle_success(),
+                Err(error) => self.handle_failure(error),
+            }
+            result
+        }
+
+        fn handle_success(mut self) {
+            if let Some(start) = self.start_time.take() {
+                self.span.in_scope(|| {
                     let elapsed = start.elapsed();
                     info!(elapsed_ms = elapsed.as_millis(), "API request succeeded");
 
                     record_api_success(self.api_name, self.api_type, elapsed);
-                    result
-                }),
-                None => result,
+                })
             }
         }
 
-        pub fn fail<T, E: Debug + TraceErrorKind>(mut self, result: T, error: &E) -> T {
-            match self.start_time.take() {
-                Some(start) => self.span.in_scope(|| {
+        fn handle_failure<E: ApiErrorDetails + Debug>(mut self, error: &mut E) {
+            if let Some(start) = self.start_time.take() {
+                self.span.in_scope(|| {
                     let elapsed = start.elapsed();
 
                     if error.is_expected() {
+                        // expected error, no need to display cause.
+                        // TODO: make this nicer
+                        error.take_cause();
                         info!(
                             elapsed_ms = elapsed.as_millis(),
                             error = format!("{:?}", error),
@@ -374,20 +388,7 @@ pub mod api {
                         error.trace_error_kind(),
                         elapsed,
                     );
-                    result
-                }),
-
-                None => result,
-            }
-        }
-
-        pub fn result<T, E: Clone + TraceErrorKind + Debug>(
-            self,
-            result: Result<T, E>,
-        ) -> Result<T, E> {
-            match result {
-                ok @ Ok(_) => self.succeed(ok),
-                Err(error) => self.fail(Err(error.clone()), &error),
+                })
             }
         }
     }

@@ -1,6 +1,4 @@
 use crate::fs;
-use crate::fs::PathExtra;
-use crate::log::{log_warn_action, LogColorize};
 use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,12 +12,14 @@ pub struct Plug {
     pub wasm: PathBuf,
 }
 
-pub async fn compose(source_wasm: &Path, plugs: Vec<Plug>, dest_wasm: &Path) -> anyhow::Result<()> {
+pub async fn compose(
+    source_wasm: &Path,
+    plugs: Vec<Plug>,
+    dest_wasm: &Path,
+) -> anyhow::Result<Vec<String>> {
     // Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/src/commands/plug.rs
     // with allowing missing plugs (through the also customized plug function below)
     // and using local packages only (for now)
-
-    let dest_wasm = PathExtra::new(dest_wasm);
 
     let mut graph = CompositionGraph::new();
 
@@ -35,26 +35,26 @@ pub async fn compose(source_wasm: &Path, plugs: Vec<Plug>, dest_wasm: &Path) -> 
         plug_packages.push((plug, package_id));
     }
 
-    plug(&mut graph, plug_packages, socket)?;
+    let unused_plugs = plug(&mut graph, plug_packages, socket)?;
 
     let bytes = graph.encode(EncodeOptions::default())?;
 
-    fs::create_dir_all(dest_wasm.parent()?)?;
+    fs::create_dir_all(fs::parent_or_err(dest_wasm)?)?;
     fs::write(dest_wasm, bytes)?;
 
-    Ok(())
+    Ok(unused_plugs)
 }
 
-// Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/crates/wac-graph/src/plug.rs#L23
+// Based on https://github.com/bytecodealliance/wac/blob/release-0.6.0/crates/wac-graph/src/plug.rs#L23,
 // but:
-//   - instead of returning NoPlugError, it logs skipped instantiations
+//   - instead of returning NoPlugError, it returns skipped instantiations
 //   - pre-checks multi plugs for the same export to prevent ArgumentAlreadyPassed errors, and
 //     returns a custom error for it with more context
 fn plug(
     graph: &mut CompositionGraph,
     plugs: Vec<(Plug, PackageId)>,
     socket: PackageId,
-) -> Result<(), PlugError> {
+) -> Result<Vec<String>, PlugError> {
     let socket_instantiation = graph.instantiate(socket);
 
     let mut offered_plugs = BTreeSet::<&str>::new();
@@ -121,13 +121,6 @@ fn plug(
         offered_plugs
     };
 
-    for plug_name in unused_plugs {
-        log_warn_action(
-            "Skipping",
-            format!("{}, not used", plug_name.log_color_highlight()),
-        );
-    }
-
     // Export all exports from the socket component.
     for name in graph.types()[graph[socket].ty()]
         .exports
@@ -144,5 +137,8 @@ fn plug(
             .map_err(|err| PlugError::GraphError { source: err.into() })?;
     }
 
-    Ok(())
+    Ok(unused_plugs
+        .into_iter()
+        .map(|plug_name| plug_name.to_string())
+        .collect())
 }

@@ -320,13 +320,13 @@ mod keep_alive {
     mod test {
         use test_r::test;
 
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Once;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         use super::*;
         use poem::web::websocket::Message;
         use tokio::sync::mpsc;
-        use tokio::time::{timeout, Duration};
+        use tokio::time::{Duration, timeout};
         use tokio_stream::wrappers::ReceiverStream;
         use tokio_util::sync::PollSender;
         use tracing::{Instrument, Level};

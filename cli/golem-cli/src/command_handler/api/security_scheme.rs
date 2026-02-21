@@ -13,15 +13,19 @@
 // limitations under the License.
 
 use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
-use crate::command::shared_args::ProjectOptionalFlagArg;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::model::api::{ApiSecurityScheme, IdentityProviderType};
-use golem_client::api::ApiSecurityClient;
-use golem_client::model::{
-    Provider as ProviderCloud, SecuritySchemeData as SecuritySchemeDataCloud,
+use crate::error::NonSuccessfulExit;
+use crate::log::log_error;
+use crate::model::environment::EnvironmentResolveMode;
+use crate::model::text::http_api_security::{
+    HttpSecuritySchemeCreateView, HttpSecuritySchemeGetView,
 };
+use anyhow::bail;
+use golem_client::api::ApiSecurityClient;
+use golem_client::model::SecuritySchemeCreation;
+use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 use std::sync::Arc;
 
 pub struct ApiSecuritySchemeCommandHandler {
@@ -36,8 +40,7 @@ impl ApiSecuritySchemeCommandHandler {
     pub async fn handle_command(&self, command: ApiSecuritySchemeSubcommand) -> anyhow::Result<()> {
         match command {
             ApiSecuritySchemeSubcommand::Create {
-                project,
-                security_scheme_id,
+                security_scheme_name,
                 provider_type,
                 client_id,
                 client_secret,
@@ -45,8 +48,7 @@ impl ApiSecuritySchemeCommandHandler {
                 redirect_url,
             } => {
                 self.cmd_create(
-                    project,
-                    security_scheme_id,
+                    security_scheme_name,
                     provider_type,
                     client_id,
                     client_secret,
@@ -56,47 +58,36 @@ impl ApiSecuritySchemeCommandHandler {
                 .await
             }
             ApiSecuritySchemeSubcommand::Get {
-                project,
-                security_scheme_id,
-            } => self.cmd_get(project, security_scheme_id).await,
+                security_scheme_name,
+            } => self.cmd_get(security_scheme_name).await,
+            ApiSecuritySchemeSubcommand::List => self.cmd_list().await,
         }
     }
 
     async fn cmd_create(
         &self,
-        project: ProjectOptionalFlagArg,
-        scheme_identifier: String,
-        provider_type: IdentityProviderType,
+        security_scheme_name: SecuritySchemeName,
+        provider_type: Provider,
         client_id: String,
         client_secret: String,
         scopes: Vec<String>,
         redirect_url: String,
     ) -> anyhow::Result<()> {
-        let project = self
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result: ApiSecurityScheme = clients
+        let result = clients
             .api_security
-            .create(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                &SecuritySchemeDataCloud {
-                    provider_type: match provider_type {
-                        IdentityProviderType::Google => ProviderCloud::Google,
-                        IdentityProviderType::Facebook => ProviderCloud::Facebook,
-                        IdentityProviderType::Gitlab => ProviderCloud::Gitlab,
-                        IdentityProviderType::Microsoft => ProviderCloud::Microsoft,
-                    },
-                    scheme_identifier,
+            .create_security_scheme(
+                &environment.environment_id.0,
+                &SecuritySchemeCreation {
+                    name: security_scheme_name,
+                    provider_type,
                     client_id,
                     client_secret,
                     redirect_url,
@@ -104,43 +95,65 @@ impl ApiSecuritySchemeCommandHandler {
                 },
             )
             .await
-            .map_service_error()?
-            .into();
+            .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&result);
+        self.ctx
+            .log_handler()
+            .log_view(&HttpSecuritySchemeCreateView(result));
 
         Ok(())
     }
 
-    async fn cmd_get(
-        &self,
-        project: ProjectOptionalFlagArg,
-        security_scheme_id: String,
-    ) -> anyhow::Result<()> {
-        let project = self
+    async fn cmd_get(&self, security_scheme_name: SecuritySchemeName) -> anyhow::Result<()> {
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result: ApiSecurityScheme = clients
+        // TODO: atomic: missing client method to get by name
+        let Some(result) = clients
             .api_security
-            .get(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                &security_scheme_id,
-            )
+            .get_environment_security_schemes(&environment.environment_id.0)
             .await
             .map_service_error()?
-            .into();
+            .values
+            .into_iter()
+            .find(|s| s.name == security_scheme_name)
+        else {
+            log_error(format!(
+                "HTTP API Security Scheme {} not found.",
+                security_scheme_name.0
+            ));
+            bail!(NonSuccessfulExit);
+        };
 
-        self.ctx.log_handler().log_view(&result);
+        self.ctx
+            .log_handler()
+            .log_view(&HttpSecuritySchemeGetView(result));
+
+        Ok(())
+    }
+
+    async fn cmd_list(&self) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let results = clients
+            .api_security
+            .get_environment_security_schemes(&environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        self.ctx.log_handler().log_view(&results);
 
         Ok(())
     }

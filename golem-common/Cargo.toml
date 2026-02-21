@@ -14,71 +14,122 @@ build = "build.rs"
 [lib]
 harness = false
 
+[features]
+default = ["full"]
+
+client = ["golem-wasm/client"]
+full = [
+    "client",
+    "golem-wasm/host",
+    "dep:golem-api-grpc",
+    "dep:golem-rib",
+    "dep:applying",
+    "dep:combine",
+    "dep:console-subscriber",
+    "dep:desert_rust",
+    "dep:figment",
+    "dep:fred",
+    "dep:heck",
+    "dep:itertools",
+    "dep:lazy_static",
+    "dep:mac_address",
+    "dep:nonempty-collections",
+    "dep:openapiv3",
+    "dep:openidconnect",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:poem",
+    "dep:poem-openapi",
+    "dep:prometheus",
+    "dep:prost-types",
+    "dep:regex",
+    "dep:scc",
+    "dep:serde_yaml",
+    "dep:similar",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:toml",
+    "dep:tonic",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+    "dep:tracing-serde",
+    "dep:wasmtime",
+    "dep:wasmtime-wasi",
+    "dep:wasmtime-wasi-http",
+    "dep:wasmparser",
+    "dep:wit-parser",
+    "dep:wasm-wave"
+]
+
 [dependencies]
-golem-api-grpc = { workspace = true }
-golem-rib = { workspace = true }
-golem-wasm = { workspace = true }
+golem-api-grpc = { workspace = true, optional = true }
+golem-rib = { workspace = true, optional = true  }
+golem-wasm = { workspace = true, default-features = false }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
+applying = { workspace = true, optional = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-combine = { workspace = true }
-console-subscriber = { workspace = true }
+combine = { workspace = true, optional = true }
+console-subscriber = { workspace = true, optional = true }
 derive_more = { workspace = true }
-desert_rust = { workspace = true }
-figment = { workspace = true }
-fred = { workspace = true }
-heck = { workspace = true }
+desert_rust = { workspace = true, optional = true }
+figment = { workspace = true, optional = true }
+fred = { workspace = true, optional = true }
+heck = { workspace = true, optional = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 ident-mash = { workspace = true }
 iso8601-timestamp = { workspace = true }
-itertools = { workspace = true }
-lazy_static = { workspace = true }
-mac_address = { workspace = true }
-nonempty-collections = { workspace = true }
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
-opentelemetry-otlp = { workspace = true }
-poem = { workspace = true }
-poem-openapi = { workspace = true }
-prometheus = { workspace = true }
-prost-types = { workspace = true }
+itertools = { workspace = true, optional = true }
+lazy_static = { workspace = true, optional = true }
+mac_address = { workspace = true, optional = true }
+nonempty-collections = { workspace = true, optional = true }
+openapiv3 = { workspace = true, optional = true }
+openidconnect = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+poem = { workspace = true, optional = true }
+poem-openapi = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
+prost-types = { workspace = true, optional = true }
 rand = { workspace = true }
 range-set-blaze = { workspace = true }
-regex = { workspace = true }
-scc = { workspace = true }
+regex = { workspace = true, optional = true }
+scc = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml = { workspace = true, optional = true }
 shadow-rs = { workspace = true }
-sqlx = { workspace = true }
+similar = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
-toml = { workspace = true }
-tokio = { workspace = true }
-tonic = { workspace = true }
-tonic-tracing-opentelemetry = { workspace = true }
-tower = { workspace = true }
+toml = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
 tracing = { workspace = true }
-tracing-opentelemetry = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing-serde = { workspace = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tracing-serde = { workspace = true, optional = true }
 typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { workspace = true }
-wasmtime-wasi = { workspace = true }
-wasmtime-wasi-http = { workspace = true }
-wasmparser = { workspace = true }
-wit-parser = { workspace = true }
-wasm-wave = { workspace = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+wasmtime-wasi-http = { workspace = true, optional = true }
+wasmparser = { workspace = true, optional = true }
+wit-parser = { workspace = true, optional = true }
+wasm-wave = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

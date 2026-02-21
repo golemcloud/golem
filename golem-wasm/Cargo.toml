@@ -42,6 +42,8 @@ wasm-wave = { workspace = true, optional = true }
 wasm-metadata = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
+wasi = { version = "=0.14.1+wasi-0.2.3", optional = true }
+wstd = { version = "=0.5.4", optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
@@ -58,6 +60,7 @@ protox = { workspace = true, optional = true }
 default = ["host", "derive"]
 
 host = [
+    "client",
     "dep:arbitrary",
     "dep:async-recursion",
     "dep:async-trait",
@@ -85,7 +88,9 @@ host = [
 
 derive = ["dep:golem-wasm-derive"]
 
-stub = ["dep:wit-bindgen-rt"]
+stub = ["dep:wit-bindgen-rt", "dep:wstd", "dep:wasi"]
+
+client = ["derive", "dep:serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
 
 [package.metadata.component]
 package = "golem:rpc"
@@ -102,6 +107,10 @@ world = "wasm-rpc"
 [package.metadata.component.bindings]
 # See https://github.com/bytecodealliance/cargo-component/blob/main/src/metadata.rs#L62
 generate_unused_types = true
+
+[package.metadata.component.bindings.with]
+"wasi:io/poll@0.2.3" = "wstd::wasi::io::poll"
+"wasi:clocks/wall-clock@0.2.3" = "wstd::wasi::clocks::wall_clock"
 
 [[test]]
 name = "exports"

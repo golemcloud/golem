@@ -12,23 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::ComponentServiceConfig;
-use crate::service::compile_service::ComponentCompilationServiceImpl;
+use self::config::GrpcApiConfig;
+use crate::config::RegistryServiceConfig;
 use config::ServerConfig;
+use futures::TryFutureExt;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::grpc::server::GrpcServerTlsConfig;
+use golem_service_base::service::compiled_component;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor::services::compiled_component;
 use grpc::CompileGrpcService;
 use prometheus::Registry;
-use service::CompilationService;
-use std::{
-    net::{Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
+use service::ComponentCompilationService;
+use std::net::SocketAddrV4;
+use std::{net::Ipv4Addr, sync::Arc};
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
@@ -101,9 +101,9 @@ pub async fn run(
     )
     .await?;
 
-    let compilation_service = ComponentCompilationServiceImpl::new(
+    let compilation_service = ComponentCompilationService::new(
         config.compile_worker,
-        config.component_service.clone(),
+        config.registry_service.clone(),
         engine,
         compiled_component,
     )
@@ -111,13 +111,10 @@ pub async fn run(
 
     let compilation_service = Arc::new(compilation_service);
 
-    let ipv4_address: Ipv4Addr = config.grpc_host.parse().expect("Invalid IP address");
-    let address = SocketAddr::new(ipv4_address.into(), config.grpc_port);
-
     let grpc_port = start_grpc_server(
-        address,
+        &config.grpc,
         compilation_service,
-        config.component_service,
+        config.registry_service,
         join_set,
     )
     .await?;
@@ -131,42 +128,44 @@ pub async fn run(
 }
 
 async fn start_grpc_server(
-    addr: SocketAddr,
-    service: Arc<dyn CompilationService + Send + Sync>,
-    component_service_config: ComponentServiceConfig,
+    config: &GrpcApiConfig,
+    service: Arc<ComponentCompilationService>,
+    registry_service_config: RegistryServiceConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
+    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.port);
     let listener = TcpListener::bind(addr).await?;
+
     let grpc_port = listener.local_addr()?.port();
 
     health_reporter
         .set_serving::<ComponentCompilationServiceServer<CompileGrpcService>>()
         .await;
 
-    join_set.spawn(
-        async move {
-            tonic::transport::Server::builder()
-                .layer(
-                    middleware::server::OtelGrpcLayer::default()
-                        .filter(filters::reject_healthcheck),
-                )
-                .add_service(health_service)
-                .add_service(
-                    ComponentCompilationServiceServer::new(CompileGrpcService::new(
-                        service,
-                        component_service_config,
-                    ))
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip),
-                )
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .await
-                .map_err(|e| anyhow!(e).context("gRPC server failed"))
-        }
-        .in_current_span(),
-    );
+    join_set.spawn({
+        let mut server = tonic::transport::Server::builder();
+
+        if let GrpcServerTlsConfig::Enabled(tls) = &config.tls {
+            server = server.tls_config(tls.to_tonic())?;
+        };
+
+        server
+            .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
+            .add_service(health_service)
+            .add_service(
+                ComponentCompilationServiceServer::new(CompileGrpcService::new(
+                    service,
+                    registry_service_config,
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip),
+            )
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span()
+    });
 
     Ok(grpc_port)
 }

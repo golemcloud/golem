@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::*;
+use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
-
-use golem_worker_executor::services::compiled_component::CompiledComponentService;
 use tokio::sync::mpsc;
 use tracing::Instrument;
-
-use crate::model::*;
 
 // Worker that uploads compiled components to the cloud.
 #[derive(Clone)]
@@ -50,17 +48,17 @@ impl UploadWorker {
     // Don't need retries because they're baked into CompiledComponentService.
     async fn upload_component(&self, compiled_component: CompiledComponent) {
         let CompiledComponent {
-            component_and_version,
+            component_and_revision,
             component,
-            project_id,
+            environment_id,
         } = compiled_component;
 
         let upload_result = self
             .compiled_component_service
             .put(
-                &project_id,
-                &component_and_version.id,
-                component_and_version.version,
+                environment_id,
+                component_and_revision.id,
+                component_and_revision.revision,
                 &component,
             )
             .await
@@ -68,15 +66,15 @@ impl UploadWorker {
 
         if let Err(ref err) = upload_result {
             tracing::warn!(
-                component_id = component_and_version.id.to_string(),
-                component_version = component_and_version.version.to_string(),
+                component_id = component_and_revision.id.to_string(),
+                component_revision = component_and_revision.revision.to_string(),
                 error = err.to_string(),
                 "Failed to upload compiled component"
             );
         } else {
             tracing::info!(
-                component_id = component_and_version.id.to_string(),
-                component_version = component_and_version.version.to_string(),
+                component_id = component_and_revision.id.to_string(),
+                component_revision = component_and_revision.revision.to_string(),
                 "Successfully uploaded compiled component"
             );
         }

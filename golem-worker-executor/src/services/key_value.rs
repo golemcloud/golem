@@ -12,61 +12,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
-use anyhow::anyhow;
-use async_trait::async_trait;
-use bytes::Bytes;
-
-use golem_common::model::ProjectId;
-
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use anyhow::anyhow;
+use async_trait::async_trait;
+use bytes::Bytes;
+use golem_common::model::environment::EnvironmentId;
+use std::sync::Arc;
 
 /// Service implementing a persistent key-value store
 #[async_trait]
 pub trait KeyValueService: Send + Sync {
     async fn delete(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<()>;
 
     async fn delete_many(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<()>;
 
     async fn exists(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<bool>;
 
     async fn get(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<Option<Vec<u8>>>;
 
-    async fn get_keys(&self, project_id: ProjectId, bucket: String) -> anyhow::Result<Vec<String>>;
+    async fn get_keys(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+    ) -> anyhow::Result<Vec<String>>;
 
     async fn get_many(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>>;
 
     async fn set(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
         outgoing_value: Vec<u8>,
@@ -74,7 +75,7 @@ pub trait KeyValueService: Send + Sync {
 
     async fn set_many(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key_values: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<()>;
@@ -95,14 +96,17 @@ impl DefaultKeyValueService {
 impl KeyValueService for DefaultKeyValueService {
     async fn delete(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<()> {
         self.key_value_storage
             .with("key_value", "delete")
             .del(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 &key,
             )
             .await
@@ -112,14 +116,17 @@ impl KeyValueService for DefaultKeyValueService {
 
     async fn delete_many(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<()> {
         self.key_value_storage
             .with("key_value", "delete_many")
             .del_many(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 keys,
             )
             .await
@@ -129,7 +136,7 @@ impl KeyValueService for DefaultKeyValueService {
 
     async fn exists(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<bool> {
@@ -137,7 +144,10 @@ impl KeyValueService for DefaultKeyValueService {
             .key_value_storage
             .with("key_value", "exists")
             .exists(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 &key,
             )
             .await
@@ -147,7 +157,7 @@ impl KeyValueService for DefaultKeyValueService {
 
     async fn get(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
     ) -> anyhow::Result<Option<Vec<u8>>> {
@@ -155,7 +165,10 @@ impl KeyValueService for DefaultKeyValueService {
             .key_value_storage
             .with_entity("key_value", "get", "custom")
             .get_raw(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 &key,
             )
             .await
@@ -164,11 +177,18 @@ impl KeyValueService for DefaultKeyValueService {
         Ok(incoming_value)
     }
 
-    async fn get_keys(&self, project_id: ProjectId, bucket: String) -> anyhow::Result<Vec<String>> {
+    async fn get_keys(
+        &self,
+        environment_id: EnvironmentId,
+        bucket: String,
+    ) -> anyhow::Result<Vec<String>> {
         let keys: Vec<String> = self
             .key_value_storage
             .with("key_value", "get_keys")
-            .keys(KeyValueStorageNamespace::UserDefined { project_id, bucket })
+            .keys(KeyValueStorageNamespace::UserDefined {
+                environment_id,
+                bucket,
+            })
             .await
             .map_err(|err| anyhow!(err))?;
         Ok(keys)
@@ -176,7 +196,7 @@ impl KeyValueService for DefaultKeyValueService {
 
     async fn get_many(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         keys: Vec<String>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
@@ -184,7 +204,10 @@ impl KeyValueService for DefaultKeyValueService {
             .key_value_storage
             .with_entity("key_value", "get_many", "custom")
             .get_many_raw(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 keys,
             )
             .await
@@ -197,7 +220,7 @@ impl KeyValueService for DefaultKeyValueService {
 
     async fn set(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key: String,
         outgoing_value: Vec<u8>,
@@ -205,7 +228,10 @@ impl KeyValueService for DefaultKeyValueService {
         self.key_value_storage
             .with_entity("key_value", "set", "custom")
             .set_raw(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 &key,
                 &outgoing_value,
             )
@@ -216,7 +242,7 @@ impl KeyValueService for DefaultKeyValueService {
 
     async fn set_many(
         &self,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
         key_values: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<()> {
@@ -227,7 +253,10 @@ impl KeyValueService for DefaultKeyValueService {
         self.key_value_storage
             .with_entity("key_value", "set_many", "custom")
             .set_many_raw(
-                KeyValueStorageNamespace::UserDefined { project_id, bucket },
+                KeyValueStorageNamespace::UserDefined {
+                    environment_id,
+                    bucket,
+                },
                 &key_values,
             )
             .await

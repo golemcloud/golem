@@ -12,20 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use assert2::check;
-use async_mutex::Mutex;
+use crate::Tracing;
+use async_lock::Mutex;
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::WorkerStatus;
+use golem_common::{agent_id, data_value, phantom_agent_id};
+use golem_test_framework::dsl::{update_counts, TestDsl};
+
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::StatusCode;
 use log::info;
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
@@ -141,80 +146,87 @@ async fn auto_update_on_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker_with(&component_id, "auto_update_on_running", vec![], env, vec![])
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
 
     let mut control = http_server.f1_control(100).await;
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:component/api.{f1}",
-                    vec![50u64.into_value_and_type()],
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "f1",
+                    data_value!(50u64),
                 )
                 .await
-                .unwrap()
         }
         .in_current_span(),
     );
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     control.resume();
     let mut control2 = http_server.f1_control(110).await;
 
     control2.await_reached().await;
-    let _ = executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
     control2.resume();
 
-    let result = fiber.await.unwrap();
+    let result = fiber.await??;
     info!("result: {result:?}");
 
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?; // awaiting a result from f3 to make sure the metadata already contains the updates
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
     // Expectation: f1 is interrupted in the middle to update the worker, so it get restarted
     // and eventually finishes with 150. The update is marked as a success.
-    check!(result[0] == Value::U64(150));
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 1);
-    check!(metadata.last_known_status.failed_updates.is_empty());
+    assert_eq!(result, data_value!(150u64));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
 }
 
 #[test]
@@ -223,46 +235,52 @@ async fn auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker(&component_id, "auto_update_on_idle")
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     info!("result: {result:?}");
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    check!(result[0] == Value::U64(0));
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 1);
+    assert_eq!(result, data_value!(0u64));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
 }
 
 #[test]
@@ -271,58 +289,54 @@ async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
 
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "failing_auto_update_on_idle",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     info!("result: {result:?}");
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -330,12 +344,11 @@ async fn failing_auto_update_on_idle(
     // Expectation: we finish executing f1 which returns with 300. Then we try updating, but the
     // updated f1 would return 150 which we detect as a divergence and fail the update. After this
     // f2's original version is executed which returns random u64.
-    check!(result[0] != Value::U64(150));
-    check!(result[0] != Value::U64(300));
-    check!(metadata.last_known_status.component_version == 0);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.len() == 1);
-    check!(metadata.last_known_status.successful_updates.is_empty());
+    assert_ne!(result, data_value!(150u64));
+    assert_ne!(result, data_value!(300u64));
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+    Ok(())
 }
 
 #[test]
@@ -344,59 +357,63 @@ async fn auto_update_on_idle_with_non_diverging_history(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
-    let worker_id = executor
-        .start_worker(
-            &component_id,
-            "auto_update_on_idle_with_non_diverging_history",
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
         )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
+    executor.log_output(&worker_id).await?;
 
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap();
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f4", data_value!())
+        .await?;
 
     info!("result: {result:?}");
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Expectation: the f3 function is not changing between the versions, so we can safely
     // update the component and call f4 which only exists in the new version.
     // the current state which is 0
-    check!(result[0] == Value::U64(11));
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 1);
+    assert_eq!(result, data_value!(11u64));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
 }
 
 #[test]
@@ -405,80 +422,81 @@ async fn failing_auto_update_on_running(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
-    let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "failing_auto_update_on_running",
-            vec![],
-            env,
-            vec![],
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
         )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
 
     let mut control = http_server.f1_control(100).await;
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:component/api.{f1}",
-                    vec![20u64.into_value_and_type()],
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "f1",
+                    data_value!(20u64),
                 )
                 .await
-                .unwrap()
         }
         .in_current_span(),
     );
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     control.resume();
     let mut control2 = http_server.f1_control(110).await;
 
     control2.await_reached().await;
-    let _ = executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
     control2.resume();
 
-    let result = fiber.await.unwrap();
+    let result = fiber.await??;
     info!("result: {result:?}");
 
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap(); // awaiting a result from f3 to make sure the metadata already contains the updates
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    executor
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?; // awaiting a result from f3 to make sure the metadata already contains the updates
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -487,11 +505,10 @@ async fn failing_auto_update_on_running(
     // and tries to get updated, but it fails because f2 was previously executed, and it is
     // diverging from the new version. The update is marked as a failure and the invocation continues
     // with the original version, resulting in 300.
-    check!(result[0] == Value::U64(300));
-    check!(metadata.last_known_status.component_version == 0);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.len() == 1);
+    assert_eq!(result, data_value!(300u64));
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+    Ok(())
 }
 
 #[test]
@@ -500,55 +517,56 @@ async fn manual_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v2").unique().store().await;
-    let worker_id = executor
-        .start_worker_with(&component_id, "manual_update_on_idle", vec![], env, vec![])
-        .await;
-    let _ = executor.log_output(&worker_id).await;
-
-    let target_version = executor
-        .update_component(&component_id, "update-test-v3")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
         )
-        .await
-        .unwrap();
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let before_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .manual_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    let before_update = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let after_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
@@ -557,11 +575,11 @@ async fn manual_update_on_idle(
     drop(executor);
     http_server.abort();
 
-    check!(before_update == after_update);
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 1);
+    assert_eq!(before_update, after_update);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    Ok(())
 }
 
 #[test]
@@ -570,56 +588,52 @@ async fn manual_update_on_idle_without_save_snapshot(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "manual_update_on_idle_without_save_snapshot",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v3")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .manual_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -627,11 +641,12 @@ async fn manual_update_on_idle_without_save_snapshot(
     // Explanation: We are trying to update v1 to v3 using snapshots, but v1 does not
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
-    check!(result == vec![Value::U64(5)]);
-    check!(metadata.last_known_status.component_version == 0);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.len() == 1);
-    check!(metadata.last_known_status.successful_updates.is_empty());
+    // f3 returns args.len() + env_vars.len(); agents get an extra GOLEM_AGENT_ID env var
+    assert_eq!(result, data_value!(6u64));
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+
+    Ok(())
 }
 
 #[test]
@@ -640,85 +655,90 @@ async fn auto_update_on_running_followed_by_manual(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
-    let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "auto_update_on_running_followed_by_manual",
-            vec![],
-            env,
-            vec![],
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
         )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version1 = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version1}");
+    let updated_component_1 = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component_1.revision
+    );
 
-    let target_version2 = executor
-        .update_component(&component_id, "update-test-v3")
-        .await;
-    info!("Updated component to version {target_version2}");
+    let updated_component_2 = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component_2.revision
+    );
 
     let executor_clone = executor.clone();
-    let worker_id_clone = worker_id.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
 
     let mut control = http_server.f1_control(100).await;
 
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await(
-                    &worker_id_clone,
-                    "golem:component/api.{f1}",
-                    vec![20u64.into_value_and_type()],
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "f1",
+                    data_value!(20u64),
                 )
                 .await
-                .unwrap()
         }
         .in_current_span(),
     );
 
     control.await_reached().await;
     executor
-        .auto_update_worker(&worker_id, target_version1)
-        .await;
+        .auto_update_worker(&worker_id, updated_component_1.revision, false)
+        .await?;
     executor
-        .manual_update_worker(&worker_id, target_version2)
-        .await;
+        .manual_update_worker(&worker_id, updated_component_2.revision, false)
+        .await?;
     control.resume();
 
     let mut control2 = http_server.f1_control(110).await;
     control2.await_reached().await;
-    let _ = executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
     control2.resume();
 
-    let result1 = fiber.await.unwrap();
+    let result1 = fiber.await??;
     info!("result1: {result1:?}");
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
     info!("result2: {result2:?}");
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -727,12 +747,12 @@ async fn auto_update_on_running_followed_by_manual(
     // and eventually finishes with 150. The update is marked as a success, but immediately
     // it gets updated again to v3 on which we can call the previously non-existent 'get'
     // function to get the same state that was generated by 'v2'.
-    check!(result1[0] == Value::U64(150));
-    check!(result2[0] == Value::U64(150));
-    check!(metadata.last_known_status.component_version == target_version2);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 2);
-    check!(metadata.last_known_status.failed_updates.is_empty());
+    assert_eq!(result1, data_value!(150u64));
+    assert_eq!(result2, data_value!(150u64));
+    assert_eq!(metadata.component_revision, updated_component_2.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
 }
 
 #[test]
@@ -741,67 +761,64 @@ async fn manual_update_on_idle_with_failing_load(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v2").unique().store().await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "manual_update_on_idle_with_failing_load",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v4")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v4_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .manual_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let result = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f3", data_value!())
+        .await?;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
 
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
-    check!(result == vec![Value::U64(5)]);
-    check!(metadata.last_known_status.component_version == 0);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.len() == 1);
-    check!(metadata.last_known_status.successful_updates.is_empty());
+    // f3 returns args.len() + env_vars.len(); agents get an extra GOLEM_AGENT_ID env var
+    assert_eq!(result, data_value!(6u64));
+    assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
+
+    Ok(())
 }
 
 #[test]
@@ -810,65 +827,56 @@ async fn manual_update_on_idle_using_v11(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor
-        .component("update-test-v2-11")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
+        .name("it:agent-update")
         .unique()
         .store()
-        .await;
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "manual_update_on_idle_using_v11",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v3-11")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
-
-    let before_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .manual_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    let before_update = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let after_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
@@ -877,11 +885,11 @@ async fn manual_update_on_idle_using_v11(
     drop(executor);
     http_server.abort();
 
-    check!(before_update == after_update);
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 1);
+    assert_eq!(before_update, after_update);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    Ok(())
 }
 
 #[test]
@@ -890,65 +898,56 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor
-        .component("update-test-v2-11")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v2_release",
+        )
+        .name("it:agent-update")
         .unique()
         .store()
-        .await;
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker_with(
-            &component_id,
-            "manual_update_on_idle_using_golem_rust_sdk",
-            vec![],
-            env,
-            vec![],
-        )
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v3-sdk")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
-
-    let before_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .manual_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await_agent(&component.id, &agent_id, "f1", data_value!(0u64))
+        .await?;
+
+    let before_update = executor
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let after_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .await?;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Explanation: we can call 'get' on the updated component that does not exist in previous
     // versions, and it returns the previous global state which has been transferred to it
@@ -957,11 +956,11 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     drop(executor);
     http_server.abort();
 
-    check!(before_update == after_update);
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.len() == 1);
+    assert_eq!(before_update, after_update);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+
+    Ok(())
 }
 
 #[test]
@@ -970,152 +969,272 @@ async fn auto_update_on_idle_to_non_existing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_worker(&component_id, "auto_update_on_idle")
-        .await;
-    let _ = executor.log_output(&worker_id).await;
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor.log_output(&worker_id).await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
 
     let result1 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
     // Now we try to update to version target_version + 1, which does not exist.
     executor
-        .auto_update_worker(&worker_id, target_version + 1)
-        .await;
+        .auto_update_worker(&worker_id, updated_component.revision.next()?, false)
+        .await?;
 
     // We expect this update to fail, and the component to remain on `target_version` and remain
     // responsible to further invocations:
 
     let result2 = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
+        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .await?;
 
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-    executor.check_oplog_is_queryable(&worker_id).await;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
-    check!(result1[0] == Value::U64(0));
-    check!(result2[0] == Value::U64(0));
-    check!(metadata.last_known_status.component_version == target_version);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.len() == 1);
-    check!(metadata.last_known_status.successful_updates.len() == 1);
+    assert_eq!(result1, data_value!(0u64));
+    assert_eq!(result2, data_value!(0u64));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 1));
+
+    Ok(())
 }
 
-/// Check that GOLEM_COMPONENT_VERSION environment variable is updated as part of a worker update
+/// Check that GOLEM_COMPONENT_REVISION environment variable is updated as part of a worker update
 #[test]
 #[tracing::instrument]
-async fn update_component_version_environment_variable(
+async fn update_component_revision_environment_variable(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("update-test-env-var").store().await;
-
-    let worker_id = executor.start_worker(&component_id, "worker-1").await;
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("revision-env-agent");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     {
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:component/api.{get-version-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await
-            .unwrap();
+            .await?;
 
-        assert_eq!(result, vec![Value::String("0".to_string())]);
+        assert_eq!(result, data_value!("0"));
     }
 
-    let target_version1 = executor
-        .update_component(&component_id, "update-test-env-var")
-        .await;
+    let updated_component_1 = executor
+        .update_component(&component.id, "it_agent_update_v1_release")
+        .await?;
 
     executor
-        .auto_update_worker(&worker_id, target_version1)
-        .await;
+        .auto_update_worker(&worker_id, updated_component_1.revision, false)
+        .await?;
 
     {
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:component/api.{get-version-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await
-            .unwrap();
+            .await?;
 
-        assert_eq!(result, vec![Value::String("0".to_string())]);
+        assert_eq!(result, data_value!("0"));
 
         // FIXME: broken as get-environment during the replay is getting cached
-        // assert_eq!(result, vec![Value::String("1".to_string())]);
+        // assert_eq!(result, data_value!("1"));
     }
 
-    // worker created on the new version sees correct component version
+    // agent created on the new version sees correct component version
     {
-        let worker2 = executor.start_worker(&component_id, "worker-2").await;
+        let agent_id_2 = phantom_agent_id!("revision-env-agent", uuid::Uuid::new_v4());
+        let _worker2 = executor
+            .start_agent(&component.id, agent_id_2.clone())
+            .await?;
 
         let result = executor
-            .invoke_and_await(
-                &worker2,
-                "golem:component/api.{get-version-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id_2,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await
-            .unwrap();
+            .await?;
 
-        assert_eq!(result, vec![Value::String("1".to_string())]);
+        assert_eq!(result, data_value!("1"));
     }
 
-    let target_version2 = executor
-        .update_component(&component_id, "update-test-env-var")
-        .await;
+    let updated_component_2 = executor
+        .update_component(&component.id, "it_agent_update_v1_release")
+        .await?;
 
     executor
-        .manual_update_worker(&worker_id, target_version2)
-        .await;
+        .manual_update_worker(&worker_id, updated_component_2.revision, false)
+        .await?;
 
     {
         let result = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:component/api.{get-version-from-env-var}",
-                vec![],
+            .invoke_and_await_agent(
+                &component.id,
+                &agent_id,
+                "get_revision_from_env_var",
+                data_value!(),
             )
-            .await
-            .unwrap();
+            .await?;
 
-        assert_eq!(result, vec![Value::String("2".to_string())]);
+        assert_eq!(result, data_value!("2"));
     }
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let mut http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "it_agent_update_v1_release",
+        )
+        .name("it:agent-update")
+        .unique()
+        .store()
+        .await?;
+    let agent_id = agent_id!("update-test");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .await?;
+    executor.log_output(&worker_id).await?;
+
+    // Invoke f1 with a blocking control point so the worker stays Running
+    let mut control = http_server.f1_control(100).await;
+    let executor_clone = executor.clone();
+    let component_id_clone = component.id;
+    let agent_id_clone = agent_id.clone();
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_id_clone,
+                    &agent_id_clone,
+                    "f1",
+                    data_value!(50u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // Wait until the worker reaches the blocking point (Running state)
+    control.await_reached().await;
+
+    // Interrupt and resume concurrently: interrupt() blocks until the worker is
+    // actually interrupted, but the worker is waiting for the HTTP response,
+    // so we must resume the HTTP server in parallel to avoid a deadlock.
+    let executor_clone2 = executor.clone();
+    let worker_id_clone2 = worker_id.clone();
+    let interrupt_fiber = spawn(async move { executor_clone2.interrupt(&worker_id_clone2).await });
+    control.resume();
+    interrupt_fiber.await??;
+
+    // The invoke should fail due to interruption
+    let _ = fiber.await?;
+
+    executor
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+
+    // Upload an updated component
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
+
+    // Request auto-update with disable_wakeup=true
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, true)
+        .await?;
+
+    // Give some time for any unintended wake-up to happen
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify the worker is still Interrupted (not woken up)
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    // The worker should still be interrupted since disable_wakeup was true
+    assert_eq!(metadata.status, WorkerStatus::Interrupted);
+    // The update should be pending, not yet applied
+    assert_eq!(update_counts(&metadata), (1, 0, 0));
+
+    Ok(())
 }

@@ -15,19 +15,21 @@
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, log_warn_action, logln, LogColorize};
-use crate::model::app::{
-    AppComponentName, BinaryComponentSource, DependencyType, HttpApiDeploymentSite,
-};
+use crate::log::{log_action, log_error, log_warn, log_warn_action, logln, LogColorize};
+use crate::model::app::{BinaryComponentSource, DependencyType};
 use crate::model::component::AppComponentType;
-use crate::model::text::fmt::{log_error, log_warn};
-use crate::model::{ComponentName, Format, NewInteractiveApp, WorkerName};
+use crate::model::format::Format;
+use crate::model::worker::WorkerName;
+use crate::model::NewInteractiveApp;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
-use golem_client::model::HttpApiDefinitionRequest;
-use golem_common::model::ComponentVersion;
-use golem_templates::model::{GuestLanguage, PackageName};
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentName;
+use golem_templates::model::GuestLanguage;
+use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, Select, Text};
@@ -40,7 +42,6 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
-use uuid::Uuid;
 
 // NOTE: in the interactive handler is it okay to _read_ context (e.g. read selected component names)
 //       but mutations of state or the app should be done in other handlers
@@ -51,16 +52,6 @@ pub struct InteractiveHandler {
 impl InteractiveHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
-    }
-
-    // NOTE: static because local server hook has limited access to state
-    pub fn confirm_auto_start_local_server(yes: bool) -> anyhow::Result<bool> {
-        confirm(
-            yes,
-            true,
-            "Do you want to use the local server for the current session?",
-            Some("Tip: you can also use the 'golem server run' command in another terminal to keep the local server running for local development!"),
-        )
     }
 
     // NOTE: static because happens during context construction
@@ -83,6 +74,55 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_deploy_by_plan(
+        &self,
+        application_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        server_formatted: &str,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            formatdoc! { "
+                The above plan will be applied to the following environment:
+                    Application Name: {}
+                    Environment Name: {}
+                    Server          : {}
+
+                Do you want to continue the deployment?",
+                application_name.0.log_color_highlight(),
+                environment_name.0.log_color_highlight(),
+                server_formatted.log_color_highlight(),
+            },
+            None,
+        )
+    }
+
+    pub fn confirm_environment_deployment_options(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            formatdoc! { "
+                To continue the current command the deployments options must be updated!
+                Do you want to apply the changes now?",
+            },
+            None,
+        )
+    }
+
+    pub fn confirm_register_missing_domain(&self, domain: &Domain) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "The following domain is not registered for the environment: {}\nDo you want to register it?",
+                domain.0.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_staging_next_step(&self) -> anyhow::Result<bool> {
+        self.confirm(true, "Continue with the next staging step?", None)
+    }
+
     pub fn confirm_auto_deploy_component(
         &self,
         component_name: &ComponentName,
@@ -90,7 +130,7 @@ impl InteractiveHandler {
         self.confirm(
             true,
             format!(
-                "Component {} was not found between deployed components, do you want to deploy it, then continue?",
+                "Component {} was not found between deployed components, do you want to deploy the application, then continue?",
                 component_name.0.log_color_highlight()
             ),
             None,
@@ -98,20 +138,6 @@ impl InteractiveHandler {
     }
 
     pub fn confirm_reset_http_api_defs(&self, rendered_steps: &[String]) -> anyhow::Result<bool> {
-        self.confirm(
-            true,
-            format!(
-                "Resetting HTTP API definitions will apply the following changes:\n{}\nDo you want to continue?",
-                rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
-            ),
-            None,
-        )
-    }
-
-    pub fn confirm_reset_http_deployments(
-        &self,
-        rendered_steps: &[String],
-    ) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!(
@@ -146,37 +172,18 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_undeploy_api_from_sites_for_redeploy(
-        &self,
-        api: &str,
-        sites: &[(HttpApiDeploymentSite, String)],
-    ) -> anyhow::Result<bool> {
-        self.confirm(
-            true,
-            format!(
-                "Redeploying will temporarily undeploy HTTP API {} from the following site(s):\n{}\nDo you want to continue?",
-                api.log_color_highlight(),
-                sites
-                    .iter()
-                    .map(|target| format!("- {}, used API version: {}", target.0.to_string().log_color_highlight(), target.1.log_color_highlight()))
-                    .join("\n"),
-            ),
-            None,
-        )
-    }
-
-    pub fn confirm_update_to_latest(
+    pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
         worker_name: &WorkerName,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Agent {}/{} will be updated to the latest component version: {}. Do you want to continue?",
+            format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
-                    target_version.to_string().log_color_highlight()
+                    target_revision.to_string().log_color_highlight()
             ),
             None,
         )
@@ -188,7 +195,7 @@ impl InteractiveHandler {
             format!(
                 "Are you sure you want to delete the requested account? ({}, {})",
                 account.name.log_color_highlight(),
-                account.email.log_color_highlight()
+                account.email.0.log_color_highlight()
             ),
             None,
         )
@@ -196,7 +203,7 @@ impl InteractiveHandler {
 
     pub fn confirm_plugin_installation_changes(
         &self,
-        component: &AppComponentName,
+        component: &ComponentName,
         rendered_steps: &[String],
     ) -> anyhow::Result<bool> {
         self.confirm(
@@ -252,16 +259,10 @@ impl InteractiveHandler {
             })
             .prompt()?;
 
-        let component_service_url = CustomType::<Url>::new("Component service URL:").prompt()?;
+        let registry_service_url = CustomType::<Url>::new("Registry service URL:").prompt()?;
 
         let worker_service_url = CustomType::<OptionalUrl>::new(
             "Worker service URL (empty to use component service url):",
-        )
-        .prompt()?
-        .0;
-
-        let cloud_service_url = CustomType::<OptionalUrl>::new(
-            "Cloud service URL (empty to use component service url)",
         )
         .prompt()?
         .0;
@@ -284,8 +285,7 @@ impl InteractiveHandler {
         };
 
         let profile = Profile {
-            custom_url: Some(component_service_url),
-            custom_cloud_url: cloud_service_url,
+            custom_url: Some(registry_service_url),
             custom_worker_url: worker_service_url,
             allow_insecure: false,
             config: ProfileConfig { default_format },
@@ -297,6 +297,26 @@ impl InteractiveHandler {
             .prompt()?;
 
         Ok((profile_name.into(), profile, set_as_active))
+    }
+
+    pub fn select_repl_language(
+        &self,
+        used_languages: &HashSet<GuestLanguage>,
+    ) -> anyhow::Result<GuestLanguage> {
+        Ok(Select::new(
+            "Select REPL language:",
+            used_languages
+                .iter()
+                .cloned()
+                .sorted()
+                .chain(
+                    GuestLanguage::iter()
+                        .filter(|lang| !used_languages.contains(lang))
+                        .sorted(),
+                )
+                .collect::<Vec<_>>(),
+        )
+        .prompt()?)
     }
 
     pub fn select_component_for_repl(
@@ -312,19 +332,19 @@ impl InteractiveHandler {
 
     pub async fn create_component_dependency(
         &self,
-        component_name: Option<AppComponentName>,
-        target_component_name: Option<AppComponentName>,
+        component_name: Option<ComponentName>,
+        target_component_name: Option<ComponentName>,
         target_component_file: Option<PathBuf>,
         target_component_url: Option<Url>,
         dependency_type: Option<DependencyType>,
-    ) -> anyhow::Result<Option<(AppComponentName, BinaryComponentSource, DependencyType)>> {
+    ) -> anyhow::Result<Option<(ComponentName, BinaryComponentSource, DependencyType)>> {
         let component_type_by_name =
-            async |component_name: &AppComponentName| -> anyhow::Result<AppComponentType> {
+            async |component_name: &ComponentName| -> anyhow::Result<AppComponentType> {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
                 Ok(app_ctx
-                    .application
-                    .component_properties(component_name, self.ctx.build_profile())
+                    .application()
+                    .component(component_name)
                     .component_type())
             };
 
@@ -350,7 +370,7 @@ impl InteractiveHandler {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
             app_ctx
-                .application
+                .application()
                 .component_names()
                 .cloned()
                 .collect::<Vec<_>>()
@@ -498,14 +518,14 @@ impl InteractiveHandler {
                     let app_ctx = self.ctx.app_context_lock().await;
                     let app_ctx = app_ctx.some_or_err()?;
                     app_ctx
-                        .application
+                        .application()
                         .component_names()
                         .filter(|component_name| {
                             validate_component_type_for_dependency_type(
                                 dependency_type,
                                 app_ctx
-                                    .application
-                                    .component_properties(component_name, self.ctx.build_profile())
+                                    .application()
+                                    .component(component_name)
                                     .component_type(),
                             )
                         })
@@ -542,38 +562,6 @@ impl InteractiveHandler {
         )))
     }
 
-    pub fn select_new_api_definition_version(
-        &self,
-        api_definition: &HttpApiDefinitionRequest,
-    ) -> anyhow::Result<Option<String>> {
-        Text::new("Please specify a new API definition version:")
-            .with_initial_value(&api_definition.version)
-            .with_validator({
-                let current_version = api_definition.version.clone();
-                move |value: &str| {
-                    if value == current_version {
-                        return Ok(Validation::Invalid(ErrorMessage::Custom(
-                            "Please select a new version!".to_string(),
-                        )));
-                    }
-                    if value.contains(char::is_whitespace) {
-                        return Ok(Validation::Invalid(ErrorMessage::Custom(
-                            "Please specify a version without whitespaces!".to_string(),
-                        )));
-                    }
-                    if value.is_empty() {
-                        return Ok(Validation::Invalid(ErrorMessage::Custom(
-                            "Please specify a non-empty version!".to_string(),
-                        )));
-                    }
-
-                    Ok(Validation::Valid)
-                }
-            })
-            .prompt()
-            .none_if_not_interactive_logged()
-    }
-
     pub fn select_new_app_name_and_components(&self) -> anyhow::Result<Option<NewInteractiveApp>> {
         let Some(app_name) = Text::new("Application name:")
             .with_validator(|value: &str| {
@@ -582,6 +570,11 @@ impl InteractiveHandler {
                         "The specified application name already exists as a directory!".to_string(),
                     )));
                 }
+
+                if let Err(error) = ApplicationName::from_str(value) {
+                    return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
+                }
+
                 Ok(Validation::Valid)
             })
             .prompt()
@@ -589,9 +582,10 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
+        let app_name = ApplicationName(app_name);
 
         let mut existing_component_names = HashSet::<String>::new();
-        let mut templated_component_names = Vec::<(String, PackageName)>::new();
+        let mut templated_component_names = Vec::<(String, ComponentName)>::new();
 
         loop {
             let Some(templated_component_name) = self
@@ -612,8 +606,7 @@ impl InteractiveHandler {
 
             match choice {
                 AddComponentOrCreateApp::AddComponent => {
-                    existing_component_names
-                        .insert(templated_component_name.1.to_string_with_colon());
+                    existing_component_names.insert(templated_component_name.1 .0.clone());
                     templated_component_names.push(templated_component_name);
                     continue;
                 }
@@ -633,7 +626,7 @@ impl InteractiveHandler {
     pub fn select_new_component_template_and_package_name(
         &self,
         existing_component_names: HashSet<String>,
-    ) -> anyhow::Result<Option<(String, PackageName)>> {
+    ) -> anyhow::Result<Option<(String, ComponentName)>> {
         let available_languages = self
             .ctx
             .templates(self.ctx.dev_mode())
@@ -688,7 +681,7 @@ impl InteractiveHandler {
                     )));
                 }
 
-                if let Err(error) = PackageName::from_str(value) {
+                if let Err(error) = ComponentName::from_str(value) {
                     return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
                 }
 
@@ -700,10 +693,11 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
+        let component_name = ComponentName(component_name);
 
         Ok(Some((
             format!("{}/{}", language.id(), template.template_name),
-            PackageName::from_str(&component_name).unwrap(),
+            component_name,
         )))
     }
 
@@ -741,7 +735,7 @@ impl FromStr for OptionalUrl {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct OptionalAuthSecret(Option<AuthSecret>);
 
 impl Display for OptionalAuthSecret {
@@ -760,7 +754,7 @@ impl FromStr for OptionalAuthSecret {
         if s.trim().is_empty() {
             Ok(Self(None))
         } else {
-            Ok(Self(Some(AuthSecret(Uuid::from_str(s)?))))
+            Ok(Self(Some(AuthSecret(s.to_string()))))
         }
     }
 }
@@ -838,8 +832,9 @@ fn confirm<M: AsRef<str>>(
         Ok(result) => Ok(result),
         Err(error) => {
             if is_interactive_not_available_inquire_error(&error) {
+                logln("\n\n");
                 log_warn(
-                    "The current input device is not an interactive one,\ndefaulting to \"false\"",
+                    "The current input device is not an interactive one, defaulting to \"false\"",
                 );
                 Ok(false)
             } else {

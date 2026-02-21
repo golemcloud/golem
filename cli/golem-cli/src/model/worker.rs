@@ -12,11 +12,235 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::shared_args::StreamArgs;
 use crate::fuzzy::{Error, FuzzySearch, Match};
-use crate::model::component::show_exported_functions;
-
+use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
+};
+use clap::ValueEnum;
+use clap_verbosity_flag::Verbosity;
+use colored::control::SHOULD_COLORIZE;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::trim_date::TrimDateTime;
+use golem_common::model::worker::UpdateRecord;
+use golem_common::model::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use golem_wasm::analysis::AnalysedExport;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
+use serde_derive::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct WorkerName(pub String);
+
+impl From<&str> for WorkerName {
+    fn from(name: &str) -> Self {
+        WorkerName(name.to_string())
+    }
+}
+
+impl From<String> for WorkerName {
+    fn from(name: String) -> Self {
+        WorkerName(name)
+    }
+}
+
+impl Display for WorkerName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum AgentUpdateMode {
+    Automatic,
+    Manual,
+}
+
+impl Display for AgentUpdateMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentUpdateMode::Automatic => {
+                write!(f, "auto")
+            }
+            AgentUpdateMode::Manual => {
+                write!(f, "manual")
+            }
+        }
+    }
+}
+
+impl FromStr for AgentUpdateMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(AgentUpdateMode::Automatic),
+            "manual" => Ok(AgentUpdateMode::Manual),
+            _ => Err(format!(
+                "Unknown agent update mode: {s}. Expected one of \"auto\", \"manual\""
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerMetadataView {
+    pub component_name: ComponentName,
+    pub worker_name: WorkerName,
+    pub created_by: AccountId,
+    pub environment_id: EnvironmentId,
+    pub env: HashMap<String, String>,
+    pub status: WorkerStatus,
+    pub component_revision: ComponentRevision,
+    pub retry_count: u32,
+
+    pub pending_invocation_count: u64,
+    pub updates: Vec<UpdateRecord>,
+    pub created_at: Timestamp,
+    pub last_error: Option<String>,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
+}
+
+impl TrimDateTime for WorkerMetadataView {
+    fn trim_date_time_ms(self) -> Self {
+        self
+    }
+}
+
+impl From<WorkerMetadata> for WorkerMetadataView {
+    fn from(value: WorkerMetadata) -> Self {
+        WorkerMetadataView {
+            component_name: value.component_name,
+            worker_name: value.worker_id.worker_name.into(),
+            created_by: value.created_by,
+            environment_id: value.environment_id,
+            env: value.env,
+            status: value.status,
+            component_revision: value.component_revision,
+            retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value.updates,
+            created_at: value.created_at,
+            last_error: value.last_error,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
+            exported_resource_instances: value.exported_resource_instances,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkerMetadata {
+    pub worker_id: WorkerId,
+    pub component_name: ComponentName,
+    pub environment_id: EnvironmentId,
+    pub created_by: AccountId,
+    pub env: HashMap<String, String>,
+    pub status: WorkerStatus,
+    pub component_revision: ComponentRevision,
+    pub retry_count: u32,
+    pub pending_invocation_count: u64,
+    pub updates: Vec<UpdateRecord>,
+    pub created_at: Timestamp,
+    pub last_error: Option<String>,
+    pub component_size: u64,
+    pub total_linear_memory_size: u64,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
+}
+
+impl WorkerMetadata {
+    pub fn from(
+        component_name: ComponentName,
+        value: golem_client::model::WorkerMetadataDto,
+    ) -> Self {
+        WorkerMetadata {
+            worker_id: value.worker_id,
+            component_name,
+            created_by: value.created_by,
+            environment_id: value.environment_id,
+            env: value.env,
+            status: value.status,
+            component_revision: value.component_revision,
+            retry_count: value.retry_count,
+            pending_invocation_count: value.pending_invocation_count,
+            updates: value.updates,
+            created_at: value.created_at,
+            last_error: value.last_error,
+            component_size: value.component_size,
+            total_linear_memory_size: value.total_linear_memory_size,
+            exported_resource_instances: HashMap::from_iter(
+                value
+                    .exported_resource_instances
+                    .into_iter()
+                    .map(|desc| (desc.key.to_string(), desc.description)),
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkersMetadataResponseView {
+    pub workers: Vec<WorkerMetadataView>,
+    pub cursors: BTreeMap<String, String>,
+}
+
+impl TrimDateTime for WorkersMetadataResponseView {
+    fn trim_date_time_ms(self) -> Self {
+        Self {
+            workers: self.workers.trim_date_time_ms(),
+            ..self
+        }
+    }
+}
+
+pub trait HasVerbosity {
+    fn verbosity(&self) -> Verbosity;
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentLogStreamOptions {
+    pub colors: bool,
+    pub show_timestamp: bool,
+    pub show_level: bool,
+    /// Only show entries coming from the agent, no output about invocation markers and stream status
+    pub logs_only: bool,
+}
+
+impl From<StreamArgs> for AgentLogStreamOptions {
+    fn from(args: StreamArgs) -> Self {
+        AgentLogStreamOptions {
+            colors: SHOULD_COLORIZE.should_colorize(),
+            show_timestamp: !args.stream_no_timestamp,
+            show_level: !args.stream_no_log_level,
+            logs_only: args.logs_only,
+        }
+    }
+}
+
+pub struct WorkerNameMatch {
+    pub environment: ResolvedEnvironmentIdentity,
+    pub component_name_match_kind: ComponentNameMatchKind,
+    pub component_name: ComponentName,
+    pub worker_name: WorkerName,
+}
+
+impl WorkerNameMatch {
+    pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
+        match &self.environment.source {
+            ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),
+            ResolvedEnvironmentIdentitySource::DefaultFromManifest => None,
+        }
+    }
+}
 
 pub fn fuzzy_match_function_name(
     provided_function_name: &str,

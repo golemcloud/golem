@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use fred::prelude::{Key, Value};
@@ -34,15 +36,27 @@ impl RedisIndexedStorage {
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog => format!("worker:oplog:{key}"),
-            IndexedStorageNamespace::CompressedOpLog { level } => {
+            IndexedStorageNamespace::OpLog { worker_id: _ } => format!("worker:oplog:{key}"),
+            IndexedStorageNamespace::CompressedOpLog {
+                worker_id: _,
+                level,
+            } => {
                 format!("worker:c{level}-oplog:{key}")
             }
         }
     }
 
-    fn parse_composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
-        let prefix = Self::composite_key(namespace, "");
+    fn composite_meta_key(namespace: IndexedStorageMetaNamespace, key: &str) -> String {
+        match namespace {
+            IndexedStorageMetaNamespace::Oplog => format!("worker:oplog:{key}"),
+            IndexedStorageMetaNamespace::CompressedOplog { level } => {
+                format!("worker:c{level}-oplog:{key}")
+            }
+        }
+    }
+
+    fn parse_composite_meta_key(namespace: IndexedStorageMetaNamespace, key: &str) -> String {
+        let prefix = Self::composite_meta_key(namespace, "");
         if key.starts_with(&prefix) {
             key[prefix.len()..].to_string()
         } else {
@@ -131,7 +145,7 @@ impl IndexedStorage for RedisIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: IndexedStorageMetaNamespace,
         pattern: &str,
         cursor: ScanCursor,
         count: u64,
@@ -140,7 +154,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .redis
             .with(svc_name, api_name)
             .scan(
-                Self::composite_key(namespace.clone(), pattern),
+                Self::composite_meta_key(namespace.clone(), pattern),
                 cursor,
                 count,
             )
@@ -148,7 +162,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .map_err(|e| e.to_string())?;
         let keys = keys
             .into_iter()
-            .map(|k| Self::parse_composite_key(namespace.clone(), &k))
+            .map(|k| Self::parse_composite_meta_key(namespace.clone(), &k))
             .collect();
         Ok((cursor, keys))
     }

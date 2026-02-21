@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::net::TcpStream;
+use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Utf8Payload;
 use tokio_tungstenite::tungstenite::Message;
@@ -23,6 +24,7 @@ pub struct DebugWorkerExecutorClient {
     write_msg: DebugWrite,
     read_msg: DebugRead,
     read_messages: Vec<UntypedJrpcMessage>,
+    join_set: Option<JoinSet<anyhow::Result<()>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -125,7 +127,10 @@ impl DebugWorkerExecutorClient {
         {
             let headers = connection_request.headers_mut();
 
-            headers.insert("Authorization", format!("Bearer {}", token.value).parse()?);
+            headers.insert(
+                "Authorization",
+                format!("Bearer {}", token.secret()).parse()?,
+            );
         }
 
         // Connect to the WebSocket server
@@ -140,6 +145,7 @@ impl DebugWorkerExecutorClient {
             write_msg: write,
             read_msg: read,
             read_messages: Vec::new(),
+            join_set: None,
         })
     }
 
@@ -153,5 +159,9 @@ impl DebugWorkerExecutorClient {
 
     pub fn all_read_messages(&self) -> Vec<UntypedJrpcMessage> {
         self.read_messages.clone()
+    }
+
+    pub fn set_worker_executor_join_set(&mut self, join_set: JoinSet<anyhow::Result<()>>) {
+        let _ = self.join_set.insert(join_set);
     }
 }

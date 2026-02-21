@@ -12,448 +12,300 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::{is_grpc_retriable, GrpcError};
 use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
-use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
-use golem_api_grpc::proto::golem::limit::v1::{
-    batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
-    BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
-};
-use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::AccountId;
-use golem_common::model::RetryConfig;
-use golem_common::retries::with_retries;
+use golem_common::model::account::AccountId;
+use golem_common::SafeDisplay;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use http::Uri;
-use prost::Message;
-use std::cmp::{max, min};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
-use tonic::codec::CompressionEncoding;
-use tonic::Request;
+use tokio::sync::OnceCell;
+use tracing::debug;
 use tracing::{error, span, Instrument, Level};
-use uuid::Uuid;
+
+#[derive(Debug)]
+pub struct AtomicResourceEntry {
+    // Current (cached) value of the account level fuel limits
+    fuel: AtomicU64,
+    // any local fuel consumption that was not yet sent to the server
+    delta: AtomicI64,
+    // any fuel consumption that is currently in flight to the server
+    in_flight_delta: AtomicI64,
+    // Current (cached) value of the account level worker memory limits
+    max_memory: AtomicUsize,
+    // TODO: store a last_update timestamp here and fetch the server side values (by including a 0 update) after a certain interval.
+    // The reason is that we want to see plan changes / bucket resets even when no work is being performed for that account on this instance right now.
+    // Otherwise the first few attempts to start a worker might fail as we are using outdated values.
+}
+
+impl AtomicResourceEntry {
+    fn new(fuel: u64, max_memory: usize) -> Self {
+        Self {
+            fuel: AtomicU64::new(fuel),
+            delta: AtomicI64::new(0),
+            in_flight_delta: AtomicI64::new(0),
+            max_memory: AtomicUsize::new(max_memory),
+        }
+    }
+
+    fn effective_fuel(&self) -> u64 {
+        let fuel = self.fuel.load(Ordering::Acquire);
+        let delta = self.delta.load(Ordering::Acquire);
+        let in_flight = self.in_flight_delta.load(Ordering::Acquire);
+
+        // compute sum as i128 to avoid overflow
+        let sum = fuel as i128 + delta as i128 + in_flight as i128;
+
+        sum.max(0).min(u64::MAX as i128) as u64
+    }
+
+    pub fn borrow_fuel(&self, amount: u64) -> bool {
+        let available = self.effective_fuel();
+
+        if amount == 0 {
+            return true;
+        };
+
+        if amount <= available {
+            let amt_i64 = amount.min(i64::MAX as u64) as i64;
+            self.delta
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                    Some(d.saturating_add(amt_i64))
+                })
+                .ok();
+            record_fuel_borrow(amount);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn return_fuel(&self, amount: u64) {
+        let amt_i64 = amount.min(i64::MAX as u64) as i64;
+        self.delta
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                Some(d.saturating_sub(amt_i64))
+            })
+            .ok();
+        record_fuel_return(amount);
+    }
+
+    pub fn max_memory_limit(&self) -> usize {
+        self.max_memory.load(Ordering::Acquire)
+    }
+}
 
 #[async_trait]
 pub trait ResourceLimits: Send + Sync {
-    /// Tries to borrow fuel for a worker for the given account. Returns the maximum amount of
-    /// fuel the worker can consume at once.
-    /// If the worker runs out of fuel, it can try borrowing more fuel with the same function.
-    /// If the worker finishes running it can give back the remaining fuel with `return_fuel`.
-    async fn borrow_fuel(
+    // Get a handle to the shared resource limits entry for the account. This might be updated in the background
+    // as fuel usage is reported to registry service
+    async fn initialize_account(
         &self,
-        account_id: &AccountId,
-        amount: i64,
-    ) -> Result<i64, WorkerExecutorError>;
-
-    /// Sync version of `borrow_fuel` to be used from the epoch callback.
-    /// This only works if the ResourceLimits implementation is already has a cached resource limit
-    /// for the given account, but this can be guaranteed by always calling `borrow_fuel` first.
-    fn borrow_fuel_sync(&self, account_id: &AccountId, amount: i64) -> Option<i64>;
-
-    /// Returns some unused fuel for a given user
-    async fn return_fuel(
-        &self,
-        account_id: &AccountId,
-        remaining: i64,
-    ) -> Result<(), WorkerExecutorError>;
-
-    /// Updates the last known resource limits for a given account
-    ///
-    /// This can be originating from the cloud services explicitly sending it embed into a request,
-    /// or as a result of the periodic background sync.
-    async fn update_last_known_limits(
-        &self,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError>;
-
-    async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, WorkerExecutorError>;
+        account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError>;
 }
 
-#[derive(Debug, Clone)]
-pub struct CurrentResourceLimitsEntry {
-    limits: CurrentResourceLimits,
-    delta: i64,
+pub fn configured(
+    config: &ResourceLimitsConfig,
+    registry_service: Arc<dyn RegistryService>,
+) -> Arc<dyn ResourceLimits> {
+    match config {
+        ResourceLimitsConfig::Grpc(config) => {
+            ResourceLimitsGrpc::new(registry_service, config.batch_update_interval)
+        }
+        ResourceLimitsConfig::Disabled(_) => Arc::new(ResourceLimitsDisabled),
+    }
 }
 
-/// The default ResourceLimits implementation
-/// - can query the Cloud Services for information about the account's available resources
-/// - caches this information for a given amount of time
-/// - periodically sends batched patches to the Cloud Services to update the account's resources as
+// Note:
+// this is biased towards allowing borrows when it doubt, but might allow slight overborrowing temporarily.
+// Internally we store deltas as i64 for simplicitly. If more fuel is consumed / returned within one update time slice
+// than the i64 limits, those updates will be lost.
 pub struct ResourceLimitsGrpc {
-    endpoint: Uri,
-    access_token: Uuid,
-    retry_config: RetryConfig,
-    current_limits: scc::HashMap<AccountId, CurrentResourceLimitsEntry>,
-    background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    client: Arc<dyn RegistryService>,
+    entries: scc::HashMap<AccountId, Arc<OnceCell<Arc<AtomicResourceEntry>>>>,
 }
 
 impl ResourceLimitsGrpc {
-    async fn send_batch_updates(
-        &self,
-        updates: HashMap<AccountId, i64>,
-    ) -> Result<(), WorkerExecutorError> {
-        let body = BatchUpdateResourceLimits {
-            updates: updates.into_iter().map(|(k, v)| (k.value, v)).collect(),
-        };
-        with_retries(
-            "resource_limits",
-            "batch_update",
-            None,
-            &self.retry_config,
-            &(self.endpoint.clone(), self.access_token, body),
-            |(endpoint, access_token, body)| {
-                Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(endpoint.clone())
-                        .await?
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip);
-                    let request = authorised_request(
-                        BatchUpdateResourceLimitsRequest {
-                            resource_limits: Some(body.clone()),
-                        },
-                        access_token,
-                    );
-                    let response = client
-                        .batch_update_resource_limits(request)
-                        .await?
-                        .into_inner();
-
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(batch_update_resource_limits_response::Result::Success(_)) => Ok(()),
-                        Some(batch_update_resource_limits_response::Result::Error(error)) => {
-                            Err(GrpcError::Domain(error))
-                        }
-                    }?;
-
-                    Ok(())
-                })
-            },
-            is_grpc_retriable,
-        )
-        .await
-        .map_err(|_| WorkerExecutorError::InvalidAccount) // TODO: provide more info in the error result?
-    }
-
-    async fn fetch_resource_limits(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<CurrentResourceLimits, WorkerExecutorError> {
-        with_retries(
-            "resource_limits",
-            "fetch",
-            Some(format!("{account_id}")),
-            &self.retry_config,
-            &(self.endpoint.clone(), self.access_token, account_id.clone()),
-            |(url, access_token, account_id)| {
-                Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(url.clone())
-                        .await?
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip);
-                    let request = authorised_request(
-                        GetResourceLimitsRequest {
-                            account_id: Some(account_id.clone().into()),
-                        },
-                        access_token,
-                    );
-                    let response = client.get_resource_limits(request).await?.into_inner();
-
-                    let len = response.encoded_len();
-                    let limits = match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_resource_limits_response::Result::Success(limits)) => Ok(limits),
-                        Some(get_resource_limits_response::Result::Error(error)) => {
-                            Err(GrpcError::Domain(error))
-                        }
-                    }?;
-                    record_external_call_response_size_bytes("resource_limits", "fetch", len);
-
-                    Ok(limits.into())
-                })
-            },
-            is_grpc_retriable,
-        )
-        .await
-        .map_err(|_| WorkerExecutorError::InvalidAccount) // TODO: provide more info in the error result?
-    }
-
-    /// Takes all recorded fuel updates and resets them to 0
-    async fn take_all_fuel_updates(&self) -> HashMap<AccountId, i64> {
-        let mut updates = HashMap::new();
-        self.current_limits
-            .iter_mut_async(|mut entry| {
-                if entry.1.delta != 0 {
-                    updates.insert(entry.0.clone(), entry.1.delta);
-                    entry.1.delta = 0;
-                }
-                true
-            })
-            .await;
-
-        updates
-    }
-
-    pub async fn new(
-        endpoint: Uri,
-        access_token: Uuid,
-        retry_config: RetryConfig,
+    pub fn new(
+        registry_service: Arc<dyn RegistryService>,
         batch_update_interval: Duration,
     ) -> Arc<Self> {
         let svc = Self {
-            endpoint,
-            access_token,
-            retry_config,
-            current_limits: scc::HashMap::new(),
-            background_handle: Arc::new(Mutex::new(None)),
+            client: registry_service,
+            entries: scc::HashMap::new(),
         };
         let svc = Arc::new(svc);
-        let svc_clone = svc.clone();
-        let background_handle = tokio::spawn(
+        let svc_weak = Arc::downgrade(&svc);
+
+        // Background task for batch updates
+        tokio::spawn(
             async move {
+                let mut tick = tokio::time::interval(batch_update_interval);
                 loop {
-                    tokio::time::sleep(batch_update_interval).await;
-                    let updates = svc_clone.take_all_fuel_updates().await;
-                    if !updates.is_empty() {
-                        let r = svc_clone.send_batch_updates(updates.clone()).await;
-                        if let Err(err) = r {
-                            error!("Failed to send batched resource usage updates: {}", err);
-                            error!(
-                                "The following fuel consumption records were lost: {:?}",
-                                updates
-                            );
+                    tick.tick().await;
+
+                    let svc_arc = match svc_weak.upgrade() {
+                        Some(s) => s,
+                        None => {
+                            // service itself was dropped, we can exit
+                            break;
                         }
+                    };
+
+                    let updates = svc_arc.take_fuel_updates().await;
+                    if !updates.is_empty() {
+                        svc_arc.send_batch_updates(updates.clone()).await
                     }
                 }
             }
             .instrument(span!(parent: None, Level::INFO, "Resource limits batch updates")),
         );
-        *svc.background_handle.lock().unwrap() = Some(background_handle);
+
         svc
     }
-}
 
-impl Drop for ResourceLimitsGrpc {
-    fn drop(&mut self) {
-        if let Some(handle) = self.background_handle.lock().unwrap().take() {
-            handle.abort();
+    async fn fetch_resource_limits(
+        &self,
+        account_id: AccountId,
+    ) -> Result<golem_service_base::model::ResourceLimits, WorkerExecutorError> {
+        debug!("Fetching resource limits for account {account_id}");
+
+        let last_known_limits = self
+            .client
+            .get_resource_limits(account_id)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed fetching resource limits: {}",
+                    e.to_safe_string()
+                ))
+            })?;
+
+        Ok(last_known_limits)
+    }
+
+    async fn take_fuel_updates(&self) -> HashMap<AccountId, i64> {
+        let mut updates = HashMap::new();
+
+        let mut keys = Vec::new();
+        self.entries
+            .iter_async(|k, _| {
+                keys.push(*k);
+                true
+            })
+            .await;
+
+        for k in keys {
+            if let Some(cell) = self.entries.read_async(&k, |_, e| e.clone()).await {
+                if let Some(entry) = cell.get() {
+                    let delta = entry.delta.swap(0, Ordering::AcqRel);
+                    if delta != 0 {
+                        entry
+                            .in_flight_delta
+                            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                                Some(d.saturating_add(delta))
+                            })
+                            .ok();
+                        updates.insert(k, delta);
+                    }
+                }
+            }
+        }
+
+        updates
+    }
+
+    async fn update_last_known_limits(
+        &self,
+        account_id: AccountId,
+        updated_limits: golem_service_base::model::ResourceLimits,
+    ) {
+        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await {
+            if let Some(entry) = cell.get() {
+                entry.in_flight_delta.store(0, Ordering::Release);
+                entry
+                    .fuel
+                    .store(updated_limits.available_fuel, Ordering::Release);
+                entry.max_memory.store(
+                    updated_limits.max_memory_per_worker as usize,
+                    Ordering::Release,
+                );
+            }
+        }
+    }
+
+    async fn reset_in_flight_delta(&self, account_id: AccountId) {
+        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await {
+            if let Some(entry) = cell.get() {
+                entry.in_flight_delta.swap(0, Ordering::AcqRel);
+            }
+        }
+    }
+
+    async fn send_batch_updates(&self, updates: HashMap<AccountId, i64>) {
+        tracing::debug!("Sending batch fuel updates");
+
+        let update_limits_result = self.client.batch_update_fuel_usage(updates.clone()).await;
+
+        match update_limits_result {
+            Ok(updated_limits) => {
+                for (account_id, resource_limits) in updated_limits.0 {
+                    self.update_last_known_limits(account_id, resource_limits)
+                        .await;
+                }
+            }
+            Err(err) => {
+                error!("Failed to send batched resource usage updates: {}", err);
+                error!("Lost fuel updates: {:?}", updates);
+                for account_id in updates.keys() {
+                    self.reset_in_flight_delta(*account_id).await;
+                }
+            }
         }
     }
 }
 
 #[async_trait]
 impl ResourceLimits for ResourceLimitsGrpc {
-    async fn borrow_fuel(
+    async fn initialize_account(
         &self,
-        account_id: &AccountId,
-        amount: i64,
-    ) -> Result<i64, WorkerExecutorError> {
-        loop {
-            let borrowed = self.borrow_fuel_sync(account_id, amount);
-
-            match borrowed {
-                Some(fuel) => {
-                    record_fuel_borrow(fuel);
-                    break Ok(fuel);
-                }
-                None => {
-                    let fetched_limits = self.fetch_resource_limits(account_id).await?;
-                    self.update_last_known_limits(account_id, &fetched_limits)
-                        .await?;
-                    continue;
-                }
-            }
-        }
-    }
-
-    fn borrow_fuel_sync(&self, account_id: &AccountId, amount: i64) -> Option<i64> {
-        let mut borrowed = None;
-        self.current_limits.update_sync(account_id, |_, entry| {
-            let available = max(0, min(amount, entry.limits.fuel));
-            borrowed = Some(available);
-            record_fuel_borrow(available);
-            entry.limits.fuel -= available;
-            entry.delta -= available;
-        });
-
-        borrowed
-    }
-
-    async fn return_fuel(
-        &self,
-        account_id: &AccountId,
-        remaining: i64,
-    ) -> Result<(), WorkerExecutorError> {
-        self.current_limits.update_sync(account_id, |_, entry| {
-            record_fuel_return(remaining);
-            entry.limits.fuel += remaining;
-            entry.delta += remaining;
-        });
-        Ok(())
-    }
-
-    async fn update_last_known_limits(
-        &self,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        self.current_limits
-            .entry_async(account_id.clone())
+        account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        let cell = self
+            .entries
+            .entry_async(account_id)
             .await
-            .and_modify(|entry| {
-                entry.limits.fuel = last_known_limits.fuel + entry.delta;
-                entry.limits.max_memory = last_known_limits.max_memory;
+            .or_insert_with(|| Arc::new(OnceCell::new()));
+
+        let entry = cell
+            .get_or_try_init(|| async {
+                let fetched = self.fetch_resource_limits(account_id).await?;
+                Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
+                    AtomicResourceEntry::new(
+                        fetched.available_fuel,
+                        fetched.max_memory_per_worker as usize,
+                    ),
+                ))
             })
-            .or_insert(CurrentResourceLimitsEntry {
-                limits: last_known_limits.clone(),
-                delta: 0,
-            });
-        Ok(())
-    }
+            .await?;
 
-    async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
-        loop {
-            match self
-                .current_limits
-                .read_async(account_id, |_, entry| entry.limits.max_memory)
-                .await
-            {
-                Some(max_memory) => break Ok(max_memory),
-                None => {
-                    self.fetch_resource_limits(account_id).await?;
-                    continue;
-                }
-            }
-        }
+        Ok(entry.clone())
     }
 }
 
-fn authorised_request<T>(request: T, access_token: &Uuid) -> Request<T> {
-    let mut req = Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {access_token}").parse().unwrap(),
-    );
-    req
-}
-
-struct ResourceLimitsDisabled;
-
-impl ResourceLimitsDisabled {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {})
-    }
-}
+pub struct ResourceLimitsDisabled;
 
 #[async_trait]
 impl ResourceLimits for ResourceLimitsDisabled {
-    async fn borrow_fuel(
+    async fn initialize_account(
         &self,
-        _account_id: &AccountId,
-        amount: i64,
-    ) -> Result<i64, WorkerExecutorError> {
-        Ok(amount)
-    }
-
-    fn borrow_fuel_sync(&self, _account_id: &AccountId, amount: i64) -> Option<i64> {
-        Some(amount)
-    }
-
-    async fn return_fuel(
-        &self,
-        _account_id: &AccountId,
-        _remaining: i64,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    async fn update_last_known_limits(
-        &self,
-        _account_id: &AccountId,
-        _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
-        Ok(usize::MAX)
-    }
-}
-
-pub async fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits + Send + Sync> {
-    match config {
-        ResourceLimitsConfig::Grpc(config) => {
-            ResourceLimitsGrpc::new(
-                config.uri(),
-                config
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
-                config.retries.clone(),
-                config.batch_update_interval,
-            )
-            .await
-        }
-        ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
-    }
-}
-
-#[cfg(test)]
-pub struct ResourceLimitsMock {}
-
-#[cfg(test)]
-impl Default for ResourceLimitsMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-impl ResourceLimitsMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(test)]
-#[async_trait]
-impl ResourceLimits for ResourceLimitsMock {
-    async fn borrow_fuel(
-        &self,
-        _account_id: &AccountId,
-        _amount: i64,
-    ) -> Result<i64, WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    fn borrow_fuel_sync(&self, _account_id: &AccountId, _amount: i64) -> Option<i64> {
-        unimplemented!()
-    }
-
-    async fn return_fuel(
-        &self,
-        _account_id: &AccountId,
-        _remaining: i64,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    async fn update_last_known_limits(
-        &self,
-        _account_id: &AccountId,
-        _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
-        unimplemented!()
+        _account_id: AccountId,
+    ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+        Ok(Arc::new(AtomicResourceEntry::new(u64::MAX, usize::MAX)))
     }
 }

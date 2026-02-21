@@ -12,84 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::wave::function_wave_compatible;
-use crate::model::ComponentName;
-use crate::model::ProjectId;
+use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
-use golem_client::model::{
-    AnalysedType, ComponentMetadata, InitialComponentFile, VersionedComponentId,
-};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
+use golem_common::model::component::{
+    ComponentDto, ComponentId, ComponentRevision, InstalledPlugin,
+};
+use golem_common::model::component::{ComponentName, InitialComponentFile};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
 use golem_wasm::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
-    NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, AnalysedType,
+    NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
-use uuid::Uuid;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ComponentSelection<'a> {
-    Name(&'a ComponentName),
-    Id(Uuid),
+pub enum ComponentRevisionSelection<'a> {
+    ByWorkerName(&'a WorkerName),
+    ByExplicitRevision(ComponentRevision),
 }
 
-impl Display for ComponentSelection<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ComponentSelection::Name(name) => write!(f, "{name}"),
-            ComponentSelection::Id(id) => write!(f, "{id}"),
-        }
+impl<'a> From<&'a WorkerName> for ComponentRevisionSelection<'a> {
+    fn from(value: &'a WorkerName) -> Self {
+        Self::ByWorkerName(value)
     }
 }
 
-impl<'a> From<&'a ComponentName> for ComponentSelection<'a> {
-    fn from(name: &'a ComponentName) -> Self {
-        ComponentSelection::Name(name)
+impl From<ComponentRevision> for ComponentRevisionSelection<'_> {
+    fn from(value: ComponentRevision) -> Self {
+        Self::ByExplicitRevision(value)
     }
 }
 
-impl From<Uuid> for ComponentSelection<'_> {
-    fn from(uuid: Uuid) -> Self {
-        ComponentSelection::Id(uuid)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentNameMatchKind {
+    AppCurrentDir,
+    App,
+    Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Component {
-    pub versioned_component_id: VersionedComponentId,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub project_id: Option<ProjectId>,
-    pub created_at: Option<DateTime<Utc>>,
-    pub files: Vec<InitialComponentFile>,
-    pub env: BTreeMap<String, String>,
-}
-
-impl From<golem_client::model::Component> for Component {
-    fn from(value: golem_client::model::Component) -> Self {
-        Component {
-            versioned_component_id: value.versioned_component_id,
-            component_name: value.component_name.into(),
-            component_size: value.component_size,
-            metadata: value.metadata,
-            project_id: Some(ProjectId(value.project_id)),
-            created_at: Some(value.created_at),
-            files: value.files,
-            env: value.env.into_iter().collect(),
-        }
-    }
+pub struct SelectedComponents {
+    pub environment: ResolvedEnvironmentIdentity,
+    pub component_names: Vec<ComponentName>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,12 +99,12 @@ impl Display for AppComponentType {
 
 pub enum ComponentUpsertResult {
     Skipped,
-    Added(Component),
-    Updated(Component),
+    Added(ComponentDto),
+    Updated(ComponentDto),
 }
 
 impl ComponentUpsertResult {
-    pub fn into_component(self) -> Option<Component> {
+    pub fn into_component(self) -> Option<ComponentDto> {
         match self {
             ComponentUpsertResult::Skipped => None,
             ComponentUpsertResult::Added(component) => Some(component),
@@ -136,7 +113,7 @@ impl ComponentUpsertResult {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
     #[serde(skip)]
@@ -145,30 +122,30 @@ pub struct ComponentView {
     pub show_exports_for_rib: bool,
 
     pub component_name: ComponentName,
-    pub component_id: Uuid,
-    pub component_version: u64,
+    pub component_id: ComponentId,
+    pub component_version: Option<String>,
+    pub component_revision: u64,
     pub component_size: u64,
-    pub created_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub project_id: Option<ProjectId>,
+    pub created_at: DateTime<Utc>,
+    pub environment_id: EnvironmentId,
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
+    pub plugins: Vec<InstalledPlugin>,
     pub env: BTreeMap<String, String>,
 }
 
 impl ComponentView {
-    pub fn new_rib_style(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_rib_style(show_sensitive: bool, value: ComponentDto) -> Self {
         Self::new(show_sensitive, true, value)
     }
 
-    pub fn new_wit_style(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_wit_style(show_sensitive: bool, value: ComponentDto) -> Self {
         Self::new(show_sensitive, false, value)
     }
 
-    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: Component) -> Self {
+    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: ComponentDto) -> Self {
         let exports = {
             if value.metadata.is_agent() {
                 if show_exports_for_rib {
@@ -179,7 +156,7 @@ impl ComponentView {
                         .map(|a| a.to_wit_naming())
                         .collect::<Vec<_>>();
 
-                    show_exported_agents(&agent_types)
+                    show_exported_agents(&agent_types, true, true)
                 } else {
                     value
                         .metadata
@@ -203,11 +180,12 @@ impl ComponentView {
             show_sensitive,
             show_exports_for_rib,
             component_name: value.component_name,
-            component_id: value.versioned_component_id.component_id,
-            component_version: value.versioned_component_id.version,
+            component_id: value.id,
+            component_version: value.metadata.root_package_version().clone(),
+            component_revision: value.revision.into(),
             component_size: value.component_size,
             created_at: value.created_at,
-            project_id: value.project_id,
+            environment_id: value.environment_id,
             exports,
             agent_types: value.metadata.agent_types().to_vec(),
             dynamic_linking: value
@@ -230,9 +208,20 @@ impl ComponentView {
                 })
                 .collect(),
             files: value.files,
+            plugins: value.installed_plugins,
             env: value.env,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComponentDeployProperties {
+    pub linked_wasm_path: PathBuf,
+    pub agent_types: Vec<AgentType>,
+    pub files: Vec<crate::model::app::InitialComponentFile>,
+    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    pub plugins: Vec<crate::model::app::PluginInstallation>,
+    pub env: BTreeMap<String, String>,
 }
 
 impl TrimDateTime for ComponentView {
@@ -313,33 +302,53 @@ pub fn render_type(typ: &AnalysedType) -> String {
     }
 }
 
-pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
-    agents.iter().flat_map(render_exported_agent).collect()
-}
-
-pub fn show_exported_agent_constructors(agents: &[AgentType]) -> Vec<String> {
+pub fn show_exported_agents(
+    agents: &[AgentType],
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+) -> Vec<String> {
     agents
         .iter()
-        .map(|c| render_agent_constructor(c, true))
+        .flat_map(|agent| render_exported_agent(agent, wrapper_naming, show_dummy_return_type))
         .collect()
 }
 
-fn render_exported_agent(agent: &AgentType) -> Vec<String> {
+pub fn show_exported_agent_constructors(agents: &[AgentType], wrapper_naming: bool) -> Vec<String> {
+    agents
+        .iter()
+        .map(|c| render_agent_constructor(c, wrapper_naming, true))
+        .collect()
+}
+
+fn render_exported_agent(
+    agent: &AgentType,
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+) -> Vec<String> {
     let mut result = Vec::new();
-    result.push(render_agent_constructor(agent, true));
+    result.push(render_agent_constructor(
+        agent,
+        wrapper_naming,
+        show_dummy_return_type,
+    ));
+    let agent_name = if wrapper_naming {
+        format!("{}.", agent.wrapper_type_name())
+    } else {
+        "  ".to_string()
+    };
     for method in &agent.methods {
         let output = render_data_schema(&method.output_schema);
         if output.is_empty() {
             result.push(format!(
-                "{}.{}({})",
-                agent.wrapper_type_name(),
+                "{}{}({})",
+                agent_name,
                 method.name,
                 render_data_schema(&method.input_schema),
             ));
         } else {
             result.push(format!(
-                "{}.{}({}) -> {}",
-                agent.wrapper_type_name(),
+                "{}{}({}) -> {}",
+                agent_name,
                 method.name,
                 render_data_schema(&method.input_schema),
                 output
@@ -350,18 +359,31 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     result
 }
 
-pub fn render_agent_constructor(agent: &AgentType, show_dummy_return_type: bool) -> String {
+pub fn render_agent_constructor(
+    agent: &AgentType,
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+) -> String {
     let dummy_return_type = if show_dummy_return_type {
         " agent constructor"
     } else {
         ""
     };
-    format!(
-        "{}({}){}",
-        agent.wrapper_type_name(),
-        render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
-        dummy_return_type
-    )
+    if wrapper_naming {
+        format!(
+            "{}({}){}",
+            agent.wrapper_type_name(),
+            render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
+            dummy_return_type
+        )
+    } else {
+        format!(
+            "{}({}){}",
+            agent.type_name,
+            render_data_schema(&agent.constructor.input_schema),
+            dummy_return_type
+        )
+    }
 }
 
 fn render_data_schema(schema: &DataSchema) -> String {
@@ -500,7 +522,7 @@ pub fn format_function_name(prefix: Option<&str>, name: &str) -> String {
 }
 
 fn resolve_function<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> anyhow::Result<(&'t AnalysedFunction, ParsedFunctionName)> {
     let parsed = ParsedFunctionName::parse(function).map_err(|err| anyhow!(err))?;
@@ -540,7 +562,7 @@ fn resolve_function<'t>(
 }
 
 pub fn function_result_types<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
     let (func, _) = resolve_function(component, function)?;
@@ -549,7 +571,7 @@ pub fn function_result_types<'t>(
 }
 
 pub fn function_params_types<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
     let (func, _parsed) = resolve_function(component, function)?;
@@ -557,7 +579,7 @@ pub fn function_params_types<'t>(
     Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
 
-pub fn agent_interface_name(component: &Component, agent_type_name: &str) -> Option<String> {
+pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> Option<String> {
     match (
         component.metadata.root_package_name(),
         component.metadata.root_package_version(),

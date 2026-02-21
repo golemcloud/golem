@@ -16,12 +16,12 @@ use crate::model::text::fmt::*;
 use chrono::{DateTime, Utc};
 use cli_table::Table;
 use colored::Colorize;
-use golem_client::model::{Token, UnsafeToken};
+use golem_client::model::{Token, TokenWithSecret};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TokenNewView(pub UnsafeToken);
+pub struct TokenNewView(pub TokenWithSecret);
 
 impl MessageWithFields for TokenNewView {
     fn message(&self) -> String {
@@ -35,11 +35,11 @@ impl MessageWithFields for TokenNewView {
         let mut fields = FieldsBuilder::new();
 
         fields
-            .fmt_field("Token ID", &self.0.data.id, format_main_id)
-            .fmt_field("Account ID", &self.0.data.id, format_id)
-            .field("Created at", &self.0.data.created_at)
-            .field("Expires at", &self.0.data.expires_at)
-            .fmt_field("Secret (SAVE THIS)", &self.0.secret.value, |s| {
+            .fmt_field("Token ID", &self.0.id, format_main_id)
+            .fmt_field("Account ID", &self.0.account_id, format_id)
+            .field("Created at", &self.0.created_at)
+            .field("Expires at", &self.0.expires_at)
+            .fmt_field("Secret (SAVE THIS)", &self.0.secret.secret(), |s| {
                 s.to_string().bold().red().to_string()
             });
 
@@ -62,7 +62,7 @@ struct TokenTableView {
 impl From<&Token> for TokenTableView {
     fn from(value: &Token) -> Self {
         TokenTableView {
-            id: value.id,
+            id: value.id.0,
             created_at: value.created_at,
             expires_at: value.expires_at,
             account_id: value.account_id.to_string(),

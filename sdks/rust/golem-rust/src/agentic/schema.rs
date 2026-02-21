@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
+use crate::golem_agentic::golem::agent::common::{ElementSchema, Principal};
+use crate::golem_wasm::WitValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
-use crate::wasm_rpc::WitValue;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 
 pub trait Schema {
@@ -40,8 +40,14 @@ pub trait Schema {
 
 #[derive(Debug)]
 pub enum StructuredSchema {
+    AutoInject(AutoInjectedParamType),
     Default(ElementSchema),
     Multimodal(Vec<(String, ElementSchema)>),
+}
+
+#[derive(Debug, Clone)]
+pub enum AutoInjectedParamType {
+    Principal,
 }
 
 impl StructuredSchema {
@@ -49,6 +55,7 @@ impl StructuredSchema {
         match self {
             StructuredSchema::Default(element_schema) => Some(element_schema),
             StructuredSchema::Multimodal(_) => None,
+            StructuredSchema::AutoInject(_) => None,
         }
     }
 }
@@ -57,6 +64,12 @@ impl StructuredSchema {
 pub enum StructuredValue {
     Default(ElementValue),
     Multimodal(Vec<(String, ElementValue)>),
+    AutoInjected(AutoInjectedValue),
+}
+
+#[derive(Debug)]
+pub enum AutoInjectedValue {
+    Principal(Principal),
 }
 
 impl StructuredValue {
@@ -64,6 +77,7 @@ impl StructuredValue {
         match self {
             StructuredValue::Default(element_value) => Some(element_value),
             StructuredValue::Multimodal(_) => None,
+            StructuredValue::AutoInjected(_) => None,
         }
     }
 
@@ -71,7 +85,59 @@ impl StructuredValue {
         match self {
             StructuredValue::Default(_) => None,
             StructuredValue::Multimodal(multimodal_values) => Some(multimodal_values),
+            StructuredValue::AutoInjected(_) => None,
         }
+    }
+
+    pub fn get_principal_value(self) -> Option<Principal> {
+        match self {
+            StructuredValue::AutoInjected(AutoInjectedValue::Principal(principal)) => {
+                Some(principal)
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Schema for Principal {
+    fn get_type() -> StructuredSchema {
+        StructuredSchema::AutoInject(AutoInjectedParamType::Principal)
+    }
+
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
+        Ok(StructuredValue::AutoInjected(AutoInjectedValue::Principal(
+            self,
+        )))
+    }
+
+    fn from_structured_value(
+        value: StructuredValue,
+        schema: StructuredSchema,
+    ) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match (value, schema) {
+            (
+                StructuredValue::AutoInjected(AutoInjectedValue::Principal(principal)),
+                StructuredSchema::AutoInject(AutoInjectedParamType::Principal),
+            ) => Ok(principal),
+            _ => Err("Mismatched value and schema for Principal".to_string()),
+        }
+    }
+
+    fn from_wit_value(_wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        Err("Principal is not expected to be converted from Wit Value".to_string())
+    }
+
+    fn to_wit_value(self) -> Result<WitValue, String>
+    where
+        Self: Sized,
+    {
+        Err("Principal is not expected to be converted to Wit Value".to_string())
     }
 }
 
@@ -120,6 +186,9 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
             StructuredValue::Default(element_value) => Ok(element_value),
             StructuredValue::Multimodal(_) => {
                 Err("Expected element value but found multimodal".to_string())
+            }
+            StructuredValue::AutoInjected(_) => {
+                Err("Expected element value but found auto-injected".to_string())
             }
         };
 

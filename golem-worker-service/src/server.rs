@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
-use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_common::SafeDisplay;
-use golem_worker_service::config::{make_worker_service_config_loader, WorkerServiceConfig};
-use golem_worker_service::service::Services;
+use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_service::WorkerService;
+use golem_worker_service::bootstrap::Services;
+use golem_worker_service::config::{WorkerServiceConfig, make_worker_service_config_loader};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use opentelemetry_sdk::trace::SdkTracer;
@@ -31,6 +30,10 @@ fn main() -> anyhow::Result<()> {
             .build()?
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_worker_service_config_loader().load_or_dump_config() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install crypto provider");
+
         let tracer = init_tracing_with_default_env_filter(&config.tracing);
         info!("Using configuration:\n{}", config.to_safe_string_indented());
 
@@ -58,9 +61,7 @@ fn main() -> anyhow::Result<()> {
 
 pub async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = WorkerServiceConfig::default();
-    let services = Services::new(&config)
-        .await
-        .map_err(|e| anyhow!("Services - init error: {}", e))?;
+    let services = Services::new(&config).await?;
     let open_api_service = golem_worker_service::api::make_open_api_service(&services);
     println!("{}", open_api_service.spec_yaml());
     Ok(())

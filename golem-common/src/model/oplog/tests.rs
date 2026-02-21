@@ -29,19 +29,20 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginInstallationId, ProjectId,
-    Timestamp, WorkerId,
+    AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp, WorkerId,
 };
 use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use std::collections::{BTreeMap, BTreeSet};
-use uuid::Uuid;
-
 use test_r::test;
+use uuid::Uuid;
 
 #[test]
 fn create_serialization_poem_serde_equivalence() {
+    use crate::model::component::ComponentRevision;
+    use crate::model::environment::EnvironmentId;
+
     let entry = PublicOplogEntry::Create(CreateParams {
         timestamp: Timestamp::now_utc().rounded(),
         worker_id: WorkerId {
@@ -50,16 +51,13 @@ fn create_serialization_poem_serde_equivalence() {
             ),
             worker_name: "test1".to_string(),
         },
-        component_version: 1,
-        args: vec!["a".to_string(), "b".to_string()],
+        component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),
-        created_by: AccountId {
-            value: "account_id".to_string(),
-        },
+        created_by: AccountId::new(),
         wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
-        project_id: ProjectId::new_v4(),
+        environment_id: EnvironmentId::new(),
         parent: Some(WorkerId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
@@ -69,13 +67,10 @@ fn create_serialization_poem_serde_equivalence() {
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
-            installation_id: PluginInstallationId(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
+            plugin_priority: PluginPriority(0),
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
-            registered: true,
         }]),
         original_phantom_id: None,
     });
@@ -322,9 +317,11 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
 
 #[test]
 fn pending_update_serialization_poem_serde_equivalence_1() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_version: 1,
+        target_revision: ComponentRevision::new(1).unwrap(),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
         }),
@@ -336,9 +333,11 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
 
 #[test]
 fn pending_update_serialization_poem_serde_equivalence_2() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_version: 1,
+        target_revision: ComponentRevision::new(1).unwrap(),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -348,18 +347,17 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
 
 #[test]
 fn successful_update_serialization_poem_serde_equivalence() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_version: 1,
+        target_revision: ComponentRevision::new(1).unwrap(),
         new_component_size: 100_000_000,
         new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
-            installation_id: PluginInstallationId(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
+            plugin_priority: PluginPriority(0),
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
-            registered: true,
         }]),
     });
     let serialized = entry.to_json_string();
@@ -369,9 +367,11 @@ fn successful_update_serialization_poem_serde_equivalence() {
 
 #[test]
 fn failed_update_serialization_poem_serde_equivalence_1() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_version: 1,
+        target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
     });
     let serialized = entry.to_json_string();
@@ -381,9 +381,11 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
 
 #[test]
 fn failed_update_serialization_poem_serde_equivalence_2() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        target_version: 1,
+        target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
     });
     let serialized = entry.to_json_string();

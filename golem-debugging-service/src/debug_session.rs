@@ -14,7 +14,7 @@
 
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
-use golem_common::model::auth::Namespace;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::oplog::host_functions::{
     host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
 };
@@ -27,9 +27,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry};
-use golem_common::model::{
-    OwnedWorkerId, PluginInstallationId, RetryConfig, WorkerId, WorkerMetadata,
-};
+use golem_common::model::{OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata};
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -202,16 +200,13 @@ impl Display for DebugSessionId {
 
 #[derive(Clone)]
 pub struct ActiveSessionData {
-    pub cloud_namespace: Namespace,
+    // pub cloud_namespace: Namespace,
     pub worker_id: WorkerId,
 }
 
 impl ActiveSessionData {
-    pub fn new(cloud_namespace: Namespace, worker_id: WorkerId) -> Self {
-        Self {
-            cloud_namespace,
-            worker_id,
-        }
+    pub fn new(worker_id: WorkerId) -> Self {
+        Self { worker_id }
     }
 }
 
@@ -232,10 +227,9 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::Create(CreateParams {
             timestamp,
             worker_id,
-            component_version,
-            args,
+            component_revision,
             env,
-            project_id,
+            environment_id,
             created_by,
             wasi_config_vars,
             parent,
@@ -246,10 +240,9 @@ fn get_oplog_entry_from_public_oplog_entry(
         }) => Ok(OplogEntry::Create {
             timestamp,
             worker_id,
-            component_version,
-            args,
+            component_revision,
             env: env.into_iter().collect(),
-            project_id,
+            environment_id,
             created_by,
             wasi_config_vars: wasi_config_vars.into(),
             parent,
@@ -257,7 +250,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             initial_total_linear_memory_size,
             initial_active_plugins: initial_active_plugins
                 .into_iter()
-                .map(|x| x.installation_id)
+                .map(|x| x.plugin_priority)
                 .collect(),
             original_phantom_id,
         }),
@@ -389,26 +382,26 @@ fn get_oplog_entry_from_public_oplog_entry(
             Err("Cannot override an oplog with a rolled back remote transaction".to_string())?
         }
         PublicOplogEntry::SuccessfulUpdate(successful_update_params) => {
-            let plugin_installation_ids: HashSet<PluginInstallationId> = successful_update_params
+            let new_active_plugins: HashSet<PluginPriority> = successful_update_params
                 .new_active_plugins
                 .iter()
-                .map(|plugin| plugin.installation_id.clone())
+                .map(|plugin| plugin.plugin_priority)
                 .collect();
 
             Ok(OplogEntry::SuccessfulUpdate {
                 timestamp: successful_update_params.timestamp,
-                target_version: successful_update_params.target_version,
+                target_revision: successful_update_params.target_revision,
                 new_component_size: successful_update_params.new_component_size,
-                new_active_plugins: plugin_installation_ids,
+                new_active_plugins,
             })
         }
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp,
-            target_version,
+            target_revision,
             details,
         }) => Ok(OplogEntry::FailedUpdate {
             timestamp,
-            target_version,
+            target_revision,
             details,
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
@@ -451,13 +444,13 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::ActivatePlugin(activate_plugin_params) => {
             Ok(OplogEntry::ActivatePlugin {
                 timestamp: activate_plugin_params.timestamp,
-                plugin: activate_plugin_params.plugin.installation_id,
+                plugin_priority: activate_plugin_params.plugin.plugin_priority,
             })
         }
         PublicOplogEntry::DeactivatePlugin(deactivate_plugin_params) => {
             Ok(OplogEntry::DeactivatePlugin {
                 timestamp: deactivate_plugin_params.timestamp,
-                plugin: deactivate_plugin_params.plugin.installation_id,
+                plugin_priority: deactivate_plugin_params.plugin.plugin_priority,
             })
         }
         PublicOplogEntry::Revert(revert_params) => Ok(OplogEntry::Revert {

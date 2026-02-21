@@ -41,7 +41,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 worker_name: current_worker_name,
             },
             &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
-            self.state.component_metadata.versioned_component_id.version,
+            self.state.component_metadata.revision,
         );
 
         Ok(env)

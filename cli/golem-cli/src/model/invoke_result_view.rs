@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{function_result_types, Component};
-use crate::model::text::fmt::log_error;
+use crate::log::log_error;
+use crate::model::component::function_result_types;
 use crate::model::wave::type_wave_compatible;
-use crate::model::IdempotencyKey;
 use anyhow::{anyhow, bail};
+use golem_client::model::ComponentDto;
 use golem_client::model::InvokeResult;
+use golem_common::model::IdempotencyKey;
 use golem_wasm::{print_value_and_type, ValueAndType};
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +35,7 @@ impl InvokeResultView {
     pub fn new_invoke(
         idempotency_key: IdempotencyKey,
         result: InvokeResult,
-        component: &Component,
+        component: &ComponentDto,
         function: &str,
     ) -> Self {
         let wave = match Self::try_parse_wave(&result.result, component, function) {
@@ -46,7 +47,7 @@ impl InvokeResultView {
         };
 
         Self {
-            idempotency_key: idempotency_key.0,
+            idempotency_key: idempotency_key.value,
             result_json: result.result,
             result_wave: wave,
         }
@@ -54,7 +55,7 @@ impl InvokeResultView {
 
     pub fn new_trigger(idempotency_key: IdempotencyKey) -> Self {
         Self {
-            idempotency_key: idempotency_key.0,
+            idempotency_key: idempotency_key.value,
             result_json: None,
             result_wave: None,
         }
@@ -62,7 +63,7 @@ impl InvokeResultView {
 
     fn try_parse_wave(
         result: &Option<ValueAndType>,
-        component: &Component,
+        component: &ComponentDto,
         function: &str,
     ) -> anyhow::Result<Vec<String>> {
         let results: Vec<_> = result.iter().cloned().collect();

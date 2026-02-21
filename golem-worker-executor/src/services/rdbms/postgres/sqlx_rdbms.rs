@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures::stream::BoxStream;
-use golem_common::model::oplog::types::{Enumeration, EnumerationType, ValuesRange};
+use golem_common::model::oplog::types::{Enumeration, EnumerationType, SparseVec, ValuesRange};
 use golem_common::model::{RdbmsPoolKey, TransactionId};
 use mac_address::MacAddress;
 use serde_json::json;
@@ -451,6 +451,27 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
                 Err(get_unexpected_value_error(column_type))
             }
         }),
+        DbColumnType::Vector => setter.try_set_db_value(value, value_category, |v| {
+            if let DbValue::Vector(v) = v {
+                Ok(pgvector::Vector::from(v))
+            } else {
+                Err(get_unexpected_value_error(column_type))
+            }
+        }),
+        DbColumnType::Halfvec => setter.try_set_db_value(value, value_category, |v| {
+            if let DbValue::Halfvec(v) = v {
+                Ok(pgvector::HalfVector::from(v))
+            } else {
+                Err(get_unexpected_value_error(column_type))
+            }
+        }),
+        DbColumnType::Sparsevec => setter.try_set_db_value(value, value_category, |v| {
+            if let DbValue::Sparsevec(v) = v {
+                Ok(pgvector::SparseVector::from_map(v.to_map(), v.dim))
+            } else {
+                Err(get_unexpected_value_error(column_type))
+            }
+        }),
         DbColumnType::Enumeration(_) => setter.try_set_db_value(value, value_category, |v| {
             try_match!(v, DbValue::Enumeration(r))
                 .map_err(|_| get_unexpected_value_error(column_type))
@@ -671,6 +692,23 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Oid => {
             getter.try_get_db_value::<Oid>(value_category, |v| DbValue::Oid(v.0))?
         }
+        DbColumnType::Vector => getter
+            .try_get_db_value::<pgvector::Vector>(value_category, |v| {
+                DbValue::Vector(v.to_vec())
+            })?,
+        DbColumnType::Halfvec => getter
+            .try_get_db_value::<pgvector::HalfVector>(value_category, |v| {
+                DbValue::Halfvec(v.to_vec())
+            })?,
+        DbColumnType::Sparsevec => {
+            getter.try_get_db_value::<pgvector::SparseVector>(value_category, |v| {
+                DbValue::Sparsevec(SparseVec {
+                    dim: v.dimensions(),
+                    values: v.values().to_vec(),
+                    indices: v.indices().to_vec(),
+                })
+            })?
+        }
         DbColumnType::Enumeration(_) => {
             getter.try_get_db_value::<Enumeration>(value_category, DbValue::Enumeration)?
         }
@@ -753,6 +791,9 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
         pg_type_name::TSRANGE => Ok(DbColumnType::Tsrange),
         pg_type_name::TSTZRANGE => Ok(DbColumnType::Tstzrange),
         pg_type_name::DATERANGE => Ok(DbColumnType::Daterange),
+        pg_type_name::VECTOR => Ok(DbColumnType::Vector),
+        pg_type_name::HALFVEC => Ok(DbColumnType::Halfvec),
+        pg_type_name::SPARSEVEC => Ok(DbColumnType::Sparsevec),
         pg_type_name::CHAR_ARRAY => Ok(DbColumnType::Character.into_array()),
         pg_type_name::BOOL_ARRAY => Ok(DbColumnType::Boolean.into_array()),
         pg_type_name::INT2_ARRAY => Ok(DbColumnType::Int2.into_array()),
@@ -789,6 +830,9 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
         pg_type_name::TSRANGE_ARRAY => Ok(DbColumnType::Tsrange.into_array()),
         pg_type_name::TSTZRANGE_ARRAY => Ok(DbColumnType::Tstzrange.into_array()),
         pg_type_name::DATERANGE_ARRAY => Ok(DbColumnType::Daterange.into_array()),
+        pg_type_name::VECTOR_ARRAY => Ok(DbColumnType::Vector.into_array()),
+        pg_type_name::HALFVEC_ARRAY => Ok(DbColumnType::Halfvec.into_array()),
+        pg_type_name::SPARSEVEC_ARRAY => Ok(DbColumnType::Sparsevec.into_array()),
         _ => match type_kind {
             PgTypeKind::Enum(_) => Ok(DbColumnType::Enumeration(EnumerationType::new(type_name))),
             PgTypeKind::Composite(attributes) => {
@@ -1559,4 +1603,10 @@ pub(crate) mod pg_type_name {
     pub(crate) const VOID: &str = "VOID";
     pub(crate) const XML: &str = "XML";
     pub(crate) const XML_ARRAY: &str = "XML[]";
+    pub(crate) const VECTOR: &str = "VECTOR";
+    pub(crate) const VECTOR_ARRAY: &str = "VECTOR[]";
+    pub(crate) const HALFVEC: &str = "HALFVEC";
+    pub(crate) const HALFVEC_ARRAY: &str = "HALFVEC[]";
+    pub(crate) const SPARSEVEC: &str = "SPARSEVEC";
+    pub(crate) const SPARSEVEC_ARRAY: &str = "SPARSEVEC[]";
 }

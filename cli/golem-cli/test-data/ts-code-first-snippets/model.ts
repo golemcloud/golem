@@ -131,5 +131,7 @@ export type ResultLikeWithNoTag = {
 
 export type ResultLike = { tag: 'okay'; value: string; } | { tag: 'error'; value?: string; };
 
+export type ResultLikeWithVoid  = { tag: 'ok', okVal: void } | { tag: 'err', errVal: void };
+
 // Result exact doesn't work.
 export type ResultExact = { tag: 'ok'; value: string; } | { tag: 'err'; value: string; };

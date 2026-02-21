@@ -1,0 +1,78 @@
+{
+  "name": "@golemcloud/golem-ts-typegen",
+  "type": "module",
+  "version": "0.0.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "types",
+    "dist"
+  ],
+  "main": "dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.mts"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "agentic-guest": [
+        "types/exports.d.ts"
+      ],
+      "golem:agent/common": [
+        "types/golem_agent_common.d.ts"
+      ],
+      "golem:agent/host": [
+        "types/golem_agent_host.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "test": "tsc --noEmit && vitest run",
+    "build": "pnpm run build:lib && pnpm run build:cli",
+    "build:lib": "tsc --noEmit && rollup -c",
+    "build:cli": "tsc src/bin/golem-typegen.ts --outDir dist --module node16 --target ES2020 --esModuleInterop",
+    "dev": "rollup -c -w"
+  },
+  "bin": {
+    "golem-typegen": "./dist/bin/golem-typegen.js"
+  },
+  "keywords": [],
+  "sideEffects": [
+    "src/index.ts"
+  ],
+  "author": "",
+  "license": "SEE LICENSE IN LICENSE",
+  "description": "",
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@types/node": "^24.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
+    "eslint": "^9.33.0",
+    "fast-check": "^4.2.0",
+    "prettier": "^3.6.2",
+    "reflect-metadata": "^0.1.14",
+    "rollup": "^4.46.2",
+    "rollup-plugin-dts": "^6.2.1",
+    "rollup-plugin-typescript2": "^0.36.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.39.0",
+    "vitest": "^3.2.4"
+  },
+  "private": false,
+  "dependencies": {
+    "@golemcloud/golem-ts-types-core": "workspace:*",
+    "picocolors": "^1.1.1",
+    "commander": "^14.0.0",
+    "log-symbols": "^7.0.1",
+    "ts-morph": "^26.0.0"
+  },
+  "repository": "https://github.com/golemcloud/golem"
+}

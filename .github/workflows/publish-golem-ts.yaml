@@ -10,36 +10,71 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  WASM_RQUICKJS_VERSION: "0.0.23"
 
 jobs:
   publish:
-    runs-on: blacksmith
+    runs-on: ubuntu-latest # NOTE: must not be blacksmith for npmjs provenance to work
     if: "startsWith(github.ref, 'refs/tags/golem-ts-v')"
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20.x"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+
+      - name: Install wasm-rquickjs
+        run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
+
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Install cargo-component
+        run: cargo binstall --force cargo-component@0.21.1
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG##*-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set versions in all packages
+        working-directory: sdks/ts
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          for pkg in packages/golem-ts-types-core packages/golem-ts-typegen packages/golem-ts-sdk; do
+            cd $pkg
+            npm version $VERSION --no-git-tag-version
+            cd ../../
+          done
+
       - name: Install dependencies
-        run: |
-          npm install
+        working-directory: sdks/ts
+        run: pnpm install
 
-      - name: Generate types
-        run: |
-          npm run generate-types
+      - name: Build all packages
+        working-directory: sdks/ts
+        run: pnpm run build
 
-      - name: Build the package
-        run: |
-          npm run build
+      - name: Build the agent template WASM binary
+        working-directory: sdks/ts
+        run: pnpm run build-agent-template
 
-      - name: Publish to npm
-        run: |
-          npm publish --provenance --access public
+      - name: Publish all packages
+        working-directory: sdks/ts
+        run: pnpm -r publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

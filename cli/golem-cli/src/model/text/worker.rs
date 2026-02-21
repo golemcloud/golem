@@ -14,22 +14,25 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
-use crate::model::{
-    ComponentName, WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
+use crate::model::worker::{
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
-use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
+    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
+use golem_common::model::worker::UpdateRecord;
+use golem_common::model::Timestamp;
 use golem_wasm::{print_value_and_type, ValueAndType};
 use indoc::indoc;
 use itertools::Itertools;
@@ -112,7 +115,7 @@ impl MessageWithFields for WorkerGetView {
                         "{}",
                         format!(
                             "{}: Pending update to {}",
-                            update.timestamp, update.target_version
+                            update.timestamp, update.target_revision
                         )
                         .bright_black()
                     );
@@ -123,7 +126,7 @@ impl MessageWithFields for WorkerGetView {
                         "{}",
                         format!(
                             "{}: Successful update to {}",
-                            update.timestamp, update.target_version
+                            update.timestamp, update.target_revision
                         )
                         .green()
                         .bold()
@@ -136,7 +139,7 @@ impl MessageWithFields for WorkerGetView {
                         format!(
                             "{}: Failed update to {}{}",
                             update.timestamp,
-                            update.target_version,
+                            update.target_revision,
                             update
                                 .details
                                 .as_ref()
@@ -152,8 +155,8 @@ impl MessageWithFields for WorkerGetView {
         fields
             .fmt_field("Component name", &self.metadata.component_name, format_id)
             .fmt_field(
-                "Component version",
-                &self.metadata.component_version,
+                "Component revision",
+                &self.metadata.component_revision,
                 format_id,
             )
             .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
@@ -167,12 +170,6 @@ impl MessageWithFields for WorkerGetView {
                 "Total linear memory size",
                 &self.metadata.total_linear_memory_size,
                 format_binary_size,
-            )
-            .fmt_field_optional(
-                "Arguments",
-                &self.metadata.args,
-                !self.metadata.args.is_empty(),
-                |args| args.join(" "),
             )
             .fmt_field_optional(
                 "Environment variables",
@@ -220,12 +217,14 @@ struct WorkerMetadataTableView {
     pub component_name: ComponentName,
     #[table(title = "Agent name")]
     pub worker_name: String,
-    #[table(title = "Component\nversion", justify = "Justify::Right")]
-    pub component_version: u64,
+    #[table(title = "Component\nrevision", justify = "Justify::Right")]
+    pub component_revision: ComponentRevision,
     #[table(title = "Status", justify = "Justify::Right")]
     pub status: String,
+    #[table(title = "Pending\ninvocations", justify = "Justify::Right")]
+    pub pending_invocations: u64,
     #[table(title = "Created at")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 }
 
 impl From<&WorkerMetadataView> for WorkerMetadataTableView {
@@ -235,8 +234,9 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
             // TODO: pretty print, once we have "metadata-less" agent-type parsing
             worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
             status: format_status(&value.status),
-            component_version: value.component_version,
+            component_revision: value.component_revision,
             created_at: value.created_at,
+            pending_invocations: value.pending_invocation_count,
         }
     }
 }
@@ -315,16 +315,12 @@ impl TextView for PublicOplogEntry {
             PublicOplogEntry::Create(params) => {
                 logln(format_message_highlight("CREATE"));
                 logln(format!(
-                    "{pad}at:                {}",
+                    "{pad}at:                 {}",
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}component version: {}",
-                    format_id(&params.component_version),
-                ));
-                logln(format!(
-                    "{pad}args:              {}",
-                    format_id(&params.args.join(", ")),
+                    "{pad}component revision: {}",
+                    format_id(&params.component_revision),
                 ));
                 logln(format!("{pad}env:"));
                 for (k, v) in &params.env {
@@ -336,8 +332,8 @@ impl TextView for PublicOplogEntry {
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
                     logln(format!(
-                        "{pad}  - installation id: {}",
-                        format_id(&plugin.installation_id)
+                        "{pad}  - priority: {}",
+                        format_id(&plugin.plugin_priority.0)
                     ));
                     let inner_pad = format!("{pad}    ");
                     log_plugin_description(&inner_pad, plugin);
@@ -552,8 +548,8 @@ impl TextView for PublicOplogEntry {
                         format_id(&params.timestamp)
                     ));
                     logln(format!(
-                        "{pad}target version: {}",
-                        format_id(&inner_params.target_version),
+                        "{pad}target revision:   {}",
+                        format_id(&inner_params.target_revision),
                     ));
                 }
             },
@@ -564,8 +560,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 match &params.description {
                     PublicUpdateDescription::Automatic(_) => {
@@ -593,14 +589,14 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
-                        "{pad}  - installation id: {}",
-                        format_id(&plugin.installation_id),
+                        "{pad}  - priority: {}",
+                        format_id(&plugin.plugin_priority.0),
                     ));
                     let inner_pad = format!("{pad}    ");
                     log_plugin_description(&inner_pad, plugin);
@@ -613,8 +609,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 if let Some(details) = &params.details {
                     logln(format!("{pad}error:             {}", format_error(details)));
@@ -673,8 +669,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}installation id:   {}",
-                    format_id(&params.plugin.installation_id),
+                    "{pad}priority:   {}",
+                    format_id(&params.plugin.plugin_priority.0),
                 ));
                 log_plugin_description(pad, &params.plugin);
             }
@@ -685,8 +681,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}installation id:   {}",
-                    format_id(&params.plugin.installation_id),
+                    "{pad}priority:   {}",
+                    format_id(&params.plugin.plugin_priority.0),
                 ));
                 log_plugin_description(pad, &params.plugin);
             }
@@ -983,4 +979,44 @@ pub fn format_timestamp(timestamp: u64) -> String {
     } else {
         format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }
+}
+
+pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
+    format!(
+        "{}{}/{}",
+        match &worker_name_match.environment_reference() {
+            Some(environment_reference) => {
+                match environment_reference {
+                    EnvironmentReference::Environment { environment_name } => {
+                        format!("{}/", environment_name.0.blue().bold())
+                    }
+                    EnvironmentReference::ApplicationEnvironment {
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/",
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                    EnvironmentReference::AccountApplicationEnvironment {
+                        account_email,
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/{}/",
+                            account_email.blue().bold(),
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                }
+            }
+            None => "".to_string(),
+        },
+        worker_name_match.component_name.0.blue().bold(),
+        worker_name_match.worker_name.0.green().bold(),
+    )
 }
