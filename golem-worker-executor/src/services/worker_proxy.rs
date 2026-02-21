@@ -50,7 +50,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         owned_worker_id: &OwnedWorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
 
@@ -62,7 +62,7 @@ pub trait WorkerProxy: Send + Sync {
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError>;
@@ -75,7 +75,7 @@ pub trait WorkerProxy: Send + Sync {
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError>;
@@ -241,7 +241,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         owned_worker_id: &OwnedWorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_worker_id=%owned_worker_id, "Starting remote worker");
@@ -252,12 +252,12 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("launch_new_worker", move |client| {
                 let caller_env = caller_env.clone();
-                let caller_wasi_config_vars = caller_wasi_config_vars.clone();
+                let caller_config_vars = caller_config_vars.clone();
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(owned_worker_id.component_id().into()),
                     name: owned_worker_id.worker_name(),
                     env: caller_env,
-                    wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                    config_vars: caller_config_vars.into_iter().collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
@@ -285,7 +285,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
@@ -317,7 +317,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        config_vars: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -355,7 +355,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
@@ -385,7 +385,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        config_vars: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),

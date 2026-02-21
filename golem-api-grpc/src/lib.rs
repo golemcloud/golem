@@ -17,7 +17,6 @@ test_r::enable!();
 
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
-    use self::golem::worker::{WasiConfigVars, WasiConfigVarsEntry};
     use crate::proto::golem::worker::UpdateMode;
     use desert_rust::{
         BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -28,7 +27,7 @@ pub mod proto {
         AnalysedFunctionResult, AnalysedInstance, AnalysedType,
     };
     use golem_wasm::{FromValue, IntoValue, Value};
-    use std::collections::BTreeMap;
+
     use uuid::Uuid;
 
     tonic::include_proto!("mod");
@@ -212,27 +211,6 @@ pub mod proto {
                     type_name: "UpdateMode".to_string(),
                 }),
             }
-        }
-    }
-
-    impl From<BTreeMap<String, String>> for WasiConfigVars {
-        fn from(value: BTreeMap<String, String>) -> Self {
-            Self {
-                entries: value
-                    .into_iter()
-                    .map(|(key, value)| WasiConfigVarsEntry { key, value })
-                    .collect(),
-            }
-        }
-    }
-
-    impl From<WasiConfigVars> for BTreeMap<String, String> {
-        fn from(value: WasiConfigVars) -> Self {
-            value
-                .entries
-                .into_iter()
-                .map(|e| (e.key, e.value))
-                .collect()
         }
     }
 

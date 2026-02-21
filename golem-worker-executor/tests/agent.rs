@@ -120,7 +120,7 @@ async fn agent_env_inheritance(
     env.insert("ENV3".to_string(), "33".to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     executor.log_output(&worker_id).await?;

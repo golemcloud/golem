@@ -114,7 +114,7 @@ impl WorkerApi {
         let WorkerCreationRequest {
             name,
             env,
-            config_vars: wasi_config_vars,
+            config_vars,
         } = request;
 
         let (worker_id, component) = self
@@ -123,14 +123,7 @@ impl WorkerApi {
 
         let component_revision = self
             .worker_service
-            .create_with_component(
-                &worker_id,
-                component,
-                env,
-                wasi_config_vars.into(),
-                false,
-                auth,
-            )
+            .create_with_component(&worker_id, component, env, config_vars, false, auth)
             .await?;
 
         Ok(Json(WorkerCreationResponse {

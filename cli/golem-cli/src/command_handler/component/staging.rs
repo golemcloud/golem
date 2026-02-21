@@ -257,6 +257,18 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
+    pub fn config_vars(&self) -> BTreeMap<String, String> {
+        self.component_deploy_properties.config_vars.clone()
+    }
+
+    pub fn config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
+        if self.diff.metadata_changed() {
+            Some(self.config_vars())
+        } else {
+            None
+        }
+    }
+
     pub fn plugins(&self) -> Vec<PluginInstallation> {
         self.component_deploy_properties
             .plugins

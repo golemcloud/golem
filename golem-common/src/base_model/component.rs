@@ -126,6 +126,8 @@ declare_structs! {
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub original_env: BTreeMap<String, String>,
+        pub config_vars: BTreeMap<String, String>,
+        pub original_config_vars: BTreeMap<String, String>,
         pub wasm_hash: diff::Hash,
     }
 
@@ -137,6 +139,9 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config_vars: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub agent_types: Vec<AgentType>,
@@ -154,6 +159,7 @@ declare_structs! {
         #[cfg_attr(feature = "full", oai(default))]
         pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         pub env: Option<BTreeMap<String, String>>,
+        pub config_vars: Option<BTreeMap<String, String>>,
         pub agent_types: Option<Vec<AgentType>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]

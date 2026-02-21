@@ -65,7 +65,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         _owned_worker_id: &OwnedWorkerId,
         _caller_env: HashMap<String, String>,
-        _caller_wasi_config_vars: BTreeMap<String, String>,
+        _caller_config_vars: BTreeMap<String, String>,
         _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
@@ -83,7 +83,7 @@ impl WorkerProxy for TestWorkerProxy {
         _function_params: Vec<WitValue>,
         _caller_worker_id: WorkerId,
         _caller_env: HashMap<String, String>,
-        _caller_wasi_config_vars: BTreeMap<String, String>,
+        _caller_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
         _caller_account_id: AccountId,
     ) -> Result<Option<ValueAndType>, WorkerProxyError> {
@@ -102,7 +102,7 @@ impl WorkerProxy for TestWorkerProxy {
         _function_params: Vec<WitValue>,
         _caller_worker_id: WorkerId,
         _caller_env: HashMap<String, String>,
-        _caller_wasi_config_vars: BTreeMap<String, String>,
+        _caller_config_vars: BTreeMap<String, String>,
         _invocation_context_stack: InvocationContextStack,
         _caller_account_id: AccountId,
     ) -> Result<(), WorkerProxyError> {

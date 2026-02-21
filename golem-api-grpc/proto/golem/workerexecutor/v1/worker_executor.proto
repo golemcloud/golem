@@ -21,7 +21,6 @@ import "golem/worker/worker_status.proto";
 import "golem/worker/worker_filter.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/filesystem.proto";
-import "golem/worker/wasi_config_vars.proto";
 import "golem/common/environment.proto";
 import "golem/auth/auth_ctx.proto";
 import "wasm/rpc/val.proto";
@@ -124,11 +123,11 @@ message InterruptWorkerResponse {
 message CreateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   map<string, string> env = 2;
+  map<string, string> config_vars = 3;
   // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 3;
+  golem.common.AccountId component_owner_account_id = 4;
   // Component's owner environment
-  golem.common.EnvironmentId environment_id = 4;
-  golem.worker.WasiConfigVars wasi_config_vars = 5;
+  golem.common.EnvironmentId environment_id = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
 }

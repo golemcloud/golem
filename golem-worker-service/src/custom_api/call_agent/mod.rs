@@ -35,7 +35,6 @@ use golem_service_base::custom_api::{CallAgentBehaviour, ConstructorParameter, M
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValue, ValueAndType};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::debug;
 use uuid::Uuid;
@@ -266,7 +265,7 @@ impl CallAgentHandler {
                 Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                     parent: None,
                     env: Default::default(),
-                    wasi_config_vars: Some(BTreeMap::new().into()),
+                    config_vars: Default::default(),
                     tracing: Some(request.invocation_context().into()),
                 }),
                 resolved_route.route.environment_id,

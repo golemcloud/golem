@@ -4,13 +4,12 @@ package golem.worker;
 
 import "google/protobuf/timestamp.proto";
 import "golem/worker/worker_id.proto";
-import "golem/worker/wasi_config_vars.proto";
 
 message InvocationContext {
   golem.worker.WorkerId parent = 1;
-  map<string, string> env = 4;
-  optional TracingInvocationContext tracing = 5;
-  WasiConfigVars wasi_config_vars = 6;
+  map<string, string> env = 2;
+  map<string, string> config_vars = 3;
+  optional TracingInvocationContext tracing = 4;
 }
 
 message TracingInvocationContext {
