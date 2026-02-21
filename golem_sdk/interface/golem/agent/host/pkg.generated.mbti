@@ -1,19 +1,19 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/golem/agent/host"
 
-import(
-  "vigoo/golem_sdk/interface/golem/agent/common"
-  "vigoo/golem_sdk/interface/golem/rpc/types"
-)
+import {
+  "vigoo/golem_sdk/interface/golem/agent/common",
+  "vigoo/golem_sdk/interface/golem/rpc/types",
+}
 
 // Values
-fn get_agent_type(String) -> RegisteredAgentType?
+pub fn get_agent_type(String) -> RegisteredAgentType?
 
-fn get_all_agent_types() -> Array[RegisteredAgentType]
+pub fn get_all_agent_types() -> Array[RegisteredAgentType]
 
-fn make_agent_id(String, @common.DataValue) -> Result[String, @common.AgentError]
+pub fn make_agent_id(String, @common.DataValue) -> Result[String, @common.AgentError]
 
-fn parse_agent_id(String) -> Result[(String, @common.DataValue), @common.AgentError]
+pub fn parse_agent_id(String) -> Result[(String, @common.DataValue), @common.AgentError]
 
 // Errors
 
@@ -22,8 +22,8 @@ pub(all) struct RegisteredAgentType {
   agent_type : @common.AgentType
   implemented_by : @types.ComponentId
 }
-impl Eq for RegisteredAgentType
-impl Show for RegisteredAgentType
+pub impl Eq for RegisteredAgentType
+pub impl Show for RegisteredAgentType
 
 // Type aliases
 

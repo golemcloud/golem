@@ -1,19 +1,19 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/wasi/keyvalue/eventualBatch"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/keyvalue/types"
-  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/keyvalue/types",
+  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+}
 
 // Values
-fn delete_many(@types.Bucket, Array[String]) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub fn delete_many(@types.Bucket, Array[String]) -> Result[Unit, @wasiKeyvalueError.Error_]
 
-fn get_many(@types.Bucket, Array[String]) -> Result[Array[@types.IncomingValue?], @wasiKeyvalueError.Error_]
+pub fn get_many(@types.Bucket, Array[String]) -> Result[Array[@types.IncomingValue?], @wasiKeyvalueError.Error_]
 
-fn keys(@types.Bucket) -> Result[Array[String], @wasiKeyvalueError.Error_]
+pub fn keys(@types.Bucket) -> Result[Array[String], @wasiKeyvalueError.Error_]
 
-fn set_many(@types.Bucket, Array[(String, @types.OutgoingValue)]) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub fn set_many(@types.Bucket, Array[(String, @types.OutgoingValue)]) -> Result[Unit, @wasiKeyvalueError.Error_]
 
 // Errors
 

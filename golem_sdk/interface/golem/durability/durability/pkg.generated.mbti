@@ -1,30 +1,30 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/golem/durability/durability"
 
-import(
-  "vigoo/golem_sdk/interface/golem/api/host"
-  "vigoo/golem_sdk/interface/golem/api/oplog"
-  "vigoo/golem_sdk/interface/golem/rpc/types"
-  "vigoo/golem_sdk/interface/wasi/clocks/wallClock"
-  "vigoo/golem_sdk/interface/wasi/io/poll"
-)
+import {
+  "vigoo/golem_sdk/interface/golem/api/host",
+  "vigoo/golem_sdk/interface/golem/api/oplog",
+  "vigoo/golem_sdk/interface/golem/rpc/types",
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
+  "vigoo/golem_sdk/interface/wasi/io/poll",
+}
 
 // Values
-fn begin_durable_function(@oplog.WrappedFunctionType) -> UInt64
+pub fn begin_durable_function(@oplog.WrappedFunctionType) -> UInt64
 
-fn current_durable_execution_state() -> DurableExecutionState
+pub fn current_durable_execution_state() -> DurableExecutionState
 
-fn end_durable_function(@oplog.WrappedFunctionType, UInt64, Bool) -> Unit
+pub fn end_durable_function(@oplog.WrappedFunctionType, UInt64, Bool) -> Unit
 
-fn observe_function_call(String, String) -> Unit
+pub fn observe_function_call(String, String) -> Unit
 
-fn persist_durable_function_invocation(String, FixedArray[Byte], FixedArray[Byte], @oplog.WrappedFunctionType) -> Unit
+pub fn persist_durable_function_invocation(String, FixedArray[Byte], FixedArray[Byte], @oplog.WrappedFunctionType) -> Unit
 
-fn persist_typed_durable_function_invocation(String, @types.ValueAndType, @types.ValueAndType, @oplog.WrappedFunctionType) -> Unit
+pub fn persist_typed_durable_function_invocation(String, @types.ValueAndType, @types.ValueAndType, @oplog.WrappedFunctionType) -> Unit
 
-fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionInvocation
+pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionInvocation
 
-fn read_persisted_typed_durable_function_invocation() -> PersistedTypedDurableFunctionInvocation
+pub fn read_persisted_typed_durable_function_invocation() -> PersistedTypedDurableFunctionInvocation
 
 // Errors
 
@@ -33,27 +33,27 @@ pub(all) struct DurableExecutionState {
   is_live : Bool
   persistence_level : @host.PersistenceLevel
 }
-impl Eq for DurableExecutionState
-impl Show for DurableExecutionState
+pub impl Eq for DurableExecutionState
+pub impl Show for DurableExecutionState
 
 pub(all) struct LazyInitializedPollable(Int)
-fn LazyInitializedPollable::drop(Self) -> Unit
+pub fn LazyInitializedPollable::drop(Self) -> Unit
 #deprecated
-fn LazyInitializedPollable::inner(Self) -> Int
-fn LazyInitializedPollable::lazy_initialized_pollable() -> Self
-fn LazyInitializedPollable::set(Self, @poll.Pollable) -> Unit
-fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
-impl Eq for LazyInitializedPollable
-impl Show for LazyInitializedPollable
+pub fn LazyInitializedPollable::inner(Self) -> Int
+pub fn LazyInitializedPollable::lazy_initialized_pollable() -> Self
+pub fn LazyInitializedPollable::set(Self, @poll.Pollable) -> Unit
+pub fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
+pub impl Eq for LazyInitializedPollable
+pub impl Show for LazyInitializedPollable
 
 pub(all) enum OplogEntryVersion {
   V1
   V2
 }
-fn OplogEntryVersion::from(Int) -> Self
-fn OplogEntryVersion::ordinal(Self) -> Int
-impl Eq for OplogEntryVersion
-impl Show for OplogEntryVersion
+pub fn OplogEntryVersion::from(Int) -> Self
+pub fn OplogEntryVersion::ordinal(Self) -> Int
+pub impl Eq for OplogEntryVersion
+pub impl Show for OplogEntryVersion
 
 pub(all) struct PersistedDurableFunctionInvocation {
   timestamp : @wallClock.Datetime
@@ -62,8 +62,8 @@ pub(all) struct PersistedDurableFunctionInvocation {
   function_type : @oplog.WrappedFunctionType
   entry_version : OplogEntryVersion
 }
-impl Eq for PersistedDurableFunctionInvocation
-impl Show for PersistedDurableFunctionInvocation
+pub impl Eq for PersistedDurableFunctionInvocation
+pub impl Show for PersistedDurableFunctionInvocation
 
 pub(all) struct PersistedTypedDurableFunctionInvocation {
   timestamp : @wallClock.Datetime
@@ -72,8 +72,8 @@ pub(all) struct PersistedTypedDurableFunctionInvocation {
   function_type : @oplog.WrappedFunctionType
   entry_version : OplogEntryVersion
 }
-impl Eq for PersistedTypedDurableFunctionInvocation
-impl Show for PersistedTypedDurableFunctionInvocation
+pub impl Eq for PersistedTypedDurableFunctionInvocation
+pub impl Show for PersistedTypedDurableFunctionInvocation
 
 // Type aliases
 

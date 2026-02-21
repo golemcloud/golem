@@ -2,7 +2,7 @@
 package "vigoo/golem_sdk/gen/interface/golem/api/loadSnapshot"
 
 // Values
-fn load(FixedArray[Byte]) -> Result[Unit, String]
+pub fn load(FixedArray[Byte]) -> Result[Unit, String]
 
 // Errors
 

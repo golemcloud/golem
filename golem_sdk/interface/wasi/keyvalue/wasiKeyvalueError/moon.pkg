@@ -1,3 +1,1 @@
-import {
-  "vigoo/golem_sdk/ffi" @ffi,
-}
+warnings = "-44"

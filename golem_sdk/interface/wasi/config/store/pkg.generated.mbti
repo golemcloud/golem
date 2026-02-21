@@ -2,17 +2,17 @@
 package "vigoo/golem_sdk/interface/wasi/config/store"
 
 // Values
-fn get(String) -> Result[String?, Error_]
+pub fn get(String) -> Result[String?, Error_]
 
-fn get_all() -> Result[Array[(String, String)], Error_]
+pub fn get_all() -> Result[Array[(String, String)], Error_]
 
 // Errors
 pub(all) suberror Error_ {
   Upstream(String)
   Io(String)
 }
-impl Eq for Error_
-impl Show for Error_
+pub impl Eq for Error_
+pub impl Show for Error_
 
 // Types and methods
 

@@ -1,1 +1,0 @@
-Schema management operations (optional/emulated for schema-free databases)

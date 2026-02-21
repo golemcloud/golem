@@ -1,9 +1,9 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/wasi/blobstore/types"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/io/streams"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/io/streams",
+}
 
 // Values
 
@@ -14,25 +14,25 @@ pub(all) struct ContainerMetadata {
   name : String
   created_at : UInt64
 }
-impl Eq for ContainerMetadata
-impl Show for ContainerMetadata
+pub impl Eq for ContainerMetadata
+pub impl Show for ContainerMetadata
 
 pub(all) struct IncomingValue(Int)
-fn IncomingValue::drop(Self) -> Unit
-fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, String]
-fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], String]
+pub fn IncomingValue::drop(Self) -> Unit
+pub fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, String]
+pub fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], String]
 #deprecated
-fn IncomingValue::inner(Self) -> Int
-fn IncomingValue::size(Self) -> UInt64
-impl Eq for IncomingValue
-impl Show for IncomingValue
+pub fn IncomingValue::inner(Self) -> Int
+pub fn IncomingValue::size(Self) -> UInt64
+pub impl Eq for IncomingValue
+pub impl Show for IncomingValue
 
 pub(all) struct ObjectId {
   container : String
   object : String
 }
-impl Eq for ObjectId
-impl Show for ObjectId
+pub impl Eq for ObjectId
+pub impl Show for ObjectId
 
 pub(all) struct ObjectMetadata {
   name : String
@@ -40,17 +40,17 @@ pub(all) struct ObjectMetadata {
   created_at : UInt64
   size : UInt64
 }
-impl Eq for ObjectMetadata
-impl Show for ObjectMetadata
+pub impl Eq for ObjectMetadata
+pub impl Show for ObjectMetadata
 
 pub(all) struct OutgoingValue(Int)
-fn OutgoingValue::drop(Self) -> Unit
+pub fn OutgoingValue::drop(Self) -> Unit
 #deprecated
-fn OutgoingValue::inner(Self) -> Int
-fn OutgoingValue::new_outgoing_value() -> Self
-fn OutgoingValue::outgoing_value_write_body(Self) -> Result[@streams.OutputStream, Unit]
-impl Eq for OutgoingValue
-impl Show for OutgoingValue
+pub fn OutgoingValue::inner(Self) -> Int
+pub fn OutgoingValue::new_outgoing_value() -> Self
+pub fn OutgoingValue::outgoing_value_write_body(Self) -> Result[@streams.OutputStream, Unit]
+pub impl Eq for OutgoingValue
+pub impl Show for OutgoingValue
 
 // Type aliases
 

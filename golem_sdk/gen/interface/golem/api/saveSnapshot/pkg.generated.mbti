@@ -2,7 +2,7 @@
 package "vigoo/golem_sdk/gen/interface/golem/api/saveSnapshot"
 
 // Values
-fn save() -> FixedArray[Byte]
+pub fn save() -> FixedArray[Byte]
 
 // Errors
 

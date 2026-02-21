@@ -1,5 +1,4 @@
 import {
-  "vigoo/golem_sdk/ffi" @ffi,
   "vigoo/golem_sdk/gen/interface/golem/agent/guest" @guest,
   "vigoo/golem_sdk/gen/interface/golem/api/loadSnapshot" @loadSnapshot,
   "vigoo/golem_sdk/gen/interface/golem/api/saveSnapshot" @saveSnapshot,
@@ -7,12 +6,14 @@ import {
   "vigoo/golem_sdk/interface/golem/rpc/types" @types,
 }
 
+warnings = "-44"
+
 options(
   link: {
     "wasm": {
       "export-memory-name": "memory",
       "exports": [
-        "cabi_realloc:cabi_realloc",
+        "mbt_ffi_cabi_realloc:cabi_realloc",
         "wasmExportDiscoverAgentTypes:golem:agent/guest#discover-agent-types",
         "wasmExportDiscoverAgentTypesPostReturn:cabi_post_golem:agent/guest#discover-agent-types",
         "wasmExportGetDefinition:golem:agent/guest#get-definition",

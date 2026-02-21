@@ -2,9 +2,9 @@
 package "vigoo/golem_sdk/interface/wasi/clocks/wallClock"
 
 // Values
-fn now() -> Datetime
+pub fn now() -> Datetime
 
-fn resolution() -> Datetime
+pub fn resolution() -> Datetime
 
 // Errors
 
@@ -13,8 +13,8 @@ pub(all) struct Datetime {
   seconds : UInt64
   nanoseconds : UInt
 }
-impl Eq for Datetime
-impl Show for Datetime
+pub impl Eq for Datetime
+pub impl Show for Datetime
 
 // Type aliases
 

@@ -1,15 +1,15 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/golem/rpc/types"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/clocks/wallClock"
-  "vigoo/golem_sdk/interface/wasi/io/poll"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
+  "vigoo/golem_sdk/interface/wasi/io/poll",
+}
 
 // Values
-fn parse_uuid(String) -> Result[Uuid, String]
+pub fn parse_uuid(String) -> Result[Uuid, String]
 
-fn uuid_to_string(Uuid) -> String
+pub fn uuid_to_string(Uuid) -> String
 
 // Errors
 pub(all) suberror RpcError {
@@ -18,89 +18,89 @@ pub(all) suberror RpcError {
   NotFound(String)
   RemoteInternalError(String)
 }
-impl Eq for RpcError
-impl Show for RpcError
+pub impl Eq for RpcError
+pub impl Show for RpcError
 
 // Types and methods
 pub(all) struct AgentId {
   component_id : ComponentId
   agent_id : String
 }
-impl Eq for AgentId
-impl Show for AgentId
+pub impl Eq for AgentId
+pub impl Show for AgentId
 
 pub(all) struct CancellationToken(Int)
-fn CancellationToken::cancel(Self) -> Unit
-fn CancellationToken::drop(Self) -> Unit
+pub fn CancellationToken::cancel(Self) -> Unit
+pub fn CancellationToken::drop(Self) -> Unit
 #deprecated
-fn CancellationToken::inner(Self) -> Int
-impl Eq for CancellationToken
-impl Show for CancellationToken
+pub fn CancellationToken::inner(Self) -> Int
+pub impl Eq for CancellationToken
+pub impl Show for CancellationToken
 
 pub(all) struct ComponentId {
   uuid : Uuid
 }
-impl Eq for ComponentId
-impl Show for ComponentId
+pub impl Eq for ComponentId
+pub impl Show for ComponentId
 
 pub(all) struct FutureInvokeResult(Int)
-fn FutureInvokeResult::drop(Self) -> Unit
-fn FutureInvokeResult::get(Self) -> Result[WitValue, RpcError]?
+pub fn FutureInvokeResult::drop(Self) -> Unit
+pub fn FutureInvokeResult::get(Self) -> Result[WitValue, RpcError]?
 #deprecated
-fn FutureInvokeResult::inner(Self) -> Int
-fn FutureInvokeResult::subscribe(Self) -> @poll.Pollable
-impl Eq for FutureInvokeResult
-impl Show for FutureInvokeResult
+pub fn FutureInvokeResult::inner(Self) -> Int
+pub fn FutureInvokeResult::subscribe(Self) -> @poll.Pollable
+pub impl Eq for FutureInvokeResult
+pub impl Show for FutureInvokeResult
 
 pub(all) struct NamedWitTypeNode {
   name : String?
   owner : String?
   type_ : WitTypeNode
 }
-impl Eq for NamedWitTypeNode
-impl Show for NamedWitTypeNode
+pub impl Eq for NamedWitTypeNode
+pub impl Show for NamedWitTypeNode
 
 pub(all) enum ResourceMode {
   OWNED
   BORROWED
 }
-fn ResourceMode::from(Int) -> Self
-fn ResourceMode::ordinal(Self) -> Int
-impl Eq for ResourceMode
-impl Show for ResourceMode
+pub fn ResourceMode::from(Int) -> Self
+pub fn ResourceMode::ordinal(Self) -> Int
+pub impl Eq for ResourceMode
+pub impl Show for ResourceMode
 
 pub(all) struct Uri {
   value : String
 }
-impl Eq for Uri
-impl Show for Uri
+pub impl Eq for Uri
+pub impl Show for Uri
 
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
 }
-impl Eq for Uuid
-impl Show for Uuid
+pub impl Eq for Uuid
+pub impl Show for Uuid
 
 pub(all) struct ValueAndType {
   value : WitValue
   typ : WitType
 }
-impl Eq for ValueAndType
-impl Show for ValueAndType
+pub impl Eq for ValueAndType
+pub impl Show for ValueAndType
 
 pub(all) struct WasmRpc(Int)
-fn WasmRpc::async_invoke_and_await(Self, String, Array[WitValue]) -> FutureInvokeResult
-fn WasmRpc::drop(Self) -> Unit
+pub fn WasmRpc::async_invoke_and_await(Self, String, Array[WitValue]) -> FutureInvokeResult
+pub fn WasmRpc::drop(Self) -> Unit
 #deprecated
-fn WasmRpc::inner(Self) -> Int
-fn WasmRpc::invoke(Self, String, Array[WitValue]) -> Result[Unit, RpcError]
-fn WasmRpc::invoke_and_await(Self, String, Array[WitValue]) -> Result[WitValue, RpcError]
-fn WasmRpc::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, Array[WitValue]) -> CancellationToken
-fn WasmRpc::schedule_invocation(Self, @wallClock.Datetime, String, Array[WitValue]) -> Unit
-fn WasmRpc::wasm_rpc(AgentId) -> Self
-impl Eq for WasmRpc
-impl Show for WasmRpc
+pub fn WasmRpc::inner(Self) -> Int
+pub fn WasmRpc::invoke(Self, String, Array[WitValue]) -> Result[Unit, RpcError]
+pub fn WasmRpc::invoke_and_await(Self, String, Array[WitValue]) -> Result[WitValue, RpcError]
+pub fn WasmRpc::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, Array[WitValue]) -> CancellationToken
+pub fn WasmRpc::schedule_invocation(Self, @wallClock.Datetime, String, Array[WitValue]) -> Unit
+pub fn WasmRpc::wasm_rpc(AgentId) -> Self
+pub impl Eq for WasmRpc
+pub impl Show for WasmRpc
 
 pub(all) enum WitNode {
   RecordValue(Array[Int])
@@ -126,14 +126,14 @@ pub(all) enum WitNode {
   PrimString(String)
   Handle((Uri, UInt64))
 }
-impl Eq for WitNode
-impl Show for WitNode
+pub impl Eq for WitNode
+pub impl Show for WitNode
 
 pub(all) struct WitType {
   nodes : Array[NamedWitTypeNode]
 }
-impl Eq for WitType
-impl Show for WitType
+pub impl Eq for WitType
+pub impl Show for WitType
 
 pub(all) enum WitTypeNode {
   RecordType(Array[(String, Int)])
@@ -159,14 +159,14 @@ pub(all) enum WitTypeNode {
   PrimStringType
   HandleType((UInt64, ResourceMode))
 }
-impl Eq for WitTypeNode
-impl Show for WitTypeNode
+pub impl Eq for WitTypeNode
+pub impl Show for WitTypeNode
 
 pub(all) struct WitValue {
   nodes : Array[WitNode]
 }
-impl Eq for WitValue
-impl Show for WitValue
+pub impl Eq for WitValue
+pub impl Show for WitValue
 
 // Type aliases
 

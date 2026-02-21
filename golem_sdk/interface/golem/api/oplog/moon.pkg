@@ -1,7 +1,8 @@
 import {
-  "vigoo/golem_sdk/ffi" @ffi,
   "vigoo/golem_sdk/interface/golem/api/context" @context,
   "vigoo/golem_sdk/interface/golem/api/host" @host,
   "vigoo/golem_sdk/interface/golem/rpc/types" @types,
   "vigoo/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
 }
+
+warnings = "-44"

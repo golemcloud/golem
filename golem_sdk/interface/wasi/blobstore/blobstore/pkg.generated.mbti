@@ -1,23 +1,23 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/wasi/blobstore/blobstore"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/blobstore/container"
-  "vigoo/golem_sdk/interface/wasi/blobstore/types"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/blobstore/container",
+  "vigoo/golem_sdk/interface/wasi/blobstore/types",
+}
 
 // Values
-fn container_exists(String) -> Result[Bool, String]
+pub fn container_exists(String) -> Result[Bool, String]
 
-fn copy_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
+pub fn copy_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
 
-fn create_container(String) -> Result[@container.Container, String]
+pub fn create_container(String) -> Result[@container.Container, String]
 
-fn delete_container(String) -> Result[Unit, String]
+pub fn delete_container(String) -> Result[Unit, String]
 
-fn get_container(String) -> Result[@container.Container, String]
+pub fn get_container(String) -> Result[@container.Container, String]
 
-fn move_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
+pub fn move_object(@types.ObjectId, @types.ObjectId) -> Result[Unit, String]
 
 // Errors
 

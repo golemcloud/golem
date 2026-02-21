@@ -11,21 +11,21 @@ pub(all) struct Date {
   month : Byte
   day : Byte
 }
-impl Eq for Date
-impl Show for Date
+pub impl Eq for Date
+pub impl Show for Date
 
 pub(all) enum IpAddress {
   Ipv4((Byte, Byte, Byte, Byte))
   Ipv6((UInt, UInt, UInt, UInt, UInt, UInt, UInt, UInt))
 }
-impl Eq for IpAddress
-impl Show for IpAddress
+pub impl Eq for IpAddress
+pub impl Show for IpAddress
 
 pub(all) struct MacAddress {
   octets : (Byte, Byte, Byte, Byte, Byte, Byte)
 }
-impl Eq for MacAddress
-impl Show for MacAddress
+pub impl Eq for MacAddress
+pub impl Show for MacAddress
 
 pub(all) struct Time {
   hour : Byte
@@ -33,36 +33,36 @@ pub(all) struct Time {
   second : Byte
   nanosecond : UInt
 }
-impl Eq for Time
-impl Show for Time
+pub impl Eq for Time
+pub impl Show for Time
 
 pub(all) struct Timestamp {
   date : Date
   time : Time
 }
-impl Eq for Timestamp
-impl Show for Timestamp
+pub impl Eq for Timestamp
+pub impl Show for Timestamp
 
 pub(all) struct Timestamptz {
   timestamp : Timestamp
   offset : Int
 }
-impl Eq for Timestamptz
-impl Show for Timestamptz
+pub impl Eq for Timestamptz
+pub impl Show for Timestamptz
 
 pub(all) struct Timetz {
   time : Time
   offset : Int
 }
-impl Eq for Timetz
-impl Show for Timetz
+pub impl Eq for Timetz
+pub impl Show for Timetz
 
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
 }
-impl Eq for Uuid
-impl Show for Uuid
+pub impl Eq for Uuid
+pub impl Show for Uuid
 
 // Type aliases
 

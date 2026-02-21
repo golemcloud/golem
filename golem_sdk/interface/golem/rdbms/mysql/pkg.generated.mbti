@@ -1,9 +1,9 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/golem/rdbms/mysql"
 
-import(
-  "vigoo/golem_sdk/interface/golem/rdbms/types"
-)
+import {
+  "vigoo/golem_sdk/interface/golem/rdbms/types",
+}
 
 // Values
 
@@ -15,8 +15,8 @@ pub(all) suberror Error_ {
   QueryResponseFailure(String)
   Other(String)
 }
-impl Eq for Error_
-impl Show for Error_
+pub impl Eq for Error_
+pub impl Show for Error_
 
 // Types and methods
 pub(all) struct DbColumn {
@@ -25,8 +25,8 @@ pub(all) struct DbColumn {
   db_type : DbColumnType
   db_type_name : String
 }
-impl Eq for DbColumn
-impl Show for DbColumn
+pub impl Eq for DbColumn
+pub impl Show for DbColumn
 
 pub(all) enum DbColumnType {
   Boolean
@@ -65,54 +65,54 @@ pub(all) enum DbColumnType {
   Bit
   Json
 }
-impl Eq for DbColumnType
-impl Show for DbColumnType
+pub impl Eq for DbColumnType
+pub impl Show for DbColumnType
 
 pub(all) struct DbConnection(Int)
-fn DbConnection::begin_transaction(Self) -> Result[DbTransaction, Error_]
-fn DbConnection::drop(Self) -> Unit
-fn DbConnection::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
+pub fn DbConnection::begin_transaction(Self) -> Result[DbTransaction, Error_]
+pub fn DbConnection::drop(Self) -> Unit
+pub fn DbConnection::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
 #deprecated
-fn DbConnection::inner(Self) -> Int
-fn DbConnection::open(String) -> Result[Self, Error_]
-fn DbConnection::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
-fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
-impl Eq for DbConnection
-impl Show for DbConnection
+pub fn DbConnection::inner(Self) -> Int
+pub fn DbConnection::open(String) -> Result[Self, Error_]
+pub fn DbConnection::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+pub impl Eq for DbConnection
+pub impl Show for DbConnection
 
 pub(all) struct DbResult {
   columns : Array[DbColumn]
   rows : Array[DbRow]
 }
-impl Eq for DbResult
-impl Show for DbResult
+pub impl Eq for DbResult
+pub impl Show for DbResult
 
 pub(all) struct DbResultStream(Int)
-fn DbResultStream::drop(Self) -> Unit
-fn DbResultStream::get_columns(Self) -> Array[DbColumn]
-fn DbResultStream::get_next(Self) -> Array[DbRow]?
+pub fn DbResultStream::drop(Self) -> Unit
+pub fn DbResultStream::get_columns(Self) -> Array[DbColumn]
+pub fn DbResultStream::get_next(Self) -> Array[DbRow]?
 #deprecated
-fn DbResultStream::inner(Self) -> Int
-impl Eq for DbResultStream
-impl Show for DbResultStream
+pub fn DbResultStream::inner(Self) -> Int
+pub impl Eq for DbResultStream
+pub impl Show for DbResultStream
 
 pub(all) struct DbRow {
   values : Array[DbValue]
 }
-impl Eq for DbRow
-impl Show for DbRow
+pub impl Eq for DbRow
+pub impl Show for DbRow
 
 pub(all) struct DbTransaction(Int)
-fn DbTransaction::commit(Self) -> Result[Unit, Error_]
-fn DbTransaction::drop(Self) -> Unit
-fn DbTransaction::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
+pub fn DbTransaction::commit(Self) -> Result[Unit, Error_]
+pub fn DbTransaction::drop(Self) -> Unit
+pub fn DbTransaction::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
 #deprecated
-fn DbTransaction::inner(Self) -> Int
-fn DbTransaction::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
-fn DbTransaction::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
-fn DbTransaction::rollback(Self) -> Result[Unit, Error_]
-impl Eq for DbTransaction
-impl Show for DbTransaction
+pub fn DbTransaction::inner(Self) -> Int
+pub fn DbTransaction::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbTransaction::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+pub fn DbTransaction::rollback(Self) -> Result[Unit, Error_]
+pub impl Eq for DbTransaction
+pub impl Show for DbTransaction
 
 pub(all) enum DbValue {
   Boolean(Bool)
@@ -152,8 +152,8 @@ pub(all) enum DbValue {
   Json(String)
   Null
 }
-impl Eq for DbValue
-impl Show for DbValue
+pub impl Eq for DbValue
+pub impl Show for DbValue
 
 // Type aliases
 

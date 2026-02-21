@@ -38,8 +38,6 @@ moonbit-golem/
 │   │   ├── main.wit                   # The `agent-guest` world definition
 │   │   ├── deps.toml                  # WIT dependency source (golemcloud/golem main)
 │   │   └── deps/                      # Downloaded WIT dependencies
-│   ├── ffi/                           # Low-level WASM FFI primitives (wit-bindgen generated)
-│   │   └── top.mbt                    # Memory ops, malloc/free, ptr conversions, cabi_realloc
 │   ├── interface/                     # WIT-generated MoonBit types and host-import bindings
 │   │   ├── golem/
 │   │   │   ├── agent/common/          # Core types: AgentType, DataValue, DataSchema, AgentError, etc.
@@ -49,14 +47,7 @@ moonbit-golem/
 │   │   │   ├── api/oplog/             # Oplog types (WrappedFunctionType, OplogIndex, etc.)
 │   │   │   ├── durability/durability/ # Durability: begin/end durable function, persist, replay
 │   │   │   ├── rpc/types/             # WitValue, WitType, WitNode, WitTypeNode, WasmRpc, etc.
-│   │   │   ├── llm/                   # LLM API bindings
-│   │   │   ├── rdbms/                 # RDBMS (Postgres, MySQL) bindings
-│   │   │   ├── exec/                  # Executor API
-│   │   │   ├── graph/                 # Graph database API
-│   │   │   ├── search/                # Search API
-│   │   │   ├── stt/                   # Speech-to-text API
-│   │   │   ├── video_generation/      # Video generation API
-│   │   │   └── web_search/            # Web search API
+│   │   │   └── rdbms/                 # RDBMS (Postgres, MySQL) bindings
 │   │   └── wasi/
 │   │       ├── blobstore/             # Blob storage
 │   │       ├── clocks/                # Wall clock, monotonic clock
@@ -65,7 +56,7 @@ moonbit-golem/
 │   │       ├── keyvalue/              # Key-value store
 │   │       └── logging/               # Logging
 │   ├── gen/                           # WIT-generated WASM export glue code
-│   │   ├── ffi.mbt                    # cabi_realloc bridge, return_area
+│   │   ├── ffi.mbt                    # mbt_ffi_cabi_realloc, return_area, malloc/free/ptr helpers
 │   │   ├── gen_interface_golem_agent_guest_export.mbt  # WASM export stubs for agent guest interface
 │   │   ├── gen_interface_golem_api_load_snapshot_export.mbt
 │   │   ├── gen_interface_golem_api_save_snapshot_export.mbt
@@ -75,6 +66,8 @@ moonbit-golem/
 │   │   │   └── stub.mbt              # Snapshot save (currently returns [])
 │   │   └── interface/golem/api/loadSnapshot/
 │   │       └── stub.mbt              # Snapshot load (currently returns Err)
+│   ├── world/                         # WIT-generated world-level bindings
+│   │   └── agentGuest/                # agent-guest world imports and type re-exports
 │   └── agents/                        # SDK's agent registry
 │       └── agents.mbt                 # AgentState, RegisteredAgent, RawAgent trait, register_agent
 └── golem_sdk_example1/                # Example consumer project
@@ -89,17 +82,34 @@ moonbit-golem/
 
 ### WIT Bindgen
 
-All code under `ffi/`, `interface/`, and `gen/` (except `gen/interface/*/stub.mbt`) is
+All code under `interface/`, `world/`, and `gen/` (except `gen/interface/*/stub.mbt`) is
 **auto-generated** by `wit-bindgen moonbit`. Do NOT edit these files. Regenerate with:
 
 ```sh
 cd golem_sdk
-moon run script bindgen
+wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name vigoo/golem_sdk --ignore-stub
+moon fmt
 ```
+
+Note: `moon run script bindgen` is defined in `moon.mod.json` but can fail if the project is in a
+broken state (moon tries to resolve packages before running the script). In that case, run
+`wit-bindgen` directly as shown above.
+
+After regeneration, `wit-bindgen` produces `moon.pkg.json` files; `moon fmt` converts them to the
+new `moon.pkg` plain-text format. The `--ignore-stub` flag means `wit-bindgen` will NOT regenerate
+the stub files or their `moon.pkg` files — those must be maintained by hand.
+
+The sub-packages under `gen/` (`gen/interface/golem/agent/guest/`, `gen/interface/golem/api/loadSnapshot/`,
+`gen/interface/golem/api/saveSnapshot/`, `gen/world/agentGuest/`) need their own `moon.pkg` files
+with correct imports. Since `--ignore-stub` skips these, they must be created/maintained manually.
 
 The `stub.mbt` files under `gen/interface/` are the **SDK's implementation** of the WIT export
 interfaces. These are the files where we write the SDK's dispatch logic. `wit-bindgen` generates them
 once (with `--ignore-stub` preventing overwrites), and we maintain them by hand.
+
+FFI helper functions (`mbt_ffi_malloc`, `mbt_ffi_free`, `mbt_ffi_ptr2str`, etc.) are inlined by
+`wit-bindgen` into each package's `ffi.mbt` that needs them. The `gen/ffi.mbt` file contains
+`mbt_ffi_cabi_realloc` (the Component Model's canonical ABI allocator) and the shared `return_area`.
 
 ### The Agent Registry Pattern
 
@@ -296,15 +306,15 @@ moon check --target wasm          # Type-check example
 
 - The SDK targets **WASM only** (`preferred-target: wasm` in `moon.mod.json`)
 - String encoding is **UTF-16** (MoonBit's native format, passed to `wasm-tools component embed --encoding utf16`)
-- Memory management uses `@ffi.malloc`/`@ffi.free` for WASM linear memory, with MoonBit's GC for MoonBit objects
+- Memory management uses `mbt_ffi_malloc`/`mbt_ffi_free` (inlined per-package) for WASM linear memory, with MoonBit's GC for MoonBit objects
 - The `agents` package holds mutable global state (`let state : AgentState = AgentState::new()`) — this is a module-level singleton
 - WASM exports are linked via `moon.pkg` link configuration — every agent component must declare these exports
-- The `@ffi.cabi_realloc` function is the Component Model's canonical ABI allocator
-- `moon.pkg` can use either the new format (plain text) or `moon.pkg.json` (JSON) — this project uses both
+- The `mbt_ffi_cabi_realloc` function in `gen/ffi.mbt` is the Component Model's canonical ABI allocator
+- `moon.pkg` can use either the new format (plain text) or `moon.pkg.json` (JSON) — `moon fmt` converts JSON to plain text
 
 ## Dependencies & Tools
 
-- **wit-bindgen** ≥ 0.47.0 with `moonbit` backend — generates all WIT bindings
+- **wit-bindgen** ≥ 0.53.1 with `moonbit` backend — generates all WIT bindings
 - **wasm-tools** — for `component embed` (adds WIT type info to WASM) and `component new` (creates Component Model WASM)
 - **moon** — MoonBit build tool
 - **moonbitlang/parser** + **moonbitlang/formatter** — needed for the custom derive tool (not yet added as deps)

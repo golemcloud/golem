@@ -1,10 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/wasi/keyvalue/types"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/io/streams"
-  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/io/streams",
+  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+}
 
 // Values
 
@@ -12,32 +12,32 @@ import(
 
 // Types and methods
 pub(all) struct Bucket(Int)
-fn Bucket::drop(Self) -> Unit
+pub fn Bucket::drop(Self) -> Unit
 #deprecated
-fn Bucket::inner(Self) -> Int
-fn Bucket::open_bucket(String) -> Result[Self, @wasiKeyvalueError.Error_]
-impl Eq for Bucket
-impl Show for Bucket
+pub fn Bucket::inner(Self) -> Int
+pub fn Bucket::open_bucket(String) -> Result[Self, @wasiKeyvalueError.Error_]
+pub impl Eq for Bucket
+pub impl Show for Bucket
 
 pub(all) struct IncomingValue(Int)
-fn IncomingValue::drop(Self) -> Unit
-fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, @wasiKeyvalueError.Error_]
-fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], @wasiKeyvalueError.Error_]
-fn IncomingValue::incoming_value_size(Self) -> Result[UInt64, @wasiKeyvalueError.Error_]
+pub fn IncomingValue::drop(Self) -> Unit
+pub fn IncomingValue::incoming_value_consume_async(Self) -> Result[@streams.InputStream, @wasiKeyvalueError.Error_]
+pub fn IncomingValue::incoming_value_consume_sync(Self) -> Result[FixedArray[Byte], @wasiKeyvalueError.Error_]
+pub fn IncomingValue::incoming_value_size(Self) -> Result[UInt64, @wasiKeyvalueError.Error_]
 #deprecated
-fn IncomingValue::inner(Self) -> Int
-impl Eq for IncomingValue
-impl Show for IncomingValue
+pub fn IncomingValue::inner(Self) -> Int
+pub impl Eq for IncomingValue
+pub impl Show for IncomingValue
 
 pub(all) struct OutgoingValue(Int)
-fn OutgoingValue::drop(Self) -> Unit
+pub fn OutgoingValue::drop(Self) -> Unit
 #deprecated
-fn OutgoingValue::inner(Self) -> Int
-fn OutgoingValue::new_outgoing_value() -> Self
-fn OutgoingValue::outgoing_value_write_body_async(Self) -> Result[@streams.OutputStream, @wasiKeyvalueError.Error_]
-fn OutgoingValue::outgoing_value_write_body_sync(Self, FixedArray[Byte]) -> Result[Unit, @wasiKeyvalueError.Error_]
-impl Eq for OutgoingValue
-impl Show for OutgoingValue
+pub fn OutgoingValue::inner(Self) -> Int
+pub fn OutgoingValue::new_outgoing_value() -> Self
+pub fn OutgoingValue::outgoing_value_write_body_async(Self) -> Result[@streams.OutputStream, @wasiKeyvalueError.Error_]
+pub fn OutgoingValue::outgoing_value_write_body_sync(Self, FixedArray[Byte]) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub impl Eq for OutgoingValue
+pub impl Show for OutgoingValue
 
 // Type aliases
 

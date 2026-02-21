@@ -2,7 +2,7 @@
 package "vigoo/golem_sdk/interface/wasi/logging/logging"
 
 // Values
-fn log(Level, String, String) -> Unit
+pub fn log(Level, String, String) -> Unit
 
 // Errors
 
@@ -15,10 +15,10 @@ pub(all) enum Level {
   ERROR
   CRITICAL
 }
-fn Level::from(Int) -> Self
-fn Level::ordinal(Self) -> Int
-impl Eq for Level
-impl Show for Level
+pub fn Level::from(Int) -> Self
+pub fn Level::ordinal(Self) -> Int
+pub impl Eq for Level
+pub impl Show for Level
 
 // Type aliases
 

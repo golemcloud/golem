@@ -2,37 +2,37 @@
 package "vigoo/golem_sdk_example1/counter"
 
 // Values
-fn cabi_realloc(Int, Int, Int, Int) -> Int
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
 
-fn wasmExportDiscoverAgentTypes() -> Int
+pub fn wasmExportDiscoverAgentTypes() -> Int
 
-fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
 
-fn wasmExportGetDefinition() -> Int
+pub fn wasmExportGetDefinition() -> Int
 
-fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
 
-fn wasmExportInitialize(Int, Int, Int, Int, Int) -> Int
+pub fn wasmExportInitialize(Int, Int, Int, Int, Int) -> Int
 
-fn wasmExportInitializePostReturn(Int) -> Unit
+pub fn wasmExportInitializePostReturn(Int) -> Unit
 
-fn wasmExportInvoke(Int, Int, Int, Int, Int) -> Int
+pub fn wasmExportInvoke(Int, Int, Int, Int, Int) -> Int
 
-fn wasmExportInvokePostReturn(Int) -> Unit
+pub fn wasmExportInvokePostReturn(Int) -> Unit
 
-fn wasmExportLoad(Int, Int) -> Int
+pub fn wasmExportLoad(Int, Int) -> Int
 
-fn wasmExportLoadPostReturn(Int) -> Unit
+pub fn wasmExportLoadPostReturn(Int) -> Unit
 
-fn wasmExportSave() -> Int
+pub fn wasmExportSave() -> Int
 
-fn wasmExportSavePostReturn(Int) -> Unit
+pub fn wasmExportSavePostReturn(Int) -> Unit
 
 // Errors
 
 // Types and methods
 type Counter
-fn Counter::increment(Self) -> Unit
+pub fn Counter::increment(Self) -> Unit
 
 // Type aliases
 

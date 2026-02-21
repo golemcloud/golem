@@ -1,5 +1,6 @@
 import {
-  "vigoo/golem_sdk/ffi" @ffi,
   "vigoo/golem_sdk/interface/wasi/io/streams" @streams,
   "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError" @wasiKeyvalueError,
 }
+
+warnings = "-44"

@@ -1,18 +1,18 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/wasi/clocks/monotonicClock"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/io/poll"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/io/poll",
+}
 
 // Values
-fn now() -> UInt64
+pub fn now() -> UInt64
 
-fn resolution() -> UInt64
+pub fn resolution() -> UInt64
 
-fn subscribe_duration(UInt64) -> @poll.Pollable
+pub fn subscribe_duration(UInt64) -> @poll.Pollable
 
-fn subscribe_instant(UInt64) -> @poll.Pollable
+pub fn subscribe_instant(UInt64) -> @poll.Pollable
 
 // Errors
 

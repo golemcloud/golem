@@ -4,11 +4,13 @@ package "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError"
 // Values
 
 // Errors
-pub(all) suberror Error_ Int
-fn Error_::drop(Self) -> Unit
-fn Error_::trace(Self) -> String
-impl Eq for Error_
-impl Show for Error_
+pub(all) suberror Error_ {
+  Error_(Int)
+}
+pub fn Error_::drop(Self) -> Unit
+pub fn Error_::trace(Self) -> String
+pub impl Eq for Error_
+pub impl Show for Error_
 
 // Types and methods
 

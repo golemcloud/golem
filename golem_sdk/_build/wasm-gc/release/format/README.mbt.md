@@ -1,1 +1,0 @@
-# vigoo/golem_sdk

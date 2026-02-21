@@ -1,5 +1,0 @@
-import {
-  "vigoo/golem_sdk/ffi" @ffi,
-  "vigoo/golem_sdk/interface/wasi/blobstore/container" @container,
-  "vigoo/golem_sdk/interface/wasi/blobstore/types" @types,
-}

@@ -1,34 +1,42 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/agents"
 
-import(
-  "moonbitlang/core/hashmap"
-  "vigoo/golem_sdk/interface/golem/agent/common"
-)
+import {
+  "vigoo/golem_sdk/interface/golem/agent/common",
+}
 
 // Values
-let agent_instance : AgentInstance?
+pub fn get_agent_instance() -> AgentInstance?
 
-fn panic_with_message(String, String) -> Unit
+pub fn get_all_registered_agents() -> Array[@common.AgentType]
 
-fn register_agent(RegisteredAgent) -> Unit
+pub fn get_registered_agent(String) -> RegisteredAgent?
 
-let registered_agents : @hashmap.HashMap[String, RegisteredAgent]
+pub fn[T] panic_with_message(String, String) -> T
+
+pub fn register_agent(RegisteredAgent) -> Unit
+
+pub fn set_agent_instance(AgentInstance) -> Unit
 
 // Errors
 
 // Types and methods
-pub struct AgentInstance {
+pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
+  interface : &RawAgent
 }
 
-pub struct RegisteredAgent {
+pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
+  construct : (@common.DataValue) -> Result[&RawAgent, @common.AgentError]
 }
 
 // Type aliases
 
 // Traits
+pub(open) trait RawAgent {
+  invoke(Self, String, @common.DataValue) -> Result[@common.DataValue, @common.AgentError]
+}
 

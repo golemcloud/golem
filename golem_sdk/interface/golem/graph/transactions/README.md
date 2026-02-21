@@ -1,1 +1,0 @@
-All graph operations performed within transaction contexts

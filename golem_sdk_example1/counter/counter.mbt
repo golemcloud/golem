@@ -79,7 +79,7 @@ pub fn cabi_realloc(
   dst_alignment : Int,
   dst_size : Int,
 ) -> Int {
-  @gen.cabi_realloc(src_offset, src_size, dst_alignment, dst_size)
+  @gen.mbt_ffi_cabi_realloc(src_offset, src_size, dst_alignment, dst_size)
 }
 
 ///|

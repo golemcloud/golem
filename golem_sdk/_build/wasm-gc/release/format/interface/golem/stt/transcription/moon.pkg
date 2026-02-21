@@ -1,4 +1,0 @@
-import {
-  "vigoo/golem_sdk/ffi" @ffi,
-  "vigoo/golem_sdk/interface/golem/stt/types" @types,
-}

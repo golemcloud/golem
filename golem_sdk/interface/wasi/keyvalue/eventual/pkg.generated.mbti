@@ -1,19 +1,19 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk/interface/wasi/keyvalue/eventual"
 
-import(
-  "vigoo/golem_sdk/interface/wasi/keyvalue/types"
-  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError"
-)
+import {
+  "vigoo/golem_sdk/interface/wasi/keyvalue/types",
+  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+}
 
 // Values
-fn delete(@types.Bucket, String) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub fn delete(@types.Bucket, String) -> Result[Unit, @wasiKeyvalueError.Error_]
 
-fn exists(@types.Bucket, String) -> Result[Bool, @wasiKeyvalueError.Error_]
+pub fn exists(@types.Bucket, String) -> Result[Bool, @wasiKeyvalueError.Error_]
 
-fn get(@types.Bucket, String) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]
+pub fn get(@types.Bucket, String) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]
 
-fn set(@types.Bucket, String, @types.OutgoingValue) -> Result[Unit, @wasiKeyvalueError.Error_]
+pub fn set(@types.Bucket, String, @types.OutgoingValue) -> Result[Unit, @wasiKeyvalueError.Error_]
 
 // Errors
 
