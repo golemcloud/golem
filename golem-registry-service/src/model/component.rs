@@ -18,15 +18,10 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::component::InitialComponentFile;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
-use golem_common::model::component_metadata::{
-    ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
-};
+use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::diff::{self, Hash};
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm::analysis::AnalysedType;
-use rib::FunctionName;
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Display, Formatter};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {
@@ -42,7 +37,6 @@ pub struct NewComponentRevision {
     pub object_store_key: String,
     pub installed_plugins: Vec<InstalledPlugin>,
 
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub agent_types: Vec<AgentType>,
 }
 
@@ -56,7 +50,6 @@ impl NewComponentRevision {
         env: BTreeMap<String, String>,
         wasm_hash: Hash,
         object_store_key: String,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         installed_plugins: Vec<InstalledPlugin>,
         agent_types: Vec<AgentType>,
     ) -> Self {
@@ -72,7 +65,6 @@ impl NewComponentRevision {
             wasm_hash,
             object_store_key,
             installed_plugins,
-            dynamic_linking,
             agent_types,
         }
     }
@@ -82,11 +74,7 @@ impl NewComponentRevision {
         transformed_object_store_key: String,
         transformed_data: &[u8],
     ) -> Result<FinalizedComponentRevision, ComponentProcessingError> {
-        let metadata = ComponentMetadata::analyse_component(
-            transformed_data,
-            self.dynamic_linking,
-            self.agent_types,
-        )?;
+        let metadata = ComponentMetadata::analyse_component(transformed_data, self.agent_types)?;
 
         Ok(FinalizedComponentRevision {
             component_id: self.component_id,
@@ -168,7 +156,6 @@ impl Component {
             installed_plugins: self.installed_plugins,
 
             agent_types: self.metadata.agent_types().to_vec(),
-            dynamic_linking: self.metadata.dynamic_linking().clone(),
         })
     }
 }
@@ -194,123 +181,4 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             hash: value.hash,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct ConflictReport {
-    pub missing_functions: Vec<FunctionName>,
-    pub conflicting_functions: Vec<ConflictingFunction>,
-}
-
-impl ConflictReport {
-    pub fn is_empty(&self) -> bool {
-        self.missing_functions.is_empty() && self.conflicting_functions.is_empty()
-    }
-}
-
-impl Display for ConflictReport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Handling missing functions
-        writeln!(f, "Missing Functions:")?;
-        if self.missing_functions.is_empty() {
-            writeln!(f, "  None")?;
-        } else {
-            for missing_function in &self.missing_functions {
-                writeln!(f, "  - {missing_function}")?;
-            }
-        }
-
-        // Handling conflicting functions
-        writeln!(f, "\nFunctions with conflicting types:")?;
-        if self.conflicting_functions.is_empty() {
-            writeln!(f, "  None")?;
-        } else {
-            for conflict in &self.conflicting_functions {
-                writeln!(f, "{conflict}")?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct ConflictingFunction {
-    pub function: FunctionName,
-    pub parameter_type_conflict: Option<ParameterTypeConflict>,
-    pub return_type_conflict: Option<ReturnTypeConflict>,
-}
-
-impl Display for ConflictingFunction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Function: {}", self.function)?;
-
-        match self.parameter_type_conflict {
-            Some(ref conflict) => {
-                writeln!(f, "  Parameter Type Conflict:")?;
-                writeln!(
-                    f,
-                    "    Existing: {}",
-                    convert_to_pretty_types(&conflict.existing)
-                )?;
-                writeln!(
-                    f,
-                    "    New:      {}",
-                    convert_to_pretty_types(&conflict.new)
-                )?;
-            }
-            None => {
-                writeln!(f, "  Parameter Type Conflict: None")?;
-            }
-        }
-
-        match self.return_type_conflict {
-            Some(ref conflict) => {
-                writeln!(f, "  Result Type Conflict:")?;
-                writeln!(
-                    f,
-                    "    Existing: {}",
-                    convert_to_pretty_type(&conflict.existing)
-                )?;
-                writeln!(f, "    New:      {}", convert_to_pretty_type(&conflict.new))?;
-            }
-            None => {
-                writeln!(f, "  Result Type Conflict: None")?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct ParameterTypeConflict {
-    pub existing: Vec<AnalysedType>,
-    pub new: Vec<AnalysedType>,
-}
-
-#[derive(Debug)]
-pub struct ReturnTypeConflict {
-    pub existing: Option<AnalysedType>,
-    pub new: Option<AnalysedType>,
-}
-
-fn convert_to_pretty_types(analysed_types: &[AnalysedType]) -> String {
-    let type_names = analysed_types
-        .iter()
-        .map(|x| {
-            rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
-        })
-        .collect::<Vec<_>>();
-
-    type_names.join(", ")
-}
-
-fn convert_to_pretty_type(analysed_type: &Option<AnalysedType>) -> String {
-    analysed_type
-        .as_ref()
-        .map(|x| {
-            rib::TypeName::try_from(x.clone()).map_or("unknown".to_string(), |x| x.to_string())
-        })
-        .unwrap_or("unit".to_string())
 }

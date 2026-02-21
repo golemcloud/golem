@@ -530,7 +530,7 @@ pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod test {
     use crate::fs;
-    use assert2::check;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use test_r::test;
 
@@ -538,21 +538,22 @@ mod test {
     fn resolve_relative_globs() {
         let base_dir = PathBuf::from("somedir/somewhere");
 
-        check!(
-            fs::resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string())
+        assert_eq!(
+            fs::resolve_relative_glob(&base_dir, "").unwrap(),
+            (base_dir.clone(), "".to_string())
         );
-        check!(
-            fs::resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
-                == (base_dir.clone(), "somepath/a/b/c".to_string())
+        assert_eq!(
+            fs::resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap(),
+            (base_dir.clone(), "somepath/a/b/c".to_string())
         );
-        check!(
-            fs::resolve_relative_glob(&base_dir, "../../target").unwrap()
-                == (base_dir.join("../.."), "target".to_string())
+        assert_eq!(
+            fs::resolve_relative_glob(&base_dir, "../../target").unwrap(),
+            (base_dir.join("../.."), "target".to_string())
         );
-        check!(
+        assert_eq!(
             fs::resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..")
-                .unwrap()
-                == (base_dir.join("../../../"), "target/a".to_string())
+                .unwrap(),
+            (base_dir.join("../../../"), "target/a".to_string())
         );
     }
 }

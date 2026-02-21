@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::ComponentError;
-use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
@@ -26,46 +25,34 @@ use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
-use crate::services::plugin_registration::PluginRegistrationService;
-use crate::services::run_cpu_bound_work;
-use anyhow::{Context, anyhow};
-use golem_common::model::account::AccountId;
+use anyhow::Context;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileContentHash, ComponentFileOptions, ComponentFilePath,
     ComponentFilePermissions, ComponentUpdate, InitialComponentFile, InstalledPlugin,
     PluginInstallationAction,
 };
 use golem_common::model::component::{ComponentId, PluginInstallation};
-use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_common::widen_infallible;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
-use golem_service_base::model::plugin_registration::{
-    AppPluginSpec, LibraryPluginSpec, PluginSpec,
-};
-use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tracing::{Instrument, debug, info, info_span};
+use tracing::{debug, info};
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
     object_store: Arc<ComponentObjectStore>,
     component_compilation: Arc<dyn ComponentCompilationService>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_usage_service: Arc<AccountUsageService>,
     environment_service: Arc<EnvironmentService>,
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
-    plugin_registration_service: Arc<PluginRegistrationService>,
-    component_transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
 }
 
 impl ComponentWriteService {
@@ -74,24 +61,18 @@ impl ComponentWriteService {
         object_store: Arc<ComponentObjectStore>,
         component_compilation: Arc<dyn ComponentCompilationService>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
         account_usage_service: Arc<AccountUsageService>,
         environment_service: Arc<EnvironmentService>,
         environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
-        plugin_registration_service: Arc<PluginRegistrationService>,
-        component_transformer_plugin_caller: Arc<dyn ComponentTransformerPluginCaller>,
     ) -> Self {
         Self {
             component_repo,
             object_store,
             component_compilation,
             initial_component_files_service,
-            plugin_wasm_files_service,
             account_usage_service,
             environment_service,
             environment_plugin_grant_service,
-            plugin_registration_service,
-            component_transformer_plugin_caller,
         }
     }
 
@@ -163,7 +144,6 @@ impl ComponentWriteService {
             component_creation.env,
             wasm_hash,
             wasm_object_store_key,
-            component_creation.dynamic_linking,
             self.plugin_installations_for_new_component(
                 &environment,
                 component_creation.plugins,
@@ -303,9 +283,6 @@ impl ComponentWriteService {
             component_update.env.unwrap_or(component.env),
             wasm_hash,
             wasm_object_store_key,
-            component_update
-                .dynamic_linking
-                .unwrap_or(component.metadata.dynamic_linking().clone()),
             self.update_plugin_installations(
                 &environment,
                 component.installed_plugins,
@@ -687,16 +664,12 @@ impl ComponentWriteService {
         new_revision: NewComponentRevision,
         wasm: Arc<[u8]>,
     ) -> Result<FinalizedComponentRevision, ComponentError> {
-        let (new_revision, transformed_data) = self
-            .transform_with_installed_plugins(new_revision, wasm)
-            .await?;
-
         let (_, transformed_object_store_key) = self
-            .upload_and_hash_component_wasm(environment_id, transformed_data.clone())
+            .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;
 
-        let finalized_revision = new_revision
-            .with_transformed_component(transformed_object_store_key, &transformed_data)?;
+        let finalized_revision =
+            new_revision.with_transformed_component(transformed_object_store_key, &wasm)?;
 
         if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name()
             && finalized_revision.component_name.0 != *known_root_package_name
@@ -710,188 +683,9 @@ impl ComponentWriteService {
         debug!(
             environment_id = %environment_id,
             exports = ?finalized_revision.metadata.exports(),
-            dynamic_linking = ?finalized_revision.metadata.dynamic_linking(),
             "Finalized component",
         );
 
         Ok(finalized_revision)
-    }
-
-    async fn transform_with_installed_plugins(
-        &self,
-        mut component: NewComponentRevision,
-        mut data: Arc<[u8]>,
-    ) -> Result<(NewComponentRevision, Arc<[u8]>), ComponentError> {
-        if component.installed_plugins.is_empty() {
-            return Ok((component, data));
-        };
-
-        let mut installed_plugins = component.installed_plugins.clone();
-        installed_plugins.sort_by_key(|p| p.priority);
-
-        for installation in installed_plugins {
-            // Auth was checked when initially installing the plugins. No need to check here (and users wouldn't be able to directly access the plugin anyway)
-            // include deleted here as the plugin might have been deleted in the meantime, but components should keep working.
-            let plugin = self
-                .plugin_registration_service
-                .get_plugin(installation.plugin_registration_id, true, &AuthCtx::System)
-                .await?;
-
-            match plugin.spec {
-                PluginSpec::ComponentTransformer(spec) => {
-                    let span = info_span!("component transformation",
-                        component_id = %component.component_id,
-                        plugin_registration_id = %installation.plugin_registration_id,
-                        plugin_priority = %installation.priority,
-                    );
-
-                    (component, data) = self
-                        .apply_component_transformer_plugin(
-                            component,
-                            installation.priority,
-                            data,
-                            spec.transform_url,
-                            &installation.parameters,
-                        )
-                        .instrument(span)
-                        .await?;
-                }
-                PluginSpec::Library(spec) => {
-                    let span = info_span!("library plugin",
-                        component_id = %component.component_id,
-                        plugin_registration_id = %installation.plugin_registration_id,
-                        plugin_priority = %installation.priority,
-                    );
-                    data = self
-                        .apply_library_plugin(data, plugin.account_id, installation.priority, &spec)
-                        .instrument(span)
-                        .await?;
-                }
-                PluginSpec::App(spec) => {
-                    let span = info_span!("app plugin",
-                        component_id = %component.component_id,
-                        plugin_registration_id = %installation.plugin_registration_id,
-                        plugin_priority = %installation.priority,
-                    );
-                    data = self
-                        .apply_app_plugin(data, plugin.account_id, installation.priority, &spec)
-                        .instrument(span)
-                        .await?;
-                }
-                PluginSpec::OplogProcessor(_) => (),
-            }
-        }
-
-        Ok((component, data))
-    }
-
-    async fn apply_component_transformer_plugin(
-        &self,
-        mut component: NewComponentRevision,
-        plugin_priority: PluginPriority,
-        data: Arc<[u8]>,
-        url: String,
-        parameters: &BTreeMap<String, String>,
-    ) -> Result<(NewComponentRevision, Arc<[u8]>), ComponentError> {
-        info!(%url, "Applying component transformation plugin");
-
-        let response = self
-            .component_transformer_plugin_caller
-            .call_remote_transformer_plugin(&component, &data, url, parameters)
-            .await
-            .map_err(|err| ComponentError::ComponentTransformerPluginFailed {
-                plugin_priority,
-                reason: err,
-            })?;
-
-        let data = response.data.map(|b64| Arc::from(b64.0)).unwrap_or(data);
-
-        for (k, v) in response.env.unwrap_or_default() {
-            component.env.insert(k, v);
-        }
-
-        let mut files = component.files;
-        for file in response.additional_files.unwrap_or_default() {
-            let content_stream = file
-                .content
-                .0
-                .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>))
-                .map_error(widen_infallible::<anyhow::Error>);
-
-            let key = self
-                .initial_component_files_service
-                .put_if_not_exists(component.environment_id, content_stream)
-                .await?;
-
-            let item = InitialComponentFile {
-                content_hash: key,
-                path: file.path,
-                permissions: file.permissions,
-            };
-
-            files.retain_mut(|f| f.path != item.path);
-            files.push(item)
-        }
-        component.files = files;
-
-        Ok((component, data))
-    }
-
-    async fn apply_library_plugin(
-        &self,
-        data: Arc<[u8]>,
-        plugin_owner: AccountId,
-        plugin_priority: PluginPriority,
-        plugin_spec: &LibraryPluginSpec,
-    ) -> Result<Arc<[u8]>, ComponentError> {
-        tracing::debug!("applying library plugin");
-
-        let plug_bytes = self
-            .plugin_wasm_files_service
-            .get(plugin_owner, &plugin_spec.wasm_content_hash)
-            .await?
-            .ok_or(anyhow!(
-                "Did not find plugin data for key {}",
-                plugin_spec.wasm_content_hash.0
-            ))?;
-
-        let composed =
-            run_cpu_bound_work(move || super::utils::compose_components(&data, &plug_bytes))
-                .await
-                .map_err(|e| ComponentError::PluginCompositionFailed {
-                    plugin_priority,
-                    cause: e,
-                })?;
-
-        Ok(Arc::from(composed))
-    }
-
-    async fn apply_app_plugin(
-        &self,
-        data: Arc<[u8]>,
-        plugin_owner: AccountId,
-        plugin_priority: PluginPriority,
-        plugin_spec: &AppPluginSpec,
-    ) -> Result<Arc<[u8]>, ComponentError> {
-        tracing::debug!("applying app plugin");
-
-        let socket_bytes = self
-            .plugin_wasm_files_service
-            .get(plugin_owner, &plugin_spec.wasm_content_hash)
-            .await?
-            .ok_or(anyhow!(
-                "Did not find plugin data for key {}",
-                plugin_spec.wasm_content_hash.0
-            ))?;
-
-        let composed =
-            run_cpu_bound_work(move || super::utils::compose_components(&socket_bytes, &data))
-                .await
-                .map_err(|e| ComponentError::PluginCompositionFailed {
-                    plugin_priority,
-                    cause: e,
-                })?;
-
-        Ok(Arc::from(composed))
     }
 }

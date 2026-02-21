@@ -3,8 +3,5 @@
   "appCommonGroup": "default",
   "appCommonSkipIfExists": "common-rust/golem.yaml",
   "requiresGolemHostWIT": true,
-  "requiresWASI": true,
-  "witDepsPaths": [
-    ".wit/wit/deps"
-  ]
+  "requiresWASI": true
 }

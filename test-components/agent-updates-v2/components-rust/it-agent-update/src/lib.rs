@@ -111,8 +111,13 @@ impl UpdateTest for UpdateTestImpl {
         11
     }
 
-    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-        unimplemented!()
+    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        if bytes.len() >= 8 {
+            self.last = u64::from_be_bytes(bytes[..8].try_into().unwrap());
+            Ok(())
+        } else {
+            Err("Invalid snapshot - not enough bytes to read u64".to_string())
+        }
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -160,10 +165,7 @@ async fn report_f1(current: u64) {
         .body(body)
         .expect("Failed to build request");
 
-    let response = Client::new()
-        .send(request)
-        .await
-        .expect("Request failed");
+    let response = Client::new().send(request).await.expect("Request failed");
 
     let status = response.status();
 

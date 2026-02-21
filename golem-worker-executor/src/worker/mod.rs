@@ -1972,7 +1972,7 @@ impl RunningWorker {
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
-        let (pending_update, component, component_metadata) = {
+        let (pending_update, component, _component_metadata) = {
             let pending_update = worker_metadata
                 .last_known_status
                 .pending_updates
@@ -2110,10 +2110,7 @@ impl RunningWorker {
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
-        let mut linker = (*parent.linker()).clone(); // fresh linker
-        store
-            .data_mut()
-            .link(&engine, &mut linker, &component, &component_metadata)?;
+        let linker = (*parent.linker()).clone(); // fresh linker
 
         let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
             WorkerExecutorError::worker_creation_failed(

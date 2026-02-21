@@ -185,17 +185,6 @@ export function PluginView() {
                       )}
                     </>
                   )}
-                  {currentVersion.specs?.type === "ComponentTransformer" &&
-                    currentVersion.specs.jsonSchema && (
-                      <div>
-                        <h4 className="text-sm font-medium mt-2">
-                          JSON Schema:
-                        </h4>
-                        <pre className="bg-gray-100 p-2 rounded-md overflow-x-auto text-sm">
-                          {currentVersion.specs.jsonSchema}
-                        </pre>
-                      </div>
-                    )}
                 </div>
               </div>
             )}
@@ -216,28 +205,7 @@ export function PluginView() {
               </div>
             )}
           </CardContent>
-          <CardFooter className="flex justify-end space-x-4">
-            {currentVersion.specs?.validateUrl && (
-              <a
-                href={currentVersion.specs.validateUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-4 py-2 text-blue-500 hover:underline"
-              >
-                Validate
-              </a>
-            )}
-            {currentVersion.specs?.transformUrl && (
-              <a
-                href={currentVersion.specs.transformUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-4 py-2 bg-gray-500 text-white rounded-md shadow hover:bg-gray-600"
-              >
-                Transform
-              </a>
-            )}
-          </CardFooter>
+          <CardFooter className="flex justify-end space-x-4" />
         </Card>
       )}
     </div>

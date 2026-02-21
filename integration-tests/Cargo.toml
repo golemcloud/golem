@@ -15,7 +15,6 @@ autotests = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
-golem-rib = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }

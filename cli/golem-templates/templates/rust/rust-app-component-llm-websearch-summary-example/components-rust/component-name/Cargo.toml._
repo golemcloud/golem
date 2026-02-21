@@ -12,7 +12,23 @@ path = "src/lib.rs"
 # common-lib = { path = "../../common-rust/common-lib" }
 
 log = { workspace = true }
-golem-rust = { workspace = true, features = ["golem_ai"] }
+golem-rust = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wstd = { workspace = true }
+
+# Golem AI provider crates - uncomment the ones you need:
+# LLM providers (pick one plus the base library)
+golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-llm-anthropic = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-llm-openrouter = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-llm-bedrock = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-llm-grok = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-llm-ollama = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# Web search providers (pick one plus the base library)
+golem-ai-web-search = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+golem-ai-web-search-google = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-web-search-brave = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-web-search-serper = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+# golem-ai-web-search-tavily = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }

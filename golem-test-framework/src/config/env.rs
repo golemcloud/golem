@@ -33,7 +33,6 @@ use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
@@ -168,7 +167,6 @@ pub struct EnvBasedTestDependencies {
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
     blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
     test_component_dir: PathBuf,
@@ -351,8 +349,6 @@ impl EnvBasedTestDependencies {
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
         let redis = Self::make_redis(&config).await;
         {
             let mut connection = redis.get_connection(0);
@@ -388,7 +384,6 @@ impl EnvBasedTestDependencies {
             redis_monitor,
             blob_storage,
             initial_component_files_service,
-            plugin_wasm_files_service,
             registry_service,
             temp_directory: Arc::new(TempDir::new().expect("Failed to create temporary directory")),
             shard_manager,
@@ -444,10 +439,6 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
-    }
-
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        self.plugin_wasm_files_service.clone()
     }
 
     fn registry_service(&self) -> Arc<dyn RegistryService> {

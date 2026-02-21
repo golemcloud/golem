@@ -743,17 +743,9 @@ paths:
         explode: true
       requestBody:
         content:
-          multipart/form-data:
+          application/json; charset=utf-8:
             schema:
-              type: object
-              required:
-              - metadata
-              properties:
-                metadata:
-                  $ref: '#/components/schemas/PluginRegistrationCreation'
-                pluginWasm:
-                  type: string
-                  format: binary
+              $ref: '#/components/schemas/PluginRegistrationCreation'
         required: true
       responses:
         '200':
@@ -6775,11 +6767,6 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          type: object
-          default: {}
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         env:
           type: object
           default: {}
@@ -6891,7 +6878,6 @@ components:
       - producers
       - memories
       - binaryWit
-      - dynamicLinking
       - agentTypes
       properties:
         exports:
@@ -6913,10 +6899,6 @@ components:
           type: string
         rootPackageVersion:
           type: string
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         agentTypes:
           type: array
           items:
@@ -6929,20 +6911,6 @@ components:
       properties:
         elementType:
           $ref: '#/components/schemas/AnalysedType'
-    ComponentTransformerPluginSpec:
-      type: object
-      title: ComponentTransformerPluginSpec
-      required:
-      - validateUrl
-      - transformUrl
-      properties:
-        providedWitPackage:
-          type: string
-        jsonSchema: {}
-        validateUrl:
-          type: string
-        transformUrl:
-          type: string
     ComponentUpdate:
       type: object
       title: ComponentUpdate
@@ -6963,10 +6931,6 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         env:
           type: object
           additionalProperties:
@@ -7219,37 +7183,6 @@ components:
       properties:
         domain:
           type: string
-    DynamicLinkedInstance:
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-      discriminator:
-        propertyName: type
-        mapping:
-          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-    DynamicLinkedInstance_DynamicLinkedWasmRpc:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - WasmRpc
-            example: WasmRpc
-      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
-    DynamicLinkedWasmRpc:
-      type: object
-      title: DynamicLinkedWasmRpc
-      required:
-      - targets
-      properties:
-        targets:
-          type: object
-          description: Maps resource names within the dynamic linked interface to target information
-          additionalProperties:
-            $ref: '#/components/schemas/WasmRpcTarget'
     ElementSchema:
       type: object
       oneOf:
@@ -8387,41 +8320,11 @@ components:
     PluginSpecDto:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
       - $ref: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
-      - $ref: '#/components/schemas/PluginSpecDto_Empty'
-      - $ref: '#/components/schemas/PluginSpecDto_Empty'
       discriminator:
         propertyName: type
         mapping:
-          ComponentTransformer: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
           OplogProcessor: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
-          App: '#/components/schemas/PluginSpecDto_Empty'
-          Library: '#/components/schemas/PluginSpecDto_Empty'
-    PluginSpecDto_ComponentTransformerPluginSpec:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ComponentTransformer
-            example: ComponentTransformer
-      - $ref: '#/components/schemas/ComponentTransformerPluginSpec'
-    PluginSpecDto_Empty:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Library
-            example: Library
-      - $ref: '#/components/schemas/Empty'
     PluginSpecDto_OplogProcessorPluginSpec:
       allOf:
       - type: object
@@ -8967,17 +8870,6 @@ components:
         name:
           type: string
         version:
-          type: string
-    WasmRpcTarget:
-      type: object
-      title: WasmRpcTarget
-      required:
-      - interfaceName
-      - componentName
-      properties:
-        interfaceName:
-          type: string
-        componentName:
           type: string
   securitySchemes:
     Cookie:

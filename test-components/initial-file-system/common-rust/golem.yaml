@@ -1,7 +1,7 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -11,7 +11,7 @@ componentTemplates:
     presets:
       debug:
         build:
-          - command: cargo component build
+          - command: cargo-component build
             sources:
               - src
               - ../../common-rust
@@ -26,7 +26,7 @@ componentTemplates:
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
         componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
-        linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
+        outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
         clean:
           - src/bindings.rs
         customCommands:
@@ -34,7 +34,7 @@ componentTemplates:
             - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
       release:
         build:
-          - command: cargo component build --release
+          - command: cargo-component build --release
             sources:
               - src
               - ../../common-rust
@@ -49,7 +49,7 @@ componentTemplates:
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
         componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
-        linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
+        outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
         clean:
           - src/bindings.rs
         customCommands:

@@ -16,7 +16,6 @@ use crate::base_model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::base_model::base64::Base64;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -106,7 +105,6 @@ impl Debug for ComponentMetadata {
             .field("binary_wit_len", &self.data.binary_wit.len())
             .field("root_package_name", &self.data.root_package_name)
             .field("root_package_version", &self.data.root_package_version)
-            .field("dynamic_linking", &self.data.dynamic_linking)
             .field("agent_types", &self.data.agent_types)
             .finish()
     }
@@ -163,54 +161,5 @@ pub struct ComponentMetadataInnerData {
     pub root_package_version: Option<String>,
 
     #[serde(default)]
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-
-    #[serde(default)]
     pub agent_types: Vec<AgentType>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
-)]
-#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[serde(tag = "type")]
-pub enum DynamicLinkedInstance {
-    WasmRpc(DynamicLinkedWasmRpc),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct DynamicLinkedWasmRpc {
-    /// Maps resource names within the dynamic linked interface to target information
-    pub targets: HashMap<String, WasmRpcTarget>,
-}
-
-impl DynamicLinkedWasmRpc {
-    pub fn target(&self, stub_resource: &str) -> Result<WasmRpcTarget, String> {
-        self.targets.get(stub_resource).cloned().ok_or_else(|| {
-            format!("Resource '{stub_resource}' not found in dynamic linked interface")
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct WasmRpcTarget {
-    pub interface_name: String,
-    pub component_name: String,
 }

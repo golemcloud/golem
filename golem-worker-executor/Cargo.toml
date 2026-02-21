@@ -29,7 +29,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true }
+
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }

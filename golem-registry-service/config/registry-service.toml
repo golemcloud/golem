@@ -30,13 +30,6 @@ type = "Disabled"
 
 [component_compilation.config.tls.config]
 
-[component_transformer_plugin_caller.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
 [db]
 type = "Sqlite"
 

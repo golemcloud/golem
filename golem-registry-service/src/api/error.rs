@@ -264,19 +264,10 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidPluginScope { .. }
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. }
-            | ComponentError::EnvironmentPluginNotFound(_)
-            | ComponentError::ComponentTransformerPluginFailed { .. } => {
-                Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
-                    cause: None,
-                }))
-            }
-            ComponentError::PluginCompositionFailed { cause, .. } => {
-                Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
-                    cause: Some(cause.context("ComponentError")),
-                }))
-            }
+            | ComponentError::EnvironmentPluginNotFound(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
 
             ComponentError::ComponentWithNameAlreadyExists(_)
             | ComponentError::ComponentVersionAlreadyExists(_)
@@ -390,8 +381,7 @@ impl From<PluginRegistrationError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            PluginRegistrationError::RequiredWasmFileMissing
-            | PluginRegistrationError::OplogProcessorComponentDoesNotExist => {
+            PluginRegistrationError::OplogProcessorComponentDoesNotExist => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     cause: None,

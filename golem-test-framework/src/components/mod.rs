@@ -247,7 +247,8 @@ impl EnvVarBuilder {
                 h2=warn,\
                 hyper=warn,\
                 tower=warn,\
-                fred=warn"
+                fred=warn,\
+                golem_client=warn"
             ),
         )
     }

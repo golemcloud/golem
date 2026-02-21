@@ -15,10 +15,10 @@
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
+use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
-use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
@@ -41,7 +41,6 @@ pub struct RegistryServiceConfig {
     pub db: DbConfig,
     pub login: LoginConfig,
     pub blob_storage: BlobStorageConfig,
-    pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig,
     pub cors_origin_regex: String,
     pub domain_provisioner: DomainProvisionerConfig,
     pub component_compilation: ComponentCompilationConfig,
@@ -72,14 +71,6 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "{}",
             self.blob_storage.to_safe_string_indented()
-        );
-
-        let _ = writeln!(&mut result, "plugin transformations:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.component_transformer_plugin_caller
-                .to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
@@ -159,7 +150,6 @@ impl Default for RegistryServiceConfig {
             db: DbConfig::default(),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
-            component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig::default(),
             component_compilation: ComponentCompilationConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             domain_provisioner: DomainProvisionerConfig::default(),
@@ -301,20 +291,6 @@ impl Default for GitHubOAuth2Config {
             redirect_uri: url::Url::parse("http://localhost:8080/v1/login/oauth2/web/callback")
                 .unwrap(),
         }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct ComponentTransformerPluginCallerConfig {
-    pub retries: RetryConfig,
-}
-
-impl SafeDisplay for ComponentTransformerPluginCallerConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
-        result
     }
 }
 

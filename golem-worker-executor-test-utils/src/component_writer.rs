@@ -24,7 +24,7 @@ use golem_common::model::component::{
     InitialComponentFile,
 };
 use golem_common::model::component_metadata::{
-    ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata,
+    ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
@@ -89,7 +89,6 @@ impl FileSystemComponentWriter {
         component_revision: ComponentRevision,
         files: Vec<InitialComponentFile>,
         skip_analysis: bool,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
@@ -182,7 +181,6 @@ impl FileSystemComponentWriter {
             size,
             memories,
             exports,
-            dynamic_linking,
             wasm_filename,
             env,
             agent_types,
@@ -246,7 +244,6 @@ impl FileSystemComponentWriter {
         local_path: &Path,
         name: &str,
         files: Vec<InitialComponentFile>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: BTreeMap<String, String>,
         environment_id: EnvironmentId,
@@ -259,7 +256,6 @@ impl FileSystemComponentWriter {
             local_path,
             name,
             files,
-            dynamic_linking,
             unverified,
             env,
             environment_id,
@@ -277,7 +273,6 @@ impl FileSystemComponentWriter {
         local_path: &Path,
         name: &str,
         files: Vec<InitialComponentFile>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: BTreeMap<String, String>,
         environment_id: EnvironmentId,
@@ -293,7 +288,6 @@ impl FileSystemComponentWriter {
             ComponentRevision::INITIAL,
             files,
             unverified,
-            dynamic_linking,
             env,
             environment_id,
             application_id,
@@ -321,7 +315,6 @@ impl FileSystemComponentWriter {
             ComponentRevision::INITIAL,
             Vec::new(),
             false,
-            HashMap::new(),
             BTreeMap::new(),
             environment_id,
             application_id,
@@ -338,7 +331,6 @@ impl FileSystemComponentWriter {
         local_path: Option<&Path>,
         new_files: Vec<InitialComponentFile>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
         original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
@@ -377,7 +369,6 @@ impl FileSystemComponentWriter {
                 new_revision,
                 files,
                 false,
-                dynamic_linking.unwrap_or(old_metadata.dynamic_linking),
                 env.unwrap_or(old_metadata.env),
                 old_metadata.environment_id,
                 old_metadata.application_id,
@@ -497,7 +488,6 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub files: Vec<InitialComponentFile>,
     pub component_name: String,
     pub wasm_filename: String,
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub env: BTreeMap<String, String>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentType>,
@@ -533,7 +523,6 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
             metadata: ComponentMetadata::from_parts(
                 value.exports,
                 value.memories,
-                value.dynamic_linking,
                 value.root_package_name,
                 value.root_package_version,
                 value.agent_types,

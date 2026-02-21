@@ -1,7 +1,7 @@
 use crate::app::context::BuildContext;
 use crate::fs;
-use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::{CleanMode, DependencyType};
+use crate::log::{log_action, LogIndent};
+use crate::model::app::CleanMode;
 use golem_common::model::component::ComponentName;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -43,8 +43,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
                 paths.insert(("generated wit", component.generated_wit()));
                 paths.insert(("component wasm", component.wasm()));
-                paths.insert(("temp wasm", component.temp_linked_wasm()));
-                paths.insert(("linked wasm", component.final_linked_wasm()));
+                paths.insert(("output wasm", component.final_wasm()));
 
                 for build_step in component.build_commands() {
                     let build_dir = build_step
@@ -76,37 +75,6 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
     match mode {
         CleanMode::All => {
-            {
-                log_action("Cleaning", "component clients");
-                let _indent = LogIndent::new();
-
-                for component_name in ctx.application().component_names() {
-                    for dep in ctx.application().component_dependencies(component_name) {
-                        if dep.dep_type.is_wasm_rpc() {
-                            if let Some(dep) = dep.as_dependent_app_component() {
-                                log_action(
-                                    "Cleaning",
-                                    format!(
-                                        "component client {}",
-                                        dep.name.as_str().log_color_highlight()
-                                    ),
-                                );
-                                let _indent = LogIndent::new();
-
-                                let dep_component = ctx.application().component(&dep.name);
-                                fs::delete_path_logged("client wit", &dep_component.client_wit())?;
-                                if dep.dep_type == DependencyType::StaticWasmRpc {
-                                    fs::delete_path_logged(
-                                        "client wasm",
-                                        &dep_component.client_wasm(),
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             log_action("Cleaning", "common clean targets");
             let _indent = LogIndent::new();
 

@@ -44,7 +44,6 @@ static GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
 static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
 
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
-static WIT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/wit/deps");
 pub static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../schema.golem.cloud/app/golem/",
@@ -160,22 +159,6 @@ pub fn instantiate_template(
         parameters,
         resolve_mode,
     )?;
-    let wit_deps_targets = {
-        match &template.wit_deps_targets {
-            Some(paths) => paths
-                .iter()
-                .map(|path| parameters.target_path.join(path))
-                .collect(),
-            None => vec![parameters.target_path.join("wit").join("deps")],
-        }
-    };
-    for wit_dep in &template.wit_deps {
-        for target_wit_deps in &wit_deps_targets {
-            let name = wit_dep.file_name().unwrap().to_str().unwrap();
-            let target = target_wit_deps.join(name);
-            copy_all(&WIT, wit_dep, &target, TargetExistsResolveMode::MergeOrSkip)?;
-        }
-    }
     Ok(render_template_instructions(template, parameters))
 }
 
@@ -341,45 +324,6 @@ fn instantiate_file(
     }
 }
 
-fn copy(
-    catalog: &Dir<'_>,
-    source: &Path,
-    target: &Path,
-    resolve_mode: TargetExistsResolveMode,
-) -> io::Result<()> {
-    match get_resolved_contents(catalog, source, target, resolve_mode)? {
-        Some(contents) => fs::write(target, contents),
-        None => Ok(()),
-    }
-}
-
-fn copy_all(
-    catalog: &Dir<'_>,
-    source_path: &Path,
-    target_path: &Path,
-    resolve_mode: TargetExistsResolveMode,
-) -> io::Result<()> {
-    let source_dir = catalog.get_dir(source_path).ok_or_else(|| {
-        io::Error::other(format!(
-            "Could not find dir {} in catalog",
-            source_path.display()
-        ))
-    })?;
-
-    fs::create_dir_all(target_path)?;
-
-    for file in source_dir.files() {
-        copy(
-            catalog,
-            file.path(),
-            &target_path.join(file.path().file_name().unwrap().to_str().unwrap()),
-            resolve_mode,
-        )?;
-    }
-
-    Ok(())
-}
-
 fn transform(
     str: impl AsRef<str>,
     parameters: &TemplateParameters,
@@ -426,7 +370,6 @@ fn transform(
                      ),
             )
             .replace("    # golem-app-manifest-dep-env-vars-doc", &DEP_ENV_VARS_DOC)
-            .replace("    # golem-app-manifest-deps-doc", &DEPS_DOC)
             .replace("    # golem-app-manifest-env-presets",
                      "", // "    # TODO: atomic\n"
             )
@@ -438,22 +381,18 @@ fn transform(
     let transform_rust_sdk = |str: &str| -> String {
         str.replace(
             "GOLEM_RUST_VERSION_OR_PATH",
-            &parameters.sdk_overrides.golem_rust_version_or_path(),
+            &parameters.sdk_overrides.golem_rust_dep(),
         )
     };
 
     let transform_ts_sdk = |str: &str| -> String {
         str.replace(
             "GOLEM_TS_SDK_VERSION_OR_PATH",
-            &parameters
-                .sdk_overrides
-                .ts_package_version_or_path("golem-ts-sdk"),
+            &parameters.sdk_overrides.ts_package_dep("golem-ts-sdk"),
         )
         .replace(
             "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-            &parameters
-                .sdk_overrides
-                .ts_package_version_or_path("golem-ts-typegen"),
+            &parameters.sdk_overrides.ts_package_dep("golem-ts-typegen"),
         )
     };
 
@@ -641,35 +580,6 @@ fn parse_template(
         }
     };
 
-    let mut wit_deps: Vec<PathBuf> = vec![];
-    if metadata.requires_golem_host_wit.unwrap_or(false) {
-        WIT.dirs()
-            .filter(|&dir| dir.path().starts_with("golem"))
-            .map(|dir| dir.path())
-            .for_each(|path| {
-                wit_deps.push(path.to_path_buf());
-            });
-
-        wit_deps.push(PathBuf::from("golem-1.x"));
-        wit_deps.push(PathBuf::from("golem-rpc"));
-        wit_deps.push(PathBuf::from("golem-rdbms"));
-        wit_deps.push(PathBuf::from("golem-agent"));
-        wit_deps.push(PathBuf::from("golem-durability"));
-    }
-    if metadata.requires_wasi.unwrap_or(false) {
-        wit_deps.push(PathBuf::from("blobstore"));
-        wit_deps.push(PathBuf::from("cli"));
-        wit_deps.push(PathBuf::from("clocks"));
-        wit_deps.push(PathBuf::from("config"));
-        wit_deps.push(PathBuf::from("filesystem"));
-        wit_deps.push(PathBuf::from("http"));
-        wit_deps.push(PathBuf::from("io"));
-        wit_deps.push(PathBuf::from("keyvalue"));
-        wit_deps.push(PathBuf::from("logging"));
-        wit_deps.push(PathBuf::from("random"));
-        wit_deps.push(PathBuf::from("sockets"));
-    }
-
     Template {
         name,
         kind,
@@ -677,10 +587,6 @@ fn parse_template(
         description: metadata.description,
         template_path: template_root.to_path_buf(),
         instructions,
-        wit_deps,
-        wit_deps_targets: metadata
-            .wit_deps_paths
-            .map(|dirs| dirs.iter().map(PathBuf::from).collect()),
         dev_only: metadata.dev_only.unwrap_or(false),
     }
 }
@@ -1063,37 +969,6 @@ static DEP_ENV_VARS_DOC: LazyLock<String> = LazyLock::new(|| {
                 out.push_str(&line);
             }
 
-            out.push('\n');
-        }
-
-        out.push('\n');
-    }
-
-    out.trim_end().to_string()
-});
-
-static DEPS_DOC: LazyLock<String> = LazyLock::new(|| {
-    let indent = "    ";
-    let mut out = String::new();
-
-    out.push_str(&formatdoc! {"
-        {indent}# The following block contains commented-out dependencies for various Golem AI libraries.
-        {indent}# For each area (such as LLM, Search, etc) only one of the providers can be commented out.
-        {indent}# If no provider dependency is commented out, then using that AI API will be a runtime failure.
-        ",
-        });
-
-    for group in DOC_DEPENDENCIES.iter() {
-        out.push_str(&doc_group_header(indent, group));
-
-        for dep in &group.dependencies {
-            if dep.url.is_empty() {
-                continue;
-            }
-
-            out.push_str(&doc_dep_header(indent, dep));
-            out.push_str(&format!("{indent}# - type: wasm\n", indent = indent));
-            out.push_str(&format!("{indent}#   url: {}\n", dep.url, indent = indent));
             out.push('\n');
         }
 

@@ -19,7 +19,6 @@ pub mod auth;
 pub mod base64;
 pub mod certificate;
 pub mod component;
-pub mod component_constraint;
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
@@ -35,6 +34,8 @@ pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod optional_field_update;
+#[cfg(feature = "full")]
+pub mod parsed_function_name;
 pub mod plan;
 pub mod plugin_registration;
 pub mod poem;

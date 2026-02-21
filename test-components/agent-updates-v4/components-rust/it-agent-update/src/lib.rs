@@ -19,7 +19,7 @@ impl UpdateTest for UpdateTestImpl {
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        unimplemented!()
+        Ok(Vec::new())
     }
 }
 
