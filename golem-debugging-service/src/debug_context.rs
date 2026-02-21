@@ -61,7 +61,7 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
@@ -483,9 +483,9 @@ impl InvocationContextManagement for DebugContext {
     }
 }
 
-impl HasWasiConfigVars for DebugContext {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.wasi_config_vars()
+impl HasConfigVars for DebugContext {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.config_vars()
     }
 }
 

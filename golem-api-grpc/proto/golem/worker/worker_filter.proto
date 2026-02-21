@@ -19,7 +19,7 @@ message WorkerFilter {
     WorkerAndFilter and = 6;
     WorkerOrFilter or = 7;
     WorkerNotFilter not = 8;
-    WorkerWasiConfigVarsFilter wasi_config_vars = 9;
+    WorkerConfigVarsFilter config_vars = 9;
   }
 }
 
@@ -61,7 +61,7 @@ message WorkerEnvFilter {
   string value = 3;
 }
 
-message WorkerWasiConfigVarsFilter {
+message WorkerConfigVarsFilter {
   string name = 1;
   golem.common.StringFilterComparator comparator = 2;
   string value = 3;

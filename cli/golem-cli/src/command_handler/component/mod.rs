@@ -915,12 +915,15 @@ impl ComponentCommandHandler {
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
+        let config_vars = component.config_vars().clone();
+
         Ok(ComponentDeployProperties {
             wasm_path,
             agent_types,
             files,
             plugins,
             env,
+            config_vars,
         })
     }
 
@@ -1018,6 +1021,11 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
+                config_vars: properties
+                    .config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             }
             .into(),
             wasm_hash: component_binary_hash.into(),
@@ -1068,6 +1076,7 @@ impl ComponentCommandHandler {
                         .map(|files| files.file_options.clone())
                         .unwrap_or_default(),
                     env: component_stager.env(),
+                    config_vars: component_stager.config_vars(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1161,6 +1170,7 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
+                    config_vars: component_stager.config_vars_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

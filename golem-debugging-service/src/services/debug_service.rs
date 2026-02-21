@@ -411,7 +411,7 @@ impl DebugService for DebugServiceDefault {
             account_id,
             owned_worker_id,
             Some(session_data.worker_metadata.env.clone()),
-            Some(session_data.worker_metadata.wasi_config_vars.clone()),
+            Some(session_data.worker_metadata.config_vars.clone()),
             Some(
                 session_data
                     .worker_metadata
@@ -538,7 +538,7 @@ impl DebugService for DebugServiceDefault {
             account_id,
             owned_worker_id,
             Some(debug_session_data.worker_metadata.env.clone()),
-            Some(debug_session_data.worker_metadata.wasi_config_vars.clone()),
+            Some(debug_session_data.worker_metadata.config_vars.clone()),
             Some(
                 debug_session_data
                     .worker_metadata

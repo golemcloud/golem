@@ -374,7 +374,7 @@ async fn invocation_context_test(
 
     let agent_id = agent_id!("invocation-context", "w1");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     executor

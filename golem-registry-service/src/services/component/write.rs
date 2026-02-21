@@ -142,6 +142,7 @@ impl ComponentWriteService {
             component_creation.component_name.clone(),
             initial_component_files,
             component_creation.env,
+            component_creation.config_vars,
             wasm_hash,
             wasm_object_store_key,
             self.plugin_installations_for_new_component(
@@ -281,6 +282,9 @@ impl ComponentWriteService {
             )
             .await?,
             component_update.env.unwrap_or(component.env),
+            component_update
+                .config_vars
+                .unwrap_or(component.config_vars),
             wasm_hash,
             wasm_object_store_key,
             self.update_plugin_installations(

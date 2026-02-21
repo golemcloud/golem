@@ -6772,6 +6772,11 @@ components:
           default: {}
           additionalProperties:
             type: string
+        configVars:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
         agentTypes:
           type: array
           default: []
@@ -6801,6 +6806,8 @@ components:
       - installedPlugins
       - env
       - originalEnv
+      - configVars
+      - originalConfigVars
       - wasmHash
       properties:
         id:
@@ -6848,6 +6855,14 @@ components:
           additionalProperties:
             type: string
         originalEnv:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
+        originalConfigVars:
           type: object
           additionalProperties:
             type: string
@@ -6932,6 +6947,10 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
         env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
           type: object
           additionalProperties:
             type: string

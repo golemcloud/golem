@@ -66,6 +66,8 @@ pub struct ComponentMetadata {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_vars: BTreeMap<String, String>,
 }
 
 impl Hashable for ComponentMetadata {
