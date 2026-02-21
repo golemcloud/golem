@@ -157,7 +157,6 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: component.revision,
                 new_file_options: BTreeMap::new(),
                 removed_files: Vec::new(),
-                dynamic_linking: None,
                 env: Some(BTreeMap::from_iter(vec![(
                     "ENV_VAR".to_string(),
                     "ENV_VAR_VALUE".to_string(),
@@ -407,7 +406,6 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                 current_revision: component.revision,
                 new_file_options: BTreeMap::new(),
                 removed_files: Vec::new(),
-                dynamic_linking: None,
                 env: Some(BTreeMap::from_iter(vec![(
                     "ENV_VAR".to_string(),
                     "ENV_VAR_VALUE".to_string(),

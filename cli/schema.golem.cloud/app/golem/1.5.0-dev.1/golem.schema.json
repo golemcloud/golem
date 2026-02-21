@@ -20,13 +20,6 @@
       "type": "string",
       "description": "Temporary directory used for generating and building WIT and WASM artifacts. Default location is golem-temp."
     },
-    "witDeps": {
-      "type": "array",
-      "description": "List of source directories for common wit dependency packages",
-      "items": {
-        "type": "string"
-      }
-    },
     "componentTemplates": {
       "type": "object",
       "description": "Component templates by template names",
@@ -255,9 +248,9 @@
           "type": "string",
           "description": "File path for the built WASM component."
         },
-        "linkedWasm": {
+        "outputWasm": {
           "type": "string",
-          "description": "File path for the linked WASM component which is ready to be uploaded to Golem."
+          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
         },
         "buildMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
@@ -322,15 +315,6 @@
           "description": "Environment variables for the component.",
           "additionalProperties": {
             "type": "string"
-          }
-        },
-        "dependenciesMergeMode": {
-          "$ref": "#/definitions/vecMergeMode"
-        },
-        "dependencies": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/componentDependency"
           }
         }
       }
@@ -577,68 +561,6 @@
           "targets"
         ]
       }
-    },
-    "componentDependency": {
-      "type": "object",
-      "description": "Component dependencies",
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "wasm-rpc",
-                "wasm",
-                "wasm-rpc-static"
-              ],
-              "description": "Type of the dependency"
-            },
-            "target": {
-              "type": "string",
-              "description": "Target component name."
-            }
-          },
-          "required": [
-            "type",
-            "target"
-          ]
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "wasm"
-              ],
-              "description": "Type of the dependency"
-            },
-            "path": {
-              "type": "string",
-              "description": "Target component WASM path."
-            }
-          },
-          "required": [
-            "type",
-            "path"
-          ]
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "wasm"
-              ],
-              "description": "Type of the dependency"
-            },
-            "url": {
-              "type": "string",
-              "description": "Target component remote URL."
-            }
-          },
-          "required": [
-            "type",
-            "url"
-          ]
-        }
-      ]
     },
     "initialComponentFile": {
       "type": "object",

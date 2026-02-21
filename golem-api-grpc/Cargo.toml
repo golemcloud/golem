@@ -13,7 +13,6 @@ license-file = "../LICENSE"
 harness = false
 
 [dependencies]
-golem-rib = { workspace = true }
 golem-wasm = { workspace = true, default-features = true }
 
 desert_rust = { workspace = true }

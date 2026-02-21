@@ -16,7 +16,4 @@ components:
     env:
     # golem-app-manifest-dep-env-vars-doc
 
-    dependencies:
-    # golem-app-manifest-deps-doc
-
     # golem-app-manifest-env-presets

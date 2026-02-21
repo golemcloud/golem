@@ -3216,7 +3216,6 @@ async fn wasi_config_component_update(
             Vec::new(),
             Vec::new(),
             None,
-            None,
             Some(BTreeMap::from_iter(vec![
                 ("k1".to_string(), "v2".to_string()),
                 ("k3".to_string(), "v4".to_string()),

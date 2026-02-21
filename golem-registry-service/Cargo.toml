@@ -21,13 +21,11 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true }
 golem-service-base = { workspace = true }
 golem-wasm = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
-assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 aws-config = { workspace = true }
@@ -38,11 +36,9 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
-darling = { workspace = true }
 desert_rust.workspace = true
 figment = { workspace = true }
 futures = { workspace = true }
-goldenfile = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
@@ -51,7 +47,6 @@ hyper = { workspace = true }
 indoc = { workspace = true }
 jsonwebtoken = { workspace = true }
 lazy_static = { workspace = true }
-mappable-rc = { workspace = true }
 num-traits = { workspace = true }
 openidconnect.workspace = true
 opentelemetry = { workspace = true }
@@ -106,13 +101,13 @@ tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { workspace = true, features = ["futures-03"] }
 tracing-subscriber = { workspace = true }
-tryhard = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wac-graph = { workspace = true }
 
 [dev-dependencies]
+assert2 = { workspace = true }
 futures = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
+tryhard = { workspace = true }

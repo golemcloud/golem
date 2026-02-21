@@ -14,7 +14,9 @@
 
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction};
 
-use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
+use super::parsed_function_name::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
+};
 
 pub fn find_resource_site(
     exports: &[AnalysedExport],

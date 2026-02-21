@@ -25,7 +25,8 @@ use golem_common::model::component::{
     ComponentDto, ComponentId, ComponentRevision, InstalledPlugin,
 };
 use golem_common::model::component::{ComponentName, InitialComponentFile};
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
@@ -34,9 +35,8 @@ use golem_wasm::analysis::{
     NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use itertools::Itertools;
-use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
@@ -130,7 +130,6 @@ pub struct ComponentView {
     pub environment_id: EnvironmentId,
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentType>,
-    pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<InstalledPlugin>,
     pub env: BTreeMap<String, String>,
@@ -188,25 +187,6 @@ impl ComponentView {
             environment_id: value.environment_id,
             exports,
             agent_types: value.metadata.agent_types().to_vec(),
-            dynamic_linking: value
-                .metadata
-                .dynamic_linking()
-                .iter()
-                .map(|(name, link)| {
-                    (
-                        name.clone(),
-                        match link {
-                            DynamicLinkedInstance::WasmRpc(links) => links
-                                .targets
-                                .iter()
-                                .map(|(resource, target)| {
-                                    (resource.clone(), target.interface_name.clone())
-                                })
-                                .collect::<BTreeMap<String, String>>(),
-                        },
-                    )
-                })
-                .collect(),
             files: value.files,
             plugins: value.installed_plugins,
             env: value.env,
@@ -216,10 +196,9 @@ impl ComponentView {
 
 #[derive(Clone, Debug)]
 pub struct ComponentDeployProperties {
-    pub linked_wasm_path: PathBuf,
+    pub wasm_path: PathBuf,
     pub agent_types: Vec<AgentType>,
     pub files: Vec<crate::model::app::InitialComponentFile>,
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub plugins: Vec<crate::model::app::PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,

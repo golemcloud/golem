@@ -38,7 +38,7 @@ use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     PluginInstallation,
 };
-use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
+use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{
@@ -103,7 +103,6 @@ pub trait TestDsl {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
@@ -134,7 +133,6 @@ pub trait TestDsl {
             Vec::new(),
             None,
             None,
-            None,
         )
         .await
     }
@@ -154,7 +152,6 @@ pub trait TestDsl {
             latest_revision.files.into_iter().map(|f| f.path).collect(),
             None,
             None,
-            None,
         )
         .await
     }
@@ -172,7 +169,6 @@ pub trait TestDsl {
             Some(name),
             Vec::new(),
             Vec::new(),
-            None,
             Some(BTreeMap::from_iter(env.to_vec())),
             None,
         )
@@ -186,7 +182,6 @@ pub trait TestDsl {
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
@@ -674,7 +669,6 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     unique: bool,
     unverified: bool,
     files: Vec<IFSEntry>,
-    dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     env: BTreeMap<String, String>,
     config_vars: BTreeMap<String, String>,
     plugins: Vec<PluginInstallation>,
@@ -690,7 +684,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             unique: false,
             unverified: false,
             files: Vec::new(),
-            dynamic_linking: HashMap::new(),
             env: BTreeMap::new(),
             config_vars: BTreeMap::new(),
             plugins: Vec::new(),
@@ -761,24 +754,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self.add_file(target, source, ComponentFilePermissions::ReadWrite)
     }
 
-    /// Set the dynamic linking for the component
-    pub fn with_dynamic_linking(
-        mut self,
-        dynamic_linking: &[(&str, DynamicLinkedInstance)],
-    ) -> Self {
-        self.dynamic_linking = dynamic_linking
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
-        self
-    }
-
-    /// Adds a dynamic linked instance to the component
-    pub fn add_dynamic_linking(mut self, name: &str, instance: DynamicLinkedInstance) -> Self {
-        self.dynamic_linking.insert(name.to_string(), instance);
-        self
-    }
-
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
         let map = env.into_iter().collect::<BTreeMap<_, _>>();
         self.env = map;
@@ -824,7 +799,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.unique,
                 self.unverified,
                 self.files,
-                self.dynamic_linking,
                 self.env,
                 self.config_vars,
                 self.plugins,

@@ -62,6 +62,7 @@ use golem_common::model::agent::{AgentId, DataValue, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::ParsedFunctionSite;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
@@ -71,7 +72,6 @@ use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{parse_value_and_type, ValueAndType};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use rib::ParsedFunctionSite;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
@@ -2335,21 +2335,24 @@ fn split_worker_name(worker_name: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use crate::command_handler::worker::split_worker_name;
-    use assert2::assert;
+    use pretty_assertions::assert_eq;
     use test_r::test;
 
     #[test]
     fn test_split_worker_name() {
-        assert!(split_worker_name("a") == vec!["a"]);
-        assert!(split_worker_name("a()") == vec!["a()"]);
-        assert!(split_worker_name("a(\"///\")") == vec!["a(\"///\")"]);
-        assert!(split_worker_name("a/b") == vec!["a", "b"]);
-        assert!(split_worker_name("a/b()") == vec!["a", "b()"]);
-        assert!(split_worker_name("a/b(\"///\")") == vec!["a", "b(\"///\")"]);
-        assert!(split_worker_name("a/b/c") == vec!["a", "b", "c"]);
-        assert!(split_worker_name("a/b/c()") == vec!["a", "b", "c()"]);
-        assert!(split_worker_name("a/b/c(\"/\")") == vec!["a", "b", "c(\"/\")"]);
-        assert!(split_worker_name("/") == vec!["", ""]);
-        assert!(split_worker_name("a(/") == vec!["a(/"]);
+        assert_eq!(split_worker_name("a"), vec!["a"]);
+        assert_eq!(split_worker_name("a()"), vec!["a()"]);
+        assert_eq!(split_worker_name("a(\"///\")"), vec!["a(\"///\")"]);
+        assert_eq!(split_worker_name("a/b"), vec!["a", "b"]);
+        assert_eq!(split_worker_name("a/b()"), vec!["a", "b()"]);
+        assert_eq!(split_worker_name("a/b(\"///\")"), vec!["a", "b(\"///\")"]);
+        assert_eq!(split_worker_name("a/b/c"), vec!["a", "b", "c"]);
+        assert_eq!(split_worker_name("a/b/c()"), vec!["a", "b", "c()"]);
+        assert_eq!(
+            split_worker_name("a/b/c(\"/\")"),
+            vec!["a", "b", "c(\"/\")"]
+        );
+        assert_eq!(split_worker_name("/"), vec!["", ""]);
+        assert_eq!(split_worker_name("a(/"), vec!["a(/"]);
     }
 }

@@ -13,10 +13,8 @@
 // limitations under the License.
 
 use crate::app::build::add_metadata::add_metadata_to_selected_components;
-use crate::app::build::componentize::componentize;
+use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::gen_bridge;
-use crate::app::build::gen_wit::gen_wit;
-use crate::app::build::link::link;
 use crate::app::context::BuildContext;
 use crate::model::app::AppBuildStep;
 pub mod add_metadata;
@@ -25,20 +23,12 @@ pub mod command;
 pub mod componentize;
 pub mod extract_agent_type;
 pub mod gen_bridge;
-pub mod gen_wit;
-pub mod link;
 pub mod task_result_marker;
 pub mod up_to_date_check;
 
 pub async fn build_app(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    if ctx.should_run_step(AppBuildStep::GenWit) {
-        gen_wit(ctx).await?;
-    }
-    if ctx.should_run_step(AppBuildStep::Componentize) {
-        componentize(ctx).await?;
-    }
-    if ctx.should_run_step(AppBuildStep::Link) {
-        link(ctx).await?;
+    if ctx.should_run_step(AppBuildStep::Build) {
+        build_components(ctx).await?;
     }
     if ctx.should_run_step(AppBuildStep::AddMetadata) {
         add_metadata_to_selected_components(ctx).await?;

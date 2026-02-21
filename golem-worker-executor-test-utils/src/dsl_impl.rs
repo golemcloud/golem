@@ -34,7 +34,6 @@ use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
     InitialComponentFile, PluginInstallation,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::RevertWorkerTarget;
@@ -123,7 +122,6 @@ impl TestDsl for TestWorkerExecutor {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
@@ -146,11 +144,6 @@ impl TestDsl for TestWorkerExecutor {
         } else {
             ComponentName(name.to_string())
         };
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
 
         let source_path = if !unverified {
             rename_component_if_needed(
@@ -191,7 +184,6 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         converted_files,
-                        dynamic_linking,
                         unverified,
                         env,
                         config_vars,
@@ -210,7 +202,6 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         converted_files,
-                        dynamic_linking,
                         unverified,
                         env,
                         config_vars,
@@ -255,7 +246,6 @@ impl TestDsl for TestWorkerExecutor {
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
@@ -315,7 +305,6 @@ impl TestDsl for TestWorkerExecutor {
                 source_path.as_deref(),
                 converted_new_files,
                 removed_files,
-                dynamic_linking,
                 env,
                 config_vars,
                 original_source_hash,

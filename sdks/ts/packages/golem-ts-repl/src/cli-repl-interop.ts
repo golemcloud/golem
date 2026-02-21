@@ -388,7 +388,7 @@ class GolemCli {
     this.clientConfig = opts.clientConfig;
   }
 
-  async run(opts: { args: string[]; mode: 'inherit' | 'piped' }): Promise<{
+  async run(opts: { args: string[]; mode: 'inherit' | 'collect' }): Promise<{
     ok: boolean;
     code: number | null;
     stdout: string;
@@ -403,7 +403,7 @@ class GolemCli {
           switch (mode) {
             case 'inherit':
               return 'inherit';
-            case 'piped':
+            case 'collect':
               return ['ignore', 'pipe', 'pipe'];
           }
         })(opts.mode),
@@ -414,7 +414,7 @@ class GolemCli {
       let stdout = '';
       let stderr = '';
 
-      if (opts.mode === 'piped') {
+      if (opts.mode === 'collect') {
         child.stdout?.on('data', (chunk) => {
           stdout += chunk.toString();
         });
@@ -433,7 +433,7 @@ class GolemCli {
   async runJson(opts: {
     args: string[];
   }): Promise<{ ok: boolean; code: number | null; json: any }> {
-    const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'piped' });
+    const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'collect' });
     return { ok: result.ok, code: result.code, json: JSON.parse(result.stdout) };
   }
 }

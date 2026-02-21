@@ -10,7 +10,6 @@ lto = true
 
 golem-rust = { GOLEM_RUST_VERSION_OR_PATH, features = [
     "export_golem_agentic",
-#    "golem_ai" # Uncomment to use Golem AI libraries
 ] }
 
 # Advanced HTTP client, alternative of wstd::http

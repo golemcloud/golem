@@ -15,7 +15,6 @@
 use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::application::ApplicationError;
-use crate::services::component_transformer_plugin_caller::TransformationFailedReason;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
@@ -78,16 +77,6 @@ pub enum ComponentError {
     ConflictingPluginPriority(PluginPriority),
     #[error("Multiple plugins with same environment plugin grant id {0}")]
     ConflictingEnvironmentPluginGrantId(EnvironmentPluginGrantId),
-    #[error("Failed to componse component with plugin with priority {plugin_priority}")]
-    PluginCompositionFailed {
-        plugin_priority: PluginPriority,
-        cause: anyhow::Error,
-    },
-    #[error("Component transformer plugin with priority {plugin_priority} failed with: {reason}")]
-    ComponentTransformerPluginFailed {
-        plugin_priority: PluginPriority,
-        reason: TransformationFailedReason,
-    },
     #[error("agent type for name {0} not found in environment")]
     AgentTypeForNameNotFound(String),
     #[error(transparent)]
@@ -118,8 +107,6 @@ impl SafeDisplay for ComponentError {
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
             Self::ConflictingEnvironmentPluginGrantId(_) => self.to_string(),
             Self::ConflictingPluginPriority(_) => self.to_string(),
-            Self::PluginCompositionFailed { .. } => self.to_string(),
-            Self::ComponentTransformerPluginFailed { .. } => self.to_string(),
             Self::ComponentNotFound(_) => self.to_string(),
             Self::ComponentByNameNotFound(_) => self.to_string(),
             Self::AgentTypeForNameNotFound(_) => self.to_string(),

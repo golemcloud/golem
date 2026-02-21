@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::{GOLEM_RUST_VERSION, GOLEM_TS_VERSION};
+use anyhow::anyhow;
 use fancy_regex::{Match, Regex};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase, ToTitleCase};
 use serde::{Deserialize, Serialize};
 use std::fmt::Formatter;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::{fmt, io};
@@ -434,8 +435,6 @@ pub struct Template {
     pub description: String,
     pub template_path: PathBuf,
     pub instructions: String,
-    pub wit_deps: Vec<PathBuf>,
-    pub wit_deps_targets: Option<Vec<PathBuf>>,
     pub dev_only: bool,
 }
 
@@ -462,8 +461,6 @@ pub(crate) struct TemplateMetadata {
     pub requires_golem_host_wit: Option<bool>,
     #[serde(rename = "requiresWASI")]
     pub requires_wasi: Option<bool>,
-    #[serde(rename = "witDepsPaths")]
-    pub wit_deps_paths: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,
     pub instructions: Option<String>,
     #[serde(rename = "devOnly")]
@@ -488,7 +485,7 @@ pub struct SdkOverrides {
 }
 
 impl SdkOverrides {
-    pub fn ts_package_version_or_path(&self, package_name: &str) -> String {
+    pub fn ts_package_dep(&self, package_name: &str) -> String {
         match &self.ts_packages_path {
             Some(ts_packages_path) => {
                 format!("{}/{}", ts_packages_path, package_name)
@@ -501,7 +498,7 @@ impl SdkOverrides {
         }
     }
 
-    pub fn golem_rust_version_or_path(&self) -> String {
+    pub fn golem_rust_dep(&self) -> String {
         match &self.golem_rust_path {
             Some(rust_path) => {
                 format!(r#"path = "{}""#, rust_path)
@@ -515,6 +512,27 @@ impl SdkOverrides {
                 )
             }
         }
+    }
+
+    pub fn golem_client_dep(&self) -> anyhow::Result<String> {
+        if let Some(rust_path) = &self.golem_rust_path {
+            return Ok(format!(
+                r#"path = "{}/golem-client""#,
+                Self::golem_repo_path_from_golem_rust_path(rust_path)?
+            ));
+        }
+
+        todo!("No published version yet")
+    }
+
+    pub fn golem_repo_path_from_golem_rust_path(path: &str) -> anyhow::Result<String> {
+        let suffix = Path::new("sdks/rust/golem-rust");
+        let path = Path::new(path);
+        // TODO: use cli fs functions, once templates crate is moved into cli
+        path.to_string_lossy()
+            .strip_suffix(suffix.to_string_lossy().as_ref())
+            .ok_or_else(|| anyhow!("Invalid Golem Rust path: {}", path.display()))
+            .map(|s| s.to_string())
     }
 }
 

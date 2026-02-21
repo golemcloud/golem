@@ -19,6 +19,7 @@ use golem_common::base_model::WorkerId;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::{IdempotencyKey, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -26,7 +27,6 @@ use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionPar
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::protobuf::Val;
 use golem_wasm::{Value, ValueAndType};
-use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;

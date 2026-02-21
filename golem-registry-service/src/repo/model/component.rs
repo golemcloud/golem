@@ -26,7 +26,7 @@ use golem_common::model::component::{
     ComponentFileContentHash, ComponentFilePath, ComponentFilePermissions, ComponentName,
     ComponentRevision, InitialComponentFile, InstalledPlugin,
 };
-use golem_common::model::component_metadata::{ComponentMetadata, dynamic_linking_to_diffable};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
@@ -242,9 +242,6 @@ impl ComponentRevisionRecord {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
-                    self.metadata.value().dynamic_linking(),
-                ),
             }
             .into(),
             wasm_hash: self.binary_hash.into(),

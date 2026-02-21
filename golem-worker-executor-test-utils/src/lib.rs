@@ -115,7 +115,7 @@ use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
+    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
@@ -135,7 +135,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use uuid::Uuid;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
+use wasmtime::component::{Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
@@ -956,20 +956,6 @@ impl HostFutureInvokeResult for TestWorkerCtx {
 
     async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
-    }
-}
-
-#[async_trait]
-impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<TestWorkerCtx>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()> {
-        self.durable_ctx
-            .link(engine, linker, component, component_metadata)
     }
 }
 

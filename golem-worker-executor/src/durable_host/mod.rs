@@ -20,7 +20,6 @@ mod cli;
 mod clocks;
 mod config;
 pub mod durability;
-mod dynamic_linking;
 mod filesystem;
 pub mod golem;
 pub mod http;

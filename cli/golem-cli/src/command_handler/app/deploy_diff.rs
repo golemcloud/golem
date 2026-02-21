@@ -735,7 +735,6 @@ fn normalized_diff_deployment(
                                     version: metadata.version.clone(),
                                     env: safe_env(&metadata.env),
                                     config_vars: metadata.config_vars.clone(),
-                                    dynamic_linking_wasm_rpc: Default::default(),
                                 }
                                 .into(),
                                 None => component.metadata.hash().into(),

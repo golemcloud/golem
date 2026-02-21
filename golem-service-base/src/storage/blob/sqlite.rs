@@ -77,9 +77,6 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::Components { environment_id } => {
                 format!("components-{environment_id}")
             }
-            BlobStorageNamespace::PluginWasmFiles { account_id } => {
-                format!("plugin_wasm_files-{account_id}")
-            }
         }
     }
 

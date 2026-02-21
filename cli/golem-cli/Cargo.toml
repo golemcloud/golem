@@ -32,32 +32,29 @@ harness = false
 golem-templates = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true }
-golem-rib-repl = { workspace = true }
-golem-wasm = { workspace = true , default-features = true }
+golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
+ariadne = { workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
-auditable-serde = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true }
-cargo-component = { workspace = true }
-cargo-component-core = { workspace = true }
-cargo_toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
+crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+evcxr = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
@@ -75,14 +72,13 @@ lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
-nanoid = { workspace = true }
-nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+rustyline = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
@@ -108,6 +104,7 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
+unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }
@@ -116,21 +113,20 @@ walkdir = { workspace = true }
 wax = { workspace = true }
 wasmparser = { workspace = true }
 wasm-encoder = { workspace = true }
+wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
-wit-bindgen-rust = { workspace = true }
 wit-component = { workspace = true }
 wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
-webbrowser = { workspace = true }
-warp = { workspace = true }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
 openssl = { workspace = true }
 openssl-sys = { workspace = true }
 
 [dev-dependencies]
+assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = { workspace = true }
 log = { workspace = true }
@@ -140,8 +136,6 @@ reqwest = { workspace = true }
 serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
-wasm-metadata = { workspace = true }
-
 [build-dependencies]
 lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }
