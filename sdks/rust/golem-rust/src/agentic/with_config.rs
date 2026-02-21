@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::BaseAgent;
-
-pub struct AgentConfig<T> {
-    t: T
-}
-
-impl<T> AgentConfig<T> {
-    pub fn get(&self) -> T {
-        // get config from somewhere
-        todo!("config is not implemented yet")
-    }
+pub trait WithConfig<T> {
+    
 }

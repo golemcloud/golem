@@ -356,8 +356,11 @@ fn generate_base_agent_impl(
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
     quote! {
+
+        impl<T> golem_rust::agentic::WithConfig<T> for #self_ty where T: 'static {}
+
         #[golem_rust::async_trait::async_trait(?Send)]
-        impl<T> #impl_generics golem_rust::agentic::BaseAgent<T> for #self_ty #ty_generics #where_clause {
+        impl #impl_generics golem_rust::agentic::BaseAgent for #self_ty #ty_generics #where_clause {
             fn get_agent_id(&self) -> String {
                 golem_rust::agentic::get_agent_id().agent_id
             }

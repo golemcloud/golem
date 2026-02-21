@@ -153,7 +153,7 @@ fn extract_config_type_argument(trait_item: &ItemTrait) -> Option<syn::Type> {
     for bound in &trait_item.supertraits {
         if let syn::TypeParamBound::Trait(trait_bound) = bound {
             if trait_bound.path.segments.len() == 1
-                && trait_bound.path.segments[0].ident == "Agent"
+                && trait_bound.path.segments[0].ident == "WithConfig"
             {
                 if let syn::PathArguments::AngleBracketed(args) =
                     &trait_bound.path.segments[0].arguments
