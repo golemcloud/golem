@@ -21,6 +21,7 @@ pub mod metrics;
 pub mod model;
 pub mod path;
 pub mod service;
+pub mod mcp;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
@@ -33,8 +34,12 @@ use poem::listener::Listener;
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
+use poem::endpoint::TowerCompatExt;
+use crate::mcp::GolemAgentMcpServer;
 
 #[cfg(test)]
 test_r::enable!();
@@ -43,11 +48,13 @@ pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
     pub custom_request_port: u16,
+    pub mcp_port: u16,
 }
 
 pub struct TrafficReadyEndpoints {
     pub grpc_port: u16,
     pub custom_request_port: u16,
+    pub mcp_port: u16,
     pub api_endpoint: BoxEndpoint<'static>,
 }
 
@@ -79,17 +86,19 @@ impl WorkerService {
     ) -> anyhow::Result<RunDetails> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set, tracer.clone()).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set, tracer.clone()).await?;
+        let mcp_port = self.start_mcp_server(join_set, tracer).await?;
 
         info!(
-            "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
-            http_port, grpc_port, custom_request_port
+            "Started worker service on ports: http: {}, grpc: {}, gateway: {}, mcp: {}",
+            http_port, grpc_port, custom_request_port, mcp_port
         );
 
         Ok(RunDetails {
             http_port,
             grpc_port,
             custom_request_port,
+            mcp_port,
         })
     }
 
@@ -100,11 +109,14 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set, tracer.clone()).await?;
+        let mcp_port = self.start_mcp_server(join_set, tracer).await?;
         let api_endpoint = api::make_open_api_service(&self.services).boxed();
+
         Ok(TrafficReadyEndpoints {
             grpc_port,
             api_endpoint,
+            mcp_port,
             custom_request_port,
         })
     }
@@ -196,6 +208,47 @@ impl WorkerService {
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }
             .in_current_span(),
+        );
+
+        Ok(port)
+    }
+
+    async fn start_mcp_server(&self, join_set: &mut JoinSet<anyhow::Result<()>>,         tracer: Option<SdkTracer>,
+    ) -> anyhow::Result<u16> {
+
+        let poem_listener = poem::listener::TcpListener::bind(format!(
+            "0.0.0.0:{}",
+            self.config.custom_request_port
+        ));
+
+        let acceptor = poem_listener.into_acceptor().await?;
+
+        let port = acceptor.local_addr()[0]
+            .as_socket_addr()
+            .expect("socket address")
+            .port();
+
+        let service = StreamableHttpService::new(
+            move || Ok(GolemAgentMcpServer::new(None)),
+            LocalSessionManager::default().into(),
+            StreamableHttpServerConfig::default(),
+        );
+
+        let route = Route::new()
+            .nest("/mcp", service.compat())
+            .with(OpenTelemetryMetrics::new())
+            .with_if_lazy(tracer.is_some(), || {
+                OpenTelemetryTracing::new(tracer.unwrap())
+            });
+
+        join_set.spawn(
+            async move {
+                poem::Server::new_with_acceptor(acceptor)
+                    .run(route)
+                    .await
+                    .map_err(|err| anyhow!(err).context("API Gateway server failed"))
+            }
+                .in_current_span(),
         );
 
         Ok(port)
