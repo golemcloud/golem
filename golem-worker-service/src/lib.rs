@@ -218,7 +218,7 @@ impl WorkerService {
 
         let poem_listener = poem::listener::TcpListener::bind(format!(
             "0.0.0.0:{}",
-            self.config.custom_request_port
+            8000
         ));
 
         let acceptor = poem_listener.into_acceptor().await?;
