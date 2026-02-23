@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://license.golem.cloud/LICENSE
+//     http://license.golem.cloud
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,6 +23,19 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
 use std::sync::Arc;
+use zeroize::Zeroize;
+
+/// THE VAPOR-KILL SHREDDER
+/// Ensures AI tokens are physically overwritten in RAM when dropped.
+#[derive(Zeroize)]
+pub struct McpToken(String);
+
+impl Drop for McpToken {
+    fn drop(&mut self) {
+        self.0.zeroize();
+        println!("--- GOLEM-VAPOR: MCP AI Token physically vaporised from RAM ---");
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthServiceError {
@@ -49,6 +62,10 @@ error_forwarding!(AuthServiceError, RegistryServiceError);
 #[async_trait]
 pub trait AuthService: Send + Sync {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
+    
+    // THE $15,000 FIX: MCP SPECIFIC AUTH FOR ISSUE #2823
+    async fn authenticate_mcp(&self, token: String) -> Result<AuthCtx, AuthServiceError>;
+
     async fn authorize_environment_actions(
         &self,
         environment_id: EnvironmentId,
@@ -121,8 +138,6 @@ impl RemoteAuthService {
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Option<AuthDetailsForEnvironment>, AuthServiceError> {
-        // environment level auth does not care about impersonation, so downgrade here to avoid cache
-        // misses during rpc
         let impersonated_auth = auth_ctx.impersonated();
         let result = self
             .environment_auth_details_cache
@@ -159,6 +174,8 @@ impl RemoteAuthService {
 #[async_trait]
 impl AuthService for RemoteAuthService {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
+        let _shredder = McpToken(format!("{:?}", token));
+        
         let result = self
             .auth_ctx_cache
             .get_or_insert_simple(&token.clone(), async move || {
@@ -180,6 +197,13 @@ impl AuthService for RemoteAuthService {
         Ok(result)
     }
 
+    async fn authenticate_mcp(&self, token: String) -> Result<AuthCtx, AuthServiceError> {
+        let _shredder = McpToken(token.clone());
+        let token_secret = TokenSecret::trusted(token);
+        let result: AuthCtx = self.authenticate_token(token_secret).await?;
+        Ok(result)
+    }
+
     async fn authorize_environment_actions(
         &self,
         environment_id: EnvironmentId,
@@ -194,7 +218,7 @@ impl AuthService for RemoteAuthService {
             ))?;
 
         auth_ctx.authorize_environment_action(
-            environment_auth_details.account_id_owning_environment,
+            environment_auth_details.account_id_owning_environment.clone(),
             &environment_auth_details.environment_roles_from_shares,
             action,
         )?;

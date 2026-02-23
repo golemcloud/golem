@@ -92,6 +92,7 @@ tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
+zeroize = { version = "1.8.2", features = ["derive"] }
 
 [dev-dependencies]
 golem-test-framework.workspace = true
