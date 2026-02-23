@@ -19,9 +19,10 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextStack, T
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
+use crate::model::agent::{Principal, UntypedDataValue};
 use crate::model::{
-    AccountId, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId, ScheduledAction, WorkerId,
-    WorkerMetadata, WorkerStatus,
+    AccountId, AgentInvocation, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId,
+    ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use anyhow::anyhow;
 use bigdecimal::BigDecimal;
@@ -1277,8 +1278,9 @@ pub struct SerializableScheduledInvocation {
     pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
     pub idempotency_key: IdempotencyKey,
-    pub full_function_name: String,
-    pub function_input: Vec<Value>,
+    pub method_name: String,
+    pub input: UntypedDataValue,
+    pub principal: Principal,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub spans: Vec<Vec<PublicSpanData>>,
@@ -1290,27 +1292,42 @@ impl SerializableScheduledInvocation {
             ScheduledAction::Invoke {
                 account_id,
                 owned_worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Ok(Self {
-                timestamp: schedule_id.timestamp,
-                account_id,
-                environment_id: owned_worker_id.environment_id,
-                worker_id: owned_worker_id.worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-                spans: encode_span_data(&invocation_context.to_oplog_data()),
-                trace_id: invocation_context.trace_id,
-                trace_states: invocation_context.trace_states,
-            }),
+                invocation,
+            } => match invocation {
+                AgentInvocation::AgentMethod {
+                    idempotency_key,
+                    method_name,
+                    input,
+                    invocation_context,
+                    principal,
+                } => Ok(Self {
+                    timestamp: schedule_id.timestamp,
+                    account_id,
+                    environment_id: owned_worker_id.environment_id,
+                    worker_id: owned_worker_id.worker_id,
+                    idempotency_key,
+                    method_name,
+                    input,
+                    principal,
+                    spans: encode_span_data(&invocation_context.to_oplog_data()),
+                    trace_id: invocation_context.trace_id,
+                    trace_states: invocation_context.trace_states,
+                }),
+                other => Err(format!(
+                    "ScheduleId contains a non-method invocation: {:?}",
+                    other.kind()
+                )),
+            },
             _ => Err("ScheduleId does not describe an invocation".to_string()),
         }
     }
 
     pub fn into_domain(self) -> ScheduleId {
+        let invocation_context = InvocationContextStack::from_oplog_data(
+            self.trace_id,
+            self.trace_states,
+            decode_span_data(self.spans),
+        );
         ScheduleId {
             timestamp: self.timestamp,
             action: ScheduledAction::Invoke {
@@ -1319,14 +1336,13 @@ impl SerializableScheduledInvocation {
                     environment_id: self.environment_id,
                     worker_id: self.worker_id,
                 },
-                idempotency_key: self.idempotency_key,
-                full_function_name: self.full_function_name,
-                function_input: self.function_input,
-                invocation_context: InvocationContextStack::from_oplog_data(
-                    self.trace_id,
-                    self.trace_states,
-                    decode_span_data(self.spans),
-                ),
+                invocation: AgentInvocation::AgentMethod {
+                    idempotency_key: self.idempotency_key,
+                    method_name: self.method_name,
+                    input: self.input,
+                    invocation_context,
+                    principal: self.principal,
+                },
             },
         }
     }

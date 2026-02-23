@@ -43,7 +43,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig,
 };
-use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -61,7 +60,7 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::Value;
+
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -553,11 +552,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn invoke(
         &self,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
+        let idempotency_key = invocation
+            .idempotency_key()
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request("Invocation has no idempotency key")
+            })?
+            .clone();
+
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
 
@@ -567,19 +570,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
-                self.enqueue_worker_invocation(AgentInvocation::AgentMethod {
-                    idempotency_key,
-                    method_name: full_function_name,
-                    input: UntypedDataValue::Tuple(
-                        function_input
-                            .into_iter()
-                            .map(UntypedElementValue::ComponentModel)
-                            .collect(),
-                    ),
-                    invocation_context,
-                    principal: Principal::anonymous(),
-                })
-                .await?;
+                self.enqueue_worker_invocation(invocation).await?;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
         }
@@ -588,20 +579,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Invokes the worker and awaits for a result.
     pub async fn invoke_and_await(
         &self,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     ) -> Result<AgentInvocationResult, WorkerExecutorError> {
-        match self
-            .invoke(
-                idempotency_key.clone(),
-                full_function_name,
-                function_input,
-                invocation_context,
-            )
-            .await?
-        {
+        let idempotency_key = invocation
+            .idempotency_key()
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request("Invocation has no idempotency key")
+            })?
+            .clone();
+
+        match self.invoke(invocation).await? {
             ResultOrSubscription::Finished(Ok(output)) => Ok(output),
             ResultOrSubscription::Finished(Err(err)) => Err(err),
             ResultOrSubscription::Pending(subscription) => {

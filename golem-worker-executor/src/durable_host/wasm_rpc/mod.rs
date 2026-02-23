@@ -382,7 +382,8 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::{OplogIndex, OwnedWorkerId, ScheduledAction};
+use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
+use golem_common::model::{AgentInvocation, OplogIndex, OwnedWorkerId, ScheduledAction};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
@@ -838,10 +839,18 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let action = ScheduledAction::Invoke {
                 account_id: self.created_by(),
                 owned_worker_id: remote_worker_id,
-                idempotency_key,
-                full_function_name: function_name,
-                function_input: function_params.into_iter().map(|e| e.into()).collect(),
-                invocation_context: stack,
+                invocation: AgentInvocation::AgentMethod {
+                    idempotency_key,
+                    method_name: function_name,
+                    input: UntypedDataValue::Tuple(
+                        function_params
+                            .into_iter()
+                            .map(|e| UntypedElementValue::ComponentModel(e.into()))
+                            .collect(),
+                    ),
+                    invocation_context: stack,
+                    principal: Principal::anonymous(),
+                },
             };
 
             let result = self

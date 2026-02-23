@@ -315,10 +315,7 @@ pub enum ScheduledAction {
     Invoke {
         account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     },
 }
 

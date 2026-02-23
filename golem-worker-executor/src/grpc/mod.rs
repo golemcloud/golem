@@ -48,7 +48,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, DataValue, Principal, UntypedDataValue};
+use golem_common::model::agent::{AgentId, AgentMode, Principal, UntypedDataValue};
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -67,7 +67,6 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::{FromValue, IntoValue};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -1602,54 +1601,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = self.get_or_create(&request).await?;
 
-        let metadata = worker.get_latest_worker_metadata().await;
-        let worker_name = &metadata.worker_id.worker_name;
-
-        let agent_type_name = AgentId::parse_agent_type_name(worker_name).map_err(|err| {
-            WorkerExecutorError::invalid_request(format!(
-                "Cannot parse agent type name from worker name '{worker_name}': {err}"
-            ))
-        })?;
-
-        let component_metadata = worker
-            .component_service()
-            .get_metadata(
-                metadata.worker_id.component_id,
-                Some(metadata.last_known_status.component_revision),
-            )
-            .await?;
-
-        let agent_type = component_metadata
-            .metadata
-            .find_agent_type_by_wrapper_name(&agent_type_name)
-            .map_err(WorkerExecutorError::invalid_request)?
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Agent type {} not found in component metadata",
-                    agent_type_name
-                ))
-            })?;
-
-        let method = agent_type
-            .methods
-            .iter()
-            .find(|m| m.name == method_name)
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Agent method {} not found in agent type {}",
-                    method_name, agent_type_name
-                ))
-            })?;
-
-        let method_parameters_typed =
-            DataValue::try_from_untyped(method_parameters, method.input_schema.clone()).map_err(
-                |err| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "Agent method parameters type error: {err}"
-                    ))
-                },
-            )?;
-
         let principal: Principal = request
             .principal
             .map(|p| p.try_into())
@@ -1659,21 +1610,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?
             .unwrap_or_else(Principal::anonymous);
 
-        let function_name = "golem:agent/guest.{invoke}".to_string();
-        let function_input: Vec<golem_wasm::Value> = vec![
-            method_name.into_value(),
-            method_parameters_typed.into_value(),
-            principal.into_value(),
-        ];
-
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
         let invocation_context = from_proto_invocation_context(&request.context);
 
+        let invocation = AgentInvocation::AgentMethod {
+            idempotency_key: ik,
+            method_name,
+            input: method_parameters.into(),
+            invocation_context,
+            principal,
+        };
+
         match mode {
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
-                let invocation_result = worker
-                    .invoke_and_await(ik, function_name, function_input, invocation_context)
-                    .await?;
+                let invocation_result = worker.invoke_and_await(invocation).await?;
 
                 match invocation_result {
                     AgentInvocationResult::AgentMethod { output } => Ok(Some(output)),
@@ -1685,9 +1635,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
                 // TODO: scheduled invocation support (this is trigger)
-                worker
-                    .invoke(ik, function_name, function_input, invocation_context)
-                    .await?;
+                worker.invoke(invocation).await?;
                 Ok(None)
             }
         }

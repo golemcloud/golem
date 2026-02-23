@@ -29,9 +29,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{AgentInvocation, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::Value;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -57,15 +56,12 @@ pub trait SchedulerWorkerAccess {
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
-    // enqueue and invocation to the worker
+    // enqueue an invocation to the worker
     async fn enqueue_invocation(
         &self,
         created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -100,10 +96,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         &self,
         created_by: AccountId,
         owned_worker_id: &OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
@@ -117,14 +110,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             )
             .await?;
 
-        worker
-            .invoke(
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            )
-            .await?;
+        worker.invoke(invocation).await?;
 
         Worker::start_if_needed(worker).await?;
 
@@ -338,10 +324,7 @@ impl SchedulerServiceDefault {
                 ScheduledAction::Invoke {
                     account_id,
                     owned_worker_id,
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                    invocation_context,
+                    invocation,
                 } => {
                     // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
@@ -350,17 +333,13 @@ impl SchedulerServiceDefault {
                         .enqueue_invocation(
                             account_id,
                             &owned_worker_id,
-                            idempotency_key,
-                            full_function_name.clone(),
-                            function_input,
-                            invocation_context,
+                            invocation,
                         )
                         .await;
 
                     if let Err(e) = result {
                         error!(
                             worker_id = owned_worker_id.to_string(),
-                            full_function_name = full_function_name,
                             "Failed to invoke worker with scheduled invocation: {e}"
                         );
                     };
@@ -465,14 +444,13 @@ mod tests {
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
+        AgentInvocation, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
+        WorkerId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use golem_wasm::Value;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -496,10 +474,7 @@ mod tests {
             &self,
             _created_by: AccountId,
             _owned_worker_id: &OwnedWorkerId,
-            _idempotency_key: IdempotencyKey,
-            _full_function_name: String,
-            _function_input: Vec<Value>,
-            _invocation_context: InvocationContextStack,
+            _invocation: AgentInvocation,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
