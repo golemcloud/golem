@@ -12,6 +12,7 @@ pub struct CompiledMcp {
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
-    pub agent_types: Vec<AgentTypeName>
+    // for now we are not storing pre-computed prompts and tools, but we can add it later if needed (to reduce storage)
+    pub agent_types: Vec<AgentTypeName> 
 }
 

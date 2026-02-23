@@ -18,7 +18,7 @@ use rmcp::model::Tool;
 use golem_common::base_model::agent::{AgentMethod, DataSchema};
 use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::mcp_schema::{McpToolSchema, McpToolSchemaMapper};
+use crate::mcp::mcp_schema::{McpToolSchema, McpToolGetSchema};
 
 #[derive(Clone)]
 pub enum McpAgentCapability {

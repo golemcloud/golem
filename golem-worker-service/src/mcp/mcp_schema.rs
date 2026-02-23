@@ -17,7 +17,7 @@ use serde_json::json;
 use golem_common::base_model::agent::{AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema};
 use golem_wasm::analysis::AnalysedType;
 
-pub trait McpToolSchemaMapper {
+pub trait McpToolGetSchema {
     fn get_schema(&self) -> McpToolSchema;
 }
 
@@ -26,7 +26,7 @@ pub struct McpToolSchema {
     pub output_schema: Option<JsonObject>,
 }
 
-impl McpToolSchemaMapper for AgentMethod {
+impl McpToolGetSchema for AgentMethod {
     fn get_schema(&self) -> McpToolSchema {
         let input_schema: JsonObject = get_mcp_tool_schema(&self.input_schema);
         let output_schema: JsonObject = get_mcp_tool_schema(&self.output_schema);

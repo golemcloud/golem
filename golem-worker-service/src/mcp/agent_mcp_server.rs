@@ -24,24 +24,30 @@ use rmcp::handler::server::router::prompt::PromptRouter;
 use serde_json::{json};
 use tokio::sync::{Mutex};
 use golem_common::base_model::agent::{AgentId, AgentMethod, AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchemas};
+use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::NamedElementSchema;
 use golem_wasm::analysis::analysed_type::u32;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_prompt::AgentMcpPrompt;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::mcp_schema::{McpToolSchema, McpToolSchemaMapper};
+use crate::mcp::mcp_schema::{McpToolGetSchema};
+use crate::mcp::McpCapabilityLookup;
 
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
     pub tool_router: ToolRouter<GolemAgentMcpServer>,
     pub processor: Arc<Mutex<OperationProcessor>>,
+    pub domain: Arc<Mutex<Option<Domain>>>,
+    agent_id: Option<AgentId>,
 }
 
 impl GolemAgentMcpServer {
     pub fn new(agent_id: Option<AgentId>) -> Self {
         Self {
-            tool_router: Self::tool_router(agent_id),
+            tool_router: Self::tool_router(agent_id.clone()),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
+            domain: Arc::new(Mutex::new(None)),
+            agent_id,
         }
     }
 

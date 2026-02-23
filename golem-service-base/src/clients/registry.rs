@@ -162,7 +162,7 @@ pub trait RegistryService: Send + Sync {
         domain: &Domain,
     ) -> Result<CompiledRoutes, RegistryServiceError>;
 
-    async fn get_active_mcp_routes_for_domain(
+    async fn get_active_mcp_capabilities_for_domain(
         &self,
         domain: &Domain,
     ) -> Result<CompiledMcp, RegistryServiceError>;
@@ -712,8 +712,8 @@ impl RegistryService for GrpcRegistryService {
             Some(get_active_routes_for_domain_response::Result::Error(error)) => Err(error.into()),
         }
     }
-    
-    async fn get_active_mcp_routes_for_domain(&self, domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
+
+    async fn get_active_mcp_capabilities_for_domain(&self, domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
         todo!()
     }
 
