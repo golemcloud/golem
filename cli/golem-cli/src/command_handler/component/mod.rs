@@ -51,13 +51,11 @@ use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 
+use crate::app_template::add_component_by_template;
+use crate::model::GuestLanguage;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::add_component_by_template;
-use golem_templates::model::{
-    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
-};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -179,15 +177,12 @@ impl ComponentCommandHandler {
         let (common_template, component_template) =
             app_handler.get_template(&template, self.ctx.dev_mode())?;
 
-        let application_name = TemplateApplicationName::from(application_name.0);
-
         match add_component_by_template(
             common_template,
             Some(component_template),
             &PathBuf::from("."),
             &application_name,
-            &PackageName::from_string(component_name.0.clone())
-                .expect("Failed to parse component name"),
+            &component_name,
             Some(self.ctx.template_sdk_overrides()),
         ) {
             Ok(()) => {

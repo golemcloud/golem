@@ -29,7 +29,6 @@ test = true
 harness = false
 
 [dependencies]
-golem-templates = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-wasm = { workspace = true, default-features = true }
@@ -55,6 +54,7 @@ crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 evcxr = { workspace = true }
+fancy-regex = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
@@ -62,6 +62,7 @@ fuzzy-matcher = { workspace = true }
 gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
+include_dir = { workspace = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 inquire = { workspace = true }
@@ -136,6 +137,7 @@ reqwest = { workspace = true }
 serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
+
 [build-dependencies]
 lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }

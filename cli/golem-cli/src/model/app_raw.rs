@@ -25,8 +25,6 @@ use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_templates::model::GuestLanguage;
-use golem_templates::APP_MANIFEST_JSON_SCHEMA;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -36,6 +34,8 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use url::Url;
+use crate::app_template::APP_MANIFEST_JSON_SCHEMA;
+use crate::model::GuestLanguage;
 
 struct NoopRetriever;
 

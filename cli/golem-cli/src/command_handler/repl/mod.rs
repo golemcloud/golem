@@ -27,10 +27,10 @@ use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
 use anyhow::bail;
 use golem_common::model::component::ComponentName;
-use golem_templates::model::GuestLanguage;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use crate::model::GuestLanguage;
 
 mod rust;
 mod typescript;

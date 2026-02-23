@@ -16,7 +16,6 @@ use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, Mini
 use crate::log::logln;
 use anyhow::{anyhow, Context};
 use colored::Colorize;
-use golem_templates::model::GuestLanguage;
 use indoc::indoc;
 use regex::Regex;
 use std::cmp::max;
@@ -28,6 +27,7 @@ use std::process::Command;
 use version_compare::{Cmp, Version};
 use walkdir::DirEntry;
 use wax::{Glob, LinkBehavior, WalkBehavior};
+use crate::model::GuestLanguage;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
 enum Language {

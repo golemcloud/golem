@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
+use crate::app_template::add_component_by_template;
+use crate::app_template::model::{Template, TemplateName};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -48,6 +50,7 @@ use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::GuestLanguage;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -65,10 +68,6 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_templates::add_component_by_template;
-use golem_templates::model::{
-    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
-};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -161,8 +160,6 @@ impl AppCommandHandler {
             ),
         );
 
-        let application_name = TemplateApplicationName::from(application_name.0);
-
         if components.is_empty() {
             let common_templates = languages
                 .iter()
@@ -175,14 +172,15 @@ impl AppCommandHandler {
             {
                 let _indent = LogIndent::new();
                 // TODO: cleanup add_component_by_example, so we don't have to pass a dummy arg
-                let dummy_package_name = PackageName::from_string("app:comp").unwrap();
+                let component_name = ComponentName::try_from("dummy:comp")
+                    .expect("Failed to parse dummy component name.");
                 for common_template in common_templates.into_iter().flatten() {
                     match add_component_by_template(
                         Some(common_template),
                         None,
                         &app_dir,
                         &application_name,
-                        &dummy_package_name,
+                        &component_name,
                         Some(self.ctx.template_sdk_overrides()),
                     ) {
                         Ok(()) => {
@@ -213,8 +211,7 @@ impl AppCommandHandler {
                     Some(component_template),
                     &app_dir,
                     &application_name,
-                    &PackageName::from_string(component_name.0.clone())
-                        .expect("Failed to parse component name."),
+                    &component_name,
                     Some(self.ctx.template_sdk_overrides()),
                 ) {
                     Ok(()) => {
@@ -235,10 +232,7 @@ impl AppCommandHandler {
 
         log_action(
             "Created",
-            format!(
-                "application {}",
-                application_name.as_str().log_color_highlight()
-            ),
+            format!("application {}", application_name.0.log_color_highlight()),
         );
 
         logln("");
@@ -247,7 +241,7 @@ impl AppCommandHandler {
             logln(
                 format!(
                     "To add components to the application, switch to the {} directory, and use the `{}` command.",
-                    application_name.as_str().log_color_highlight(),
+                    application_name.0.log_color_highlight(),
                     "component new".log_color_highlight(),
                 )
             );
@@ -255,7 +249,7 @@ impl AppCommandHandler {
             logln(
                 format!(
                     "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
-                    application_name.as_str().log_color_highlight(),
+                    application_name.0.log_color_highlight(),
                     "build".log_color_highlight(),
                     "deploy".log_color_highlight(),
                 )

@@ -2,7 +2,7 @@ use crate::app::{check_component_metadata, cmd, flag, pattern, TestContext};
 use crate::Tracing;
 
 use golem_cli::fs;
-use golem_templates::model::GuestLanguage;
+use golem_cli::model::GuestLanguage;
 use indoc::indoc;
 use std::path::Path;
 use strum::IntoEnumIterator;

@@ -21,7 +21,6 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
     AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
-use golem_templates::model::SdkOverrides;
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
@@ -30,6 +29,7 @@ use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 use tracing::debug;
+use crate::app_template::model::SdkOverrides;
 
 #[allow(clippy::module_inception)]
 mod rust;

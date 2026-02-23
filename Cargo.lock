@@ -2695,15 +2695,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dir-diff"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7ad16bf5f84253b50d6557681c58c3ab67c47c77d39fed9aeb56e947290bd10"
-dependencies = [
- "walkdir",
-]
-
-[[package]]
 name = "directories-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3909,6 +3900,7 @@ dependencies = [
  "desert_rust",
  "dirs 4.0.0",
  "evcxr",
+ "fancy-regex 0.14.0",
  "flate2",
  "fs_extra",
  "futures-util",
@@ -3917,11 +3909,11 @@ dependencies = [
  "goldenfile",
  "golem-client",
  "golem-common",
- "golem-templates",
  "golem-wasm",
  "golem-wasm-derive",
  "heck",
  "humansize",
+ "include_dir",
  "indexmap 2.12.0",
  "indoc",
  "inquire",
@@ -4360,27 +4352,6 @@ dependencies = [
  "tonic-tracing-opentelemetry",
  "tracing",
  "tracing-test",
-]
-
-[[package]]
-name = "golem-templates"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "assert2",
- "cargo_metadata",
- "dir-diff",
- "fancy-regex 0.14.0",
- "fs_extra",
- "heck",
- "include_dir",
- "indoc",
- "itertools 0.14.0",
- "serde",
- "serde_json",
- "strum",
- "strum_macros",
- "test-r",
 ]
 
 [[package]]

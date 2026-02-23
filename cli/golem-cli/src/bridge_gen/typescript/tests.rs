@@ -29,7 +29,6 @@ use golem_common::model::agent::{
     UntypedJsonElementValues, UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
 use golem_common::model::Empty;
-use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -41,6 +40,7 @@ use std::io::Write;
 use std::process::Stdio;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
+use crate::model::GuestLanguage;
 
 struct GeneratedPackage {
     pub dir: TempDir,

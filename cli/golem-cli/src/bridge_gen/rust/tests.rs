@@ -26,10 +26,10 @@ use golem_common::model::agent::{
     NamedElementSchemas, Snapshotting,
 };
 use golem_common::model::Empty;
-use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{f64, str};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
+use crate::model::GuestLanguage;
 
 struct GeneratedPackage {
     #[allow(dead_code)]

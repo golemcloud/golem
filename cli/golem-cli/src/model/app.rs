@@ -17,7 +17,6 @@ use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
-use crate::model::app_raw;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
@@ -26,15 +25,16 @@ use crate::model::cascade::property::Property;
 use crate::model::component::AppComponentType;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
+use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 
+use crate::app_template::model::TemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::validate_lower_kebab_case_identifier;
-use golem_templates::model::GuestLanguage;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -279,33 +279,6 @@ pub struct CustomBridgeSdkTarget {
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct TemplateName(String);
-
-impl TemplateName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Display for TemplateName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for TemplateName {
-    fn from(value: String) -> Self {
-        TemplateName(value)
-    }
-}
-
-impl From<&str> for TemplateName {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
@@ -670,7 +643,7 @@ impl ComponentLayerId {
         parent_ids
             .into_vec()
             .into_iter()
-            .map(|parent_id| Self::TemplateCustomPresets(TemplateName(parent_id.to_string())))
+            .map(|parent_id| Self::TemplateCustomPresets(parent_id.into()))
             .collect()
     }
 }
@@ -1446,13 +1419,14 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use crate::app_template::model::TemplateName;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
         Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerId,
         ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
-        ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, TemplateName,
-        WithSource, DEFAULT_TEMP_DIR,
+        ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, WithSource,
+        DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1911,70 +1885,73 @@ mod app_builder {
             template_name: TemplateName,
             template: app_raw::ComponentTemplate,
         ) {
-            validation.with_context(vec![("template", template_name.0.clone())], |validation| {
-                if let Some(err) = self
-                    .component_layer_store
-                    .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateCommon(template_name.clone()),
-                        parents: ComponentLayerId::parent_ids_from_raw_template_references(
-                            template.templates,
-                        ),
-                        properties: ComponentLayerPropertiesKind::Common(Box::new(
-                            template.component_properties.into(),
-                        )),
-                    })
-                    .err()
-                {
-                    validation.add_error(err.to_string())
-                }
+            validation.with_context(
+                vec![("template", template_name.to_string())],
+                |validation| {
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::TemplateCommon(template_name.clone()),
+                            parents: ComponentLayerId::parent_ids_from_raw_template_references(
+                                template.templates,
+                            ),
+                            properties: ComponentLayerPropertiesKind::Common(Box::new(
+                                template.component_properties.into(),
+                            )),
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
 
-                let presets = PartitionedComponentPresets::new(template.presets);
+                    let presets = PartitionedComponentPresets::new(template.presets);
 
-                if let Some(err) = self
-                    .component_layer_store
-                    .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
-                        parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
-                        properties: {
-                            if presets.env_presets.is_empty() {
-                                ComponentLayerPropertiesKind::Empty
-                            } else {
-                                ComponentLayerPropertiesKind::Presets {
-                                    presets: presets.env_presets,
-                                    default_preset: "".to_string(),
-                                }
-                            }
-                        },
-                    })
-                    .err()
-                {
-                    validation.add_error(err.to_string())
-                }
-
-                if let Some(err) = self
-                    .component_layer_store
-                    .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
-                        parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
-                            template_name.clone(),
-                        )],
-                        properties: {
-                            match presets.default_custom_preset {
-                                Some(default_custom_preset) => {
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
+                            parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
+                            properties: {
+                                if presets.env_presets.is_empty() {
+                                    ComponentLayerPropertiesKind::Empty
+                                } else {
                                     ComponentLayerPropertiesKind::Presets {
-                                        presets: presets.custom_presets,
-                                        default_preset: default_custom_preset,
+                                        presets: presets.env_presets,
+                                        default_preset: "".to_string(),
                                     }
                                 }
-                                None => ComponentLayerPropertiesKind::Empty,
-                            }
-                        },
-                    })
-                    .err()
-                {
-                    validation.add_error(err.to_string())
-                }
-            });
+                            },
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
+                            parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
+                                template_name.clone(),
+                            )],
+                            properties: {
+                                match presets.default_custom_preset {
+                                    Some(default_custom_preset) => {
+                                        ComponentLayerPropertiesKind::Presets {
+                                            presets: presets.custom_presets,
+                                            default_preset: default_custom_preset,
+                                        }
+                                    }
+                                    None => ComponentLayerPropertiesKind::Empty,
+                                }
+                            },
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+                },
+            );
         }
 
         fn add_component(

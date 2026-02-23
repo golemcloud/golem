@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ApplicationName, ComposableAppGroupName, DocDependency, DocDependencyEnvVar,
-    DocDependencyGroup, GuestLanguage, PackageName, SdkOverrides, TargetExistsResolveDecision,
-    TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata, TemplateName,
-    TemplateParameters, Transform,
+use crate::app_template::model::{
+    ComposableAppGroupName, DocDependency, DocDependencyEnvVar, DocDependencyGroup, SdkOverrides,
+    TargetExistsResolveDecision, TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata,
+    TemplateName, TemplateParameters, Transform,
 };
+use crate::model::GuestLanguage;
 use anyhow::Context;
+use golem_common::base_model::component::ComponentName;
+use golem_common::model::application::ApplicationName;
+use heck::{ToKebabCase, ToSnakeCase};
 use include_dir::{include_dir, Dir, DirEntry};
 use indoc::formatdoc;
 use itertools::Itertools;
@@ -43,7 +46,7 @@ static GOLEM_TS_VERSION: &str = "0.1.0-dev.1";
 static GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
 static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
 
-static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../golem-templates/templates");
 pub static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../schema.golem.cloud/app/golem/",
@@ -167,13 +170,12 @@ pub fn add_component_by_template(
     component_template: Option<&Template>,
     target_path: &Path,
     application_name: &ApplicationName,
-    package_name: &PackageName,
+    component_name: &ComponentName,
     sdk_overrides: Option<&SdkOverrides>,
 ) -> anyhow::Result<()> {
     let parameters = TemplateParameters {
         application_name: application_name.clone(),
-        component_name: package_name.to_string_with_colon().into(),
-        package_name: package_name.clone(),
+        component_name: component_name.clone(),
         target_path: target_path.into(),
         sdk_overrides: sdk_overrides.cloned().unwrap_or_default(),
     };
@@ -330,30 +332,16 @@ fn transform(
     transforms: &[Transform],
 ) -> String {
     let transform_pack_and_comp = |str: &str| -> String {
-        str.replace(
-            "componentnameapi",
-            &format!("{}api", parameters.component_name.parts().join("")),
-        )
-        .replace("componentname", parameters.component_name.as_str())
-        .replace("component-name", &parameters.component_name.to_kebab_case())
-        .replace("ComponentName", &parameters.component_name.to_pascal_case())
-        .replace("componentName", &parameters.component_name.to_camel_case())
-        .replace("component_name", &parameters.component_name.to_snake_case())
-        .replace(
-            "pack::name",
-            &parameters.package_name.to_string_with_double_colon(),
-        )
-        .replace("pa_ck::na_me", &parameters.package_name.to_rust_binding())
-        .replace("pack:name", &parameters.package_name.to_string_with_colon())
-        .replace("pack_name", &parameters.package_name.to_snake_case())
-        .replace("pack-name", &parameters.package_name.to_kebab_case())
-        .replace("pack/name", &parameters.package_name.to_string_with_slash())
-        .replace("PackName", &parameters.package_name.to_pascal_case())
-        .replace("pack-ns", &parameters.package_name.namespace())
-        .replace("PackNs", &parameters.package_name.namespace_title_case())
-        .replace("__pack__", &parameters.package_name.namespace_snake_case())
-        .replace("__name__", &parameters.package_name.name_snake_case())
-        .replace("__cn__", "componentName")
+        str.replace("componentname", parameters.component_name.as_str())
+            .replace(
+                "component-name",
+                &parameters.component_name.0.to_kebab_case(),
+            )
+            .replace(
+                "component_name",
+                &parameters.component_name.0.to_snake_case(),
+            )
+            .replace("__cn__", "componentName")
     };
 
     let transform_manifest_hints = |str: &str| -> String {
@@ -376,7 +364,7 @@ fn transform(
     };
 
     let transform_app_name =
-        |str: &str| -> String { str.replace("app-name", parameters.application_name.as_str()) };
+        |str: &str| -> String { str.replace("app-name", &parameters.application_name.0) };
 
     let transform_rust_sdk = |str: &str| -> String {
         str.replace(

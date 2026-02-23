@@ -46,11 +46,11 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_templates::model::GuestLanguage;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use crate::model::GuestLanguage;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -807,7 +807,7 @@ pub mod shared_args {
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
-    use golem_templates::model::GuestLanguage;
+    use crate::model::GuestLanguage;
 
     pub type ComponentTemplateName = String;
     pub type NewWorkerArgument = String;

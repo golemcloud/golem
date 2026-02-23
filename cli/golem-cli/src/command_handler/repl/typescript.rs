@@ -24,7 +24,6 @@ use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::process::{CommandExt, ExitStatusExt};
 use crate::{binary_path_to_string, fs};
-use golem_templates::model::GuestLanguage;
 use heck::ToLowerCamelCase;
 use indoc::formatdoc;
 use itertools::Itertools;
@@ -33,6 +32,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::process::Command;
+use crate::model::GuestLanguage;
 
 pub struct TypeScriptRepl {
     ctx: Arc<Context>,
