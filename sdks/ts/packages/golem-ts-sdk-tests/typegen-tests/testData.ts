@@ -1,3 +1,5 @@
+import { Principal as AliasedSdkPrincipal } from "@golemcloud/golem-ts-sdk";
+
 interface SimpleInterfaceType {
   n: number;
 }
@@ -175,5 +177,12 @@ class MyAgent {
   // type-gen does not track private functions. This can be made configurable though
   private async getWeather2(object: Object): PromiseType {
     return Promise.resolve(`Weather in is sunny!`);
+  }
+}
+
+class Principal { }
+
+class PrincipalAgent {
+  constructor(readonly principal: AliasedSdkPrincipal, readonly otherPrincipal: Principal) {
   }
 }

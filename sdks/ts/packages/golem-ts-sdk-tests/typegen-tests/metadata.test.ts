@@ -31,6 +31,7 @@ import {
   getObjectWithTypeParameter,
   getUnionWithTypeParameter,
   getMethodParams,
+  getConstructorParams,
 } from './util.js';
 
 // While golem-ts-sdk has some of these tests repeated within its context,
@@ -156,5 +157,21 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     if (optionalParam?.kind === 'union') {
       expect(optionalParam?.unionTypes.map((t) => t.kind)).toStrictEqual(['undefined', 'number']);
     }
+  });
+
+  it('correctly type aliased sdk principal', () => {
+    const param = getConstructorParams('PrincipalAgent')[0];
+    expect(param.name).toBe('principal');
+    expect(param.type.kind).toBe('principal');
+    expect(param.type.name).toBe('Principal');
+    expect(param.type.optional).toBe(false);
+  });
+
+  it('correctly type unrelated type reusing sdk name', () => {
+    const param = getConstructorParams('PrincipalAgent')[1];
+    expect(param.name).toBe('otherPrincipal');
+    expect(param.type.kind).toBe('others');
+    expect(param.type.name).toBe('Principal');
+    expect(param.type.optional).toBe(false);
   });
 });
