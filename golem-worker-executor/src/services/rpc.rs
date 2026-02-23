@@ -35,7 +35,9 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentInvocationMode, UntypedDataValue};
+use golem_common::model::agent::{
+    AgentInvocationMode, AgentPrincipal, Principal, UntypedDataValue,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionSite};
@@ -286,6 +288,8 @@ impl Rpc for RemoteInvocationRpc {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
+        let principal = caller_agent_principal(self_worker_id);
+
         let result = self
             .worker_proxy
             .invoke_agent(
@@ -300,6 +304,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_config,
                 self_stack,
                 self_created_by,
+                principal,
             )
             .await?;
 
@@ -320,6 +325,8 @@ impl Rpc for RemoteInvocationRpc {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
+        let principal = caller_agent_principal(self_worker_id);
+
         self.worker_proxy
             .invoke_agent(
                 &owned_worker_id.worker_id(),
@@ -333,11 +340,18 @@ impl Rpc for RemoteInvocationRpc {
                 self_config,
                 self_stack,
                 self_created_by,
+                principal,
             )
             .await?;
 
         Ok(())
     }
+}
+
+fn caller_agent_principal(self_worker_id: &WorkerId) -> Principal {
+    Principal::Agent(AgentPrincipal {
+        agent_id: self_worker_id.clone(),
+    })
 }
 
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {

@@ -318,6 +318,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
+                principal: None,
             })
             .await;
 
@@ -362,6 +363,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
+                principal: None,
             })
             .await;
 

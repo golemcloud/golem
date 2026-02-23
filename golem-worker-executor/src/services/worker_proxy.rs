@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentInvocationMode, UntypedDataValue};
+use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -67,6 +67,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        principal: Principal,
     ) -> Result<Option<UntypedDataValue>, WorkerProxyError>;
 
     async fn update(
@@ -279,6 +280,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        principal: Principal,
     ) -> Result<Option<UntypedDataValue>, WorkerProxyError> {
         debug!("Invoking remote agent method {method_name} on worker {worker_id}");
 
@@ -313,7 +315,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    principal: Some(principal.clone().into()),
                 }))
             })
             .await?
