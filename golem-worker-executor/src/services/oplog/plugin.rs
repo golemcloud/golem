@@ -57,7 +57,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
         worker_metadata: WorkerMetadata,
         plugin: &InstalledPlugin,
         initial_oplog_index: OplogIndex,
-        entries: Vec<PublicOplogEntry>,
+        entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
@@ -197,7 +197,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         worker_metadata: WorkerMetadata,
         plugin: &InstalledPlugin,
         initial_oplog_index: OplogIndex,
-        entries: Vec<PublicOplogEntry>,
+        entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
         let running_plugin = self
             .resolve_plugin_worker(worker_metadata.environment_id, plugin)
@@ -706,28 +706,6 @@ impl ForwardingOplogState {
         initial_oplog_index: OplogIndex,
         entries: &[OplogEntry],
     ) -> Result<(), WorkerExecutorError> {
-        let mut public_entries = Vec::new();
-
-        for (delta, entry) in entries.iter().enumerate() {
-            let idx = initial_oplog_index.range_end(delta as u64 + 1);
-            let public_entry = PublicOplogEntry::from_oplog_entry(
-                idx,
-                entry.clone(),
-                self.oplog_service.clone(),
-                self.components.clone(),
-                &metadata.owned_worker_id(),
-                metadata.last_known_status.component_revision, // NOTE: this is only safe if the component revision is not changing within one batch
-            )
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to enrich oplog entry for oplog processors: {err}"
-                ))
-            })?;
-
-            public_entries.push(public_entry);
-        }
-
         if !metadata.last_known_status.active_plugins.is_empty() {
             let component_metadata = self
                 .components
@@ -753,7 +731,7 @@ impl ForwardingOplogState {
                         metadata.clone(),
                         &plugin,
                         initial_oplog_index,
-                        public_entries.clone(),
+                        entries.to_vec(),
                     )
                     .await?;
             }

@@ -835,7 +835,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Failed to upload invocation payload: {e}"
                 ))
             })?;
-        let entry = OplogEntry::pending_worker_invocation(idempotency_key, payload);
+        let entry = OplogEntry::pending_agent_invocation(idempotency_key, payload);
         let timestamped_invocation = TimestampedAgentInvocation {
             timestamp: entry.timestamp(),
             invocation,

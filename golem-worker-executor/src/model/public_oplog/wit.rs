@@ -250,13 +250,15 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 dropped_region,
             }) => Self::Revert(oplog::RevertParameters {
                 timestamp: timestamp.into(),
-                start: dropped_region.start.into(),
-                end: dropped_region.end.into(),
+                dropped_region: oplog::OplogRegion {
+                    start: dropped_region.start.into(),
+                    end: dropped_region.end.into(),
+                },
             }),
             PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
                 timestamp,
                 idempotency_key,
-            }) => Self::CancelPendingInvocation(oplog::CancelInvocationParameters {
+            }) => Self::CancelPendingInvocation(oplog::CancelPendingInvocationParameters {
                 timestamp: timestamp.into(),
                 idempotency_key: idempotency_key.to_string(),
             }),
@@ -270,7 +272,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp: timestamp.into(),
                 span_id: span_id.to_string(),
                 parent: parent_id.map(|id| id.to_string()),
-                linked_context: linked_context.map(|id| id.to_string()),
+                linked_context_id: linked_context.map(|id| id.to_string()),
                 attributes: attributes
                     .into_iter()
                     .map(|attr| oplog::Attribute {
