@@ -138,4 +138,3 @@ fn is_golem_evcxr_repl_set() -> bool {
         .map(|b| b.into())
         .unwrap_or(false)
 }
-

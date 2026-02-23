@@ -14,10 +14,10 @@
 
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::model::worker::WorkerName;
+use crate::model::GuestLanguage;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::model::GuestLanguage;
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

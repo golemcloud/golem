@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app_template::model::SdkOverrides;
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
@@ -29,7 +30,6 @@ use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 use tracing::debug;
-use crate::app_template::model::SdkOverrides;
 
 #[allow(clippy::module_inception)]
 mod rust;

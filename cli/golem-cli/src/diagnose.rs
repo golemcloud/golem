@@ -14,6 +14,7 @@
 
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
 use crate::log::logln;
+use crate::model::GuestLanguage;
 use anyhow::{anyhow, Context};
 use colored::Colorize;
 use indoc::indoc;
@@ -27,7 +28,6 @@ use std::process::Command;
 use version_compare::{Cmp, Version};
 use walkdir::DirEntry;
 use wax::{Glob, LinkBehavior, WalkBehavior};
-use crate::model::GuestLanguage;
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
 enum Language {

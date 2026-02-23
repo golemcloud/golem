@@ -24,9 +24,9 @@ use crate::model::app::{
     CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, WithSource,
     DEFAULT_CONFIG_FILE_NAME,
 };
-use crate::model::{app_raw, GuestLanguage};
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
+use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::anyhow;
 use colored::Colorize;

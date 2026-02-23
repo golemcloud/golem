@@ -1556,10 +1556,10 @@ mod tests {
         reproducer_for_multiple_types_called_element,
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
+    use crate::model::GuestLanguage;
     use golem_common::model::component::ComponentName;
     use tempfile::NamedTempFile;
     use test_r::test;
-    use crate::model::GuestLanguage;
 
     #[cfg(test)]
     struct Trace;

@@ -14,6 +14,7 @@
 
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::GuestLanguage;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};
@@ -23,7 +24,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use crate::model::GuestLanguage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum ReplLanguage {

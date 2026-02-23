@@ -15,11 +15,11 @@
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig, CustomBridgeSdkTarget};
+use crate::model::GuestLanguage;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::model::GuestLanguage;
 
 pub struct BridgeCommandHandler {
     ctx: Arc<Context>,

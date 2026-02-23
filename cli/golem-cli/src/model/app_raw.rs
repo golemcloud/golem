@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app_template::APP_MANIFEST_JSON_SCHEMA;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
+use crate::model::GuestLanguage;
 use anyhow::{anyhow, Context};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
@@ -34,8 +36,6 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use url::Url;
-use crate::app_template::APP_MANIFEST_JSON_SCHEMA;
-use crate::model::GuestLanguage;
 
 struct NoopRetriever;
 

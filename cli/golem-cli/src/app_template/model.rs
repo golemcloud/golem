@@ -233,8 +233,8 @@ impl SdkOverrides {
     pub fn golem_repo_path_from_golem_rust_path(path: &str) -> anyhow::Result<String> {
         let suffix = Path::new("sdks/rust/golem-rust");
         let path = Path::new(path);
-        fs::path_to_str(&path)?
-            .strip_suffix(fs::path_to_str(&suffix)?)
+        fs::path_to_str(path)?
+            .strip_suffix(fs::path_to_str(suffix)?)
             .ok_or_else(|| anyhow!("Invalid Golem Rust path: {}", path.display()))
             .map(|s| s.to_string())
     }

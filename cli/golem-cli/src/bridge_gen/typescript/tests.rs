@@ -19,6 +19,7 @@ use crate::bridge_gen::BridgeGenerator;
 use crate::model::agent::test::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
+use crate::model::GuestLanguage;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
@@ -40,7 +41,6 @@ use std::io::Write;
 use std::process::Stdio;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
-use crate::model::GuestLanguage;
 
 struct GeneratedPackage {
     pub dir: TempDir,

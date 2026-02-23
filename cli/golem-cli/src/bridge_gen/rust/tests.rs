@@ -19,6 +19,7 @@ use crate::bridge_gen::BridgeGenerator;
 use crate::model::agent::test::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
+use crate::model::GuestLanguage;
 use camino::Utf8Path;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
@@ -29,7 +30,6 @@ use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{f64, str};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
-use crate::model::GuestLanguage;
 
 struct GeneratedPackage {
     #[allow(dead_code)]

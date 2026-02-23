@@ -762,6 +762,7 @@ mod tests {
         single_agent_wrapper_types,
     };
 
+    use crate::model::GuestLanguage;
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
@@ -774,7 +775,6 @@ mod tests {
     };
     use indoc::indoc;
     use test_r::test;
-    use crate::model::GuestLanguage;
 
     #[test]
     fn empty_agent_wrapper() {

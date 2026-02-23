@@ -211,7 +211,7 @@ impl AppCommandHandler {
                     Some(component_template),
                     &app_dir,
                     &application_name,
-                    &component_name,
+                    component_name,
                     Some(self.ctx.template_sdk_overrides()),
                 ) {
                     Ok(()) => {

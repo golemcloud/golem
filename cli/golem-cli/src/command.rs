@@ -34,6 +34,7 @@ use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, WorkerName};
+use crate::model::GuestLanguage;
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
@@ -50,7 +51,6 @@ use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
-use crate::model::GuestLanguage;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -804,10 +804,10 @@ pub enum GolemCliSubcommand {
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
     use crate::model::worker::{AgentUpdateMode, WorkerName};
+    use crate::model::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
-    use crate::model::GuestLanguage;
 
     pub type ComponentTemplateName = String;
     pub type NewWorkerArgument = String;

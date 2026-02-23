@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::fs;
+use crate::model::GuestLanguage;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
@@ -24,7 +25,6 @@ use golem_wasm::analysis::analysed_type::{
     unit_result, variant,
 };
 use std::path::Path;
-use crate::model::GuestLanguage;
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
