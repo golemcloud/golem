@@ -27,6 +27,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -213,13 +214,14 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 Some(running_plugin.component_revision),
                 None,
                 &InvocationContextStack::fresh(),
+                Principal::anonymous(),
             )
             .await?;
 
         let idempotency_key = IdempotencyKey::fresh();
 
         worker
-            .enqueue_worker_invocation(AgentInvocation::ProcessOplogEntries {
+            .invoke(AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
                 account_id: worker_metadata.created_by.clone(),
                 config: running_plugin

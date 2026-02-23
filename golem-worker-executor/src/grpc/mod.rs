@@ -220,6 +220,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
+        let principal = extract_principal(&request.principal);
+
         let env = request
             .env
             .iter()
@@ -242,6 +244,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             None,
             &InvocationContextStack::fresh(),
+            principal,
         )
         .await?;
 
@@ -324,6 +327,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
+        let principal = extract_principal(&request.principal);
+
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -345,6 +350,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                principal,
             )
             .await?;
 
@@ -441,6 +447,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
+        let principal = extract_principal(&request.principal);
+
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -470,6 +478,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 worker.revert(target).await?;
@@ -489,6 +498,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -526,6 +537,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                principal,
             )
             .await?;
             worker.cancel_invocation(idempotency_key).await?;
@@ -549,6 +561,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -585,6 +599,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        principal.clone(),
                     )
                     .await?;
                     if let Some(mut await_interruption) = worker
@@ -609,6 +624,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        principal.clone(),
                     )
                     .await?;
                     if let Some(mut await_interruption) = worker
@@ -632,6 +648,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        principal,
                     )
                     .await?;
                     if let Some(mut await_interruption) = worker
@@ -663,6 +680,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -697,6 +716,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal.clone(),
                 )
                 .await?;
                 Ok(())
@@ -715,6 +735,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 Ok(())
@@ -766,6 +787,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             request.parent(),
             &invocation_context,
+            request.principal(),
         )
         .await
     }
@@ -927,6 +949,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
+        let principal = extract_principal(&request.principal);
+
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .clone()
@@ -1017,6 +1041,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
+                            principal.clone(),
                         )
                         .await?;
 
@@ -1043,6 +1068,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             &InvocationContextStack::fresh(),
+                            principal.clone(),
                         )
                         .await?;
 
@@ -1079,6 +1105,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 worker.enqueue_manual_update(target_revision).await?;
@@ -1102,6 +1129,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -1129,6 +1158,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                principal,
             )
             .await?
             .event_service();
@@ -1446,6 +1476,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
+        let principal = extract_principal(&request.principal);
+
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -1491,6 +1523,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             &InvocationContextStack::fresh(),
+                            principal,
                         )
                         .await?;
                         worker.activate_plugin(plugin_priority).await?;
@@ -1515,6 +1548,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let principal = extract_principal(&request.principal);
 
         let auth_ctx: AuthCtx = request
             .auth_ctx
@@ -1563,6 +1598,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    principal,
                 )
                 .await?;
                 worker.deactivate_plugin(plugin_priority).await?;
@@ -2595,6 +2631,18 @@ impl Stream for WorkerEventStream {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+fn extract_principal(
+    proto_principal: &Option<golem_api_grpc::proto::golem::component::Principal>,
+) -> Principal {
+    proto_principal
+        .as_ref()
+        .and_then(|p| {
+            let result: Result<Principal, String> = p.clone().try_into();
+            result.ok()
+        })
+        .unwrap_or_else(Principal::anonymous)
 }
 
 fn extract_owned_worker_id<T>(

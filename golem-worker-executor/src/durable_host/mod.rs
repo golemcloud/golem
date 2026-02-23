@@ -81,7 +81,7 @@ use futures::future::try_join_all;
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode, Principal};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
@@ -2406,6 +2406,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        Principal::anonymous(),
                     )
                     .await?;
                 }

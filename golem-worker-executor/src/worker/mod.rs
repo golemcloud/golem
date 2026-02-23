@@ -142,6 +142,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -156,6 +157,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_revision,
                 parent,
                 invocation_context_stack,
+                principal,
             )
             .await
     }
@@ -170,6 +172,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -183,6 +186,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
+            principal,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -226,6 +230,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Self, WorkerExecutorError> {
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -311,7 +316,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         idempotency_key: IdempotencyKey::fresh(),
                         input: agent_id.parameters.clone().into(),
                         invocation_context: invocation_context_stack.clone(),
-                        principal: Principal::anonymous(),
+                        principal,
                     })
                     .await
                     .expect("Failed enqueuing initial agent invocations to worker");
@@ -799,7 +804,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Enqueue invocation of an exported function
-    pub async fn enqueue_worker_invocation(
+    async fn enqueue_worker_invocation(
         &self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {

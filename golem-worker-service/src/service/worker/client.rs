@@ -419,6 +419,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     wasi_config_vars: Some(config_vars.clone().into()),
                     ignore_already_existing,
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 }))
             },
             |response| match response.into_inner() {
@@ -457,6 +458,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
@@ -492,6 +494,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         )),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
                     },
                 ))
             },
@@ -585,6 +588,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         recover_immediately,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
                     }),
                 )
             },
@@ -698,6 +702,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     force: Some(force),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 }))
             },
             |response| match response.into_inner() {
@@ -738,6 +743,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
+                    principal: None,
                 }))
             },
             |response| match response.into_inner() {
@@ -910,7 +916,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         component_owner_account_id: Some(account_id.into()),
                         path: path_clone.to_string(),
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
                     }),
                 )
             },
@@ -973,6 +980,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
+                            principal: None,
                         },
                     ))
                 },
@@ -1063,7 +1071,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         worker_id: Some(worker_id.into()),
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
                     }),
                 )
             },
@@ -1102,7 +1111,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         worker_id: Some(worker_id.into()),
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: None,
                     }),
                 )
             },
@@ -1147,6 +1157,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 }))
             },
             |response| match response.into_inner() {
@@ -1183,6 +1194,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     target: Some(target.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 }))
             },
             |response| match response.into_inner() {
@@ -1220,6 +1232,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     idempotency_key: Some(idempotency_key.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 }))
             },
             |response| match response.into_inner() {

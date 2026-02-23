@@ -38,6 +38,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::GolemApiFork;
@@ -443,6 +444,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             None,
             None,
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await?;
 

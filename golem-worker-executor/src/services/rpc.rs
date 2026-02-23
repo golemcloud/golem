@@ -767,6 +767,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 None,
                 Some(self_worker_id.clone()),
                 &self_stack,
+                Principal::Agent(AgentPrincipal {
+                    agent_id: self_worker_id.clone(),
+                }),
             )
             .await?;
 

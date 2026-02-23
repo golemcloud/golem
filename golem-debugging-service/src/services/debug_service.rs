@@ -20,6 +20,7 @@ use crate::model::params::*;
 use async_trait::async_trait;
 use gethostname::gethostname;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -227,6 +228,7 @@ impl DebugServiceDefault {
             None,
             None,
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await
         .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
@@ -420,6 +422,7 @@ impl DebugService for DebugServiceDefault {
             ),
             session_data.worker_metadata.parent.clone(),
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await
         .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
@@ -547,6 +550,7 @@ impl DebugService for DebugServiceDefault {
             ),
             debug_session_data.worker_metadata.parent.clone(),
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await
         .map_err(|e| {

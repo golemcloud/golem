@@ -279,6 +279,7 @@ impl TestDsl for TestWorkerExecutor {
                 wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?;
 
@@ -437,6 +438,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -593,6 +595,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 recover_immediately,
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -619,6 +622,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 force: Some(force),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -674,6 +678,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -701,6 +706,7 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
+                principal: None,
             })
             .await?
             .into_inner();
@@ -734,6 +740,7 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
+                principal: None,
             })
             .await?
             .into_inner();
@@ -759,6 +766,7 @@ impl TestDsl for TestWorkerExecutor {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -871,6 +879,7 @@ impl TestDsl for TestWorkerExecutor {
                 idempotency_key: Some(idempotency_key.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -902,6 +911,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -953,6 +963,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();
@@ -1011,6 +1022,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
+                principal: None,
             })
             .await?
             .into_inner();

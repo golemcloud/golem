@@ -28,6 +28,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AgentInvocation, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -87,6 +88,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                Principal::anonymous(),
             )
             .await?;
         Ok(worker.oplog())
@@ -107,6 +109,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
                 None,
                 None,
                 &InvocationContextStack::fresh(),
+                Principal::anonymous(),
             )
             .await?;
 

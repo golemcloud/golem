@@ -20,6 +20,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::base_model::agent::Principal;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
@@ -42,6 +43,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 
     /// Gets or creates a worker and starts it
@@ -54,6 +56,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 }
 
@@ -102,6 +105,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
@@ -115,6 +119,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         component_revision,
                         parent,
                         invocation_context,
+                        principal,
                     )
                     .await
             }
@@ -133,6 +138,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self.worker_activator.lock().unwrap().clone();
         match maybe_worker_activator {
@@ -146,6 +152,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         component_revision,
                         parent,
                         invocation_context,
+                        principal,
                     )
                     .await
             }
@@ -188,6 +195,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
                 )
                 .await
                 {
@@ -209,6 +217,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_suspended(
             &self.all,
@@ -219,6 +228,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             component_revision,
             parent,
             invocation_context,
+            principal,
         )
         .await
     }
@@ -232,6 +242,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_running(
             &self.all,
@@ -242,6 +253,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             component_revision,
             parent,
             invocation_context,
+            principal,
         )
         .await
     }
