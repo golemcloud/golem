@@ -100,7 +100,7 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::{
     AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
     ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord, replay_equivalent,
+    WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -1717,7 +1717,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
             if let Some(recorded_result) = response {
-                if !replay_equivalent(&recorded_result, result) {
+                if !recorded_result.replay_equivalent(result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!("{full_function_name} => {recorded_result:?}"),
                         format!("{full_function_name} => {result:?}"),

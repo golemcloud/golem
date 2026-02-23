@@ -860,30 +860,32 @@ fn untyped_data_replay_equivalent(a: &UntypedDataValue, b: &UntypedDataValue) ->
     }
 }
 
-pub fn replay_equivalent(a: &AgentInvocationResult, b: &AgentInvocationResult) -> bool {
-    match (a, b) {
-        (
-            AgentInvocationResult::AgentInitialization,
-            AgentInvocationResult::AgentInitialization,
-        ) => true,
-        (
-            AgentInvocationResult::AgentMethod { output: a },
-            AgentInvocationResult::AgentMethod { output: b },
-        ) => untyped_data_replay_equivalent(a, b),
-        (AgentInvocationResult::ManualUpdate, AgentInvocationResult::ManualUpdate) => true,
-        (
-            AgentInvocationResult::LoadSnapshot { error: a },
-            AgentInvocationResult::LoadSnapshot { error: b },
-        ) => a == b,
-        (
-            AgentInvocationResult::SaveSnapshot { snapshot: a },
-            AgentInvocationResult::SaveSnapshot { snapshot: b },
-        ) => a == b,
-        (
-            AgentInvocationResult::ProcessOplogEntries { error: a },
-            AgentInvocationResult::ProcessOplogEntries { error: b },
-        ) => a == b,
-        _ => false,
+impl AgentInvocationResult {
+    pub fn replay_equivalent(&self, other: &AgentInvocationResult) -> bool {
+        match (self, other) {
+            (
+                AgentInvocationResult::AgentInitialization,
+                AgentInvocationResult::AgentInitialization,
+            ) => true,
+            (
+                AgentInvocationResult::AgentMethod { output: a },
+                AgentInvocationResult::AgentMethod { output: b },
+            ) => untyped_data_replay_equivalent(a, b),
+            (AgentInvocationResult::ManualUpdate, AgentInvocationResult::ManualUpdate) => true,
+            (
+                AgentInvocationResult::LoadSnapshot { error: a },
+                AgentInvocationResult::LoadSnapshot { error: b },
+            ) => a == b,
+            (
+                AgentInvocationResult::SaveSnapshot { snapshot: a },
+                AgentInvocationResult::SaveSnapshot { snapshot: b },
+            ) => a == b,
+            (
+                AgentInvocationResult::ProcessOplogEntries { error: a },
+                AgentInvocationResult::ProcessOplogEntries { error: b },
+            ) => a == b,
+            _ => false,
+        }
     }
 }
 
