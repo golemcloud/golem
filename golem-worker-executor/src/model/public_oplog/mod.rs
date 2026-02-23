@@ -30,7 +30,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
+    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingAgentInvocationParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
@@ -38,13 +38,13 @@ use golem_common::model::oplog::public_oplog_entry::{
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
+    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest, LoadSnapshotParameters,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
     JsonSnapshotData, ManualUpdateParameters, OplogEntry, OplogIndex,
-    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    UpdateDescription,
+    PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicOplogEntry, PublicSnapshotData,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{
     AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedWorkerId, WorkerId,
@@ -416,7 +416,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 begin_index,
             })),
-            OplogEntry::PendingWorkerInvocation {
+            OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
                 payload,
@@ -438,8 +438,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 )
                 .await?;
 
-                Ok(PublicOplogEntry::PendingWorkerInvocation(
-                    PendingWorkerInvocationParams {
+                Ok(PublicOplogEntry::PendingAgentInvocation(
+                    PendingAgentInvocationParams {
                         timestamp,
                         invocation: public_invocation,
                     },
@@ -786,6 +786,7 @@ async fn agent_invocation_to_public(
             idempotency_key,
             input,
             invocation_context,
+            ..
         } => {
             let metadata = components
                 .get_metadata(
@@ -824,6 +825,7 @@ async fn agent_invocation_to_public(
             method_name,
             input,
             invocation_context,
+            ..
         } => {
             let metadata = components
                 .get_metadata(
@@ -863,14 +865,16 @@ async fn agent_invocation_to_public(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
         AgentInvocation::SaveSnapshot { .. } => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
-        AgentInvocation::LoadSnapshot { .. } => {
-            // TODO: implement properly
-            todo!("LoadSnapshot public oplog conversion not yet implemented")
-        }
-        AgentInvocation::ProcessOplogEntries { .. } => {
-            // TODO: implement properly
-            todo!("ProcessOplogEntries public oplog conversion not yet implemented")
-        }
+        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(
+            PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
+                snapshot: PublicSnapshotData::Raw(snapshot),
+            }),
+        ),
+        AgentInvocation::ProcessOplogEntries {
+            idempotency_key, ..
+        } => Ok(PublicAgentInvocation::ProcessOplogEntries(
+            ProcessOplogEntriesParameters { idempotency_key },
+        )),
     }
 }
 
@@ -881,13 +885,11 @@ async fn agent_invocation_result_to_public(
     result: AgentInvocationResult,
 ) -> Result<PublicAgentInvocationResult, String> {
     match result {
-        AgentInvocationResult::AgentInitialization { output } => {
-            // AgentConstructor does not have an output_schema, so we cannot type the output
+        AgentInvocationResult::AgentInitialization => {
             let _ = components;
             let _ = owned_worker_id;
             let _ = component_revision;
             let output_data = DataValue::Tuple(ElementValues { elements: vec![] });
-            let _ = output;
 
             Ok(PublicAgentInvocationResult::AgentInitialization(
                 AgentInvocationOutputParameters {

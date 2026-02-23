@@ -897,7 +897,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<GetOplogEntry>,
-    ) -> anyhow::Result<Option<Vec<golem_api_1_x::oplog::OplogEntry>>> {
+    ) -> anyhow::Result<Option<Vec<golem_api_1_x::oplog::PublicOplogEntry>>> {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
         let component_service = self.state.component_service.clone();
@@ -1091,7 +1091,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         Option<
             Vec<(
                 golem_api_1_x::oplog::OplogIndex,
-                golem_api_1_x::oplog::OplogEntry,
+                golem_api_1_x::oplog::PublicOplogEntry,
             )>,
         >,
     > {
@@ -1125,7 +1125,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                     .into_iter()
                     .map(|(idx, entry)| {
                         let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
-                        let entry: golem_api_1_x::oplog::OplogEntry = entry.into();
+                        let entry: golem_api_1_x::oplog::PublicOplogEntry = entry.into();
                         (idx, entry)
                     })
                     .collect(),

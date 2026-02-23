@@ -37,7 +37,7 @@ use crate::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
+    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingAgentInvocationParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
@@ -116,6 +116,9 @@ impl From<WorkerError> for golem_api_grpc::proto::golem::worker::WorkerError {
             }
             WorkerError::ExceededMemoryLimit => {
                 Error::ExceededMemoryLimit(grpc_worker::ExceededMemoryLimit {})
+            }
+            WorkerError::AgentError(details) => {
+                Error::UnknownError(grpc_worker::UnknownError { details })
             }
         };
         Self { error: Some(error) }
@@ -358,8 +361,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     begin_index: OplogIndex::from_u64(end_remote_write.begin_index),
                 }))
             }
-            oplog_entry::Entry::PendingWorkerInvocation(pending_worker_invocation) => Ok(
-                PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
+            oplog_entry::Entry::PendingAgentInvocation(pending_worker_invocation) => Ok(
+                PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                     timestamp: pending_worker_invocation
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -752,10 +755,10 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::PendingWorkerInvocation(pending_worker_invocation) => {
+            PublicOplogEntry::PendingAgentInvocation(pending_worker_invocation) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::PendingWorkerInvocation(
-                        golem_api_grpc::proto::golem::worker::PendingWorkerInvocationParameters {
+                    entry: Some(oplog_entry::Entry::PendingAgentInvocation(
+                        golem_api_grpc::proto::golem::worker::PendingAgentInvocationParameters {
                             timestamp: Some(pending_worker_invocation.timestamp.into()),
                             invocation: Some(pending_worker_invocation.invocation.try_into()?),
                         },

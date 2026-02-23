@@ -43,8 +43,8 @@ use golem_common::model::oplog::{
 use golem_common::model::plan::PlanId;
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
-    IdempotencyKey, OplogIndex, OwnedWorkerId, RdbmsPoolKey, RetryConfig, TransactionId,
-    WorkerFilter, WorkerId, WorkerStatusRecord,
+    AgentInvocationResult, IdempotencyKey, OplogIndex, OwnedWorkerId, RdbmsPoolKey, RetryConfig,
+    TransactionId, WorkerFilter, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -64,7 +64,7 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, Value, ValueAndType};
+use golem_wasm::{Uri, Value};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -607,15 +607,14 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_invocation_success(
+    async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Value>,
         consumed_fuel: u64,
-        output: Option<ValueAndType>,
+        result: &AgentInvocationResult,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, result)
             .await
     }
 

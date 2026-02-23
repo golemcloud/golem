@@ -31,7 +31,7 @@ message OplogEntry {
     EndAtomicRegionParameters EndAtomicRegion = 13;
     TimestampParameter BeginRemoteWrite = 14;
     EndRemoteWriteParameters EndRemoteWrite = 15;
-    PendingWorkerInvocationParameters PendingWorkerInvocation = 16;
+    PendingAgentInvocationParameters PendingAgentInvocation = 16;
     PendingUpdateParameters PendingUpdate = 17;
     SuccessfulUpdateParameters SuccessfulUpdate = 18;
     FailedUpdateParameters FailedUpdate = 19;
@@ -219,7 +219,7 @@ message RemoteTransactionParameters {
   uint64 begin_index = 2;
 }
 
-message PendingWorkerInvocationParameters {
+message PendingAgentInvocationParameters {
   google.protobuf.Timestamp timestamp = 1;
   PublicAgentInvocation invocation = 2;
 }

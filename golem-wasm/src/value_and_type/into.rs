@@ -21,7 +21,7 @@ use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{Datelike, Offset, Timelike};
-use std::collections::{BTreeMap, BTreeSet, Bound, HashMap};
+use std::collections::{BTreeMap, BTreeSet, Bound, HashMap, HashSet};
 use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
@@ -376,6 +376,16 @@ impl<K: IntoValue, V: IntoValue> IntoValue for BTreeMap<K, V> {
 }
 
 impl<T: IntoValue> IntoValue for BTreeSet<T> {
+    fn into_value(self) -> Value {
+        Value::List(self.into_iter().map(IntoValue::into_value).collect())
+    }
+
+    fn get_type() -> AnalysedType {
+        list(T::get_type())
+    }
+}
+
+impl<T: IntoValue> IntoValue for HashSet<T> {
     fn into_value(self) -> Value {
         Value::List(self.into_iter().map(IntoValue::into_value).collect())
     }

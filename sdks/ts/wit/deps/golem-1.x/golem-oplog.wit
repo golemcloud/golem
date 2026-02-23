@@ -265,11 +265,10 @@ interface oplog {
 
     record revert-parameters {
         timestamp: datetime,
-        start: oplog-index,
-        end: oplog-index
+        dropped-region: oplog-region
     }
 
-    record cancel-invocation-parameters {
+    record cancel-pending-invocation-parameters {
         timestamp: datetime,
         idempotency-key: string
     }
@@ -278,7 +277,7 @@ interface oplog {
         timestamp: datetime,
         span-id: span-id,
         parent: option<span-id>,
-        linked-context: option<span-id>,
+        linked-context-id: option<span-id>,
         attributes: list<attribute>,
     }
 
@@ -319,7 +318,232 @@ interface oplog {
         timestamp: datetime
     }
 
+    /// Opaque oplog payload, which can either be serialized inline or stored externally
+    variant oplog-payload {
+        inline(list<u8>),
+        external(oplog-external-payload)
+    }
+
+    record oplog-external-payload {
+        payload-id: uuid,
+        md5-hash: list<u8>
+    }
+
+    /// Describes the error that occurred in the agent
+    variant worker-error {
+        unknown(string),
+        invalid-request(string),
+        stack-overflow,
+        out-of-memory,
+        exceeded-memory-limit,
+        agent-error(string),
+    }
+
+    record raw-create-parameters {
+        timestamp: datetime,
+        worker-id: agent-id,
+        component-revision: component-revision,
+        env: list<tuple<string, string>>,
+        environment-id: environment-id,
+        created-by: account-id,
+        parent: option<agent-id>,
+        component-size: u64,
+        initial-total-linear-memory-size: u64,
+        initial-active-plugins: list<s32>,
+        wasi-config-vars: list<tuple<string, string>>,
+        original-phantom-id: option<uuid>
+    }
+
+    record raw-host-call-parameters {
+        timestamp: datetime,
+        function-name: string,
+        request: oplog-payload,
+        response: oplog-payload,
+        durable-function-type: wrapped-function-type,
+    }
+
+    record raw-agent-invocation-started-parameters {
+        timestamp: datetime,
+        idempotency-key: string,
+        payload: oplog-payload,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<span-data>,
+    }
+
+    record raw-agent-invocation-finished-parameters {
+        timestamp: datetime,
+        %result: oplog-payload,
+        consumed-fuel: s64,
+    }
+
+    record raw-error-parameters {
+        timestamp: datetime,
+        error: worker-error,
+        retry-from: oplog-index
+    }
+
+    record raw-pending-agent-invocation-parameters {
+        timestamp: datetime,
+        idempotency-key: string,
+        payload: oplog-payload,
+    }
+
+    /// Raw update description used in oplog entries
+    variant raw-update-description {
+        /// Automatic update by replaying the oplog on the new version
+        automatic(component-revision),
+        /// Custom update by loading a given snapshot on the new version
+        snapshot-based(raw-snapshot-based-update)
+    }
+
+    record raw-snapshot-based-update {
+        target-revision: component-revision,
+        payload: oplog-payload,
+        mime-type: string
+    }
+
+    record raw-pending-update-parameters {
+        timestamp: datetime,
+        description: raw-update-description
+    }
+
+    record raw-successful-update-parameters {
+        timestamp: datetime,
+        target-revision: component-revision,
+        new-component-size: u64,
+        new-active-plugins: list<s32>
+    }
+
+    record resource-type-id {
+        name: string,
+        owner: string,
+    }
+
+    record raw-create-resource-parameters {
+        timestamp: datetime,
+        id: agent-resource-id,
+        resource-type-id: resource-type-id,
+    }
+
+    record raw-drop-resource-parameters {
+        timestamp: datetime,
+        id: agent-resource-id,
+        resource-type-id: resource-type-id,
+    }
+
+    record raw-activate-plugin-parameters {
+        timestamp: datetime,
+        plugin-priority: s32
+    }
+
+    record raw-deactivate-plugin-parameters {
+        timestamp: datetime,
+        plugin-priority: s32
+    }
+
+    record raw-begin-remote-transaction-parameters {
+        timestamp: datetime,
+        transaction-id: string,
+        original-begin-index: option<oplog-index>
+    }
+
+    record raw-snapshot-parameters {
+        timestamp: datetime,
+        data: oplog-payload,
+        mime-type: string
+    }
+
     variant oplog-entry {
+        /// The initial agent oplog entry
+        create(raw-create-parameters),
+        /// The agent invoked a host function
+        host-call(raw-host-call-parameters),
+        /// The agent has been invoked
+        agent-invocation-started(raw-agent-invocation-started-parameters),
+        /// The agent has completed an invocation
+        agent-invocation-finished(raw-agent-invocation-finished-parameters),
+        /// Agent suspended
+        suspend(timestamp),
+        /// Agent failed
+        error(raw-error-parameters),
+        /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
+        /// more predictable.
+        no-op(timestamp),
+        /// The agent needs to recover up to the given target oplog index and continue running from
+        /// the source oplog index from there
+        /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+        /// ignore all recorded operations in between.
+        jump(jump-parameters),
+        /// Indicates that the agent has been interrupted at this point.
+        /// Only used to recompute the agent's (cached) status, has no effect on execution.
+        interrupted(timestamp),
+        /// Indicates that the agent has been exited using WASI's exit function.
+        exited(timestamp),
+        /// Overrides the agent's retry policy
+        change-retry-policy(change-retry-policy-parameters),
+        /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+        /// recovery except if there is a corresponding `EndAtomicRegion` entry.
+        begin-atomic-region(timestamp),
+        /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+        /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+        /// compaction.
+        end-atomic-region(end-atomic-region-parameters),
+        /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
+        /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
+        /// unfinished remote writes cannot be recovered.
+        begin-remote-write(timestamp),
+        /// Marks the end of a remote write operation. Only used when idempotence mode is off.
+        end-remote-write(end-remote-write-parameters),
+        /// An invocation request arrived while the agent was busy
+        pending-agent-invocation(raw-pending-agent-invocation-parameters),
+        /// An update request arrived and will be applied as soon the agent restarts
+        pending-update(raw-pending-update-parameters),
+        /// An update was successfully applied
+        successful-update(raw-successful-update-parameters),
+        /// An update failed to be applied
+        failed-update(failed-update-parameters),
+        /// Increased total linear memory size
+        grow-memory(grow-memory-parameters),
+        /// Created a resource instance
+        create-resource(raw-create-resource-parameters),
+        /// Dropped a resource instance
+        drop-resource(raw-drop-resource-parameters),
+        /// The agent emitted a log message
+        log(log-parameters),
+        /// The agent has been restarted, forgetting all its history
+        restart(timestamp),
+        /// Activates a plugin
+        activate-plugin(raw-activate-plugin-parameters),
+        /// Deactivates a plugin
+        deactivate-plugin(raw-deactivate-plugin-parameters),
+        /// Revert an agent to a previous state
+        revert(revert-parameters),
+        /// Cancel a pending invocation
+        cancel-pending-invocation(cancel-pending-invocation-parameters),
+        /// Start a new span in the invocation context
+        start-span(start-span-parameters),
+        /// Finish an open span in the invocation context
+        finish-span(finish-span-parameters),
+        /// Set an attribute on an open span in the invocation context
+        set-span-attribute(set-span-attribute-parameters),
+        /// Change the current persistence level
+        change-persistence-level(change-persistence-level-parameters),
+        /// Begins a transaction operation
+        begin-remote-transaction(raw-begin-remote-transaction-parameters),
+        /// Pre-Commit of the transaction, indicating that the transaction will be committed
+        pre-commit-remote-transaction(remote-transaction-parameters),
+        /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+        pre-rollback-remote-transaction(remote-transaction-parameters),
+        /// Committed transaction operation, indicating that the transaction was committed
+        committed-remote-transaction(remote-transaction-parameters),
+        /// Rolled back transaction operation, indicating that the transaction was rolled back
+        rolled-back-remote-transaction(remote-transaction-parameters),
+        /// A snapshot of the agent's state
+        snapshot(raw-snapshot-parameters)
+    }
+
+    variant public-oplog-entry {
         /// The initial agent oplog entry
         create(create-parameters),
         /// The agent invoked a host function
@@ -385,7 +609,7 @@ interface oplog {
         /// Revert an agent to a previous state
         revert(revert-parameters),
         /// Cancel a pending invocation
-        cancel-invocation(cancel-invocation-parameters),
+        cancel-pending-invocation(cancel-pending-invocation-parameters),
         /// Start a new span in the invocation context
         start-span(start-span-parameters),
         /// Finish an open span in the invocation context
@@ -410,11 +634,11 @@ interface oplog {
 
     resource get-oplog {
         constructor(agent-id: agent-id, start: oplog-index);
-        get-next: func() -> option<list<oplog-entry>>;
+        get-next: func() -> option<list<public-oplog-entry>>;
     }
 
     resource search-oplog {
         constructor(agent-id: agent-id, text: string);
-        get-next: func() -> option<list<tuple<oplog-index, oplog-entry>>>;
+        get-next: func() -> option<list<tuple<oplog-index, public-oplog-entry>>>;
     }
 }

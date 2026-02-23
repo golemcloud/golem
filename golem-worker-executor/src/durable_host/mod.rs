@@ -60,9 +60,11 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
 use crate::wasi_host;
-use crate::worker::invocation::{InvokeResult, invoke_observed_and_traced};
+use crate::worker::invocation::{
+    InvokeResult, invoke_observed_and_traced, lower_invocation,
+};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
-use crate::worker::{RetryDecision, Worker, interpret_function_result};
+use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
@@ -79,7 +81,7 @@ use futures::future::try_join_all;
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode, Principal};
 use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
@@ -96,9 +98,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
     ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    WorkerStatusRecord, replay_equivalent,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -106,7 +108,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{IntoValue, Uri, Value, ValueAndType};
+use golem_wasm::{IntoValue, Uri, Value};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -440,6 +442,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::None,
             TrapType::Error {
                 error: WorkerError::ExceededMemoryLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: WorkerError::AgentError(_),
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -1010,6 +1016,28 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             idempotency_key,
                             snapshot: RawSnapshotData { data, mime_type },
                         };
+                        let kind = load_snapshot_invocation.kind();
+                        let agent_id = store.as_context().data().agent_id();
+                        let lowered = match lower_invocation(
+                            load_snapshot_invocation,
+                            &component_metadata,
+                            agent_id.as_ref(),
+                        ) {
+                            Ok(lowered) => lowered,
+                            Err(err) => {
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .on_worker_update_failed(
+                                        target_revision,
+                                        Some(format!(
+                                            "Manual update failed to lower load-snapshot invocation: {err}"
+                                        )),
+                                    )
+                                    .await;
+                                return Some(RetryDecision::Immediate);
+                            }
+                        };
 
                         store
                             .as_context_mut()
@@ -1017,7 +1045,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .begin_call_snapshotting_function();
 
                         let load_result = invoke_observed_and_traced(
-                            &load_snapshot_invocation,
+                            lowered,
+                            kind,
                             store,
                             instance,
                             &component_metadata,
@@ -1202,6 +1231,19 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
         };
+        let kind = load_snapshot_invocation.kind();
+        let agent_id = store.as_context().data().agent_id();
+        let lowered = match lower_invocation(
+            load_snapshot_invocation,
+            &component_metadata,
+            agent_id.as_ref(),
+        ) {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                warn!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
+                return SnapshotRecoveryResult::Failed;
+            }
+        };
 
         store
             .as_context_mut()
@@ -1209,7 +1251,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .begin_call_snapshotting_function();
 
         let load_result = invoke_observed_and_traced(
-            &load_snapshot_invocation,
+            lowered,
+            kind,
             store,
             instance,
             &component_metadata,
@@ -1521,6 +1564,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         .collect(),
                 ),
                 invocation_context: stack,
+                principal: Principal::anonymous(),
             };
 
             self.public_state
@@ -1629,30 +1673,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         decision
     }
 
-    async fn on_invocation_success(
+    async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Value>,
         consumed_fuel: u64,
-        output: Option<ValueAndType>,
+        result: &AgentInvocationResult,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
-                let result = AgentInvocationResult::AgentMethod {
-                    output: UntypedDataValue::Tuple(
-                        output
-                            .as_ref()
-                            .map(|vat| vec![UntypedElementValue::ComponentModel(vat.value.clone())])
-                            .unwrap_or_default(),
-                    ),
-                };
-
                 self.public_state
                     .worker()
                     .oplog()
-                    .add_agent_invocation_finished(&result, consumed_fuel)
+                    .add_agent_invocation_finished(result, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1666,7 +1700,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
                         .worker()
-                        .store_invocation_success(&idempotency_key, output.clone())
+                        .store_invocation_success(&idempotency_key, result.clone())
                         .await;
 
                     self.public_state.event_service().emit_invocation_finished(
@@ -1682,30 +1716,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
-
-            if let Some(invocation_result) = response {
-                let expected_output = match &invocation_result {
-                    AgentInvocationResult::AgentMethod { output: untyped }
-                    | AgentInvocationResult::AgentInitialization { output: untyped } => {
-                        match untyped {
-                            UntypedDataValue::Tuple(elements) => {
-                                elements.first().and_then(|elem| match elem {
-                                    UntypedElementValue::ComponentModel(v) => output
-                                        .as_ref()
-                                        .map(|vat| ValueAndType::new(v.clone(), vat.typ.clone())),
-                                    _ => None,
-                                })
-                            }
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-                let is_diverged = expected_output != output;
-                if is_diverged {
+            if let Some(recorded_result) = response {
+                if !replay_equivalent(&recorded_result, result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("{full_function_name}({function_input:?}) => {expected_output:?}"),
-                        format!("{full_function_name}({function_input:?}) => {output:?}"),
+                        format!("{full_function_name} => {recorded_result:?}"),
+                        format!("{full_function_name} => {result:?}"),
                     ));
                 }
             }
@@ -2056,14 +2071,27 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         invocation_payload,
                         invocation_context,
                     })) => {
-                        let (function_name, function_input) =
-                            extract_function_name_and_input(&invocation_payload);
-
                         let agent_invocation = AgentInvocation::from_parts(
                             idempotency_key.clone(),
                             invocation_payload,
                             invocation_context.clone(),
                         );
+
+                        let component_metadata = store
+                            .as_context()
+                            .data()
+                            .component_metadata()
+                            .metadata
+                            .clone();
+
+                        let agent_id = store.as_context().data().agent_id();
+                        let kind = agent_invocation.kind();
+                        let lowered = lower_invocation(
+                            agent_invocation,
+                            &component_metadata,
+                            agent_id.as_ref(),
+                        )?;
+                        let full_function_name = lowered.wit_fqfn.clone();
 
                         store
                             .as_context_mut()
@@ -2072,12 +2100,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .process_pending_replay_events()
                             .await?;
 
-                        debug!("Replaying function {function_name}");
+                        debug!("Replaying function {}", &full_function_name);
                         debug!(
                             "Replay state: {:?}",
                             store.as_context().data().durable_ctx().state.replay_state
                         );
-                        let span = span!(Level::INFO, "replaying", function = function_name);
+                        let span = span!(Level::INFO, "replaying", function = full_function_name.as_str());
                         store
                             .as_context_mut()
                             .data_mut()
@@ -2090,17 +2118,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_invocation_context(invocation_context)
                             .await?;
-
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let full_function_name = function_name.to_string();
                         let invoke_result = invoke_observed_and_traced(
-                            &agent_invocation,
+                            lowered,
+                            kind,
                             store,
                             instance,
                             &component_metadata,
@@ -2125,76 +2145,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                let output = invocation_result.into_raw_output();
-                                let component_metadata =
-                                    store.as_context().data().component_metadata();
-
-                                match component_metadata
-                                    .metadata
-                                    .find_function(&full_function_name)
+                                if let Err(err) = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .on_agent_invocation_success(
+                                        &full_function_name,
+                                        consumed_fuel,
+                                        &invocation_result,
+                                    )
+                                    .await
                                 {
-                                    Ok(value) => {
-                                        if let Some(value) = value {
-                                            let result = interpret_function_result(
-                                                output,
-                                                value.analysed_export.result,
-                                            )
-                                            .map_err(|e| WorkerExecutorError::ValueMismatch {
-                                                details: e.join(", "),
-                                            })?;
-                                            if let Err(err) = store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_invocation_success(
-                                                    &full_function_name,
-                                                    &function_input,
-                                                    consumed_fuel,
-                                                    result,
-                                                )
-                                                .await
-                                            {
-                                                break Err(err);
-                                            }
-                                        } else {
-                                            let trap_type = TrapType::Error {
-                                                error: WorkerError::InvalidRequest(format!(
-                                                    "Function {full_function_name} not found"
-                                                )),
-                                                retry_from: OplogIndex::INITIAL,
-                                            };
-
-                                            let _ = store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_invocation_failure(
-                                                    &full_function_name,
-                                                    &trap_type,
-                                                )
-                                                .await;
-
-                                            break Err(WorkerExecutorError::invalid_request(
-                                                format!("Function {full_function_name} not found"),
-                                            ));
-                                        }
-                                    }
-                                    Err(err) => {
-                                        let trap_type = TrapType::Error {
-                                            error: WorkerError::InvalidRequest(format!(
-                                                "Function {full_function_name} not found: {err}"
-                                            )),
-                                            retry_from: OplogIndex::INITIAL,
-                                        };
-
-                                        let _ = store
-                                            .as_context_mut()
-                                            .data_mut()
-                                            .on_invocation_failure(&full_function_name, &trap_type)
-                                            .await;
-
-                                        break Err(WorkerExecutorError::invalid_request(format!(
-                                            "Function {full_function_name} not found: {err}"
-                                        )));
-                                    }
+                                    break Err(err);
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
@@ -2803,24 +2764,6 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     }
     stderr_entries.reverse();
     stderr_entries.join("")
-}
-
-fn extract_function_name_and_input(
-    invocation_payload: &AgentInvocationPayload,
-) -> (String, Vec<Value>) {
-    match invocation_payload {
-        AgentInvocationPayload::AgentInitialization { input } => (
-            "golem:agent/guest.{initialize}".to_string(),
-            vec![input.clone().into_value()],
-        ),
-        AgentInvocationPayload::AgentMethod {
-            method_name, input, ..
-        } => (method_name.clone(), vec![input.clone().into_value()]),
-        AgentInvocationPayload::ManualUpdate { .. }
-        | AgentInvocationPayload::LoadSnapshot { .. }
-        | AgentInvocationPayload::SaveSnapshot
-        | AgentInvocationPayload::ProcessOplogEntries { .. } => (String::new(), vec![]),
-    }
 }
 
 /// Indicates which step of the http request handling is responsible for closing an open

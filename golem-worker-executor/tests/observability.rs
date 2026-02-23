@@ -267,7 +267,7 @@ async fn get_oplog_with_api_changing_updates(
     // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
     let oplog = oplog
         .into_iter()
-        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingWorkerInvocation(_)))
+        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingAgentInvocation(_)))
         .collect::<Vec<_>>();
 
     assert_eq!(result, data_value!(11u64));

@@ -197,7 +197,7 @@ impl PublicOplogEntry {
                 Self::string_match("endremotewrite", &[], query_path, query)
                     || Self::string_match("end-remote-write", &[], query_path, query)
             }
-            PublicOplogEntry::PendingWorkerInvocation(params) => {
+            PublicOplogEntry::PendingAgentInvocation(params) => {
                 Self::string_match("pendingworkerinvocation", &[], query_path, query)
                     || Self::string_match("pending-worker-invocation", &[], query_path, query)
                     || match &params.invocation {

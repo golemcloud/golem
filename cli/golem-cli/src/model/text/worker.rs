@@ -526,7 +526,7 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.begin_index)
                 ));
             }
-            PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
+            PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
                 PublicAgentInvocation::AgentInitialization(inner_params) => {
                     logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));
                     logln(format!(

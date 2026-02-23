@@ -19,7 +19,7 @@ use crate::model::oplog::public_oplog_entry::{
     BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams, CreateResourceParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
-    NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams, RestartParams,
+    NoOpParams, PendingUpdateParams, PendingAgentInvocationParams, RestartParams,
     SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
@@ -294,7 +294,7 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
 
 #[test]
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
+    let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
@@ -476,4 +476,31 @@ fn restart_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn oplog_entry_type_matches_wit() {
+    use crate::model::oplog::OplogEntry;
+    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
+    use golem_wasm::IntoValue;
+    use std::path::PathBuf;
+
+    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
+    let mut resolver =
+        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
+
+    let wit_type = resolver
+        .analysed_type(&TypeName {
+            package: Some("golem:api@1.5.0".to_string()),
+            owner: TypeOwner::Interface("oplog".to_string()),
+            name: Some("oplog-entry".to_string()),
+        })
+        .expect("Failed to find oplog-entry type in WIT");
+
+    let rust_type = OplogEntry::get_type();
+
+    assert_eq!(
+        rust_type, wit_type,
+        "OplogEntry::get_type() does not match the WIT oplog-entry definition"
+    );
 }

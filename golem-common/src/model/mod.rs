@@ -54,12 +54,11 @@ use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
 use crate::base_model::agent::AgentId;
+use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{
-    OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId,
-};
+use crate::model::oplog::{OplogEntry, PublicOplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
@@ -594,7 +593,7 @@ impl WorkerFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub struct RetryConfig {
     pub max_attempts: u32,
@@ -696,6 +695,16 @@ pub struct SuccessfulUpdateRecord {
     pub target_revision: ComponentRevision,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentInvocationKind {
+    AgentInitialization,
+    AgentMethod,
+    ManualUpdate,
+    LoadSnapshot,
+    SaveSnapshot,
+    ProcessOplogEntries,
+}
+
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum AgentInvocation {
@@ -706,12 +715,14 @@ pub enum AgentInvocation {
         idempotency_key: IdempotencyKey,
         input: UntypedDataValue,
         invocation_context: InvocationContextStack,
+        principal: Principal,
     },
     AgentMethod {
         idempotency_key: IdempotencyKey,
         method_name: String,
         input: UntypedDataValue,
         invocation_context: InvocationContextStack,
+        principal: Principal,
     },
     LoadSnapshot {
         idempotency_key: IdempotencyKey,
@@ -739,10 +750,12 @@ pub enum AgentInvocationPayload {
     },
     AgentInitialization {
         input: UntypedDataValue,
+        principal: Principal,
     },
     AgentMethod {
         method_name: String,
         input: UntypedDataValue,
+        principal: Principal,
     },
     LoadSnapshot {
         snapshot: RawSnapshotData,
@@ -753,14 +766,14 @@ pub enum AgentInvocationPayload {
         config: Vec<(String, String)>,
         metadata: WorkerMetadata,
         first_entry_index: OplogIndex,
-        entries: Vec<OplogEntry>,
+        entries: Vec<crate::model::oplog::OplogEntry>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum AgentInvocationResult {
-    AgentInitialization { output: UntypedDataValue },
+    AgentInitialization,
     AgentMethod { output: UntypedDataValue },
     ManualUpdate,
     LoadSnapshot { error: Option<String> },
@@ -768,33 +781,109 @@ pub enum AgentInvocationResult {
     ProcessOplogEntries { error: Option<String> },
 }
 
-impl AgentInvocationResult {
-    /// Extracts the raw `Option<Value>` from the result, for compatibility with
-    /// code paths that still work with raw wasm values.
-    pub fn into_raw_output(self) -> Option<Value> {
-        match self {
-            AgentInvocationResult::AgentInitialization { output }
-            | AgentInvocationResult::AgentMethod { output } => match output {
-                UntypedDataValue::Tuple(elements) => elements.into_iter().find_map(|e| match e {
-                    UntypedElementValue::ComponentModel(v) => Some(v),
-                    _ => None,
-                }),
-                _ => None,
-            },
-            AgentInvocationResult::ManualUpdate => None,
-            AgentInvocationResult::SaveSnapshot { snapshot } => Some(Value::Record(vec![
-                Value::List(snapshot.data.into_iter().map(Value::U8).collect()),
-                Value::String(snapshot.mime_type),
-            ])),
-            AgentInvocationResult::LoadSnapshot { error } => match error {
-                Some(err) => Some(Value::Result(Err(Some(Box::new(Value::String(err)))))),
-                None => Some(Value::Result(Ok(None))),
-            },
-            AgentInvocationResult::ProcessOplogEntries { error } => match error {
-                Some(err) => Some(Value::Result(Err(Some(Box::new(Value::String(err)))))),
-                None => Some(Value::Result(Ok(None))),
-            },
+fn value_replay_equivalent(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::F32(x), Value::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (Value::F64(x), Value::F64(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (Value::List(xs), Value::List(ys))
+        | (Value::Tuple(xs), Value::Tuple(ys))
+        | (Value::Record(xs), Value::Record(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .zip(ys.iter())
+                    .all(|(x, y)| value_replay_equivalent(x, y))
         }
+        (
+            Value::Variant {
+                case_idx: ai,
+                case_value: av,
+            },
+            Value::Variant {
+                case_idx: bi,
+                case_value: bv,
+            },
+        ) => {
+            ai == bi
+                && match (av, bv) {
+                    (Some(a), Some(b)) => value_replay_equivalent(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        (Value::Option(a), Value::Option(b)) => match (a, b) {
+            (Some(a), Some(b)) => value_replay_equivalent(a, b),
+            (None, None) => true,
+            _ => false,
+        },
+        (Value::Result(a), Value::Result(b)) => match (a, b) {
+            (Ok(a), Ok(b)) | (Err(a), Err(b)) => match (a, b) {
+                (Some(a), Some(b)) => value_replay_equivalent(a, b),
+                (None, None) => true,
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => a == b,
+    }
+}
+
+fn untyped_element_replay_equivalent(
+    a: &UntypedElementValue,
+    b: &UntypedElementValue,
+) -> bool {
+    match (a, b) {
+        (UntypedElementValue::ComponentModel(a), UntypedElementValue::ComponentModel(b)) => {
+            value_replay_equivalent(a, b)
+        }
+        _ => a == b,
+    }
+}
+
+fn untyped_data_replay_equivalent(a: &UntypedDataValue, b: &UntypedDataValue) -> bool {
+    match (a, b) {
+        (UntypedDataValue::Tuple(xs), UntypedDataValue::Tuple(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .zip(ys.iter())
+                    .all(|(x, y)| untyped_element_replay_equivalent(x, y))
+        }
+        (UntypedDataValue::Multimodal(xs), UntypedDataValue::Multimodal(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().zip(ys.iter()).all(|(x, y)| {
+                    x.name == y.name
+                        && untyped_element_replay_equivalent(&x.value, &y.value)
+                })
+        }
+        _ => false,
+    }
+}
+
+pub fn replay_equivalent(a: &AgentInvocationResult, b: &AgentInvocationResult) -> bool {
+    match (a, b) {
+        (
+            AgentInvocationResult::AgentInitialization,
+            AgentInvocationResult::AgentInitialization,
+        ) => true,
+        (
+            AgentInvocationResult::AgentMethod { output: a },
+            AgentInvocationResult::AgentMethod { output: b },
+        ) => untyped_data_replay_equivalent(a, b),
+        (AgentInvocationResult::ManualUpdate, AgentInvocationResult::ManualUpdate) => true,
+        (
+            AgentInvocationResult::LoadSnapshot { error: a },
+            AgentInvocationResult::LoadSnapshot { error: b },
+        ) => a == b,
+        (
+            AgentInvocationResult::SaveSnapshot { snapshot: a },
+            AgentInvocationResult::SaveSnapshot { snapshot: b },
+        ) => a == b,
+        (
+            AgentInvocationResult::ProcessOplogEntries { error: a },
+            AgentInvocationResult::ProcessOplogEntries { error: b },
+        ) => a == b,
+        _ => false,
     }
 }
 
@@ -808,16 +897,24 @@ impl AgentInvocation {
             AgentInvocationPayload::ManualUpdate { target_revision } => {
                 Self::ManualUpdate { target_revision }
             }
-            AgentInvocationPayload::AgentInitialization { input } => Self::AgentInitialization {
-                idempotency_key,
+            AgentInvocationPayload::AgentInitialization { input, principal } => {
+                Self::AgentInitialization {
+                    idempotency_key,
+                    input,
+                    invocation_context,
+                    principal,
+                }
+            }
+            AgentInvocationPayload::AgentMethod {
+                method_name,
                 input,
-                invocation_context,
-            },
-            AgentInvocationPayload::AgentMethod { method_name, input } => Self::AgentMethod {
+                principal,
+            } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
                 invocation_context,
+                principal,
             },
             AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
                 idempotency_key,
@@ -829,14 +926,14 @@ impl AgentInvocation {
                 config,
                 metadata,
                 first_entry_index,
-                entries,
+                ..
             } => Self::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
                 config,
                 metadata,
                 first_entry_index,
-                entries,
+                entries: Vec::new(), // Entries are pre-converted to PublicOplogEntry before enqueuing; replay does not reconstruct them
             },
         }
     }
@@ -858,9 +955,10 @@ impl AgentInvocation {
                 idempotency_key,
                 input,
                 invocation_context,
+                principal,
             } => (
                 idempotency_key,
-                AgentInvocationPayload::AgentInitialization { input },
+                AgentInvocationPayload::AgentInitialization { input, principal },
                 invocation_context,
             ),
             Self::AgentMethod {
@@ -868,9 +966,14 @@ impl AgentInvocation {
                 method_name,
                 input,
                 invocation_context,
+                principal,
             } => (
                 idempotency_key,
-                AgentInvocationPayload::AgentMethod { method_name, input },
+                AgentInvocationPayload::AgentMethod {
+                    method_name,
+                    input,
+                    principal,
+                },
                 invocation_context,
             ),
             Self::LoadSnapshot {
@@ -943,14 +1046,25 @@ impl AgentInvocation {
         }
     }
 
-    pub fn function_name(&self) -> String {
+    pub fn kind(&self) -> AgentInvocationKind {
+        match self {
+            Self::ManualUpdate { .. } => AgentInvocationKind::ManualUpdate,
+            Self::AgentInitialization { .. } => AgentInvocationKind::AgentInitialization,
+            Self::AgentMethod { .. } => AgentInvocationKind::AgentMethod,
+            Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
+            Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
+            Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
+        }
+    }
+
+    pub fn display_name(&self) -> String {
         match self {
             Self::ManualUpdate { .. } => String::new(),
-            Self::AgentInitialization { .. } => "golem:agent/guest.{initialize}".to_string(),
+            Self::AgentInitialization { .. } => "initialize".to_string(),
             Self::AgentMethod { method_name, .. } => method_name.clone(),
-            Self::LoadSnapshot { .. } => "golem:api/load-snapshot.{load}".to_string(),
-            Self::SaveSnapshot { .. } => "golem:api/save-snapshot.{save}".to_string(),
-            Self::ProcessOplogEntries { .. } => "golem:api/oplog-processor.{process}".to_string(),
+            Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
+            Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
+            Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
         }
     }
 }

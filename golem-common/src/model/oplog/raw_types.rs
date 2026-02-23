@@ -263,6 +263,7 @@ pub enum WorkerError {
     OutOfMemory,
     // The worker tried to grow its memory beyond the limits of the plan
     ExceededMemoryLimit,
+    AgentError(String),
 }
 
 impl WorkerError {
@@ -273,6 +274,7 @@ impl WorkerError {
             Self::StackOverflow => "Stack overflow",
             Self::OutOfMemory => "Out of memory",
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
+            Self::AgentError(message) => message,
         }
     }
 
@@ -284,5 +286,391 @@ impl WorkerError {
             "".to_string()
         };
         format!("{message}{error_logs}")
+    }
+}
+
+impl golem_wasm::IntoValue for WorkerError {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            WorkerError::Unknown(s) => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(golem_wasm::Value::String(s))),
+            },
+            WorkerError::InvalidRequest(s) => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(golem_wasm::Value::String(s))),
+            },
+            WorkerError::StackOverflow => golem_wasm::Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            WorkerError::OutOfMemory => golem_wasm::Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            WorkerError::ExceededMemoryLimit => golem_wasm::Value::Variant {
+                case_idx: 4,
+                case_value: None,
+            },
+            WorkerError::AgentError(s) => golem_wasm::Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(golem_wasm::Value::String(s))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![
+            case("unknown", str()),
+            case("invalid-request", str()),
+            unit_case("stack-overflow"),
+            unit_case("out-of-memory"),
+            unit_case("exceeded-memory-limit"),
+            case("agent-error", str()),
+        ])
+    }
+}
+
+impl golem_wasm::FromValue for WorkerError {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let s = String::from_value(*case_value.ok_or("Expected case_value for unknown")?)?;
+                    Ok(WorkerError::Unknown(s))
+                }
+                1 => {
+                    let s = String::from_value(*case_value.ok_or("Expected case_value for invalid-request")?)?;
+                    Ok(WorkerError::InvalidRequest(s))
+                }
+                2 => Ok(WorkerError::StackOverflow),
+                3 => Ok(WorkerError::OutOfMemory),
+                4 => Ok(WorkerError::ExceededMemoryLimit),
+                5 => {
+                    let s = String::from_value(*case_value.ok_or("Expected case_value for agent-error")?)?;
+                    Ok(WorkerError::AgentError(s))
+                }
+                _ => Err(format!("Invalid case_idx for WorkerError: {case_idx}")),
+            },
+            other => Err(format!("Expected Variant for WorkerError, got {other:?}")),
+        }
+    }
+}
+
+impl golem_wasm::IntoValue for DurableFunctionType {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            DurableFunctionType::ReadLocal => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            DurableFunctionType::WriteLocal => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            DurableFunctionType::ReadRemote => golem_wasm::Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+            DurableFunctionType::WriteRemote => golem_wasm::Value::Variant {
+                case_idx: 3,
+                case_value: None,
+            },
+            DurableFunctionType::WriteRemoteBatched(opt) => golem_wasm::Value::Variant {
+                case_idx: 4,
+                case_value: Some(Box::new(opt.into_value())),
+            },
+            DurableFunctionType::WriteRemoteTransaction(opt) => golem_wasm::Value::Variant {
+                case_idx: 5,
+                case_value: Some(Box::new(opt.into_value())),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![
+            unit_case("read-local"),
+            unit_case("write-local"),
+            unit_case("read-remote"),
+            unit_case("write-remote"),
+            case("write-remote-batched", option(OplogIndex::get_type())),
+            case("write-remote-transaction", option(OplogIndex::get_type())),
+        ])
+    }
+}
+
+impl golem_wasm::FromValue for DurableFunctionType {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => Ok(DurableFunctionType::ReadLocal),
+                1 => Ok(DurableFunctionType::WriteLocal),
+                2 => Ok(DurableFunctionType::ReadRemote),
+                3 => Ok(DurableFunctionType::WriteRemote),
+                4 => {
+                    let opt = Option::<OplogIndex>::from_value(
+                        *case_value.ok_or("Expected case_value for write-remote-batched")?,
+                    )?;
+                    Ok(DurableFunctionType::WriteRemoteBatched(opt))
+                }
+                5 => {
+                    let opt = Option::<OplogIndex>::from_value(
+                        *case_value.ok_or("Expected case_value for write-remote-transaction")?,
+                    )?;
+                    Ok(DurableFunctionType::WriteRemoteTransaction(opt))
+                }
+                _ => Err(format!(
+                    "Invalid case_idx for DurableFunctionType: {case_idx}"
+                )),
+            },
+            other => Err(format!(
+                "Expected Variant for DurableFunctionType, got {other:?}"
+            )),
+        }
+    }
+}
+
+impl golem_wasm::IntoValue for UpdateDescription {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            UpdateDescription::Automatic { target_revision } => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(target_revision.into_value())),
+            },
+            UpdateDescription::SnapshotBased {
+                target_revision,
+                payload,
+                mime_type,
+            } => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                    target_revision.into_value(),
+                    payload.into_value(),
+                    mime_type.into_value(),
+                ]))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![
+            case("automatic", ComponentRevision::get_type()),
+            case(
+                "snapshot-based",
+                record(vec![
+                    field("target-revision", ComponentRevision::get_type()),
+                    field("payload", OplogPayload::<Vec<u8>>::get_type()),
+                    field("mime-type", str()),
+                ]),
+            ),
+        ])
+    }
+}
+
+impl golem_wasm::FromValue for UpdateDescription {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let target_revision = ComponentRevision::from_value(
+                        *case_value.ok_or("Expected case_value for automatic")?,
+                    )?;
+                    Ok(UpdateDescription::Automatic { target_revision })
+                }
+                1 => {
+                    let record_value =
+                        *case_value.ok_or("Expected case_value for snapshot-based")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 3 => {
+                            let mut iter = fields.into_iter();
+                            let target_revision =
+                                ComponentRevision::from_value(iter.next().unwrap())?;
+                            let payload =
+                                OplogPayload::<Vec<u8>>::from_value(iter.next().unwrap())?;
+                            let mime_type = String::from_value(iter.next().unwrap())?;
+                            Ok(UpdateDescription::SnapshotBased {
+                                target_revision,
+                                payload,
+                                mime_type,
+                            })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 3 fields for raw-snapshot-based-update, got {other:?}"
+                        )),
+                    }
+                }
+                _ => Err(format!(
+                    "Invalid case_idx for UpdateDescription: {case_idx}"
+                )),
+            },
+            other => Err(format!(
+                "Expected Variant for UpdateDescription, got {other:?}"
+            )),
+        }
+    }
+}
+
+impl golem_wasm::IntoValue for SpanData {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context: _,
+                attributes,
+                inherited,
+            } => {
+                let attrs: Vec<golem_wasm::Value> = attributes
+                    .into_iter()
+                    .map(|(key, value)| {
+                        golem_wasm::Value::Record(vec![
+                            golem_wasm::Value::String(key),
+                            value.into_value(),
+                        ])
+                    })
+                    .collect();
+                golem_wasm::Value::Variant {
+                    case_idx: 0,
+                    case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                        span_id.into_value(),
+                        start.into_value(),
+                        parent_id.into_value(),
+                        golem_wasm::Value::Option(None), // linked_context: option<u64> = None
+                        golem_wasm::Value::List(attrs),
+                        golem_wasm::Value::Bool(inherited),
+                    ]))),
+                }
+            }
+            SpanData::ExternalSpan { span_id } => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                    span_id.into_value(),
+                ]))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        let attribute_type = record(vec![
+            field("key", str()),
+            field("value", AttributeValue::get_type()),
+        ]);
+        variant(vec![
+            case(
+                "local-span",
+                record(vec![
+                    field("span-id", SpanId::get_type()),
+                    field("start", crate::model::Timestamp::get_type()),
+                    field("parent", option(SpanId::get_type())),
+                    field("linked-context", option(u64())),
+                    field("attributes", list(attribute_type)),
+                    field("inherited", bool()),
+                ]),
+            ),
+            case(
+                "external-span",
+                record(vec![field("span-id", SpanId::get_type())]),
+            ),
+        ])
+    }
+}
+
+impl golem_wasm::FromValue for SpanData {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let record_value =
+                        *case_value.ok_or("Expected case_value for local-span")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 6 => {
+                            let mut iter = fields.into_iter();
+                            let span_id = SpanId::from_value(iter.next().unwrap())?;
+                            let start =
+                                crate::model::Timestamp::from_value(iter.next().unwrap())?;
+                            let parent_id =
+                                Option::<SpanId>::from_value(iter.next().unwrap())?;
+                            let _linked_context_idx =
+                                Option::<u64>::from_value(iter.next().unwrap())?;
+                            let attrs_list = match iter.next().unwrap() {
+                                golem_wasm::Value::List(items) => {
+                                    let mut map = HashMap::new();
+                                    for item in items {
+                                        match item {
+                                            golem_wasm::Value::Record(fields)
+                                                if fields.len() == 2 =>
+                                            {
+                                                let mut fiter = fields.into_iter();
+                                                let key =
+                                                    String::from_value(fiter.next().unwrap())?;
+                                                let value = AttributeValue::from_value(
+                                                    fiter.next().unwrap(),
+                                                )?;
+                                                map.insert(key, value);
+                                            }
+                                            other => {
+                                                return Err(format!(
+                                                    "Expected Record with 2 fields for attribute, got {other:?}"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    map
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "Expected List for attributes, got {other:?}"
+                                    ));
+                                }
+                            };
+                            let inherited = bool::from_value(iter.next().unwrap())?;
+                            Ok(SpanData::LocalSpan {
+                                span_id,
+                                start,
+                                parent_id,
+                                linked_context: None,
+                                attributes: attrs_list,
+                                inherited,
+                            })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 6 fields for local-span-data, got {other:?}"
+                        )),
+                    }
+                }
+                1 => {
+                    let record_value =
+                        *case_value.ok_or("Expected case_value for external-span")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 1 => {
+                            let span_id = SpanId::from_value(fields.into_iter().next().unwrap())?;
+                            Ok(SpanData::ExternalSpan { span_id })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 1 field for external-span-data, got {other:?}"
+                        )),
+                    }
+                }
+                _ => Err(format!("Invalid case_idx for SpanData: {case_idx}")),
+            },
+            other => Err(format!("Expected Variant for SpanData, got {other:?}")),
+        }
     }
 }

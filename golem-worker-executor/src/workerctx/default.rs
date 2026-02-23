@@ -57,13 +57,15 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord};
+use golem_common::model::{
+    AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord,
+};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, Value, ValueAndType};
+use golem_wasm::{Uri, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Weak};
@@ -210,15 +212,14 @@ impl InvocationHooks for Context {
             .await
     }
 
-    async fn on_invocation_success(
+    async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Value>,
         consumed_fuel: u64,
-        output: Option<ValueAndType>,
+        result: &AgentInvocationResult,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, result)
             .await
     }
 

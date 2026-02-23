@@ -341,7 +341,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::EndRemoteWrite(_) => {
             Err("Cannot override an oplog with an end atomic write oplog".to_string())
         }
-        PublicOplogEntry::PendingWorkerInvocation(_) => {
+        PublicOplogEntry::PendingAgentInvocation(_) => {
             Err("Cannot override an oplog with a pending worker invocation".to_string())?
         }
         PublicOplogEntry::PendingUpdate(_) => {

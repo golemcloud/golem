@@ -55,8 +55,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    AgentInvocation, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp,
-    TimestampedAgentInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    Timestamp, TimestampedAgentInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -1670,41 +1671,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
-                let value = worker
+                let invocation_result = worker
                     .invoke_and_await(ik, function_name, function_input, invocation_context)
                     .await?;
 
-                match value {
-                    Some(value_and_type) => match value_and_type.value {
-                        golem_wasm::Value::Result(Ok(Some(data_value_value))) => {
-                            let untyped =
-                                UntypedDataValue::from_value(*data_value_value).map_err(|err| {
-                                    WorkerExecutorError::unknown(format!(
-                                        "Unexpected DataValue value: {err}"
-                                    ))
-                                })?;
-                            Ok(Some(untyped))
-                        }
-                        golem_wasm::Value::Result(Err(Some(agent_error_value))) => {
-                            let agent_error = golem_common::model::agent::AgentError::from_value(
-                                *agent_error_value,
-                            )
-                            .map_err(|err| {
-                                WorkerExecutorError::unknown(format!(
-                                    "Unexpected AgentError value: {err}"
-                                ))
-                            })?;
-                            Err(WorkerExecutorError::runtime(format!(
-                                "Agent invocation failed: {agent_error}"
-                            )))
-                        }
-                        _ => Err(WorkerExecutorError::unknown(
-                            "Unexpected return value from agent invocation",
-                        )),
-                    },
-                    None => Err(WorkerExecutorError::unknown(
-                        "Unexpected missing invoke result value",
-                    )),
+                match invocation_result {
+                    AgentInvocationResult::AgentMethod { output } => Ok(Some(output)),
+                    AgentInvocationResult::AgentInitialization => Ok(None),
+                    other => Err(WorkerExecutorError::unknown(format!(
+                        "Unexpected invocation result type: {other:?}"
+                    ))),
                 }
             }
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {

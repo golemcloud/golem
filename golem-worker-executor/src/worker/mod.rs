@@ -40,7 +40,9 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, Snapshotting, SnapshottingConfig};
+use golem_common::model::agent::{
+    AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig,
+};
 use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
@@ -59,8 +61,7 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::analysis::AnalysedFunctionResult;
-use golem_wasm::{IntoValue, Value, ValueAndType};
+use golem_wasm::Value;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -311,6 +312,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         idempotency_key: IdempotencyKey::fresh(),
                         input: agent_id.parameters.clone().into(),
                         invocation_context: invocation_context_stack.clone(),
+                        principal: Principal::anonymous(),
                     })
                     .await
                     .expect("Failed enqueuing initial agent invocations to worker");
@@ -575,6 +577,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .collect(),
                     ),
                     invocation_context,
+                    principal: Principal::anonymous(),
                 })
                 .await?;
                 Ok(ResultOrSubscription::Pending(subscription))
@@ -583,15 +586,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Invokes the worker and awaits for a result.
-    ///
-    /// The successful result is an `Option<ValueAndType>` encoding the result value.
     pub async fn invoke_and_await(
         &self,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, WorkerExecutorError> {
+    ) -> Result<AgentInvocationResult, WorkerExecutorError> {
         match self
             .invoke(
                 idempotency_key.clone(),
@@ -671,7 +672,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: Option<ValueAndType>,
+        result: AgentInvocationResult,
     ) {
         let mut map = self.invocation_results.write().await;
         map.insert(
@@ -811,7 +812,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Enqueue invocation of an exported function
-    async fn enqueue_worker_invocation(
+    pub async fn enqueue_worker_invocation(
         &self,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
@@ -2183,7 +2184,7 @@ struct FailedInvocationResult {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<Option<ValueAndType>, FailedInvocationResult>,
+        result: Result<AgentInvocationResult, FailedInvocationResult>,
     },
     Lazy {
         oplog_idx: OplogIndex,
@@ -2204,17 +2205,7 @@ impl InvocationResult {
                 OplogEntry::AgentInvocationFinished { result, .. } => {
                     let invocation_result: AgentInvocationResult =
                         services.oplog().download_payload(result).await.expect("failed to deserialize function response payload");
-
-                    // Extract the output value if present
-                    let value = match invocation_result {
-                        AgentInvocationResult::AgentMethod { output } |
-                        AgentInvocationResult::AgentInitialization { output } => {
-                            // TODO: convert UntypedDataValue to ValueAndType
-                            None
-                        }
-                        _ => None,
-                    };
-                    Ok(value)
+                    Ok(invocation_result)
                 }
                 OplogEntry::Error { error, retry_from, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
@@ -2338,25 +2329,10 @@ pub enum QueuedWorkerInvocation {
 }
 
 pub enum ResultOrSubscription {
-    Finished(Result<Option<ValueAndType>, WorkerExecutorError>),
+    Finished(Result<AgentInvocationResult, WorkerExecutorError>),
     Pending(EventsSubscription),
 }
 
-pub fn interpret_function_result(
-    function_results: Option<Value>,
-    expected_types: Option<AnalysedFunctionResult>,
-) -> Result<Option<ValueAndType>, Vec<String>> {
-    match (function_results, expected_types) {
-        (None, None) => Ok(None),
-        (Some(_), None) => Err(vec![
-            "Unexpected result value (got some, expected: none)".to_string()
-        ]),
-        (None, Some(_)) => Err(vec![
-            "Unexpected result value (got none, expected: some)".to_string()
-        ]),
-        (Some(value), Some(expected)) => Ok(Some(ValueAndType::new(value, expected.typ))),
-    }
-}
 
 struct GetOrCreateWorkerResult {
     initial_worker_metadata: WorkerMetadata,

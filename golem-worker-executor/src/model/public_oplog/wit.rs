@@ -22,7 +22,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
     JumpParams, LogParams, ManualUpdateParameters, NoOpParams, PendingUpdateParams,
-    PendingWorkerInvocationParams, PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PendingAgentInvocationParams, PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams,
@@ -36,7 +36,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{Empty, Timestamp};
 
-impl From<PublicOplogEntry> for oplog::OplogEntry {
+impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
         match value {
             PublicOplogEntry::Create(CreateParams {
@@ -155,7 +155,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             }),
-            PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
+            PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
                 timestamp,
                 invocation,
             }) => Self::PendingAgentInvocation(oplog::PendingAgentInvocationParameters {
@@ -256,7 +256,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
                 timestamp,
                 idempotency_key,
-            }) => Self::CancelInvocation(oplog::CancelInvocationParameters {
+            }) => Self::CancelPendingInvocation(oplog::CancelInvocationParameters {
                 timestamp: timestamp.into(),
                 idempotency_key: idempotency_key.to_string(),
             }),
@@ -446,13 +446,24 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                 })
             }
             PublicAgentInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
-            PublicAgentInvocation::LoadSnapshot(_params) => {
-                // TODO: implement load snapshot conversion
-                todo!("LoadSnapshot WIT conversion not yet implemented")
+            PublicAgentInvocation::LoadSnapshot(params) => {
+                let (data, mime_type) = match params.snapshot {
+                    PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
+                        (data, mime_type)
+                    }
+                    PublicSnapshotData::Json(JsonSnapshotData { data }) => (
+                        serde_json::to_vec(&data).unwrap_or_default(),
+                        "application/json".to_string(),
+                    ),
+                };
+                Self::LoadSnapshot(oplog::LoadSnapshotParameters {
+                    snapshot: crate::preview2::golem_api_1_x::host::Snapshot { data, mime_type },
+                })
             }
-            PublicAgentInvocation::ProcessOplogEntries(_params) => {
-                // TODO: implement process oplog entries conversion
-                todo!("ProcessOplogEntries WIT conversion not yet implemented")
+            PublicAgentInvocation::ProcessOplogEntries(params) => {
+                Self::ProcessOplogEntries(oplog::ProcessOplogEntriesParameters {
+                    idempotency_key: params.idempotency_key.value,
+                })
             }
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
                 Self::ManualUpdate(oplog::ManualUpdateParameters {

@@ -369,6 +369,21 @@ impl<T: FromValue + Ord> FromValue for std::collections::BTreeSet<T> {
     }
 }
 
+impl<T: FromValue + Eq + std::hash::Hash> FromValue for std::collections::HashSet<T> {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::List(values) => {
+                let mut set = std::collections::HashSet::new();
+                for v in values {
+                    set.insert(T::from_value(v)?);
+                }
+                Ok(set)
+            }
+            _ => Err(format!("Expected List value for HashSet, got {value:?}")),
+        }
+    }
+}
+
 impl FromValue for uuid::Uuid {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {

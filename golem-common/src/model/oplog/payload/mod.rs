@@ -425,6 +425,27 @@ pub mod host_functions {
     }
 }
 
+impl golem_wasm::IntoValue for host_functions::HostFunctionName {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::String(self.to_string())
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::str()
+    }
+}
+
+impl golem_wasm::FromValue for host_functions::HostFunctionName {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::String(s) => Ok(Self::from(s.as_str())),
+            other => Err(format!(
+                "Expected String for HostFunctionName, got {other:?}"
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogPayload<T: BinaryCodec + Debug + Clone + PartialEq> {
     Inline(Box<T>),
@@ -500,6 +521,89 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> BinaryDeserializer for OplogPay
             other => Err(desert_rust::Error::DeserializationFailure(format!(
                 "Invalid tag for OplogPayload: {other}"
             ))),
+        }
+    }
+}
+
+impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::IntoValue for OplogPayload<T> {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            OplogPayload::Inline(value) => {
+                let bytes = serialize(&value).expect("Failed to serialize OplogPayload::Inline");
+                golem_wasm::Value::Variant {
+                    case_idx: 0,
+                    case_value: Some(Box::new(bytes.into_value())),
+                }
+            }
+            OplogPayload::SerializedInline(bytes) => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(bytes.into_value())),
+            },
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                    payload_id.0.into_value(),
+                    md5_hash.into_value(),
+                ]))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![
+            case("inline", list(u8())),
+            case(
+                "external",
+                record(vec![
+                    field("payload-id", str()),
+                    field("md5-hash", list(u8())),
+                ]),
+            ),
+        ])
+    }
+}
+
+impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::FromValue for OplogPayload<T> {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let bytes = Vec::<u8>::from_value(
+                        *case_value.ok_or("Expected case_value for inline")?,
+                    )?;
+                    Ok(OplogPayload::SerializedInline(bytes))
+                }
+                1 => {
+                    let record_value =
+                        *case_value.ok_or("Expected case_value for external")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 2 => {
+                            let mut iter = fields.into_iter();
+                            let payload_id =
+                                PayloadId(Uuid::from_value(iter.next().unwrap())?);
+                            let md5_hash = Vec::<u8>::from_value(iter.next().unwrap())?;
+                            Ok(OplogPayload::External {
+                                payload_id,
+                                md5_hash,
+                            })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 2 fields for oplog-external-payload, got {other:?}"
+                        )),
+                    }
+                }
+                _ => Err(format!("Invalid case_idx for OplogPayload: {case_idx}")),
+            },
+            other => Err(format!(
+                "Expected Variant for OplogPayload, got {other:?}"
+            )),
         }
     }
 }

@@ -183,7 +183,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
-        PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
+        PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
             PublicAgentInvocation::AgentInitialization(inner_params) => {
                 let _ = writeln!(result, "ENQUEUED AGENT INITIALIZATION");
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);

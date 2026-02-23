@@ -30,18 +30,16 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
+    AgentInvocation, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -220,46 +218,19 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         let idempotency_key = IdempotencyKey::fresh();
 
-        let val_account_info = Value::Record(vec![worker_metadata.created_by.into_value()]);
-        let val_component_id = worker_metadata.worker_id.component_id.into_value();
-        let mut config_pairs = Vec::new();
-        for (key, value) in running_plugin.configuration.iter() {
-            config_pairs.push(Value::Tuple(vec![
-                key.clone().into_value(),
-                value.clone().into_value(),
-            ]));
-        }
-        let val_config = Value::List(config_pairs);
-        let function_name = "golem:api/oplog-processor@1.3.0.{process}".to_string();
-
-        let val_worker_id = worker_metadata.worker_id.clone().into_value();
-        let agent_metadata_for_guests: AgentMetadataForGuests = worker_metadata.into();
-        let val_metadata = agent_metadata_for_guests.into_value();
-        let val_first_entry_index = initial_oplog_index.into_value();
-        let val_entries = Value::List(
-            entries
-                .into_iter()
-                .map(|entry| entry.into_value())
-                .collect(),
-        );
-
-        let function_input = vec![
-            val_account_info,
-            val_config,
-            val_component_id,
-            val_worker_id,
-            val_metadata,
-            val_first_entry_index,
-            val_entries,
-        ];
-
         worker
-            .invoke(
+            .enqueue_worker_invocation(AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
-                function_name,
-                function_input,
-                InvocationContextStack::fresh(),
-            )
+                account_id: worker_metadata.created_by.clone(),
+                config: running_plugin
+                    .configuration
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                metadata: worker_metadata,
+                first_entry_index: initial_oplog_index,
+                entries,
+            })
             .await?;
 
         Ok(())

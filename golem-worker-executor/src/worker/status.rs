@@ -291,7 +291,7 @@ fn calculate_latest_worker_status(
             OplogEntry::EndRemoteWrite { .. } => {
                 current_status = WorkerStatus::Running;
             }
-            OplogEntry::PendingWorkerInvocation { .. } => {}
+            OplogEntry::PendingAgentInvocation { .. } => {}
             OplogEntry::PendingUpdate { .. } => {
                 if current_status == WorkerStatus::Failed {
                     current_status = WorkerStatus::Retrying;
@@ -433,7 +433,7 @@ fn calculate_pending_invocations(
     let mut result = initial;
     for entry in entries.values() {
         // Here we are handling two categories of oplog entries:
-        // - "input" entries adding items to pending queues (PendingWorkerInvocation, PendingUpdate)
+        // - "input" entries adding items to pending queues (PendingAgentInvocation, PendingUpdate)
         // - "output" entries removing items from pending queues when they got processed (AgentInvocationStarted, SuccessfulUpdate, FailedUpdate)
         //
         // Skipped regions does not matter for us - they are representing jumps and updates, and anything that happens in these regions
@@ -447,7 +447,7 @@ fn calculate_pending_invocations(
         //   the pending queue, so the revert will not make them retried.
 
         match entry {
-            OplogEntry::PendingWorkerInvocation {
+            OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
                 payload,
@@ -794,6 +794,7 @@ fn is_worker_error_retriable(
         WorkerError::StackOverflow => false,
         WorkerError::OutOfMemory => true,
         WorkerError::ExceededMemoryLimit => false,
+        WorkerError::AgentError(_) => false,
     }
 }
 
@@ -809,7 +810,7 @@ mod test {
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
+    use golem_common::model::agent::{Principal, UntypedDataValue, UntypedElementValue};
     use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -826,7 +827,7 @@ mod test {
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value};
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
@@ -848,9 +849,9 @@ mod test {
             .agent_invocation_started("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -866,9 +867,9 @@ mod test {
             .grow_memory(10)
             .grow_memory(100)
             .jump(OplogIndex::from_u64(2))
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -883,9 +884,9 @@ mod test {
             .agent_invocation_started("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .revert(OplogIndex::from_u64(5))
             .build();
 
@@ -916,7 +917,7 @@ mod test {
             )
             .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .build();
 
         run_test_case(test_case).await;
@@ -952,7 +953,7 @@ mod test {
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .build();
 
         run_test_case(test_case).await;
@@ -986,11 +987,11 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .pending_update(&update1, |status| status.total_linear_memory_size = 200)
             .successful_update(update1, 2000, &HashSet::new())
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -1024,11 +1025,11 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -1058,7 +1059,7 @@ mod test {
             })
             .failed_update(update2)
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -1094,7 +1095,7 @@ mod test {
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .revert(OplogIndex::from_u64(3))
             .build();
 
@@ -1129,11 +1130,11 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .revert(OplogIndex::from_u64(4))
             .build();
 
@@ -1173,14 +1174,14 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .agent_invocation_started("c", vec![], k2.clone())
             .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
             .revert(OplogIndex::from_u64(5))
@@ -1204,13 +1205,13 @@ mod test {
                 function_input: vec![Value::Bool(true)],
                 invocation_context: InvocationContextStack::fresh(),
             })
-            .agent_invocation_finished(None, k1.clone())
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1.clone())
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(None, k2.clone())
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2.clone())
             .revert(OplogIndex::from_u64(5))
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(None, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
             .revert(OplogIndex::from_u64(2))
             .build();
 
@@ -1251,7 +1252,7 @@ mod test {
             .snapshot()
             .grow_memory(100)
             .snapshot()
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .build();
 
         run_test_case(test_case).await;
@@ -1267,7 +1268,7 @@ mod test {
             .snapshot()
             .grow_memory(100)
             .snapshot()
-            .agent_invocation_finished(None, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
             .revert(OplogIndex::from_u64(3))
             .build();
 
@@ -1363,6 +1364,7 @@ mod test {
                         .map(UntypedElementValue::ComponentModel)
                         .collect(),
                 ),
+                principal: Principal::anonymous(),
             };
             self.add(
                 OplogEntry::AgentInvocationStarted {
@@ -1386,19 +1388,9 @@ mod test {
 
         pub fn agent_invocation_finished(
             self,
-            response: Option<ValueAndType>,
+            result: AgentInvocationResult,
             idempotency_key: IdempotencyKey,
         ) -> Self {
-            let result = match response {
-                Some(vat) => AgentInvocationResult::AgentMethod {
-                    output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                        vat.value,
-                    )]),
-                },
-                None => AgentInvocationResult::AgentMethod {
-                    output: UntypedDataValue::Tuple(vec![]),
-                },
-            };
             self.add(
                 OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),

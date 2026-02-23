@@ -17,11 +17,10 @@ use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
-use crate::worker::invocation::{InvokeResult, invoke_observed_and_traced};
-use crate::worker::{
-    QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
-    interpret_function_result,
+use crate::worker::invocation::{
+    InvokeResult, LoweredInvocation, invoke_observed_and_traced, lower_invocation,
 };
+use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use async_lock::Mutex;
@@ -32,7 +31,7 @@ use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::{OplogEntry, WorkerError};
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    AgentInvocation, AgentInvocationKind, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
     TimestampedAgentInvocation, WorkerId,
 };
 use golem_common::model::{
@@ -42,8 +41,7 @@ use golem_common::model::{
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::Value;
-use golem_wasm::analysis::AnalysedFunctionResult;
+
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -52,7 +50,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{Instrument, Level, Span, debug, span, warn};
 use wasmtime::component::Instance;
-use wasmtime::{AsContext, Store};
+use wasmtime::Store;
 
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
@@ -488,37 +486,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             AgentInvocation::ManualUpdate { target_revision } => {
                 self.manual_update(target_revision).await
             }
-            ref invocation @ AgentInvocation::AgentInitialization {
-                ref idempotency_key,
-                ..
-            }
-            | ref invocation @ AgentInvocation::AgentMethod {
-                ref idempotency_key,
-                ..
-            }
-            | ref invocation @ AgentInvocation::LoadSnapshot {
-                ref idempotency_key,
-                ..
-            }
-            | ref invocation @ AgentInvocation::SaveSnapshot {
-                ref idempotency_key,
-                ..
-            }
-            | ref invocation @ AgentInvocation::ProcessOplogEntries {
-                ref idempotency_key,
-                ..
-            } => {
-                let has_result = {
-                    let invocation_results = self.parent.invocation_results.read().await;
-                    invocation_results.contains_key(idempotency_key)
-                };
-                if !has_result {
-                    self.invoke_agent(invocation, invocation_span).await
+            invocation => {
+                if let Some(idempotency_key) = invocation.idempotency_key() {
+                    let has_result = {
+                        let invocation_results = self.parent.invocation_results.read().await;
+                        invocation_results.contains_key(idempotency_key)
+                    };
+                    if !has_result {
+                        self.invoke_agent(invocation, invocation_span).await
+                    } else {
+                        debug!(
+                            "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
+                        );
+                        CommandOutcome::Continue
+                    }
                 } else {
-                    debug!(
-                        "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
-                    );
-                    CommandOutcome::Continue
+                    self.invoke_agent(invocation, invocation_span).await
                 }
             }
         }
@@ -527,11 +510,29 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Invokes an agent function on the worker
     async fn invoke_agent(
         &mut self,
-        invocation: &AgentInvocation,
+        invocation: AgentInvocation,
         invocation_span: &Span,
     ) -> CommandOutcome {
-        let (idempotency_key, _, invocation_context) = invocation.clone().into_parts();
-        let full_function_name = invocation.function_name();
+        let display_name = invocation.display_name();
+        let kind = invocation.kind();
+        let invocation_context = invocation.invocation_context();
+        let idempotency_key = invocation
+            .idempotency_key()
+            .cloned()
+            .unwrap_or_else(IdempotencyKey::fresh);
+
+        let component_metadata = self.store.data().component_metadata().metadata.clone();
+        let lowered = match lower_invocation(
+            invocation,
+            &component_metadata,
+            self.parent.agent_id.as_ref(),
+        ) {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                warn!("Failed to lower invocation: {err}");
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+        };
 
         let span = span!(
             parent: invocation_span,
@@ -544,17 +545,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             %idempotency_key,
-            function = full_function_name
+            function = display_name
         );
 
-        self.invoke_agent_inner(
-            invocation_context,
-            idempotency_key,
-            full_function_name,
-            invocation,
-        )
-        .instrument(span)
-        .await
+        self.invoke_agent_inner(invocation_context, idempotency_key, lowered, kind)
+            .instrument(span)
+            .await
     }
 
     /// Invokes an agent function on the worker
@@ -564,15 +560,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        invocation: &AgentInvocation,
+        lowered: LoweredInvocation,
+        kind: AgentInvocationKind,
     ) -> CommandOutcome {
+        let full_function_name = lowered.wit_fqfn.clone();
         let result = self
             .invoke_agent_with_context(
                 invocation_context,
                 idempotency_key,
                 &full_function_name,
-                invocation,
+                lowered,
+                kind,
             )
             .await;
 
@@ -581,8 +579,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                self.agent_invocation_finished(full_function_name, invocation_result, consumed_fuel)
-                    .await
+                self.agent_invocation_finished(
+                    full_function_name,
+                    invocation_result,
+                    consumed_fuel,
+                    kind,
+                )
+                .await
             }
             _ => {
                 self.agent_invocation_failed(&full_function_name, result)
@@ -598,7 +601,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
         full_function_name: &str,
-        invocation: &AgentInvocation,
+        lowered: LoweredInvocation,
+        kind: AgentInvocationKind,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         self.store
             .data_mut()
@@ -631,7 +635,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
 
         let result = invoke_observed_and_traced(
-            invocation,
+            lowered,
+            kind,
             self.store,
             self.instance,
             &component_metadata,
@@ -663,120 +668,39 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         full_function_name: String,
         invocation_result: AgentInvocationResult,
         consumed_fuel: u64,
+        kind: AgentInvocationKind,
     ) -> CommandOutcome {
-        let component_metadata = self.store.as_context().data().component_metadata();
-
-        let function_results = component_metadata
-            .metadata
-            .find_function(&full_function_name);
-
-        match function_results {
-            Ok(Some(invokable_function)) => {
-                let function_results = invokable_function.analysed_export.result.clone();
-
-                let output = invocation_result.into_raw_output();
-
-                match self
-                    .agent_invocation_finished_with_type(
-                        full_function_name.clone(),
-                        output,
-                        consumed_fuel,
-                        function_results,
-                    )
-                    .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        self.store
-                            .data_mut()
-                            .on_invocation_failure(
-                                &full_function_name,
-                                &TrapType::Error {
-                                    error: WorkerError::Unknown(error.to_string()),
-                                    retry_from: OplogIndex::INITIAL,
-                                },
-                            )
-                            .await;
+        match self
+            .store
+            .data_mut()
+            .on_agent_invocation_success(&full_function_name, consumed_fuel, &invocation_result)
+            .await
+        {
+            Ok(()) => {
+                if self.parent.agent_mode() == AgentMode::Ephemeral {
+                    if self.store.data().component_metadata().metadata.is_agent()
+                        && kind == AgentInvocationKind::AgentInitialization
+                    {
+                        CommandOutcome::Continue
+                    } else {
                         CommandOutcome::BreakInnerLoop(RetryDecision::None)
                     }
-                }
-            }
-
-            Ok(None) => {
-                self.store
-                    .data_mut()
-                    .on_invocation_failure(
-                        &full_function_name,
-                        &TrapType::Error {
-                            error: WorkerError::InvalidRequest("Function not found".to_string()),
-                            retry_from: OplogIndex::INITIAL,
-                        },
-                    )
-                    .await;
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
-            }
-
-            Err(err) => {
-                self.store
-                    .data_mut()
-                    .on_invocation_failure(
-                        &full_function_name,
-                        &TrapType::Error {
-                            error: WorkerError::InvalidRequest(format!(
-                                "Failed analysing function: {err}"
-                            )),
-                            retry_from: OplogIndex::INITIAL,
-                        },
-                    )
-                    .await;
-                CommandOutcome::BreakInnerLoop(RetryDecision::None)
-            }
-        }
-    }
-
-    /// The inner logic of handling a successfully finished agent invocation,
-    /// with the function's expected result type already known
-    async fn agent_invocation_finished_with_type(
-        &mut self,
-        full_function_name: String,
-        output: Option<Value>,
-        consumed_fuel: u64,
-        function_result: Option<AnalysedFunctionResult>,
-    ) -> Result<CommandOutcome, WorkerExecutorError> {
-        let result = interpret_function_result(output, function_result).map_err(|e| {
-            WorkerExecutorError::ValueMismatch {
-                details: e.join(", "),
-            }
-        });
-
-        match result {
-            Ok(result) => {
-                self.store
-                    .data_mut()
-                    .on_invocation_success(&full_function_name, &vec![], consumed_fuel, result)
-                    .await?;
-
-                if self.parent.agent_mode() == AgentMode::Ephemeral {
-                    // For ephemeral agents, we allow running the 'initialize' call and one another
-                    if self.store.data().component_metadata().metadata.is_agent()
-                        && full_function_name == "golem:agent/guest.{initialize}"
-                    {
-                        Ok(CommandOutcome::Continue)
-                    } else {
-                        Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
-                    }
                 } else {
-                    Ok(CommandOutcome::Continue)
+                    CommandOutcome::Continue
                 }
             }
             Err(error) => {
-                let trap_type = TrapType::from_error::<Ctx>(&anyhow!(error), OplogIndex::INITIAL);
-
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&full_function_name, &trap_type)
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Error {
+                            error: WorkerError::Unknown(error.to_string()),
+                            retry_from: OplogIndex::INITIAL,
+                        },
+                    )
                     .await;
-                Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
+                CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
         }
     }
@@ -838,11 +762,29 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
+        let kind = save_snapshot_invocation.kind();
+        let lowered = match lower_invocation(
+            save_snapshot_invocation,
+            &component_metadata,
+            self.parent.agent_id.as_ref(),
+        ) {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                warn!("Failed to lower save-snapshot invocation: {err}");
+                return self
+                    .fail_update(
+                        target_revision,
+                        format!("failed to lower save-snapshot invocation: {err}"),
+                    )
+                    .await;
+            }
+        };
 
         self.store.data_mut().begin_call_snapshotting_function();
 
         let result = invoke_observed_and_traced(
-            &save_snapshot_invocation,
+            lowered,
+            kind,
             self.store,
             self.instance,
             &component_metadata,
@@ -1030,11 +972,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key: IdempotencyKey::fresh(),
         };
+        let kind = save_snapshot_invocation.kind();
+        let lowered = match lower_invocation(
+            save_snapshot_invocation,
+            &component_metadata,
+            self.parent.agent_id.as_ref(),
+        ) {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                warn!("Failed to lower save-snapshot invocation: {err}");
+                return CommandOutcome::Continue;
+            }
+        };
 
         self.store.data_mut().begin_call_snapshotting_function();
 
         let result = invoke_observed_and_traced(
-            &save_snapshot_invocation,
+            lowered,
+            kind,
             self.store,
             self.instance,
             &component_metadata,

@@ -21,7 +21,7 @@ use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, UntypedDataValue, UntypedElementValue};
+use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::{AgentInvocationPayload, LogLevel, WorkerError};
 use golem_common::model::regions::OplogRegion;
@@ -342,6 +342,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 "request".into_value(),
             )]),
             invocation_context: InvocationContextStack::fresh_rounded(),
+            principal: Principal::anonymous(),
         })
         .await
         .unwrap()
@@ -523,6 +524,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 large_payload2.clone().into_value(),
             )]),
             invocation_context: InvocationContextStack::fresh_rounded(),
+            principal: Principal::anonymous(),
         })
         .await
         .unwrap()

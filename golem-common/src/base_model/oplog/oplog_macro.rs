@@ -68,6 +68,98 @@ macro_rules! oplog_entry {
             }
         }
 
+        #[cfg(feature = "full")]
+        impl golem_wasm::IntoValue for OplogEntry {
+            fn into_value(self) -> golem_wasm::Value {
+                use golem_wasm::IntoValue as _;
+
+                let _case_names: &[&str] = &[$(stringify!($case)),*];
+                match self {
+                    $(Self::$case { timestamp, $($field),* } => {
+                        let _case_idx = _case_names.iter().position(|e| *e == stringify!($case)).unwrap() as u32;
+                        golem_wasm::Value::Variant {
+                            case_idx: _case_idx,
+                            case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                                timestamp.into_value(),
+                                $($field.into_value()),*
+                            ])))
+                        }
+                    }),*
+                }
+            }
+
+            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                use golem_wasm::IntoValue as _;
+                use heck::ToKebabCase as _;
+
+                golem_wasm::analysis::analysed_type::variant(vec![
+                    $(
+                        golem_wasm::analysis::analysed_type::case(
+                            &stringify!($case).to_kebab_case(),
+                            golem_wasm::analysis::analysed_type::record(vec![
+                                golem_wasm::analysis::analysed_type::field(
+                                    "timestamp",
+                                    <Timestamp as golem_wasm::IntoValue>::get_type()
+                                ),
+                                $(golem_wasm::analysis::analysed_type::field(
+                                    &stringify!($field).replace('_', "-"),
+                                    <$typ as golem_wasm::IntoValue>::get_type()
+                                )),*
+                            ])
+                        )
+                    ),*
+                ])
+            }
+        }
+
+        #[cfg(feature = "full")]
+        impl golem_wasm::FromValue for OplogEntry {
+            fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+                match value {
+                    golem_wasm::Value::Variant { case_idx, case_value } => {
+                        let mut _expected_idx = 0u32;
+                        $(
+                            if case_idx == _expected_idx {
+                                let _record = case_value.ok_or_else(|| format!(
+                                    "Expected case_value for {}",
+                                    stringify!($case)
+                                ))?;
+                                match *_record {
+                                    golem_wasm::Value::Record(fields) => {
+                                        // Count expected fields: 1 (timestamp) + raw fields
+                                        let _expected_len = 1usize $(+ { let _ = stringify!($field); 1usize })*;
+                                        if fields.len() != _expected_len {
+                                            return Err(format!(
+                                                "Expected {} fields for {}, got {}",
+                                                _expected_len, stringify!($case), fields.len()
+                                            ));
+                                        }
+                                        let mut _iter = fields.into_iter();
+                                        let timestamp = <Timestamp as golem_wasm::FromValue>::from_value(
+                                            _iter.next().unwrap()
+                                        )?;
+                                        $(
+                                            let $field = <$typ as golem_wasm::FromValue>::from_value(
+                                                _iter.next().unwrap()
+                                            )?;
+                                        )*
+                                        return Ok(Self::$case { timestamp, $($field),* });
+                                    }
+                                    other => return Err(format!(
+                                        "Expected Record for {}, got {:?}",
+                                        stringify!($case), other
+                                    )),
+                                }
+                            }
+                            _expected_idx += 1;
+                        )*
+                        Err(format!("Invalid case_idx for OplogEntry: {}", case_idx))
+                    }
+                    other => Err(format!("Expected Variant for OplogEntry, got {:?}", other)),
+                }
+            }
+        }
+
         pub mod public_oplog_entry {
             pub use super::*;
 

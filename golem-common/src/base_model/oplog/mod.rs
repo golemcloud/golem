@@ -238,7 +238,7 @@ oplog_entry! {
         }
     },
     /// An invocation request arrived while the worker was busy
-    PendingWorkerInvocation {
+    PendingAgentInvocation {
         hint: true
         raw {
             idempotency_key: IdempotencyKey,
