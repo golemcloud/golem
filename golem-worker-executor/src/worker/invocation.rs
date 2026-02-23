@@ -47,7 +47,6 @@ use wasmtime_wasi_http::bindings::Proxy;
 /// - `instance`: reference to the wasmtime instance
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
-    kind: AgentInvocationKind,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
@@ -60,7 +59,6 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
 
     let result = invoke_observed(
         lowered,
-        kind,
         &mut store,
         instance,
         component_metadata,
@@ -181,7 +179,6 @@ fn find_function<'a, Ctx: WorkerCtx>(
 /// Invokes a worker and calls the appropriate hooks to observe the invocation
 async fn invoke_observed<Ctx: WorkerCtx>(
     lowered: LoweredInvocation,
-    kind: AgentInvocationKind,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
@@ -224,6 +221,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     verify_agent_invocation(agent_id, &metadata)?;
 
+    let kind = lowered.kind;
     let call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
             invoke(
@@ -683,6 +681,8 @@ impl InvokeResult {
 /// names and parameter values needed by the wasmtime runtime.
 #[derive(Debug)]
 pub struct LoweredInvocation {
+    /// The kind of agent invocation this was lowered from
+    pub kind: AgentInvocationKind,
     /// The fully-qualified WIT function name used for dispatch and metadata lookup
     /// (e.g., "golem:agent/guest.{invoke}")
     pub wit_fqfn: String,
@@ -698,6 +698,7 @@ pub fn lower_invocation(
     component_metadata: &ComponentMetadata,
     agent_id: Option<&AgentId>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
+    let kind = invocation.kind();
     match invocation {
         AgentInvocation::AgentInitialization {
             input, principal, ..
@@ -714,6 +715,7 @@ pub fn lower_invocation(
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_default();
             Ok(LoweredInvocation {
+                kind,
                 wit_fqfn: initialize.name.to_string(),
                 display_name: "initialize".to_string(),
                 params: vec![
@@ -738,6 +740,7 @@ pub fn lower_invocation(
                     )
                 })?;
             Ok(LoweredInvocation {
+                kind,
                 wit_fqfn: invoke_fn.name.to_string(),
                 display_name: method_name.clone(),
                 params: vec![
@@ -760,6 +763,7 @@ pub fn lower_invocation(
                     )
                 })?;
             Ok(LoweredInvocation {
+                kind,
                 wit_fqfn: save_snapshot.name.to_string(),
                 display_name: "save-snapshot".to_string(),
                 params: vec![],
@@ -775,6 +779,7 @@ pub fn lower_invocation(
                     )
                 })?;
             Ok(LoweredInvocation {
+                kind,
                 wit_fqfn: load_snapshot.name.to_string(),
                 display_name: "load-snapshot".to_string(),
                 params: vec![snapshot.into_value()],
@@ -820,6 +825,7 @@ pub fn lower_invocation(
             );
 
             Ok(LoweredInvocation {
+                kind,
                 wit_fqfn: oplog_processor.name.to_string(),
                 display_name: "process-oplog-entries".to_string(),
                 params: vec![

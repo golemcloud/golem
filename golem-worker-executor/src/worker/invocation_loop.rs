@@ -514,7 +514,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_span: &Span,
     ) -> CommandOutcome {
         let display_name = invocation.display_name();
-        let kind = invocation.kind();
         let invocation_context = invocation.invocation_context();
         let idempotency_key = invocation
             .idempotency_key()
@@ -548,7 +547,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function = display_name
         );
 
-        self.invoke_agent_inner(invocation_context, idempotency_key, lowered, kind)
+        self.invoke_agent_inner(invocation_context, idempotency_key, lowered)
             .instrument(span)
             .await
     }
@@ -561,8 +560,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
         lowered: LoweredInvocation,
-        kind: AgentInvocationKind,
     ) -> CommandOutcome {
+        let kind = lowered.kind;
         let full_function_name = lowered.wit_fqfn.clone();
         let result = self
             .invoke_agent_with_context(
@@ -570,7 +569,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 idempotency_key,
                 &full_function_name,
                 lowered,
-                kind,
             )
             .await;
 
@@ -602,7 +600,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: &str,
         lowered: LoweredInvocation,
-        kind: AgentInvocationKind,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         self.store
             .data_mut()
@@ -636,7 +633,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let result = invoke_observed_and_traced(
             lowered,
-            kind,
             self.store,
             self.instance,
             &component_metadata,
@@ -762,7 +758,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
-        let kind = save_snapshot_invocation.kind();
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
@@ -784,7 +779,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let result = invoke_observed_and_traced(
             lowered,
-            kind,
             self.store,
             self.instance,
             &component_metadata,
@@ -972,7 +966,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key: IdempotencyKey::fresh(),
         };
-        let kind = save_snapshot_invocation.kind();
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
@@ -989,7 +982,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let result = invoke_observed_and_traced(
             lowered,
-            kind,
             self.store,
             self.instance,
             &component_metadata,

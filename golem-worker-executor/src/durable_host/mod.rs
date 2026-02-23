@@ -1016,7 +1016,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             idempotency_key,
                             snapshot: RawSnapshotData { data, mime_type },
                         };
-                        let kind = load_snapshot_invocation.kind();
                         let agent_id = store.as_context().data().agent_id();
                         let lowered = match lower_invocation(
                             load_snapshot_invocation,
@@ -1046,7 +1045,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
                         let load_result = invoke_observed_and_traced(
                             lowered,
-                            kind,
                             store,
                             instance,
                             &component_metadata,
@@ -1231,7 +1229,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
         };
-        let kind = load_snapshot_invocation.kind();
         let agent_id = store.as_context().data().agent_id();
         let lowered = match lower_invocation(
             load_snapshot_invocation,
@@ -1252,7 +1249,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
         let load_result = invoke_observed_and_traced(
             lowered,
-            kind,
             store,
             instance,
             &component_metadata,
@@ -2085,7 +2081,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .clone();
 
                         let agent_id = store.as_context().data().agent_id();
-                        let kind = agent_invocation.kind();
                         let lowered = lower_invocation(
                             agent_invocation,
                             &component_metadata,
@@ -2120,7 +2115,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .await?;
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
-                            kind,
                             store,
                             instance,
                             &component_metadata,
