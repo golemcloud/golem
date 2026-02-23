@@ -23,6 +23,7 @@ import {
   ClassDeclaration,
   PropertyDeclaration,
   Symbol as TsMorphSymbol,
+  Project,
 } from 'ts-morph';
 import {
   buildJSONFromType,
@@ -35,10 +36,11 @@ import {
 
 import * as fs from 'node:fs';
 import path from 'path';
+import { createWellKnownTypes, WellKnownTypes } from './wellknownTypes';
 
-export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean): Type.Type {
+export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean, wellKnownTypes: WellKnownTypes): Type.Type {
   try {
-    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+    return getTypeFromTsMorphInternal(tsMorphType, isOptional, wellKnownTypes, new Set());
   } catch (e) {
     if (e instanceof Error) {
       let error = e.message;
@@ -62,6 +64,7 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean
 function getTypeFromTsMorphInternal(
   tsMorphType: TsMorphType,
   isOptional: boolean,
+  wellKnownTypes: WellKnownTypes,
   visitedTypes: Set<TsMorphType>,
 ): Type.Type {
   const type = unwrapAlias(tsMorphType);
@@ -203,7 +206,7 @@ function getTypeFromTsMorphInternal(
 
   if (rawName === 'Promise' && type.getTypeArguments().length === 1) {
     const inner = type.getTypeArguments()[0];
-    const promiseType = getTypeFromTsMorphInternal(inner, false, visitedTypes);
+    const promiseType = getTypeFromTsMorphInternal(inner, false, wellKnownTypes, visitedTypes);
 
     return {
       kind: 'promise',
@@ -215,8 +218,8 @@ function getTypeFromTsMorphInternal(
 
   if (rawName === 'Map' && type.getTypeArguments().length === 2) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getTypeFromTsMorphInternal(keyT, false, new Set(visitedTypes));
-    const value = getTypeFromTsMorphInternal(valT, false, new Set(visitedTypes));
+    const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes,  new Set(visitedTypes));
+    const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes,  new Set(visitedTypes));
     return {
       kind: 'map',
       name: aliasName,
@@ -248,7 +251,7 @@ function getTypeFromTsMorphInternal(
   if (type.isTuple()) {
     const tupleElems = type
       .getTupleElements()
-      .map((el) => getTypeFromTsMorphInternal(el, false, new Set(visitedTypes)));
+      .map((el) => getTypeFromTsMorphInternal(el, false, wellKnownTypes, new Set(visitedTypes)));
 
     return {
       kind: 'tuple',
@@ -273,7 +276,7 @@ function getTypeFromTsMorphInternal(
       throw new Error('Array type without element type');
     }
 
-    const element = getTypeFromTsMorphInternal(resolvedElementType, false, visitedTypes);
+    const element = getTypeFromTsMorphInternal(resolvedElementType, false, wellKnownTypes, visitedTypes);
 
     return {
       kind: 'array',
@@ -290,12 +293,12 @@ function getTypeFromTsMorphInternal(
 
     const unionTypes = type
       .getUnionTypes()
-      .map((t) => getTypeFromTsMorphInternal(t, false, new Set(visitedTypes)));
+      .map((t) => getTypeFromTsMorphInternal(t, false, wellKnownTypes, new Set(visitedTypes)));
 
     const [aliasRawName, aliasedTypeArgs] = aliased;
 
     if (argsInternal.length > 0 || !aliasRawName) {
-      const args = argsInternal.map((arg) => getTypeFromTsMorph(arg, false));
+      const args = argsInternal.map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes));
 
       return {
         kind: 'union',
@@ -307,7 +310,7 @@ function getTypeFromTsMorphInternal(
       };
     }
 
-    const aliasedArgs = aliasedTypeArgs.map((arg) => getTypeFromTsMorph(arg, false));
+    const aliasedArgs = aliasedTypeArgs.map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes));
 
     return {
       kind: 'union',
@@ -323,7 +326,7 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'class',
       name: aliasName ?? rawName,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: propertiesAsSymbols(type, wellKnownTypes, visitedTypes),
       optional: isOptional,
     };
   }
@@ -332,19 +335,19 @@ function getTypeFromTsMorphInternal(
     return {
       kind: 'interface',
       name: aliasName ?? rawName,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: propertiesAsSymbols(type, wellKnownTypes, visitedTypes),
       optional: isOptional,
-      typeParams: type.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false)),
+      typeParams: type.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes)),
     };
   }
 
   if (type.isObject()) {
-    const args = tsMorphType.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false));
+    const args = tsMorphType.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes));
 
     return {
       kind: 'object',
       name: aliasName,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: propertiesAsSymbols(type, wellKnownTypes, visitedTypes),
       typeParams: args,
       optional: isOptional,
     };
@@ -458,12 +461,13 @@ export type ClassMetadataGenConfig = {
   excludeOverriddenMethods: boolean;
 };
 
-export function generateClassMetadata(classMetadataGenConfig: ClassMetadataGenConfig) {
-  updateMetadataFromSourceFiles(classMetadataGenConfig);
+export function generateClassMetadata(classMetadataGenConfig: ClassMetadataGenConfig, project: Project) {
+  updateMetadataFromSourceFiles(classMetadataGenConfig, project);
   return saveAndClearInMemoryMetadata();
 }
 
-export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetadataGenConfig) {
+export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetadataGenConfig, project: Project) {
+  const wellKnownTypes = createWellKnownTypes(project);
   for (const sourceFile of classMetadataGenConfig.sourceFiles) {
     const classes = sourceFile.getClasses();
 
@@ -490,7 +494,7 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
           ? []
           : publicConstructors[0].getParameters().map((p) => ({
               name: p.getName(),
-              type: getTypeFromTsMorph(p.getType(), p.isOptional()),
+              type: getTypeFromTsMorph(p.getType(), p.isOptional(), wellKnownTypes),
             }));
 
       const methods = new Map();
@@ -509,11 +513,11 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
 
         const methodParams = new Map(
           method.getParameters().map((p) => {
-            return [p.getName(), getTypeFromTsMorph(p.getType(), p.isOptional())];
+            return [p.getName(), getTypeFromTsMorph(p.getType(), p.isOptional(), wellKnownTypes)];
           }),
         );
 
-        const returnType = getTypeFromTsMorph(method.getReturnType(), false);
+        const returnType = getTypeFromTsMorph(method.getReturnType(), false, wellKnownTypes);
         methods.set(method.getName(), { methodParams, returnType });
       }
 
@@ -553,11 +557,11 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
             }
             const paramType = p.getTypeAtLocation(decl);
             const isOptional = TsMorphNode.isParameterDeclaration(decl) ? decl.isOptional() : false;
-            return [p.getName(), getTypeFromTsMorph(paramType, isOptional)];
+            return [p.getName(), getTypeFromTsMorph(paramType, isOptional, wellKnownTypes)];
           }),
         );
 
-        const returnType = getTypeFromTsMorph(callSignature.getReturnType(), false);
+        const returnType = getTypeFromTsMorph(callSignature.getReturnType(), false, wellKnownTypes);
         methods.set(publicArrow.getName(), { methodParams, returnType });
       }
 
@@ -674,13 +678,13 @@ export function loadTypeMetadataFromJsonFile() {
   TypeMetadata.loadFromJson(json);
 }
 
-function propertiesAsSymbols(type: TsMorphType, visitedTypes: Set<TsMorphType>): Symbol[] {
+function propertiesAsSymbols(type: TsMorphType, wellKnownTypes: WellKnownTypes,  visitedTypes: Set<TsMorphType>): Symbol[] {
   return type.getProperties().map((prop) => {
     const firstDeclaration = prop.getDeclarations()[0];
     // NOTE: falling back to firstDeclaration if no value declaration found,
     //       to support runtime generated or manipulated types
     const type = prop.getTypeAtLocation(getValueDeclaration(prop) ?? firstDeclaration);
-    const tsType = getTypeFromTsMorphInternal(type, false, new Set(visitedTypes));
+    const tsType = getTypeFromTsMorphInternal(type, false, wellKnownTypes, new Set(visitedTypes));
     const propName = prop.getName();
 
     if (

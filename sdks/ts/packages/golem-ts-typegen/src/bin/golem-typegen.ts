@@ -50,7 +50,7 @@ program
         excludeOverriddenMethods: options.excludeOverriddenMethods,
       };
 
-      updateMetadataFromSourceFiles(genConfig);
+      updateMetadataFromSourceFiles(genConfig, project);
 
       const result = TypeMetadata.getAll();
 
