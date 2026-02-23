@@ -190,5 +190,11 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         value: typeArgs[1],
         optional: json.optional,
       };
+      case 'principal':
+        return {
+          kind: 'principal',
+          name: json.name,
+          optional: json.optional,
+        };
   }
 }

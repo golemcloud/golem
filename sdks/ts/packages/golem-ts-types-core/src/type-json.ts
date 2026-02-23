@@ -87,6 +87,7 @@ export type LiteTypeJSON =
       optional: boolean;
     }
   | { kind: 'others'; name?: string; optional: boolean; recursive: boolean }
+  | { kind: 'principal'; name?: string; optional: boolean; }
   | {
       kind: 'unresolved-type';
       name?: string;

@@ -31,12 +31,17 @@ export interface WellKnownTypes {
     map: WellKnown;
     typedArrays: Map<string, WellKnown>;
   };
+  sdk: {
+    principal: WellKnown
+  }
 }
 
 export function createWellKnownTypes(project: Project): WellKnownTypes {
   const sf = project.createSourceFile(
     "__golem_well_known_types__.ts",
     `
+      import { Principal } from '@golemcloud/golem-ts-sdk';
+
       let _object!: Object;
 
       let _promise!: Promise<any>;
@@ -52,6 +57,8 @@ export function createWellKnownTypes(project: Project): WellKnownTypes {
       let _Uint32Array!: Uint32Array;
       let _BigInt64Array!: BigInt64Array;
       let _BigUint64Array!: BigUint64Array;
+
+      let _principal!: Principal;
     `,
     { overwrite: true }
   );
@@ -73,9 +80,14 @@ export function createWellKnownTypes(project: Project): WellKnownTypes {
     ]),
   };
 
+  const sdk = {
+    principal: getWellKnownFromVar(sf, "_principal"),
+  };
+
   return {
     object: getWellKnownFromVar(sf, "_object"),
     containers,
+    sdk
   };
 }
 

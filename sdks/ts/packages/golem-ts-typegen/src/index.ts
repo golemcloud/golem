@@ -36,7 +36,8 @@ import {
 
 import * as fs from 'node:fs';
 import path from 'path';
-import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownTypes';
+
+import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownTypes.js';
 
 export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean, wellKnownTypes: WellKnownTypes): Type.Type {
   try {
@@ -138,6 +139,14 @@ function getTypeFromTsMorphInternal(
       name: aliasName,
       key: key,
       value: value,
+      optional: isOptional,
+    };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.principal)) {
+    return {
+      kind: 'principal',
+      name: aliasName,
       optional: isOptional,
     };
   }
