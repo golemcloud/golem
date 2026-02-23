@@ -31,16 +31,16 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
     DeserializationContext, SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::{FromValue, IntoValue, NodeIndex, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
-use sqlx::postgres::PgTypeKind;
 use sqlx::ValueRef;
+use sqlx::postgres::PgTypeKind;
+use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -49,11 +49,11 @@ use std::ops::Bound;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
+use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
 use wasmtime_wasi::p2::{FsError, SocketError};
-use wasmtime_wasi::StreamError;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
@@ -237,7 +237,7 @@ impl BinaryDeserializer for SerializableFsErrorCode {
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableFsErrorCode: {other}"
-                )))
+                )));
             }
         };
         Ok(SerializableFsErrorCode(error_code))
@@ -534,7 +534,7 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableSocketErrorCode: {other}"
-                )))
+                )));
             }
         };
         Ok(SerializableSocketErrorCode(error_code))

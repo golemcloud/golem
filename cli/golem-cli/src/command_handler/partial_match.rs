@@ -175,9 +175,7 @@ impl ErrorHandler {
 
                     if let Some((agent_id, agent_type)) = agent_id.as_ref() {
                         log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                            &component,
-                            agent_id,
-                            agent_type,
+                            &component, agent_id, agent_type,
                         ));
                     }
                     logln("");

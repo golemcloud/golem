@@ -18,18 +18,18 @@ use super::{
     QueryVariable, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
+use crate::model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
     AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
     BinaryType, ComponentModelElementSchema, ComponentModelElementValue, DataSchema, DataValue,
     ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
-    NamedElementValue, NamedElementValues,
-    RegisteredAgentType, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue, UntypedDataValue,
-    UntypedElementValue, UntypedNamedElementValue, Url,
+    NamedElementValue, NamedElementValues, RegisteredAgentType, Snapshotting, SnapshottingConfig,
+    SnapshottingEveryNInvocation, SnapshottingPeriodic, TextDescriptor, TextReference,
+    TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
+    UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+    Url,
 };
-use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
 
@@ -465,16 +465,28 @@ impl ElementValue {
                 ElementSchema::ComponentModel(component_model_schema),
             ) => {
                 let typ: AnalysedType = component_model_schema.element_type;
-                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(value, typ) }))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(value, typ),
+                }))
             }
             (
                 UntypedElementValue::UnstructuredText(text_ref),
                 ElementSchema::UnstructuredText(descriptor),
-            ) => Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text_ref.value, descriptor })),
+            ) => Ok(ElementValue::UnstructuredText(
+                UnstructuredTextElementValue {
+                    value: text_ref.value,
+                    descriptor,
+                },
+            )),
             (
                 UntypedElementValue::UnstructuredBinary(binary_ref),
                 ElementSchema::UnstructuredBinary(descriptor),
-            ) => Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: binary_ref.value, descriptor })),
+            ) => Ok(ElementValue::UnstructuredBinary(
+                UnstructuredBinaryElementValue {
+                    value: binary_ref.value,
+                    descriptor,
+                },
+            )),
             _ => Err("Element value does not match schema".to_string()),
         }
     }

@@ -107,9 +107,13 @@ async fn get_oplog_1(
     let invoke_count = oplog
         .iter()
         .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(
-                AgentInvocationStartedParams { invocation: PublicAgentInvocation::AgentMethodInvocation(_), .. }
-            ))
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                    invocation: PublicAgentInvocation::AgentMethodInvocation(_),
+                    ..
+                })
+            )
         })
         .count();
     assert!(

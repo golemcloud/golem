@@ -286,8 +286,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
 
-        let proto_mode: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode =
-            mode.into();
+        let proto_mode: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode = mode.into();
         let proto_mode = proto_mode as i32;
 
         let proto_schedule_at = schedule_at.map(|dt| prost_types::Timestamp {

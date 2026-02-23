@@ -19,7 +19,9 @@ use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
@@ -44,8 +46,6 @@ use golem_common::model::oplog::{
     RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
     UpdateDescription,
 };
-use golem_common::model::agent::{DataValue, ElementValues};
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{
     AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedWorkerId, WorkerId,
 };
@@ -291,15 +291,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     other => other,
                 };
 
-                Ok(PublicOplogEntry::HostCall(
-                    HostCallParams {
-                        timestamp,
-                        function_name: function_name.to_string(),
-                        request: host_request.into_value_and_type(),
-                        response: host_response.into_value_and_type(),
-                        durable_function_type: durable_function_type.into(),
-                    },
-                ))
+                Ok(PublicOplogEntry::HostCall(HostCallParams {
+                    timestamp,
+                    function_name: function_name.to_string(),
+                    request: host_request.into_value_and_type(),
+                    response: host_response.into_value_and_type(),
+                    durable_function_type: durable_function_type.into(),
+                }))
             }
             OplogEntry::AgentInvocationStarted {
                 timestamp,
@@ -313,8 +311,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .download_payload(owned_worker_id, payload)
                     .await?;
 
-                let invocation_context_stack =
-                    InvocationContextStack::from_oplog_data(trace_id, trace_states, invocation_context);
+                let invocation_context_stack = InvocationContextStack::from_oplog_data(
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                );
                 let invocation = AgentInvocation::from_parts(
                     idempotency_key,
                     invocation_payload,
@@ -861,9 +862,7 @@ async fn agent_invocation_to_public(
         AgentInvocation::ManualUpdate { target_revision } => Ok(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
-        AgentInvocation::SaveSnapshot { .. } => {
-            Ok(PublicAgentInvocation::SaveSnapshot(Empty {}))
-        }
+        AgentInvocation::SaveSnapshot { .. } => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
         AgentInvocation::LoadSnapshot { .. } => {
             // TODO: implement properly
             todo!("LoadSnapshot public oplog conversion not yet implemented")
@@ -891,7 +890,9 @@ async fn agent_invocation_result_to_public(
             let _ = output;
 
             Ok(PublicAgentInvocationResult::AgentInitialization(
-                AgentInvocationOutputParameters { output: output_data },
+                AgentInvocationOutputParameters {
+                    output: output_data,
+                },
             ))
         }
         AgentInvocationResult::AgentMethod { output } => {
@@ -900,7 +901,9 @@ async fn agent_invocation_result_to_public(
             let _ = output;
 
             Ok(PublicAgentInvocationResult::AgentMethod(
-                AgentInvocationOutputParameters { output: output_data },
+                AgentInvocationOutputParameters {
+                    output: output_data,
+                },
             ))
         }
         AgentInvocationResult::ManualUpdate => {
@@ -909,16 +912,14 @@ async fn agent_invocation_result_to_public(
         AgentInvocationResult::LoadSnapshot { error } => Ok(
             PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }),
         ),
-        AgentInvocationResult::SaveSnapshot { snapshot } => {
-            Ok(PublicAgentInvocationResult::SaveSnapshot(
-                SaveSnapshotResultParameters {
-                    snapshot: PublicSnapshotData::Raw(RawSnapshotData {
-                        data: snapshot.data,
-                        mime_type: snapshot.mime_type,
-                    }),
-                },
-            ))
-        }
+        AgentInvocationResult::SaveSnapshot { snapshot } => Ok(
+            PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
+                snapshot: PublicSnapshotData::Raw(RawSnapshotData {
+                    data: snapshot.data,
+                    mime_type: snapshot.mime_type,
+                }),
+            }),
+        ),
         AgentInvocationResult::ProcessOplogEntries { error } => Ok(
             PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters { error }),
         ),

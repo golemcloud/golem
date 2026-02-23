@@ -18,32 +18,32 @@ use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::model::agent::AgentId;
+use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
+use golem_common::model::oplog::RawSnapshotData;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
-use golem_common::model::OplogIndex;
+use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
-use golem_wasm::Value;
-use tracing::{debug, error, Instrument};
+use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
+use golem_wasm::{FromValue, IntoValue, Value};
+use tracing::{Instrument, debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContext, AsContextMut, StoreContextMut};
-use wasmtime_wasi_http::bindings::Proxy;
 use wasmtime_wasi_http::WasiHttpView;
+use wasmtime_wasi_http::bindings::Proxy;
 
 /// Invokes a function on a worker.
 ///
 /// The context is held until the invocation finishes
 ///
 /// Arguments:
-/// - `full_function_name`: the name of the function to invoke, including the interface name if applicable
-/// - `function_input`: the input parameters for the function
+/// - `invocation`: the agent invocation describing what to invoke
 /// - `store`: reference to the wasmtime instance's store
 /// - `instance`: reference to the wasmtime instance
 pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
-    full_function_name: String,
-    function_input: Vec<Value>,
+    invocation: &AgentInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
@@ -52,11 +52,10 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    debug!("Beginning invocation {full_function_name}");
+    debug!("Beginning invocation {invocation:?}");
 
     let result = invoke_observed(
-        full_function_name.clone(),
-        function_input,
+        invocation,
         &mut store,
         instance,
         component_metadata,
@@ -176,14 +175,16 @@ fn find_function<'a, Ctx: WorkerCtx>(
 
 /// Invokes a worker and calls the appropriate hooks to observe the invocation
 async fn invoke_observed<Ctx: WorkerCtx>(
-    full_function_name: String,
-    function_input: Vec<Value>,
+    invocation: &AgentInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
     is_live: bool,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
+
+    let (full_function_name, function_input) =
+        extract_function_name_and_input(invocation, component_metadata)?;
 
     let parsed = ParsedFunctionName::parse(&full_function_name).map_err(|err| {
         WorkerExecutorError::invalid_request(format!(
@@ -225,15 +226,23 @@ async fn invoke_observed<Ctx: WorkerCtx>(
                 decoded_params,
                 &full_function_name,
                 &metadata,
+                invocation,
             )
             .await
         }
         FindFunctionResult::ResourceDrop => {
             // Special function: drop
-            drop_resource(&mut store, &function_input, &full_function_name).await
+            drop_resource(&mut store, &function_input, &full_function_name, invocation).await
         }
         FindFunctionResult::IncomingHttpHandlerBridge => {
-            invoke_http_handler(&mut store, instance, &function_input, &full_function_name).await
+            invoke_http_handler(
+                &mut store,
+                instance,
+                &function_input,
+                &full_function_name,
+                invocation,
+            )
+            .await
         }
     };
 
@@ -252,9 +261,9 @@ fn verify_agent_invocation(
                 // interface_name is the kebab-cased agent type name from the static wrapper
                 let agent_type = agent_id.wrapper_agent_type();
                 if interface_name != agent_type {
-                    Err(WorkerExecutorError::invalid_request(
-                        format!("Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}")
-                    ))
+                    Err(WorkerExecutorError::invalid_request(format!(
+                        "Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}"
+                    )))
                 } else {
                     // matching names
                     Ok(())
@@ -346,6 +355,7 @@ async fn invoke<Ctx: WorkerCtx>(
     decoded_function_input: Vec<DecodeParamResult>,
     raw_function_name: &str,
     metadata: &InvokableFunction,
+    invocation: &AgentInvocation,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -373,20 +383,24 @@ async fn invoke<Ctx: WorkerCtx>(
                     "Function returned with more than one values, which is not supported",
                 ))
             } else {
-                match results
+                let output = match results
                     .iter()
                     .zip(types.iter())
                     .zip(metadata.analysed_export.result.as_ref().map(|r| &r.typ))
                     .next()
                 {
-                    Some(((val, typ), analysed_type)) => {
-                        let output = encode_output(val, typ, analysed_type, store.data_mut())
+                    Some(((val, typ), analysed_type)) => Some(
+                        encode_output(val, typ, analysed_type, store.data_mut())
                             .await
-                            .map_err(WorkerExecutorError::from)?;
-                        Ok(InvokeResult::from_success(consumed_fuel, Some(output)))
-                    }
-                    None => Ok(InvokeResult::from_success(consumed_fuel, None)),
-                }
+                            .map_err(WorkerExecutorError::from)?,
+                    ),
+                    None => None,
+                };
+                let result = wrap_output_as_agent_result(invocation, output)?;
+                Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result,
+                })
             }
         }
         Err(err) => {
@@ -405,6 +419,7 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
     instance: &wasmtime::component::Instance,
     function_input: &[Value],
     raw_function_name: &str,
+    invocation: &AgentInvocation,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
 
@@ -485,7 +500,13 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
             .await?;
 
     match res_or_error {
-        Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, Some(resp))),
+        Ok(resp) => {
+            let result = wrap_output_as_agent_result(invocation, Some(resp))?;
+            Ok(InvokeResult::Succeeded {
+                consumed_fuel,
+                result,
+            })
+        }
         Err(e) => {
             let retry_from = store.as_context().data().get_current_retry_point().await;
             Ok(InvokeResult::from_error::<Ctx>(
@@ -501,6 +522,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     function_input: &[Value],
     raw_function_name: &str,
+    invocation: &AgentInvocation,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -518,7 +540,13 @@ async fn drop_resource<Ctx: WorkerCtx>(
         let consumed_fuel = store.data_mut().return_fuel(current_fuel_level);
 
         match result {
-            Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, None)),
+            Ok(_) => {
+                let result = wrap_output_as_agent_result(invocation, None)?;
+                Ok(InvokeResult::Succeeded {
+                    consumed_fuel,
+                    result,
+                })
+            }
             Err(err) => {
                 let retry_from = store.data().get_current_retry_point().await;
                 Ok(InvokeResult::from_error::<Ctx>(
@@ -529,7 +557,11 @@ async fn drop_resource<Ctx: WorkerCtx>(
             }
         }
     } else {
-        Ok(InvokeResult::from_success(0, None))
+        let result = wrap_output_as_agent_result(invocation, None)?;
+        Ok(InvokeResult::Succeeded {
+            consumed_fuel: 0,
+            result,
+        })
     }
 }
 
@@ -604,7 +636,7 @@ pub enum InvokeResult {
     /// The invoked function succeeded and produced a result
     Succeeded {
         consumed_fuel: u64,
-        output: Option<Value>,
+        result: AgentInvocationResult,
     },
     /// The function was running but got interrupted
     Interrupted {
@@ -614,13 +646,6 @@ pub enum InvokeResult {
 }
 
 impl InvokeResult {
-    pub fn from_success(consumed_fuel: u64, output: Option<Value>) -> Self {
-        InvokeResult::Succeeded {
-            consumed_fuel,
-            output,
-        }
-    }
-
     pub fn from_error<Ctx: WorkerCtx>(
         consumed_fuel: u64,
         error: &anyhow::Error,
@@ -663,6 +688,156 @@ impl InvokeResult {
             InvokeResult::Exited { .. } => Some(TrapType::Exit),
             _ => None,
         }
+    }
+}
+
+/// Extracts the low-level wasm function name and input parameters from an `AgentInvocation`.
+///
+/// This is the single place that maps high-level agent invocations to the raw wasm function
+/// names and parameter values needed by the wasmtime runtime.
+fn extract_function_name_and_input(
+    invocation: &AgentInvocation,
+    component_metadata: &ComponentMetadata,
+) -> Result<(String, Vec<Value>), WorkerExecutorError> {
+    match invocation {
+        AgentInvocation::AgentInitialization { input, .. } => {
+            let initialize = component_metadata
+                .agent_initialize()
+                .map_err(WorkerExecutorError::runtime)?
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "agent initialize function not found in component".to_string(),
+                    )
+                })?;
+            Ok((
+                initialize.name.to_string(),
+                vec![input.clone().into_value()],
+            ))
+        }
+        AgentInvocation::AgentMethod {
+            method_name, input, ..
+        } => Ok((method_name.clone(), vec![input.clone().into_value()])),
+        AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
+            "ManualUpdate should not be invoked as a wasm function directly".to_string(),
+        )),
+        AgentInvocation::SaveSnapshot { .. } => {
+            let save_snapshot = component_metadata
+                .save_snapshot()
+                .map_err(WorkerExecutorError::runtime)?
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "save-snapshot function not found in component".to_string(),
+                    )
+                })?;
+            Ok((save_snapshot.name.to_string(), vec![]))
+        }
+        AgentInvocation::LoadSnapshot { snapshot, .. } => {
+            let load_snapshot = component_metadata
+                .load_snapshot()
+                .map_err(WorkerExecutorError::runtime)?
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "load-snapshot function not found in component".to_string(),
+                    )
+                })?;
+            Ok((
+                load_snapshot.name.to_string(),
+                vec![snapshot.clone().into_value()],
+            ))
+        }
+        AgentInvocation::ProcessOplogEntries { .. } => {
+            // ProcessOplogEntries stores Vec<OplogEntry> (internal format), but the WIT
+            // oplog-processor.process function expects PublicOplogEntry values.
+            // The conversion from OplogEntry to PublicOplogEntry is async and requires
+            // services, so it must happen before constructing this AgentInvocation variant.
+            // Currently, plugin.rs handles this conversion and invokes the worker directly.
+            Err(WorkerExecutorError::invalid_request(
+                "ProcessOplogEntries cannot be invoked through the normal invocation pipeline; \
+                 entries must be converted to PublicOplogEntry first"
+                    .to_string(),
+            ))
+        }
+    }
+}
+
+/// Wraps raw wasm output into the appropriate `AgentInvocationResult` variant
+/// based on the type of `AgentInvocation`.
+fn wrap_output_as_agent_result(
+    invocation: &AgentInvocation,
+    output: Option<Value>,
+) -> Result<AgentInvocationResult, WorkerExecutorError> {
+    match invocation {
+        AgentInvocation::AgentInitialization { .. } => {
+            let data = match output {
+                Some(v) => UntypedDataValue::from_value(v).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to convert agent initialization result: {e}"
+                    ))
+                })?,
+                None => UntypedDataValue::Tuple(vec![]),
+            };
+            Ok(AgentInvocationResult::AgentInitialization { output: data })
+        }
+        AgentInvocation::AgentMethod { .. } => {
+            let data = match output {
+                Some(v) => UntypedDataValue::from_value(v).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to convert agent method result: {e}"
+                    ))
+                })?,
+                None => UntypedDataValue::Tuple(vec![]),
+            };
+            Ok(AgentInvocationResult::AgentMethod { output: data })
+        }
+        AgentInvocation::ManualUpdate { .. } => Ok(AgentInvocationResult::ManualUpdate),
+        AgentInvocation::SaveSnapshot { .. } => {
+            let snapshot = match output {
+                Some(v) => RawSnapshotData::from_value(v).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Invalid result from save-snapshot function: {e}"
+                    ))
+                })?,
+                None => {
+                    return Err(WorkerExecutorError::runtime(
+                        "Missing result from save-snapshot function",
+                    ));
+                }
+            };
+            Ok(AgentInvocationResult::SaveSnapshot { snapshot })
+        }
+        AgentInvocation::LoadSnapshot { .. } => {
+            let error = decode_result_error(output, "load-snapshot")?;
+            Ok(AgentInvocationResult::LoadSnapshot { error })
+        }
+        AgentInvocation::ProcessOplogEntries { .. } => {
+            let error = decode_result_error(output, "process-oplog-entries")?;
+            Ok(AgentInvocationResult::ProcessOplogEntries { error })
+        }
+    }
+}
+
+/// Decodes the output of a WIT function that returns `result<_, string>`.
+/// Returns `Ok(None)` if the result was Ok, `Ok(Some(error))` if it was Err(string),
+/// or `Err` if the output couldn't be decoded.
+fn decode_result_error(
+    output: Option<Value>,
+    function_name: &str,
+) -> Result<Option<String>, WorkerExecutorError> {
+    match output {
+        Some(value) => {
+            let result: Result<(), String> = FromValue::from_value(value).map_err(|e| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to decode result from {function_name} function: {e}"
+                ))
+            })?;
+            match result {
+                Ok(()) => Ok(None),
+                Err(error) => Ok(Some(error)),
+            }
+        }
+        None => Err(WorkerExecutorError::runtime(format!(
+            "Unexpected empty result from {function_name} function"
+        ))),
     }
 }
 

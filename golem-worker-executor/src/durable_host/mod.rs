@@ -40,6 +40,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
+use crate::services::HasOplogService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -57,12 +58,11 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::HasOplogService;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
 use crate::wasi_host;
-use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
+use crate::worker::invocation::{InvokeResult, invoke_observed_and_traced};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
-use crate::worker::{interpret_function_result, RetryDecision, Worker};
+use crate::worker::{RetryDecision, Worker, interpret_function_result};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
@@ -73,11 +73,14 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 pub use durability::*;
-use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use futures::future::try_join_all;
+use golem_common::model::RetryConfig;
+use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
@@ -88,13 +91,10 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry, OplogIndex,
-    PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-    WorkerResourceId,
+    PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
+    WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::RetryConfig;
-use golem_common::model::TransactionId;
-use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::{
     AgentInvocation, AgentInvocationPayload, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
     ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
@@ -106,7 +106,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, Value, ValueAndType};
+use golem_wasm::{IntoValue, Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -118,7 +118,7 @@ use std::vec;
 use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tracing::{debug, info, span, warn, Instrument, Level};
+use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -128,7 +128,7 @@ use wasmtime_wasi::p2::{FsResult, Stderr, Stdout, WasiCtx, WasiImpl, WasiView};
 use wasmtime_wasi::{I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
+    HostFutureIncomingResponse, OutgoingRequestConfig, default_send_request,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
@@ -575,7 +575,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     match lookup_result {
                         OplogEntryLookupResult::Found { index, .. } => {
-                            debug!("Remote write operation {begin_index} already completed at {index}, continue replaying");
+                            debug!(
+                                "Remote write operation {begin_index} already completed at {index}, continue replaying"
+                            );
                             Ok(begin_index)
                         }
                         OplogEntryLookupResult::NotFound {
@@ -996,81 +998,63 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .metadata
                             .clone();
 
-                        let failed = match component_metadata.load_snapshot() {
-                            Ok(Some(load_snapshot)) => {
-                                let idempotency_key = IdempotencyKey::fresh();
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .durable_ctx_mut()
-                                    .set_current_idempotency_key(idempotency_key.clone())
-                                    .await;
+                        let idempotency_key = IdempotencyKey::fresh();
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .set_current_idempotency_key(idempotency_key.clone())
+                            .await;
 
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .begin_call_snapshotting_function();
+                        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+                            idempotency_key,
+                            snapshot: RawSnapshotData { data, mime_type },
+                        };
 
-                                let load_result = invoke_observed_and_traced(
-                                    load_snapshot.name.to_string(),
-                                    vec![Value::Record(vec![
-                                        Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
-                                        Value::String(mime_type),
-                                    ])],
-                                    store,
-                                    instance,
-                                    &component_metadata,
-                                    true,
-                                )
-                                .await;
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .begin_call_snapshotting_function();
 
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .end_call_snapshotting_function();
+                        let load_result = invoke_observed_and_traced(
+                            &load_snapshot_invocation,
+                            store,
+                            instance,
+                            &component_metadata,
+                            true,
+                        )
+                        .await;
 
-                                match load_result {
-                                    Err(error) => Some(format!(
-                                        "Manual update failed to load snapshot: {error}"
-                                    )),
-                                    Ok(InvokeResult::Failed { error, .. }) => {
-                                        let stderr = store
-                                            .as_context()
-                                            .data()
-                                            .get_public_state()
-                                            .event_service()
-                                            .get_last_invocation_errors();
-                                        let error = error.to_string(&stderr);
-                                        Some(format!(
-                                            "Manual update failed to load snapshot: {error}"
-                                        ))
-                                    }
-                                    Ok(InvokeResult::Succeeded { output, .. }) => {
-                                        if let Some(output) = output {
-                                            match output {
-                                                Value::Result(Err(Some(boxed_error_value))) => {
-                                                    match &*boxed_error_value {
-                                                        Value::String(error) =>
-                                                            Some(format!("Manual update failed to load snapshot: {error}")),
-                                                        _ =>
-                                                            Some("Unexpected result value from the snapshot load function".to_string())
-                                                    }
-                                                }
-                                                _ => None
-                                            }
-                                        } else {
-                                            Some("Unexpected result value from the snapshot load function".to_string())
-                                        }
-                                    }
-                                    _ => None,
-                                }
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .end_call_snapshotting_function();
+
+                        let failed = match load_result {
+                            Err(error) => {
+                                Some(format!("Manual update failed to load snapshot: {error}"))
                             }
-                            Ok(None) => {
-                                Some("Failed to find exported load-snapshot function".to_string())
+                            Ok(InvokeResult::Failed { error, .. }) => {
+                                let stderr = store
+                                    .as_context()
+                                    .data()
+                                    .get_public_state()
+                                    .event_service()
+                                    .get_last_invocation_errors();
+                                let error = error.to_string(&stderr);
+                                Some(format!("Manual update failed to load snapshot: {error}"))
                             }
-                            Err(err) => Some(format!(
-                                "Failed to find exported load-snapshot function: {err}"
-                            )),
+                            Ok(InvokeResult::Succeeded {
+                                result: AgentInvocationResult::LoadSnapshot { error },
+                                ..
+                            }) => {
+                                error.map(|e| format!("Manual update failed to load snapshot: {e}"))
+                            }
+                            Ok(InvokeResult::Succeeded { .. }) => Some(
+                                "Unexpected result value from the snapshot load function"
+                                    .to_string(),
+                            ),
+                            _ => None,
                         };
 
                         if let Some(error) = failed {
@@ -1123,7 +1107,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                 }
             }
             _ => {
-                panic!("`finalize_pending_snapshot_update` can only be called with a snapshot update description")
+                panic!(
+                    "`finalize_pending_snapshot_update` can only be called with a snapshot update description"
+                )
             }
         }
     }
@@ -1159,7 +1145,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                 data, mime_type, ..
             } => (data, mime_type),
             _ => {
-                warn!("Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay");
+                warn!(
+                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                );
                 store
                     .as_context_mut()
                     .data_mut()
@@ -1202,34 +1190,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .metadata
             .clone();
 
-        let load_snapshot_fn = match component_metadata.load_snapshot() {
-            Ok(Some(f)) => f,
-            Ok(None) => {
-                warn!("Component does not export load-snapshot; falling back to full replay");
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .drop_override_and_restart()
-                    .await;
-                return SnapshotRecoveryResult::NotAttempted;
-            }
-            Err(err) => {
-                warn!("Failed to find load-snapshot function: {err}; falling back to full replay");
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .drop_override_and_restart()
-                    .await;
-                return SnapshotRecoveryResult::NotAttempted;
-            }
-        };
-
         let idempotency_key = IdempotencyKey::fresh();
         store
             .as_context_mut()
@@ -1238,17 +1198,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key.clone())
             .await;
 
+        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+            idempotency_key,
+            snapshot: RawSnapshotData { data, mime_type },
+        };
+
         store
             .as_context_mut()
             .data_mut()
             .begin_call_snapshotting_function();
 
         let load_result = invoke_observed_and_traced(
-            load_snapshot_fn.name.to_string(),
-            vec![Value::Record(vec![
-                Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
-                Value::String(mime_type),
-            ])],
+            &load_snapshot_invocation,
             store,
             instance,
             &component_metadata,
@@ -1277,22 +1238,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     "Snapshot recovery failed to load snapshot: {error}"
                 ))
             }
-            Ok(InvokeResult::Succeeded { output, .. }) => {
-                if let Some(output) = output {
-                    match output {
-                        Value::Result(Err(Some(boxed_error_value))) => match &*boxed_error_value {
-                            Value::String(error) => Some(format!(
-                                "Snapshot recovery load-snapshot returned error: {error}"
-                            )),
-                            _ => Some(
-                                "Unexpected result value from load-snapshot function".to_string(),
-                            ),
-                        },
-                        _ => None,
-                    }
-                } else {
-                    Some("Unexpected empty result from load-snapshot function".to_string())
-                }
+            Ok(InvokeResult::Succeeded {
+                result: AgentInvocationResult::LoadSnapshot { error },
+                ..
+            }) => error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}")),
+            Ok(InvokeResult::Succeeded { .. }) => {
+                Some("Unexpected result value from load-snapshot function".to_string())
             }
             Ok(_) => Some("Snapshot recovery interrupted".to_string()),
         };
@@ -1693,9 +1644,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     output: UntypedDataValue::Tuple(
                         output
                             .as_ref()
-                            .map(|vat| {
-                                vec![UntypedElementValue::ComponentModel(vat.value.clone())]
-                            })
+                            .map(|vat| vec![UntypedElementValue::ComponentModel(vat.value.clone())])
                             .unwrap_or_default(),
                     ),
                 };
@@ -1741,9 +1690,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         match untyped {
                             UntypedDataValue::Tuple(elements) => {
                                 elements.first().and_then(|elem| match elem {
-                                    UntypedElementValue::ComponentModel(v) => output.as_ref().map(|vat| {
-                                        ValueAndType::new(v.clone(), vat.typ.clone())
-                                    }),
+                                    UntypedElementValue::ComponentModel(v) => output
+                                        .as_ref()
+                                        .map(|vat| ValueAndType::new(v.clone(), vat.typ.clone())),
                                     _ => None,
                                 })
                             }
@@ -2110,6 +2059,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         let (function_name, function_input) =
                             extract_function_name_and_input(&invocation_payload);
 
+                        let agent_invocation = AgentInvocation::from_parts(
+                            idempotency_key.clone(),
+                            invocation_payload,
+                            invocation_context.clone(),
+                        );
+
                         store
                             .as_context_mut()
                             .data_mut()
@@ -2145,8 +2100,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                         let full_function_name = function_name.to_string();
                         let invoke_result = invoke_observed_and_traced(
-                            full_function_name.clone(),
-                            function_input.clone(),
+                            &agent_invocation,
                             store,
                             instance,
                             &component_metadata,
@@ -2168,9 +2122,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                output,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
+                                let output = invocation_result.into_raw_output();
                                 let component_metadata =
                                     store.as_context().data().component_metadata();
 
@@ -2270,7 +2225,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 TrapType::Exit => {
                                                     break Err(WorkerExecutorError::runtime(
                                                         "Process exited",
-                                                    ))
+                                                    ));
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -2411,7 +2366,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 )
                                                 .await;
 
-                                            debug!("Retrying prepare_instance after failed update attempt");
+                                            debug!(
+                                                "Retrying prepare_instance after failed update attempt"
+                                            );
 
                                             Ok(Some(RetryDecision::Immediate))
                                         }
@@ -2818,8 +2775,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
             Some((
                 _,
                 OplogEntry::AgentInvocationStarted {
-                    idempotency_key,
-                    ..
+                    idempotency_key, ..
                 },
             )) => match &first_seen_invocation {
                 None => {
@@ -2829,9 +2785,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                         break;
                     };
                 }
-                Some(expected_idempotency_key)
-                    if idempotency_key == expected_idempotency_key =>
-                {
+                Some(expected_idempotency_key) if idempotency_key == expected_idempotency_key => {
                     stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
                     if stderr_entries.len() >= max_count {
                         break;
@@ -2855,40 +2809,17 @@ fn extract_function_name_and_input(
     invocation_payload: &AgentInvocationPayload,
 ) -> (String, Vec<Value>) {
     match invocation_payload {
-        AgentInvocationPayload::AgentInitialization { input } => {
-            let function_input = match input {
-                UntypedDataValue::Tuple(elements) => elements
-                    .iter()
-                    .filter_map(|e| match e {
-                        UntypedElementValue::ComponentModel(v) => Some(v.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => vec![],
-            };
-            ("golem:agent/guest.{initialize}".to_string(), function_input)
-        }
+        AgentInvocationPayload::AgentInitialization { input } => (
+            "golem:agent/guest.{initialize}".to_string(),
+            vec![input.clone().into_value()],
+        ),
         AgentInvocationPayload::AgentMethod {
             method_name, input, ..
-        } => {
-            let function_input = match input {
-                UntypedDataValue::Tuple(elements) => elements
-                    .iter()
-                    .filter_map(|e| match e {
-                        UntypedElementValue::ComponentModel(v) => Some(v.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => vec![],
-            };
-            (method_name.clone(), function_input)
-        }
+        } => (method_name.clone(), vec![input.clone().into_value()]),
         AgentInvocationPayload::ManualUpdate { .. }
         | AgentInvocationPayload::LoadSnapshot { .. }
         | AgentInvocationPayload::SaveSnapshot
-        | AgentInvocationPayload::ProcessOplogEntries { .. } => {
-            (String::new(), vec![])
-        }
+        | AgentInvocationPayload::ProcessOplogEntries { .. } => (String::new(), vec![]),
     }
 }
 

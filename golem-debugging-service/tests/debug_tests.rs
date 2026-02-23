@@ -479,9 +479,7 @@ async fn test_playback_with_overrides(
     let original_list_entry =
         &workflow_result.oplogs[u64::from(workflow_result.list_boundary) as usize - 1];
     let original_result = match &original_list_entry.entry {
-        PublicOplogEntry::AgentInvocationFinished(completed) => completed
-            .result
-            .clone(),
+        PublicOplogEntry::AgentInvocationFinished(completed) => completed.result.clone(),
         _ => panic!("Expected AgentInvocationFinished at list boundary"),
     };
 

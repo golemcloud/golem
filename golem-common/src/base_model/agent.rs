@@ -513,7 +513,9 @@ impl DataValue {
         match self {
             DataValue::Tuple(mut elements) if elements.elements.len() == 1 => {
                 match elements.elements.remove(0) {
-                    ElementValue::ComponentModel(ComponentModelElementValue { value }) => Some(value.value),
+                    ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                        Some(value.value)
+                    }
                     _ => None,
                 }
             }
@@ -523,21 +525,30 @@ impl DataValue {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
 pub enum UntypedDataValue {
     Tuple(Vec<UntypedElementValue>),
     Multimodal(Vec<UntypedNamedElementValue>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
 pub struct UntypedNamedElementValue {
     pub name: String,
     pub value: UntypedElementValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
 pub enum UntypedElementValue {
     ComponentModel(Value),
     UnstructuredText(TextReferenceValue),
@@ -800,16 +811,28 @@ impl ElementValue {
                             errors.join(", ")
                         )
                     })?;
-                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: value_and_type }))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: value_and_type,
+                }))
             }
             (
                 UntypedJsonElementValue::UnstructuredText(text),
                 ElementSchema::UnstructuredText(descriptor),
-            ) => Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text.value, descriptor })),
+            ) => Ok(ElementValue::UnstructuredText(
+                UnstructuredTextElementValue {
+                    value: text.value,
+                    descriptor,
+                },
+            )),
             (
                 UntypedJsonElementValue::UnstructuredBinary(binary),
                 ElementSchema::UnstructuredBinary(descriptor),
-            ) => Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: binary.value, descriptor })),
+            ) => Ok(ElementValue::UnstructuredBinary(
+                UnstructuredBinaryElementValue {
+                    value: binary.value,
+                    descriptor,
+                },
+            )),
             _ => Err("Element value does not match schema".to_string()),
         }
     }

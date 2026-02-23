@@ -335,16 +335,14 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .unwrap()
         .rounded();
     let entry2 = oplog
-        .add_agent_invocation_started(
-            AgentInvocation::AgentMethod {
-                idempotency_key: IdempotencyKey::fresh(),
-                method_name: "f2".to_string(),
-                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    "request".into_value(),
-                )]),
-                invocation_context: InvocationContextStack::fresh_rounded(),
-            },
-        )
+        .add_agent_invocation_started(AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::fresh(),
+            method_name: "f2".to_string(),
+            input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                "request".into_value(),
+            )]),
+            invocation_context: InvocationContextStack::fresh_rounded(),
+        })
         .await
         .unwrap()
         .rounded();
@@ -518,16 +516,14 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .unwrap()
         .rounded();
     let entry2 = oplog
-        .add_agent_invocation_started(
-            AgentInvocation::AgentMethod {
-                idempotency_key: IdempotencyKey::fresh(),
-                method_name: "f2".to_string(),
-                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
-                    large_payload2.clone().into_value(),
-                )]),
-                invocation_context: InvocationContextStack::fresh_rounded(),
-            },
-        )
+        .add_agent_invocation_started(AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::fresh(),
+            method_name: "f2".to_string(),
+            input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                large_payload2.clone().into_value(),
+            )]),
+            invocation_context: InvocationContextStack::fresh_rounded(),
+        })
         .await
         .unwrap()
         .rounded();

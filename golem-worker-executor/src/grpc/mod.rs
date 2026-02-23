@@ -55,8 +55,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp, TimestampedAgentInvocation,
-    WorkerEvent, WorkerFilter, WorkerId, AgentInvocation, WorkerMetadata, WorkerStatus,
+    AgentInvocation, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp,
+    TimestampedAgentInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -1654,9 +1654,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|p| p.try_into())
             .transpose()
             .map_err(|e: String| {
-                WorkerExecutorError::invalid_request(format!(
-                    "failed converting principal: {e}"
-                ))
+                WorkerExecutorError::invalid_request(format!("failed converting principal: {e}"))
             })?
             .unwrap_or_else(Principal::anonymous);
 

@@ -468,7 +468,9 @@ fn calculate_pending_invocations(
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| !invocation.invocation.has_idempotency_key(idempotency_key));
+                result.retain(|invocation| {
+                    !invocation.invocation.has_idempotency_key(idempotency_key)
+                });
             }
             OplogEntry::PendingUpdate {
                 description:
@@ -503,7 +505,9 @@ fn calculate_pending_invocations(
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
-                result.retain(|invocation| !invocation.invocation.has_idempotency_key(idempotency_key));
+                result.retain(|invocation| {
+                    !invocation.invocation.has_idempotency_key(idempotency_key)
+                });
             }
             _ => {}
         }
@@ -805,6 +809,7 @@ mod test {
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
     use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
     use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -814,7 +819,6 @@ mod test {
         OplogPayload, PayloadId, RawOplogPayload, TimestampedUpdateDescription, UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
-    use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
     use golem_common::model::{
         AgentInvocation, AgentInvocationPayload, AgentInvocationResult, FailedUpdateRecord,
         IdempotencyKey, OwnedWorkerId, RetryConfig, ScanCursor, SuccessfulUpdateRecord, Timestamp,
@@ -1354,7 +1358,10 @@ mod test {
             let payload = AgentInvocationPayload::AgentMethod {
                 method_name: function_name.to_string(),
                 input: UntypedDataValue::Tuple(
-                    request.into_iter().map(UntypedElementValue::ComponentModel).collect(),
+                    request
+                        .into_iter()
+                        .map(UntypedElementValue::ComponentModel)
+                        .collect(),
                 ),
             };
             self.add(
@@ -1384,7 +1391,9 @@ mod test {
         ) -> Self {
             let result = match response {
                 Some(vat) => AgentInvocationResult::AgentMethod {
-                    output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(vat.value)]),
+                    output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                        vat.value,
+                    )]),
                 },
                 None => AgentInvocationResult::AgentMethod {
                     output: UntypedDataValue::Tuple(vec![]),
@@ -1511,12 +1520,10 @@ mod test {
         pub fn pending_invocation(self, invocation: AgentInvocation) -> Self {
             let entry = OplogEntry::pending_worker_invocation(invocation.clone()).rounded();
             self.add(entry.clone(), move |mut status| {
-                status
-                    .pending_invocations
-                    .push(TimestampedAgentInvocation {
-                        timestamp: entry.timestamp(),
-                        invocation,
-                    });
+                status.pending_invocations.push(TimestampedAgentInvocation {
+                    timestamp: entry.timestamp(),
+                    invocation,
+                });
                 status
             })
         }

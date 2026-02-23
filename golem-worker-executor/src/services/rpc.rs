@@ -649,7 +649,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             extra_deps,
         }
     }
-
 }
 
 /// As we know the target component's metadata, and it includes the root package name, we can

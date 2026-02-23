@@ -23,7 +23,7 @@ use crate::preview2::golem_api_1_x::host::{
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
-use crate::preview2::{golem_api_1_x, Pollable};
+use crate::preview2::{Pollable, golem_api_1_x};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::{HasOplogService, HasWorker};
@@ -60,7 +60,7 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{subscribe, IoView};
+use wasmtime_wasi::{IoView, subscribe};
 
 impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -246,8 +246,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await
         {
             Err(anyhow!(
-                        "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
-                    ))
+                "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
+            ))
         } else if self.state.is_live() {
             let jump = OplogRegion {
                 start: jump_target,
@@ -320,7 +320,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     );
                 }
                 None => {
-                    debug!("Worker's atomic operation starting at {} is not committed, ignoring persisted entries",  begin_index);
+                    debug!(
+                        "Worker's atomic operation starting at {} is not committed, ignoring persisted entries",
+                        begin_index
+                    );
 
                     // We need to jump to the end of the oplog
                     self.state.replay_state.switch_to_live().await;

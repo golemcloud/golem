@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::ToJSON;
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromParameter, ParseResult, Type};

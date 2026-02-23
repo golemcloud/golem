@@ -15,7 +15,7 @@
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    host_functions, DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed,
+    DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed, host_functions,
 };
 use wasmtime_wasi::p2::bindings::random::insecure_seed::Host;
 

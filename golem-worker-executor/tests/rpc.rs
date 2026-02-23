@@ -548,7 +548,9 @@ async fn wasm_rpc_bug_32_test(
             &agent_id,
             "bug_wasm_rpc_i32",
             DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: input_vat })],
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: input_vat,
+                })],
             }),
         )
         .await?;

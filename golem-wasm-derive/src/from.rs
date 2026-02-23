@@ -265,8 +265,11 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
             } else {
                 let current_wit_idx = wit_idx;
                 wit_idx += 1;
-                let field_from_value =
-                    apply_from_conversions(&field.ty, wit_field, quote! { fields[#current_wit_idx].clone() });
+                let field_from_value = apply_from_conversions(
+                    &field.ty,
+                    wit_field,
+                    quote! { fields[#current_wit_idx].clone() },
+                );
                 quote! {
                     #field_name: #field_from_value
                 }

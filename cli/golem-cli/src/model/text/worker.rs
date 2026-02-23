@@ -25,11 +25,14 @@ use base64::Engine;
 use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
-use golem_common::model::agent::{BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue};
+use golem_common::model::agent::{
+    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, PublicAgentInvocation, StringAttributeValue,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
+    PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
 use golem_common::model::Timestamp;
@@ -358,38 +361,36 @@ impl TextView for PublicOplogEntry {
                     value_to_string(&params.response)
                 ));
             }
-            PublicOplogEntry::AgentInvocationStarted(params) => {
-                match &params.invocation {
-                    PublicAgentInvocation::AgentMethodInvocation(inner) => {
-                        logln(format!(
-                            "{} {}",
-                            format_message_highlight("INVOKE"),
-                            format_id(&inner.method_name),
-                        ));
-                        logln(format!(
-                            "{pad}at:                {}",
-                            format_id(&params.timestamp)
-                        ));
-                        logln(format!(
-                            "{pad}idempotency key:   {}",
-                            format_id(&inner.idempotency_key),
-                        ));
-                        logln(format!("{pad}input:"));
-                        log_data_value(&pad, &inner.function_input);
-                    }
-                    other => {
-                        logln(format!(
-                            "{} {:?}",
-                            format_message_highlight("INVOKE"),
-                            other,
-                        ));
-                        logln(format!(
-                            "{pad}at:                {}",
-                            format_id(&params.timestamp)
-                        ));
-                    }
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(inner) => {
+                    logln(format!(
+                        "{} {}",
+                        format_message_highlight("INVOKE"),
+                        format_id(&inner.method_name),
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&inner.idempotency_key),
+                    ));
+                    logln(format!("{pad}input:"));
+                    log_data_value(&pad, &inner.function_input);
                 }
-            }
+                other => {
+                    logln(format!(
+                        "{} {:?}",
+                        format_message_highlight("INVOKE"),
+                        other,
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+            },
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 logln(format_message_highlight("INVOKE COMPLETED"));
                 logln(format!(
@@ -400,10 +401,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
-                logln(format!(
-                    "{pad}result:            {:?}",
-                    params.result
-                ));
+                logln(format!("{pad}result:            {:?}", params.result));
             }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
@@ -964,21 +962,23 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                 }
             }
         },
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => match value {
-            BinaryReference::Url(url) => {
-                logln(format!("{pad}- URL: {}", format_id(&url.value)));
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Url(url) => {
+                    logln(format!("{pad}- URL: {}", format_id(&url.value)));
+                }
+                BinaryReference::Inline(inline) => {
+                    logln(format!(
+                        "{pad}- Inline: {} bytes",
+                        format_id(&inline.data.len().to_string())
+                    ));
+                    logln(format!(
+                        "{pad}  MIME type: {}",
+                        format_id(&inline.binary_type.mime_type)
+                    ));
+                }
             }
-            BinaryReference::Inline(inline) => {
-                logln(format!(
-                    "{pad}- Inline: {} bytes",
-                    format_id(&inline.data.len().to_string())
-                ));
-                logln(format!(
-                    "{pad}  MIME type: {}",
-                    format_id(&inline.binary_type.mime_type)
-                ));
-            }
-        },
+        }
     }
 }
 

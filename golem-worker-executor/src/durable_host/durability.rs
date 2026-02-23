@@ -22,18 +22,18 @@ use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::IntoValueAndType;
 use std::fmt::{Debug, Display};
 use tracing::error;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
+use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -358,10 +358,8 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 "Trying to replay an durable invocation in a PersistNothing block",
             ))
         } else {
-            let (_, oplog_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::HostCall
-            )?;
+            let (_, oplog_entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall)?;
             match oplog_entry {
                 OplogEntry::HostCall {
                     timestamp,

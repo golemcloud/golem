@@ -19,6 +19,7 @@ mod tests;
 
 use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType};
 use crate::model::component::ComponentRevision;
+use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
@@ -30,7 +31,6 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
-use crate::model::oplog::PayloadId;
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
 use crate::oplog_payload;

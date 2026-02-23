@@ -2,16 +2,15 @@ use super::{
     AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentInvocationMode, AgentMethod,
     AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
-    ComponentModelElementValue, CorsOptions, CustomHttpMethod, DataSchema, DataValue, ElementSchema,
-    ElementValue, ElementValues,
-    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    LiteralSegment, NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
-    RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, SystemVariable, SystemVariableSegment, TextDescriptor, TextReference,
-    TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
-    UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
-    Url,
+    ComponentModelElementValue, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
+    PathVariable, Principal, QueryVariable, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
+    SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextReferenceValue,
+    TextSource, TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
@@ -72,9 +71,7 @@ impl From<AgentInvocationMode> for golem_api_grpc::proto::golem::worker::v1::Age
 impl From<golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode>
     for AgentInvocationMode
 {
-    fn from(
-        value: golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode,
-    ) -> Self {
+    fn from(value: golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode) -> Self {
         match value {
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
                 AgentInvocationMode::Await
@@ -627,14 +624,22 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementValue> for ElementV
             None => Err("Missing field: value".to_string()),
             Some(v) => match v {
                 element_value::Value::ComponentModel(val) => {
-                    Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: val.try_into()? }))
+                    Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: val.try_into()?,
+                    }))
                 }
-                element_value::Value::UnstructuredText(text_ref) => {
-                    Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text_ref.try_into()?, descriptor: TextDescriptor::default() }))
-                }
-                element_value::Value::UnstructuredBinary(bin_ref) => {
-                    Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: bin_ref.try_into()?, descriptor: BinaryDescriptor::default() }))
-                }
+                element_value::Value::UnstructuredText(text_ref) => Ok(
+                    ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                        value: text_ref.try_into()?,
+                        descriptor: TextDescriptor::default(),
+                    }),
+                ),
+                element_value::Value::UnstructuredBinary(bin_ref) => Ok(
+                    ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                        value: bin_ref.try_into()?,
+                        descriptor: BinaryDescriptor::default(),
+                    }),
+                ),
             },
         }
     }
@@ -1040,8 +1045,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
     fn try_from(
         value: golem_api_grpc::proto::golem::component::HttpMethod,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::http_method::Value;
         use golem_api_grpc::proto::golem::component::StandardHttpMethod;
+        use golem_api_grpc::proto::golem::component::http_method::Value;
 
         match value
             .value
@@ -1073,8 +1078,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
 
 impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
     fn from(value: HttpMethod) -> Self {
-        use golem_api_grpc::proto::golem::component::http_method::Value;
         use golem_api_grpc::proto::golem::component::StandardHttpMethod;
+        use golem_api_grpc::proto::golem::component::http_method::Value;
 
         Self {
             value: Some(match value {

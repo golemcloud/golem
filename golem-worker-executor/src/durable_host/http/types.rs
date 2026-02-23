@@ -15,11 +15,12 @@
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
-use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::HasWorker;
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use desert_rust::BinaryCodec;
+use golem_common::model::ScheduleId;
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
@@ -28,7 +29,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::ScheduleId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};

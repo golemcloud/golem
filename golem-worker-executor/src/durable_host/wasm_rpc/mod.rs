@@ -51,8 +51,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         _self_: Resource<WasmRpcEntry>,
         _method_name: String,
         _input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>
-    {
+    ) -> anyhow::Result<
+        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+    > {
         // TODO: Implement invoke_and_await for the new interface
         Err(anyhow::anyhow!(
             "wasm-rpc invoke-and-await not yet implemented for the new agent-based interface"
@@ -137,7 +138,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         &mut self,
         _this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>,
+        Option<
+            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+        >,
     > {
         // TODO: Implement get for the new interface
         Err(anyhow::anyhow!(

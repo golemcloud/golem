@@ -41,6 +41,7 @@ use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode, Snapshotting, SnapshottingConfig};
+use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -59,7 +60,6 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
-use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -823,9 +823,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        let (idempotency_key, invocation_payload, _invocation_context) = invocation.clone().into_parts();
-        let payload = self.oplog.upload_payload(&invocation_payload).await
-            .map_err(|e| WorkerExecutorError::invalid_request(format!("Failed to upload invocation payload: {e}")))?;
+        let (idempotency_key, invocation_payload, _invocation_context) =
+            invocation.clone().into_parts();
+        let payload = self
+            .oplog
+            .upload_payload(&invocation_payload)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Failed to upload invocation payload: {e}"
+                ))
+            })?;
         let entry = OplogEntry::pending_worker_invocation(idempotency_key, payload);
         let timestamped_invocation = TimestampedAgentInvocation {
             timestamp: entry.timestamp(),

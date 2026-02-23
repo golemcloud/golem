@@ -17,10 +17,10 @@ use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
-use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
+use crate::worker::invocation::{InvokeResult, invoke_observed_and_traced};
 use crate::worker::{
-    interpret_function_result, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker,
-    WorkerCommand,
+    QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+    interpret_function_result,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -32,24 +32,25 @@ use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::{OplogEntry, WorkerError};
 use golem_common::model::{
-    invocation_context::{AttributeValue, InvocationContextStack},
-    OplogIndex,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    TimestampedAgentInvocation, WorkerId,
 };
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, TimestampedAgentInvocation, WorkerId, AgentInvocation,
+    OplogIndex,
+    invocation_context::{AttributeValue, InvocationContextStack},
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::Value;
+use golem_wasm::analysis::AnalysedFunctionResult;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedReceiver;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
-use tracing::{debug, span, warn, Instrument, Level, Span};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tracing::{Instrument, Level, Span, debug, span, warn};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store};
 
@@ -138,7 +139,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 Some(RetryDecision::ReacquirePermits) => {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
-                    debug!("Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}");
+                    debug!(
+                        "Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}"
+                    );
                     let _ = Worker::restart_on_oom(
                         self.parent.clone(),
                         true,
@@ -482,68 +485,54 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_span: &Span,
     ) -> CommandOutcome {
         match inner.invocation {
-            // AgentInvocation::ExportedFunction {
-            //     idempotency_key,
-            //     full_function_name,
-            //     function_input,
-            //     invocation_context,
-            // } => {
-            //     // Need to check if the same idempotency key has already been processed and then ignore this entry.
-            //     let has_result = {
-            //         let invocation_results = self.parent.invocation_results.read().await;
-            //         invocation_results.contains_key(&idempotency_key)
-            //     };
-            //     if !has_result {
-            //         self.invoke_exported_function(
-            //             invocation_context,
-            //             idempotency_key,
-            //             full_function_name,
-            //             function_input,
-            //             invocation_span,
-            //         )
-            //         .await
-            //     } else {
-            //         debug!("Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result");
-            //         CommandOutcome::Continue
-            //     }
-            // }
             AgentInvocation::ManualUpdate { target_revision } => {
                 self.manual_update(target_revision).await
             }
-            AgentInvocation::AgentInitialization { .. } => {
-                // full_function_name: "golem:agent/guest.{initialize}".to_string(),
-                // function_input: vec![
-                //                             agent_id.agent_type.clone().into_value(),
-                //                             agent_id.parameters.clone().into_value(),
-                //                             // Fixme: this needs to come from the invocation that caused this agent to be created
-                //                             golem_common::model::agent::Principal::anonymous().into_value(),
-                //                         ],
-                todo!()
+            ref invocation @ AgentInvocation::AgentInitialization {
+                ref idempotency_key,
+                ..
             }
-            AgentInvocation::AgentMethod { .. } => {
-                todo!()
+            | ref invocation @ AgentInvocation::AgentMethod {
+                ref idempotency_key,
+                ..
             }
-            AgentInvocation::LoadSnapshot { .. } => {
-                todo!()
+            | ref invocation @ AgentInvocation::LoadSnapshot {
+                ref idempotency_key,
+                ..
             }
-            AgentInvocation::SaveSnapshot { .. } => {
-                todo!()
+            | ref invocation @ AgentInvocation::SaveSnapshot {
+                ref idempotency_key,
+                ..
             }
-            AgentInvocation::ProcessOplogEntries { .. } => {
-                todo!()
+            | ref invocation @ AgentInvocation::ProcessOplogEntries {
+                ref idempotency_key,
+                ..
+            } => {
+                let has_result = {
+                    let invocation_results = self.parent.invocation_results.read().await;
+                    invocation_results.contains_key(idempotency_key)
+                };
+                if !has_result {
+                    self.invoke_agent(invocation, invocation_span).await
+                } else {
+                    debug!(
+                        "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
+                    );
+                    CommandOutcome::Continue
+                }
             }
         }
     }
 
-    /// Invokes an exported function on the worker
-    async fn invoke_exported_function(
+    /// Invokes an agent function on the worker
+    async fn invoke_agent(
         &mut self,
-        invocation_context: InvocationContextStack,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
+        invocation: &AgentInvocation,
         invocation_span: &Span,
     ) -> CommandOutcome {
+        let (idempotency_key, _, invocation_context) = invocation.clone().into_parts();
+        let full_function_name = invocation.function_name();
+
         let span = span!(
             parent: invocation_span,
             Level::INFO,
@@ -558,50 +547,45 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function = full_function_name
         );
 
-        self.invoke_exported_function_inner(
+        self.invoke_agent_inner(
             invocation_context,
             idempotency_key,
             full_function_name,
-            function_input,
+            invocation,
         )
         .instrument(span)
         .await
     }
 
-    /// Invokes an exported function on the worker
+    /// Invokes an agent function on the worker
     ///
-    /// The inner implementation of `invoke_exported_function` to be instrumented with a span.
-    async fn invoke_exported_function_inner(
+    /// The inner implementation of `invoke_agent` to be instrumented with a span.
+    async fn invoke_agent_inner(
         &mut self,
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
         full_function_name: String,
-        function_input: Vec<Value>,
+        invocation: &AgentInvocation,
     ) -> CommandOutcome {
         let result = self
-            .invoke_exported_function_with_context(
+            .invoke_agent_with_context(
                 invocation_context,
                 idempotency_key,
                 &full_function_name,
-                &function_input,
+                invocation,
             )
             .await;
 
         match result {
             Ok(InvokeResult::Succeeded {
-                output,
+                result: invocation_result,
                 consumed_fuel,
             }) => {
-                self.exported_function_invocation_finished(
-                    full_function_name,
-                    &function_input,
-                    output,
-                    consumed_fuel,
-                )
-                .await
+                self.agent_invocation_finished(full_function_name, invocation_result, consumed_fuel)
+                    .await
             }
             _ => {
-                self.exported_function_invocation_failed(&full_function_name, result)
+                self.agent_invocation_failed(&full_function_name, result)
                     .await
             }
         }
@@ -609,12 +593,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
     /// Sets the necessary contextual information on the worker and performs the actual
     /// invocation.
-    async fn invoke_exported_function_with_context(
+    async fn invoke_agent_with_context(
         &mut self,
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
         full_function_name: &str,
-        function_input: &[Value],
+        invocation: &AgentInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         self.store
             .data_mut()
@@ -647,8 +631,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
 
         let result = invoke_observed_and_traced(
-            full_function_name.to_string(),
-            function_input.to_owned(),
+            invocation,
             self.store,
             self.instance,
             &component_metadata,
@@ -670,16 +653,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         result
     }
 
-    /// The logic handling a successfully finished worker invocation
+    /// The logic handling a successfully finished agent invocation
     ///
     /// Successful here means that the invocation function returned with
     /// `InvokeResult::Succeeded`. As the returned values get further processing,
     /// the whole invocation can still fail during that.
-    async fn exported_function_invocation_finished(
+    async fn agent_invocation_finished(
         &mut self,
         full_function_name: String,
-        function_input: &Vec<Value>,
-        output: Option<Value>,
+        invocation_result: AgentInvocationResult,
         consumed_fuel: u64,
     ) -> CommandOutcome {
         let component_metadata = self.store.as_context().data().component_metadata();
@@ -692,10 +674,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(Some(invokable_function)) => {
                 let function_results = invokable_function.analysed_export.result.clone();
 
+                let output = invocation_result.into_raw_output();
+
                 match self
-                    .exported_function_invocation_finished_with_type(
+                    .agent_invocation_finished_with_type(
                         full_function_name.clone(),
-                        function_input,
                         output,
                         consumed_fuel,
                         function_results,
@@ -751,12 +734,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
     }
 
-    /// The inner logic of handling a successfully finished worker invocation,
+    /// The inner logic of handling a successfully finished agent invocation,
     /// with the function's expected result type already known
-    async fn exported_function_invocation_finished_with_type(
+    async fn agent_invocation_finished_with_type(
         &mut self,
         full_function_name: String,
-        function_input: &Vec<Value>,
         output: Option<Value>,
         consumed_fuel: u64,
         function_result: Option<AnalysedFunctionResult>,
@@ -771,12 +753,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(result) => {
                 self.store
                     .data_mut()
-                    .on_invocation_success(
-                        &full_function_name,
-                        function_input,
-                        consumed_fuel,
-                        result,
-                    )
+                    .on_invocation_success(&full_function_name, &vec![], consumed_fuel, result)
                     .await?;
 
                 if self.parent.agent_mode() == AgentMode::Ephemeral {
@@ -804,8 +781,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
     }
 
-    /// The logic handling a worker invocation that did not succeed.
-    async fn exported_function_invocation_failed(
+    /// The logic handling an agent invocation that did not succeed.
+    async fn agent_invocation_failed(
         &mut self,
         full_function_name: &str,
         result: Result<InvokeResult, WorkerExecutorError>,
@@ -851,7 +828,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
     /// The inner implementation of the manual update command
     async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
-        let _idempotency_key = {
+        let idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
             ctx.set_current_idempotency_key(idempotency_key.clone())
@@ -860,113 +837,96 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        match component_metadata.save_snapshot() {
-            Ok(Some(save_snapshot)) => {
-                self.store.data_mut().begin_call_snapshotting_function();
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
 
-                let result = invoke_observed_and_traced(
-                    save_snapshot.name.to_string(),
-                    vec![],
-                    self.store,
-                    self.instance,
-                    &component_metadata,
-                    true,
-                )
-                    .await;
-                self.store.data_mut().end_call_snapshotting_function();
+        self.store.data_mut().begin_call_snapshotting_function();
 
-                match result {
-                    Ok(InvokeResult::Succeeded { output, .. }) => {
-                        if let Some((bytes, mime_type)) = Self::decode_snapshot_result(output) {
-                            match self
-                                .store
-                                .data()
-                                .get_public_state()
-                                .oplog()
-                                .create_snapshot_based_update_description(target_revision, bytes, mime_type)
-                                .await
-                            {
-                                Ok(update_description) => {
-                                    // Enqueue the update
-                                    self.parent.enqueue_update(update_description).await;
+        let result = invoke_observed_and_traced(
+            &save_snapshot_invocation,
+            self.store,
+            self.instance,
+            &component_metadata,
+            true,
+        )
+        .await;
+        self.store.data_mut().end_call_snapshotting_function();
 
-                                    // Reactivate the worker
-                                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                                    // Stop processing the queue to avoid race conditions
-                                }
-                                Err(error) => {
-                                    self.fail_update(
-                                        target_revision,
-                                        format!(
-                                            "failed to store the snapshot for manual update: {error}"
-                                        ),
-                                    )
-                                        .await
-                                }
-                            }
-                        } else {
-                            self.fail_update(
-                                target_revision,
-                                "failed to get a snapshot for manual update: invalid snapshot result"
-                                    .to_string(),
-                            )
-                                .await
-                        }
-                    }
-                    Ok(InvokeResult::Failed { error, .. }) => {
-                        let stderr = self
-                            .store
-                            .data()
-                            .get_public_state()
-                            .event_service()
-                            .get_last_invocation_errors();
-                        let error = error.to_string(&stderr);
-                        self.fail_update(
-                            target_revision,
-                            format!("failed to get a snapshot for manual update: {error}"),
-                        )
-                            .await
-                    }
-                    Ok(InvokeResult::Exited { .. }) => {
-                        self.fail_update(
-                            target_revision,
-                            "failed to get a snapshot for manual update: it called exit"
-                                .to_string(),
-                        )
-                            .await
-                    }
-                    Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                        self.fail_update(
-                            target_revision,
-                            format!(
-                                "failed to get a snapshot for manual update: {interrupt_kind:?}"
-                            ),
-                        )
-                            .await
+        match result {
+            Ok(InvokeResult::Succeeded {
+                result: AgentInvocationResult::SaveSnapshot { snapshot },
+                ..
+            }) => {
+                match self
+                    .store
+                    .data()
+                    .get_public_state()
+                    .oplog()
+                    .create_snapshot_based_update_description(
+                        target_revision,
+                        snapshot.data,
+                        snapshot.mime_type,
+                    )
+                    .await
+                {
+                    Ok(update_description) => {
+                        // Enqueue the update
+                        self.parent.enqueue_update(update_description).await;
+
+                        // Reactivate the worker
+                        CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                        // Stop processing the queue to avoid race conditions
                     }
                     Err(error) => {
                         self.fail_update(
                             target_revision,
-                            format!("failed to get a snapshot for manual update: {error:?}"),
+                            format!("failed to store the snapshot for manual update: {error}"),
                         )
-                            .await
+                        .await
                     }
                 }
             }
-            Ok(None) => {
+            Ok(InvokeResult::Succeeded { .. }) => {
                 self.fail_update(
                     target_revision,
-                    "failed to get a snapshot for manual update: save-snapshot is not exported"
+                    "failed to get a snapshot for manual update: invalid snapshot result"
                         .to_string(),
                 )
-                    .await
+                .await
+            }
+            Ok(InvokeResult::Failed { error, .. }) => {
+                let stderr = self
+                    .store
+                    .data()
+                    .get_public_state()
+                    .event_service()
+                    .get_last_invocation_errors();
+                let error = error.to_string(&stderr);
+                self.fail_update(
+                    target_revision,
+                    format!("failed to get a snapshot for manual update: {error}"),
+                )
+                .await
+            }
+            Ok(InvokeResult::Exited { .. }) => {
+                self.fail_update(
+                    target_revision,
+                    "failed to get a snapshot for manual update: it called exit".to_string(),
+                )
+                .await
+            }
+            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                self.fail_update(
+                    target_revision,
+                    format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
+                )
+                .await
             }
             Err(error) => {
                 self.fail_update(
                     target_revision,
-                    format!("failed to get a snapshot for manual update: error while finding the exported save-snapshot function: {error}"),
+                    format!("failed to get a snapshot for manual update: {error:?}"),
                 )
-                    .await
+                .await
             }
         }
     }
@@ -1026,31 +986,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         CommandOutcome::Continue
     }
 
-    /// Attempts to interpret the save snapshot result as a byte vector and mime type
-    fn decode_snapshot_result(value: Option<Value>) -> Option<(Vec<u8>, String)> {
-        if let Some(Value::Record(fields)) = value {
-            if fields.len() == 2 {
-                if let (Value::List(bytes), Value::String(mime_type)) = (&fields[0], &fields[1]) {
-                    let mut result = Vec::new();
-                    for value in bytes {
-                        if let Value::U8(byte) = value {
-                            result.push(*byte);
-                        } else {
-                            return None;
-                        }
-                    }
-                    Some((result, mime_type.clone()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
     /// Extends the invocation context with a new span containing information about the invocation
     fn extend_invocation_context(
         invocation_context: &mut InvocationContextStack,
@@ -1092,83 +1027,75 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn save_snapshot(&mut self) -> CommandOutcome {
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        match component_metadata.save_snapshot() {
-            Ok(Some(save_snapshot)) => {
-                self.store.data_mut().begin_call_snapshotting_function();
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
+            idempotency_key: IdempotencyKey::fresh(),
+        };
 
-                let result = invoke_observed_and_traced(
-                    save_snapshot.name.to_string(),
-                    vec![],
-                    self.store,
-                    self.instance,
-                    &component_metadata,
-                    true,
-                )
-                .await;
-                self.store.data_mut().end_call_snapshotting_function();
+        self.store.data_mut().begin_call_snapshotting_function();
 
-                match result {
-                    Ok(InvokeResult::Succeeded { output, .. }) => {
-                        if let Some((bytes, mime_type)) = Self::decode_snapshot_result(output) {
-                            let oplog = self.store.data().get_public_state().oplog();
-                            let serialized = golem_common::serialization::serialize(&bytes);
-                            match serialized {
-                                Ok(serialized_bytes) => {
-                                    match oplog.upload_raw_payload(serialized_bytes).await {
-                                        Ok(raw_payload) => {
-                                            match raw_payload.into_payload::<Vec<u8>>() {
-                                                Ok(payload) => {
-                                                    oplog
-                                                        .add_and_commit(OplogEntry::snapshot(
-                                                            payload, mime_type,
-                                                        ))
-                                                        .await;
-                                                    debug!("Periodic snapshot saved successfully");
-                                                }
-                                                Err(err) => {
-                                                    warn!(
-                                                        "Failed to convert snapshot payload: {err}"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(err) => {
-                                            warn!(
-                                                "Failed to upload periodic snapshot payload: {err}"
-                                            );
-                                        }
-                                    }
+        let result = invoke_observed_and_traced(
+            &save_snapshot_invocation,
+            self.store,
+            self.instance,
+            &component_metadata,
+            true,
+        )
+        .await;
+        self.store.data_mut().end_call_snapshotting_function();
+
+        match result {
+            Ok(InvokeResult::Succeeded {
+                result: AgentInvocationResult::SaveSnapshot { snapshot },
+                ..
+            }) => {
+                let oplog = self.store.data().get_public_state().oplog();
+                let serialized = golem_common::serialization::serialize(&snapshot.data);
+                match serialized {
+                    Ok(serialized_bytes) => {
+                        match oplog.upload_raw_payload(serialized_bytes).await {
+                            Ok(raw_payload) => match raw_payload.into_payload::<Vec<u8>>() {
+                                Ok(payload) => {
+                                    oplog
+                                        .add_and_commit(OplogEntry::snapshot(
+                                            payload,
+                                            snapshot.mime_type,
+                                        ))
+                                        .await;
+                                    debug!("Periodic snapshot saved successfully");
                                 }
                                 Err(err) => {
-                                    warn!("Failed to serialize snapshot data: {err}");
+                                    warn!("Failed to convert snapshot payload: {err}");
                                 }
+                            },
+                            Err(err) => {
+                                warn!("Failed to upload periodic snapshot payload: {err}");
                             }
-                        } else {
-                            warn!("Periodic snapshot returned unexpected result format");
                         }
-                        CommandOutcome::Continue
-                    }
-                    Ok(InvokeResult::Failed { .. }) => {
-                        warn!("Periodic snapshot save function failed");
-                        CommandOutcome::Continue
-                    }
-                    Ok(InvokeResult::Exited { .. }) => {
-                        warn!("Worker exited during periodic snapshot save");
-                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
-                    }
-                    Ok(InvokeResult::Interrupted { .. }) => {
-                        warn!("Worker interrupted during periodic snapshot save");
-                        CommandOutcome::BreakInnerLoop(RetryDecision::None)
                     }
                     Err(err) => {
-                        warn!("Periodic snapshot save invocation error: {err}");
-                        CommandOutcome::Continue
+                        warn!("Failed to serialize snapshot data: {err}");
                     }
                 }
+                CommandOutcome::Continue
             }
-            Ok(None) => CommandOutcome::Continue,
+            Ok(InvokeResult::Succeeded { .. }) => {
+                warn!("Periodic snapshot returned unexpected result format");
+                CommandOutcome::Continue
+            }
+            Ok(InvokeResult::Failed { .. }) => {
+                warn!("Periodic snapshot save function failed");
+                CommandOutcome::Continue
+            }
+            Ok(InvokeResult::Exited { .. }) => {
+                warn!("Worker exited during periodic snapshot save");
+                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+            }
+            Ok(InvokeResult::Interrupted { .. }) => {
+                warn!("Worker interrupted during periodic snapshot save");
+                CommandOutcome::BreakInnerLoop(RetryDecision::None)
+            }
             Err(err) => {
-                warn!("Failed to find save-snapshot function: {err}");
+                warn!("Periodic snapshot save invocation error: {err}");
                 CommandOutcome::Continue
             }
         }

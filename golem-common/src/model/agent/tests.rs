@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::Empty;
 use crate::base_model::agent::{
     Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
 };
-use crate::base_model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
@@ -74,7 +74,9 @@ fn roundtrip_test_2() {
     roundtrip_test(
         "agent-2",
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: 12u32.into_value_and_type() })],
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 12u32.into_value_and_type(),
+            })],
         }),
     )
 }
@@ -85,19 +87,23 @@ fn roundtrip_test_3() {
         "agent-3",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 12u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(
-                    Value::Record(vec![
-                        Value::U32(1),
-                        Value::U32(2),
-                        Value::Flags(vec![true, false, true]),
-                    ]),
-                    record(vec![
-                        field("x", u32()),
-                        field("y", u32()),
-                        field("properties", flags(&["a", "b", "c"])),
-                    ]),
-                ) }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 12u32.into_value_and_type(),
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::U32(1),
+                            Value::U32(2),
+                            Value::Flags(vec![true, false, true]),
+                        ]),
+                        record(vec![
+                            field("x", u32()),
+                            field("y", u32()),
+                            field("properties", flags(&["a", "b", "c"])),
+                        ]),
+                    ),
+                }),
             ],
         }),
     )
@@ -109,12 +115,18 @@ fn roundtrip_test_4_1() {
         "agent-4",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Url(Url {
-                    value: "https://url1.com/".to_string(),
-                }), descriptor: TextDescriptor::default() }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Url(Url {
-                    value: "https://url2.com/".to_string(),
-                }), descriptor: TextDescriptor::default() }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Url(Url {
+                        value: "https://url1.com/".to_string(),
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Url(Url {
+                        value: "https://url2.com/".to_string(),
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
             ],
         }),
     )
@@ -126,16 +138,22 @@ fn roundtrip_test_4_2() {
         "agent-4",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Inline(TextSource {
-                    data: "hello, world!".to_string(),
-                    text_type: None,
-                }), descriptor: TextDescriptor::default() }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Inline(TextSource {
-                    data: "\\\"hello,\\\" world!".to_string(),
-                    text_type: Some(TextType {
-                        language_code: "en".to_string(),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "hello, world!".to_string(),
+                        text_type: None,
                     }),
-                }), descriptor: TextDescriptor::default() }),
+                    descriptor: TextDescriptor::default(),
+                }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Inline(TextSource {
+                        data: "\\\"hello,\\\" world!".to_string(),
+                        text_type: Some(TextType {
+                            language_code: "en".to_string(),
+                        }),
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
             ],
         }),
     )
@@ -210,12 +228,18 @@ fn roundtrip_test_5_1() {
         "agent-5",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: BinaryReference::Url(Url {
-                    value: "https://url1.com/".to_string(),
-                }), descriptor: BinaryDescriptor::default() }),
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: BinaryReference::Url(Url {
-                    value: "https://url2.com/".to_string(),
-                }), descriptor: BinaryDescriptor::default() }),
+                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                    value: BinaryReference::Url(Url {
+                        value: "https://url1.com/".to_string(),
+                    }),
+                    descriptor: BinaryDescriptor::default(),
+                }),
+                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                    value: BinaryReference::Url(Url {
+                        value: "https://url2.com/".to_string(),
+                    }),
+                    descriptor: BinaryDescriptor::default(),
+                }),
             ],
         }),
     )
@@ -227,18 +251,24 @@ fn roundtrip_test_5_2() {
         "agent-5",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: BinaryReference::Inline(BinarySource {
-                    data: "Hello world!".as_bytes().to_vec(),
-                    binary_type: BinaryType {
-                        mime_type: "application/json".to_string(),
-                    },
-                }), descriptor: BinaryDescriptor::default() }),
-                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: BinaryReference::Inline(BinarySource {
-                    data: "Hello world!".as_bytes().to_vec(),
-                    binary_type: BinaryType {
-                        mime_type: "image/png".to_string(),
-                    },
-                }), descriptor: BinaryDescriptor::default() }),
+                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: "Hello world!".as_bytes().to_vec(),
+                        binary_type: BinaryType {
+                            mime_type: "application/json".to_string(),
+                        },
+                    }),
+                    descriptor: BinaryDescriptor::default(),
+                }),
+                ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data: "Hello world!".as_bytes().to_vec(),
+                        binary_type: BinaryType {
+                            mime_type: "image/png".to_string(),
+                        },
+                    }),
+                    descriptor: BinaryDescriptor::default(),
+                }),
             ],
         }),
     )
@@ -264,7 +294,9 @@ fn roundtrip_test_6() {
                 },
                 NamedElementValue {
                     name: "x".to_string(),
-                    value: ElementValue::ComponentModel(ComponentModelElementValue { value: 101u32.into_value_and_type() }),
+                    value: ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: 101u32.into_value_and_type(),
+                    }),
                 },
             ],
         }),
@@ -285,7 +317,9 @@ fn invalid_agent_param_count() {
     failure_test(
         "agent-1",
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: 12u32.into_value_and_type() })],
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 12u32.into_value_and_type(),
+            })],
         }),
         "Unexpected number of parameters: got 1, expected 0",
     )
@@ -296,7 +330,9 @@ fn invalid_agent_param_type() {
     failure_test(
         "agent-2",
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: "hello".into_value_and_type() })],
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: "hello".into_value_and_type(),
+            })],
         }),
         "Failed to parse parameter value \"hello\": invalid value type at 0..7",
     )
@@ -308,12 +344,18 @@ fn invalid_text_url() {
         "agent-4",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Url(Url {
-                    value: "https://url1.com/".to_string(),
-                }), descriptor: TextDescriptor::default() }),
-                ElementValue::UnstructuredText(UnstructuredTextElementValue { value: TextReference::Url(Url {
-                    value: "not?a/valid!url".to_string(),
-                }), descriptor: TextDescriptor::default() }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Url(Url {
+                        value: "https://url1.com/".to_string(),
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
+                ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                    value: TextReference::Url(Url {
+                        value: "not?a/valid!url".to_string(),
+                    }),
+                    descriptor: TextDescriptor::default(),
+                }),
             ],
         }),
         "Failed to parse parameter value not?a/valid!url as URL: relative URL without a base",
@@ -337,19 +379,23 @@ fn roundtrip_test_phantom_id_complex() {
         "agent-3",
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 12u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(
-                    Value::Record(vec![
-                        Value::U32(1),
-                        Value::U32(2),
-                        Value::Flags(vec![true, false, true]),
-                    ]),
-                    record(vec![
-                        field("x", u32()),
-                        field("y", u32()),
-                        field("properties", flags(&["a", "b", "c"])),
-                    ]),
-                ) }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 12u32.into_value_and_type(),
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(
+                        Value::Record(vec![
+                            Value::U32(1),
+                            Value::U32(2),
+                            Value::Flags(vec![true, false, true]),
+                        ]),
+                        record(vec![
+                            field("x", u32()),
+                            field("y", u32()),
+                            field("properties", flags(&["a", "b", "c"])),
+                        ]),
+                    ),
+                }),
             ],
         }),
         Some(phantom_id),
@@ -378,41 +424,46 @@ fn roundtrip_with_non_kebab_metadata() {
     roundtrip_test(
         "non-kebab-agent",
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(
-                // promiseId
-                Value::Record(vec![
-                    // agentId
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    // promiseId
                     Value::Record(vec![
-                        // componentId
-                        Value::Record(vec![
-                            // uuid
-                            Value::Record(vec![
-                                Value::U64(115746831381919841),   // highBits
-                                Value::U64(13556493125794766855), // lowBits
-                            ]),
-                        ]),
                         // agentId
-                        Value::String("some-agent-id(\"hello\")".to_string()),
-                    ]),
-                    Value::U64(1234), // oplogIdx
-                ]),
-                record(vec![
-                    field(
-                        "agentId",
-                        record(vec![
-                            field(
-                                "componentId",
-                                record(vec![field(
-                                    "uuid",
-                                    record(vec![field("highBits", u64()), field("lowBits", u64())]),
-                                )]),
-                            ),
-                            field("agentId", str()),
+                        Value::Record(vec![
+                            // componentId
+                            Value::Record(vec![
+                                // uuid
+                                Value::Record(vec![
+                                    Value::U64(115746831381919841),   // highBits
+                                    Value::U64(13556493125794766855), // lowBits
+                                ]),
+                            ]),
+                            // agentId
+                            Value::String("some-agent-id(\"hello\")".to_string()),
                         ]),
-                    ),
-                    field("oplogIdx", u64()),
-                ]),
-            ) })],
+                        Value::U64(1234), // oplogIdx
+                    ]),
+                    record(vec![
+                        field(
+                            "agentId",
+                            record(vec![
+                                field(
+                                    "componentId",
+                                    record(vec![field(
+                                        "uuid",
+                                        record(vec![
+                                            field("highBits", u64()),
+                                            field("lowBits", u64()),
+                                        ]),
+                                    )]),
+                                ),
+                                field("agentId", str()),
+                            ]),
+                        ),
+                        field("oplogIdx", u64()),
+                    ]),
+                ),
+            })],
         }),
     );
 }
@@ -1032,7 +1083,9 @@ fn data_value_macro_single_u32() {
     assert_eq!(
         value,
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() })]
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 42u32.into_value_and_type()
+            })]
         })
     );
 }
@@ -1044,9 +1097,15 @@ fn data_value_macro_multiple_primitives() {
         value,
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 100u64.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 3u8.into_value_and_type() }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 42u32.into_value_and_type()
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 100u64.into_value_and_type()
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 3u8.into_value_and_type()
+                }),
             ]
         })
     );
@@ -1086,8 +1145,12 @@ fn data_value_macro_trailing_comma() {
         value,
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 100u64.into_value_and_type() }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 42u32.into_value_and_type()
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 100u64.into_value_and_type()
+                }),
             ]
         })
     );
@@ -1111,7 +1174,9 @@ fn agent_id_macro_single_parameter() {
     assert_eq!(
         id.parameters,
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() })]
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 42u32.into_value_and_type()
+            })]
         })
     );
     assert_eq!(id.phantom_id, None);
@@ -1123,9 +1188,15 @@ fn agent_id_macro_multiple_parameters() {
     assert_eq!(id.agent_type, AgentTypeName("agent-3".to_string()));
     let expected_params = DataValue::Tuple(ElementValues {
         elements: vec![
-            ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() }),
-            ElementValue::ComponentModel(ComponentModelElementValue { value: 100u64.into_value_and_type() }),
-            ElementValue::ComponentModel(ComponentModelElementValue { value: 3u8.into_value_and_type() }),
+            ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 42u32.into_value_and_type(),
+            }),
+            ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 100u64.into_value_and_type(),
+            }),
+            ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 3u8.into_value_and_type(),
+            }),
         ],
     });
     assert_eq!(id.parameters, expected_params);
@@ -1140,8 +1211,12 @@ fn agent_id_macro_with_trailing_comma() {
         id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 100u64.into_value_and_type() }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 42u32.into_value_and_type()
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 100u64.into_value_and_type()
+                }),
             ]
         })
     );
@@ -1168,7 +1243,9 @@ fn phantom_agent_id_macro_single_parameter() {
     assert_eq!(
         id.parameters,
         DataValue::Tuple(ElementValues {
-            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() })]
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: 42u32.into_value_and_type()
+            })]
         })
     );
     assert_eq!(id.phantom_id, Some(phantom_uuid));
@@ -1183,8 +1260,12 @@ fn phantom_agent_id_macro_multiple_parameters() {
         id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 100u64.into_value_and_type() }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 42u32.into_value_and_type()
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 100u64.into_value_and_type()
+                }),
             ]
         })
     );
@@ -1200,8 +1281,12 @@ fn phantom_agent_id_macro_with_trailing_comma() {
         id.parameters,
         DataValue::Tuple(ElementValues {
             elements: vec![
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 42u32.into_value_and_type() }),
-                ElementValue::ComponentModel(ComponentModelElementValue { value: 100u64.into_value_and_type() }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 42u32.into_value_and_type()
+                }),
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: 100u64.into_value_and_type()
+                }),
             ]
         })
     );

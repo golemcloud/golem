@@ -29,15 +29,15 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, Value, ValueAndType};
-use golem_worker_executor::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
-    HostWasmRpc, RpcError, WasmRpc,
-};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
     ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+};
+use golem_worker_executor::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
+    HostWasmRpc, RpcError, WasmRpc,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
@@ -342,8 +342,9 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>
-    {
+    ) -> anyhow::Result<
+        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+    > {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -355,9 +356,7 @@ impl HostWasmRpc for DebugContext {
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
     ) -> anyhow::Result<Result<(), RpcError>> {
-        self.durable_ctx
-            .invoke(self_, method_name, input)
-            .await
+        self.durable_ctx.invoke(self_, method_name, input).await
     }
 
     async fn async_invoke_and_await(
@@ -412,7 +411,9 @@ impl HostFutureInvokeResult for DebugContext {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>,
+        Option<
+            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+        >,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }

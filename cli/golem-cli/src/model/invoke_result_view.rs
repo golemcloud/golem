@@ -64,9 +64,7 @@ impl InvokeResultView {
             let output_schemas = match &method.output_schema {
                 DataSchema::Tuple(schemas) => &schemas.elements,
                 _ => {
-                    log_error(
-                        "Non-tuple output schema not supported for result display",
-                    );
+                    log_error("Non-tuple output schema not supported for result display");
                     return None;
                 }
             };
@@ -80,9 +78,7 @@ impl InvokeResultView {
             let analysed_type = match &first_schema.schema {
                 ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
                 _ => {
-                    log_error(
-                        "Non-ComponentModel output schema not supported for result display",
-                    );
+                    log_error("Non-ComponentModel output schema not supported for result display");
                     return None;
                 }
             };

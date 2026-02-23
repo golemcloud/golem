@@ -55,11 +55,13 @@ use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriorit
 use self::environment::EnvironmentId;
 use crate::base_model::agent::AgentId;
 use crate::model::account::AccountId;
-use crate::model::agent::{AgentTypeResolver, UntypedDataValue};
+use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId};
+use crate::model::oplog::{
+    OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId,
+};
 use crate::model::regions::DeletedRegions;
-use crate::{grpc_uri, SafeDisplay};
+use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -196,10 +198,8 @@ pub trait PoemTypeRequirements:
 }
 
 impl<
-        T: poem_openapi::types::Type
-            + poem_openapi::types::ParseFromJSON
-            + poem_openapi::types::ToJSON,
-    > PoemTypeRequirements for T
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> PoemTypeRequirements for T
 {
 }
 
@@ -715,8 +715,7 @@ pub enum AgentInvocation {
     },
     LoadSnapshot {
         idempotency_key: IdempotencyKey,
-        snapshot: RawSnapshotData
-        // TODO
+        snapshot: RawSnapshotData, // TODO
     },
     SaveSnapshot {
         idempotency_key: IdempotencyKey,
@@ -728,8 +727,7 @@ pub enum AgentInvocation {
         config: Vec<(String, String)>,
         metadata: WorkerMetadata,
         first_entry_index: OplogIndex,
-        entries: Vec<OplogEntry>
-        // TODO
+        entries: Vec<OplogEntry>,
     },
 }
 
@@ -762,22 +760,42 @@ pub enum AgentInvocationPayload {
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum AgentInvocationResult {
-    AgentInitialization {
-        output: UntypedDataValue,
-    },
-    AgentMethod {
-        output: UntypedDataValue,
-    },
+    AgentInitialization { output: UntypedDataValue },
+    AgentMethod { output: UntypedDataValue },
     ManualUpdate,
-    LoadSnapshot {
-        error: Option<String>,
-    },
-    SaveSnapshot {
-        snapshot: RawSnapshotData,
-    },
-    ProcessOplogEntries {
-        error: Option<String>,
-    },
+    LoadSnapshot { error: Option<String> },
+    SaveSnapshot { snapshot: RawSnapshotData },
+    ProcessOplogEntries { error: Option<String> },
+}
+
+impl AgentInvocationResult {
+    /// Extracts the raw `Option<Value>` from the result, for compatibility with
+    /// code paths that still work with raw wasm values.
+    pub fn into_raw_output(self) -> Option<Value> {
+        match self {
+            AgentInvocationResult::AgentInitialization { output }
+            | AgentInvocationResult::AgentMethod { output } => match output {
+                UntypedDataValue::Tuple(elements) => elements.into_iter().find_map(|e| match e {
+                    UntypedElementValue::ComponentModel(v) => Some(v),
+                    _ => None,
+                }),
+                _ => None,
+            },
+            AgentInvocationResult::ManualUpdate => None,
+            AgentInvocationResult::SaveSnapshot { snapshot } => Some(Value::Record(vec![
+                Value::List(snapshot.data.into_iter().map(Value::U8).collect()),
+                Value::String(snapshot.mime_type),
+            ])),
+            AgentInvocationResult::LoadSnapshot { error } => match error {
+                Some(err) => Some(Value::Result(Err(Some(Box::new(Value::String(err)))))),
+                None => Some(Value::Result(Ok(None))),
+            },
+            AgentInvocationResult::ProcessOplogEntries { error } => match error {
+                Some(err) => Some(Value::Result(Err(Some(Box::new(Value::String(err)))))),
+                None => Some(Value::Result(Ok(None))),
+            },
+        }
+    }
 }
 
 impl AgentInvocation {
@@ -790,30 +808,22 @@ impl AgentInvocation {
             AgentInvocationPayload::ManualUpdate { target_revision } => {
                 Self::ManualUpdate { target_revision }
             }
-            AgentInvocationPayload::AgentInitialization { input } => {
-                Self::AgentInitialization {
-                    idempotency_key,
-                    input,
-                    invocation_context,
-                }
-            }
-            AgentInvocationPayload::AgentMethod { method_name, input } => {
-                Self::AgentMethod {
-                    idempotency_key,
-                    method_name,
-                    input,
-                    invocation_context,
-                }
-            }
-            AgentInvocationPayload::LoadSnapshot { snapshot } => {
-                Self::LoadSnapshot {
-                    idempotency_key,
-                    snapshot,
-                }
-            }
-            AgentInvocationPayload::SaveSnapshot => {
-                Self::SaveSnapshot { idempotency_key }
-            }
+            AgentInvocationPayload::AgentInitialization { input } => Self::AgentInitialization {
+                idempotency_key,
+                input,
+                invocation_context,
+            },
+            AgentInvocationPayload::AgentMethod { method_name, input } => Self::AgentMethod {
+                idempotency_key,
+                method_name,
+                input,
+                invocation_context,
+            },
+            AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
+                idempotency_key,
+                snapshot,
+            },
+            AgentInvocationPayload::SaveSnapshot => Self::SaveSnapshot { idempotency_key },
             AgentInvocationPayload::ProcessOplogEntries {
                 account_id,
                 config,
@@ -831,7 +841,13 @@ impl AgentInvocation {
         }
     }
 
-    pub fn into_parts(self) -> (IdempotencyKey, AgentInvocationPayload, InvocationContextStack) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        IdempotencyKey,
+        AgentInvocationPayload,
+        InvocationContextStack,
+    ) {
         match self {
             Self::ManualUpdate { target_revision } => (
                 IdempotencyKey::fresh(),
@@ -924,6 +940,17 @@ impl AgentInvocation {
                 invocation_context, ..
             } => invocation_context.clone(),
             _ => InvocationContextStack::fresh(),
+        }
+    }
+
+    pub fn function_name(&self) -> String {
+        match self {
+            Self::ManualUpdate { .. } => String::new(),
+            Self::AgentInitialization { .. } => "golem:agent/guest.{initialize}".to_string(),
+            Self::AgentMethod { method_name, .. } => method_name.clone(),
+            Self::LoadSnapshot { .. } => "golem:api/load-snapshot.{load}".to_string(),
+            Self::SaveSnapshot { .. } => "golem:api/save-snapshot.{save}".to_string(),
+            Self::ProcessOplogEntries { .. } => "golem:api/oplog-processor.{process}".to_string(),
         }
     }
 }

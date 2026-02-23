@@ -30,9 +30,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData,
-    PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription, RawSnapshotData,
-    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, PublicOplogEntry,
+    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotBasedUpdateParameters,
 };
 use golem_common::model::{Empty, Timestamp};
 
@@ -455,7 +455,9 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                 todo!("ProcessOplogEntries WIT conversion not yet implemented")
             }
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Self::ManualUpdate(oplog::ManualUpdateParameters { target_revision: target_revision.into() })
+                Self::ManualUpdate(oplog::ManualUpdateParameters {
+                    target_revision: target_revision.into(),
+                })
             }
         }
     }
@@ -464,9 +466,9 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
 impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
     fn from(value: PublicAgentInvocationResult) -> Self {
         match value {
-            PublicAgentInvocationResult::AgentInitialization(
-                AgentInvocationOutputParameters { output },
-            ) => {
+            PublicAgentInvocationResult::AgentInitialization(AgentInvocationOutputParameters {
+                output,
+            }) => {
                 let schema = output.extract_schema();
                 Self::AgentInitialization(oplog::AgentInvocationOutputParameters {
                     output: oplog::TypedDataValue {

@@ -22,15 +22,14 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey,
-    OwnedWorkerId,
+    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedWorkerId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use std::collections::HashSet;
 use std::hash::Hasher;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tracing::debug;
 use uuid::Uuid;
@@ -338,7 +337,13 @@ impl ReplayState {
         let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
             oplog_entry
         } else {
-            panic!("missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}", self.owned_worker_id, read_idx, self.replay_target.get(), self.last_replayed_non_hint_index.get())
+            panic!(
+                "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
+                self.owned_worker_id,
+                read_idx,
+                self.replay_target.get(),
+                self.last_replayed_non_hint_index.get()
+            )
         };
 
         // record side effects that need to be applied at the next opportunity

@@ -18,8 +18,8 @@ use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataSchema, DataValue, ElementValue,
     ElementValues, UnstructuredBinaryElementValue, UntypedDataValue,
 };
-use golem_wasm::analysis::AnalysedType;
 use golem_wasm::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
 use http::StatusCode;
 use std::collections::HashMap;
 use tracing::debug;
@@ -76,13 +76,14 @@ fn map_single_element_agent_response(
             map_component_model_agent_response(value)
         }
 
-        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: BinaryReference::Inline(binary), .. }) => {
-            Ok(RouteExecutionResult {
-                status: StatusCode::OK,
-                headers: HashMap::new(),
-                body: ResponseBody::UnstructuredBinaryBody { body: binary },
-            })
-        }
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            value: BinaryReference::Inline(binary),
+            ..
+        }) => Ok(RouteExecutionResult {
+            status: StatusCode::OK,
+            headers: HashMap::new(),
+            body: ResponseBody::UnstructuredBinaryBody { body: binary },
+        }),
 
         _ => Err(RequestHandlerError::invariant_violated(
             "Unexpected response type",

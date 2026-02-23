@@ -252,11 +252,17 @@ impl ToCompactString for ElementValues {
 impl ToCompactString for ElementValue {
     fn to_compact_string(&self) -> String {
         match self {
-            ElementValue::ComponentModel(ComponentModelElementValue { value }) => value.to_compact_string(),
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                value.to_compact_string()
+            }
             // TODO: also encode as wave for escaping?
-            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => value.to_string(),
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                value.to_string()
+            }
             // TODO: also encode as wave for escaping?
-            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => value.to_string(),
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                value.to_string()
+            }
         }
     }
 }

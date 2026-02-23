@@ -27,8 +27,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
     CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    ResumeWorkerRequest,
-    RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;

@@ -434,7 +434,10 @@ pub enum PersistenceLevel {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct RawSnapshotData {

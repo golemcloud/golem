@@ -16,11 +16,11 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::p2::bindings::sockets::tcp::{
     Duration, Host, HostTcpSocket, InputStream, IpAddressFamily, IpSocketAddress, Network,
     OutputStream, Pollable, ShutdownType, TcpSocket,
 };
-use wasmtime_wasi::p2::SocketError;
 
 impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
     async fn start_bind(

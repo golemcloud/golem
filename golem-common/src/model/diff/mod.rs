@@ -131,11 +131,7 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }
 
@@ -176,10 +172,6 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }

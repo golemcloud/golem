@@ -15,7 +15,7 @@
 pub use super::PublicOplogEntry;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
-    PublicAttribute, PublicAttributeValue, PublicAgentInvocation, StringAttributeValue,
+    PublicAgentInvocation, PublicAttribute, PublicAttributeValue, StringAttributeValue,
 };
 use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -121,7 +121,12 @@ impl PublicOplogEntry {
                         }
                         PublicAgentInvocation::AgentMethodInvocation(inv_params) => {
                             Self::string_match("agent-method-invocation", &[], query_path, query)
-                                || Self::string_match(&inv_params.method_name, &[], query_path, query)
+                                || Self::string_match(
+                                    &inv_params.method_name,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
                                 || Self::string_match(
                                     &inv_params.idempotency_key.value,
                                     &[],

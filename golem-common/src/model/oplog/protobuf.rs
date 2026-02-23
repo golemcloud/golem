@@ -13,20 +13,23 @@
 // limitations under the License.
 
 use super::{
-    AgentInitializationParameters, AgentInvocationOutputParameters, AgentMethodInvocationParameters,
-    FallibleResultParameters, JsonSnapshotData, LoadSnapshotParameters, LogLevel,
-    ManualUpdateParameters, OplogCursor, PluginInstallationDescription,
-    ProcessOplogEntriesParameters, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex, PublicRetryConfig,
-    PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
-    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError,
-    WorkerResourceId, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    AgentInitializationParameters, AgentInvocationOutputParameters,
+    AgentMethodInvocationParameters, FallibleResultParameters, JsonSnapshotData,
+    LoadSnapshotParameters, LogLevel, ManualUpdateParameters, OplogCursor,
+    PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
+    PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    StringAttributeValue, WorkerError, WorkerResourceId, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::model::Empty;
 use crate::model::agent::DataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::oplog::PersistenceLevel;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -39,13 +42,11 @@ use crate::model::oplog::public_oplog_entry::{
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
-use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
-use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    invocation_span, oplog_entry, wrapped_function_type, AttributeValue, ExternalParentSpan,
-    InvocationSpan, LocalInvocationSpan,
+    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
+    oplog_entry, wrapped_function_type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
@@ -257,35 +258,31 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .try_into()?,
                 }))
             }
-            oplog_entry::Entry::AgentInvocationStarted(agent_invocation_started) => {
-                Ok(PublicOplogEntry::AgentInvocationStarted(
-                    AgentInvocationStartedParams {
-                        timestamp: agent_invocation_started
-                            .timestamp
-                            .ok_or("Missing timestamp field")?
-                            .into(),
-                        invocation: agent_invocation_started
-                            .invocation
-                            .ok_or("Missing invocation field")?
-                            .try_into()?,
-                    },
-                ))
-            }
-            oplog_entry::Entry::AgentInvocationFinished(agent_invocation_finished) => {
-                Ok(PublicOplogEntry::AgentInvocationFinished(
-                    AgentInvocationFinishedParams {
-                        timestamp: agent_invocation_finished
-                            .timestamp
-                            .ok_or("Missing timestamp field")?
-                            .into(),
-                        result: agent_invocation_finished
-                            .result
-                            .ok_or("Missing result field")?
-                            .try_into()?,
-                        consumed_fuel: agent_invocation_finished.consumed_fuel,
-                    },
-                ))
-            }
+            oplog_entry::Entry::AgentInvocationStarted(agent_invocation_started) => Ok(
+                PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                    timestamp: agent_invocation_started
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    invocation: agent_invocation_started
+                        .invocation
+                        .ok_or("Missing invocation field")?
+                        .try_into()?,
+                }),
+            ),
+            oplog_entry::Entry::AgentInvocationFinished(agent_invocation_finished) => Ok(
+                PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+                    timestamp: agent_invocation_finished
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    result: agent_invocation_finished
+                        .result
+                        .ok_or("Missing result field")?
+                        .try_into()?,
+                    consumed_fuel: agent_invocation_finished.consumed_fuel,
+                }),
+            ),
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
                 timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
@@ -1188,17 +1185,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 let typed = init
                     .constructor_parameters
                     .ok_or("Missing constructor_parameters field")?;
-                let schema = typed
-                    .schema
-                    .ok_or("Missing schema field")?
-                    .try_into()?;
-                let untyped = typed
-                    .value
-                    .ok_or("Missing value field")?
-                    .try_into()?;
+                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
+                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
                 let constructor_parameters = DataValue::try_from_untyped(untyped, schema)?;
-                let invocation_context =
-                    encode_public_span_data(init.invocation_context)?;
+                let invocation_context = encode_public_span_data(init.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentInitialization(
                     AgentInitializationParameters {
                         idempotency_key: init
@@ -1216,17 +1206,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                 let typed = method
                     .function_input
                     .ok_or("Missing function_input field")?;
-                let schema = typed
-                    .schema
-                    .ok_or("Missing schema field")?
-                    .try_into()?;
-                let untyped = typed
-                    .value
-                    .ok_or("Missing value field")?
-                    .try_into()?;
+                let schema = typed.schema.ok_or("Missing schema field")?.try_into()?;
+                let untyped = typed.value.ok_or("Missing value field")?.try_into()?;
                 let function_input = DataValue::try_from_untyped(untyped, schema)?;
-                let invocation_context =
-                    encode_public_span_data(method.invocation_context)?;
+                let invocation_context = encode_public_span_data(method.invocation_context)?;
                 Ok(PublicAgentInvocation::AgentMethodInvocation(
                     AgentMethodInvocationParameters {
                         idempotency_key: method
@@ -1241,13 +1224,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                     },
                 ))
             }
-            Invocation::SaveSnapshot(_) => {
-                Ok(PublicAgentInvocation::SaveSnapshot(Empty {}))
-            }
+            Invocation::SaveSnapshot(_) => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
             Invocation::LoadSnapshot(load) => {
-                let snapshot = load
-                    .snapshot
-                    .ok_or("Missing snapshot field")?;
+                let snapshot = load.snapshot.ok_or("Missing snapshot field")?;
                 let data = match snapshot.data.ok_or("Missing data field")? {
                     golem_api_grpc::proto::golem::worker::snapshot_data::Data::Raw(raw) => {
                         PublicSnapshotData::Raw(RawSnapshotData {
@@ -1261,25 +1240,23 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                         })
                     }
                 };
-                Ok(PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
-                    snapshot: data,
-                }))
-            }
-            Invocation::ProcessOplogEntries(process) => {
-                Ok(PublicAgentInvocation::ProcessOplogEntries(
-                    ProcessOplogEntriesParameters {
-                        idempotency_key: process
-                            .idempotency_key
-                            .ok_or("Missing idempotency_key field")?
-                            .into(),
-                    },
+                Ok(PublicAgentInvocation::LoadSnapshot(
+                    LoadSnapshotParameters { snapshot: data },
                 ))
             }
-            Invocation::ManualUpdate(manual) => {
-                Ok(PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+            Invocation::ProcessOplogEntries(process) => Ok(
+                PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
+                    idempotency_key: process
+                        .idempotency_key
+                        .ok_or("Missing idempotency_key field")?
+                        .into(),
+                }),
+            ),
+            Invocation::ManualUpdate(manual) => Ok(PublicAgentInvocation::ManualUpdate(
+                ManualUpdateParameters {
                     target_revision: manual.target_revision.try_into()?,
-                }))
-            }
+                },
+            )),
         }
     }
 }
@@ -1365,24 +1342,22 @@ impl TryFrom<PublicAgentInvocation>
                     },
                 )
             }
-            PublicAgentInvocation::ProcessOplogEntries(process) => {
-                Invocation::ProcessOplogEntries(
-                    golem_api_grpc::proto::golem::worker::ProcessOplogEntriesInvocationParameters {
-                        idempotency_key: Some(process.idempotency_key.into()),
-                    },
-                )
-            }
-            PublicAgentInvocation::ManualUpdate(manual) => {
-                Invocation::ManualUpdate(
-                    golem_api_grpc::proto::golem::worker::ManualUpdateInvocationParameters {
-                        target_revision: manual.target_revision.into(),
-                    },
-                )
-            }
+            PublicAgentInvocation::ProcessOplogEntries(process) => Invocation::ProcessOplogEntries(
+                golem_api_grpc::proto::golem::worker::ProcessOplogEntriesInvocationParameters {
+                    idempotency_key: Some(process.idempotency_key.into()),
+                },
+            ),
+            PublicAgentInvocation::ManualUpdate(manual) => Invocation::ManualUpdate(
+                golem_api_grpc::proto::golem::worker::ManualUpdateInvocationParameters {
+                    target_revision: manual.target_revision.into(),
+                },
+            ),
         };
-        Ok(golem_api_grpc::proto::golem::worker::PublicAgentInvocation {
-            invocation: Some(invocation),
-        })
+        Ok(
+            golem_api_grpc::proto::golem::worker::PublicAgentInvocation {
+                invocation: Some(invocation),
+            },
+        )
     }
 }
 
@@ -1412,16 +1387,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     AgentInvocationOutputParameters { output },
                 ))
             }
-            ProtoResult::ManualUpdate(_) => {
-                Ok(PublicAgentInvocationResult::ManualUpdate(Empty {}))
-            }
-            ProtoResult::LoadSnapshot(opt_err) => {
-                Ok(PublicAgentInvocationResult::LoadSnapshot(
-                    FallibleResultParameters {
-                        error: opt_err.error,
-                    },
-                ))
-            }
+            ProtoResult::ManualUpdate(_) => Ok(PublicAgentInvocationResult::ManualUpdate(Empty {})),
+            ProtoResult::LoadSnapshot(opt_err) => Ok(PublicAgentInvocationResult::LoadSnapshot(
+                FallibleResultParameters {
+                    error: opt_err.error,
+                },
+            )),
             ProtoResult::SaveSnapshot(snapshot) => {
                 let data = match snapshot.data.ok_or("Missing data field")? {
                     golem_api_grpc::proto::golem::worker::snapshot_data::Data::Raw(raw) => {
@@ -1440,13 +1411,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     SaveSnapshotResultParameters { snapshot: data },
                 ))
             }
-            ProtoResult::ProcessOplogEntries(opt_err) => {
-                Ok(PublicAgentInvocationResult::ProcessOplogEntries(
-                    FallibleResultParameters {
-                        error: opt_err.error,
-                    },
-                ))
-            }
+            ProtoResult::ProcessOplogEntries(opt_err) => Ok(
+                PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters {
+                    error: opt_err.error,
+                }),
+            ),
         }
     }
 }
@@ -1522,9 +1491,11 @@ impl TryFrom<PublicAgentInvocationResult>
                 )
             }
         };
-        Ok(golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult {
-            result: Some(result),
-        })
+        Ok(
+            golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult {
+                result: Some(result),
+            },
+        )
     }
 }
 

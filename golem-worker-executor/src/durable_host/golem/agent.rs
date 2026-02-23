@@ -16,6 +16,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use golem_common::model::PromiseId;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
@@ -29,7 +30,6 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
     HostResponseGolemAgentWebhookUrl,
 };
-use golem_common::model::PromiseId;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -133,16 +133,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn parse_agent_id(
         &mut self,
         agent_id: String,
-    ) -> anyhow::Result<
-        Result<
-            (
-                String,
-                DataValue,
-                Option<golem_wasm::Uuid>,
-            ),
-            AgentError,
-        >,
-    > {
+    ) -> anyhow::Result<Result<(String, DataValue, Option<golem_wasm::Uuid>), AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
@@ -202,7 +193,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
             let Some(webhook_url) = webhook_url else {
-                return Err(anyhow!("Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"));
+                return Err(anyhow!(
+                    "Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"
+                ));
             };
 
             let persisted = durability

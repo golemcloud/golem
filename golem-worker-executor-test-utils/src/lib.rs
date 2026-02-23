@@ -65,14 +65,14 @@ use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonito
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, Value, ValueAndType};
-use golem_worker_executor::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
-};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
     ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+};
+use golem_worker_executor::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
 };
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::golem_api_1_x;
@@ -890,8 +890,9 @@ impl HostWasmRpc for TestWorkerCtx {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>
-    {
+    ) -> anyhow::Result<
+        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+    > {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -958,7 +959,9 @@ impl HostFutureInvokeResult for TestWorkerCtx {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>,
+        Option<
+            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+        >,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }

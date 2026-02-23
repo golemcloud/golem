@@ -39,38 +39,14 @@ pub mod types;
 
 // Trait to map RdbmsType to the correct HostPayloadPair types for durability
 pub trait RdbmsDurabilityPairs {
-    type ConnExecute: HostPayloadPair<
-        Req = HostRequestGolemRdbmsRequest,
-        Resp = HostResponseGolemRdbmsRowCount,
-    >;
-    type ConnQuery: HostPayloadPair<
-        Req = HostRequestGolemRdbmsRequest,
-        Resp = HostResponseGolemRdbmsResult,
-    >;
-    type ConnQueryStream: HostPayloadPair<
-        Req = HostRequestNoInput,
-        Resp = HostResponseGolemRdbmsRequest,
-    >;
-    type TxnExecute: HostPayloadPair<
-        Req = HostRequestGolemRdbmsRequest,
-        Resp = HostResponseGolemRdbmsRowCount,
-    >;
-    type TxnQuery: HostPayloadPair<
-        Req = HostRequestGolemRdbmsRequest,
-        Resp = HostResponseGolemRdbmsResult,
-    >;
-    type TxnQueryStream: HostPayloadPair<
-        Req = HostRequestNoInput,
-        Resp = HostResponseGolemRdbmsRequest,
-    >;
-    type StreamGetColumns: HostPayloadPair<
-        Req = HostRequestNoInput,
-        Resp = HostResponseGolemRdbmsColumns,
-    >;
-    type StreamGetNext: HostPayloadPair<
-        Req = HostRequestNoInput,
-        Resp = HostResponseGolemRdbmsResultChunk,
-    >;
+    type ConnExecute: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
+    type ConnQuery: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
+    type ConnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
+    type TxnExecute: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
+    type TxnQuery: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
+    type TxnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
+    type StreamGetColumns: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsColumns>;
+    type StreamGetNext: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsResultChunk>;
 }
 
 async fn open_db_connection<Ctx, T, E>(

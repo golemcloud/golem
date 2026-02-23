@@ -16,6 +16,10 @@ use super::{HasWasiConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
+use crate::preview2::golem::agent::host::{
+    CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
+    HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
+};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -58,10 +62,6 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
-use crate::preview2::golem::agent::host::{
-    CancellationToken, FutureInvokeResult, Host as AgentHost, HostCancellationToken,
-    HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
-};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
@@ -396,8 +396,9 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_common::model::agent::bindings::golem::agent::common::DataValue,
-    ) -> anyhow::Result<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>
-    {
+    ) -> anyhow::Result<
+        Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+    > {
         self.durable_ctx
             .invoke_and_await(self_, method_name, input)
             .await
@@ -464,7 +465,9 @@ impl HostFutureInvokeResult for Context {
         &mut self,
         self_: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<
-        Option<Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>>,
+        Option<
+            Result<golem_common::model::agent::bindings::golem::agent::common::DataValue, RpcError>,
+        >,
     > {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
@@ -487,16 +490,18 @@ impl HostCancellationToken for Context {
 impl AgentHost for Context {
     async fn get_all_agent_types(
         &mut self,
-    ) -> anyhow::Result<Vec<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>>
-    {
+    ) -> anyhow::Result<
+        Vec<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>,
+    > {
         AgentHost::get_all_agent_types(&mut self.durable_ctx).await
     }
 
     async fn get_agent_type(
         &mut self,
         agent_type_name: String,
-    ) -> anyhow::Result<Option<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>>
-    {
+    ) -> anyhow::Result<
+        Option<golem_common::model::agent::bindings::golem::agent::common::RegisteredAgentType>,
+    > {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
     }
 

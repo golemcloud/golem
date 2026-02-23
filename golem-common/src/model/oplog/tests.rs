@@ -15,12 +15,12 @@
 use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
-    BeginAtomicRegionParams, BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams,
-    CreateResourceParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
-    AgentInvocationFinishedParams, AgentInvocationStartedParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
-    RestartParams, SuccessfulUpdateParams, SuspendParams,
+    AgentInvocationFinishedParams, AgentInvocationStartedParams, BeginAtomicRegionParams,
+    BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams, CreateResourceParams,
+    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
+    NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams, RestartParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInvocationOutputParameters, AgentMethodInvocationParameters, LogLevel,
@@ -33,7 +33,7 @@ use crate::model::regions::OplogRegion;
 use crate::model::{
     AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp, WorkerId,
 };
-use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
+use golem_wasm::analysis::analysed_type::{r#enum, field, list, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,14 +110,18 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
             method_name: "test".to_string(),
             function_input: DataValue::Tuple(ElementValues {
                 elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
-                        value: Value::String("test".to_string()),
-                        typ: str(),
-                    } }),
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
-                        value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                        typ: record(vec![field("x", s16()), field("y", s16())]),
-                    } }),
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::String("test".to_string()),
+                            typ: str(),
+                        },
+                    }),
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                            typ: record(vec![field("x", s16()), field("y", s16())]),
+                        },
+                    }),
                 ],
             }),
             trace_id: TraceId::generate(),
@@ -148,12 +152,12 @@ fn agent_invocation_finished_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
             output: DataValue::Tuple(ElementValues {
-                elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType {
                         value: Value::Enum(1),
                         typ: r#enum(&["red", "green", "blue"]),
-                    } }),
-                ],
+                    },
+                })],
             }),
         }),
         consumed_fuel: 100,
@@ -297,14 +301,18 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
             method_name: "test".to_string(),
             function_input: DataValue::Tuple(ElementValues {
                 elements: vec![
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
-                        value: Value::String("test".to_string()),
-                        typ: str(),
-                    } }),
-                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
-                        value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                        typ: record(vec![field("x", s16()), field("y", s16())]),
-                    } }),
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::String("test".to_string()),
+                            typ: str(),
+                        },
+                    }),
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                            typ: record(vec![field("x", s16()), field("y", s16())]),
+                        },
+                    }),
                 ],
             }),
             trace_id: TraceId::generate(),

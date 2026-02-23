@@ -15,7 +15,7 @@
 use combine::parser::char::{alpha_num, string};
 use combine::parser::repeat::take_until;
 use combine::stream::position::Stream;
-use combine::{attempt, choice, eof, many1, optional, token, EasyParser, ParseError, Parser};
+use combine::{EasyParser, ParseError, Parser, attempt, choice, eof, many1, optional, token};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,

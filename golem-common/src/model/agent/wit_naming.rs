@@ -18,11 +18,11 @@ use super::{
     ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
     NamedElementValues,
 };
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
-use golem_wasm::ValueAndType;
 
 /// ToWitNaming allows converting discovered AgentTypes to WIT and WAVE compatible naming for named
 /// elements
@@ -301,9 +301,11 @@ impl ToWitNaming for NamedElementValue {
 impl ToWitNaming for ElementValue {
     fn to_wit_naming(&self) -> Self {
         match self {
-            ElementValue::ComponentModel(ComponentModelElementValue { value }) => ElementValue::ComponentModel(ComponentModelElementValue {
-                value: ValueAndType::new(value.value.clone(), value.typ.to_wit_naming()),
-            }),
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(value.value.clone(), value.typ.to_wit_naming()),
+                })
+            }
             ElementValue::UnstructuredText(_) => self.clone(),
             ElementValue::UnstructuredBinary(_) => self.clone(),
         }

@@ -42,11 +42,11 @@ use crate::model::component_metadata::ComponentMetadata;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
-use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::{
-    parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
-    ValueAndType,
+    FromValue, IntoValue, IntoValueAndType, Value, ValueAndType, parse_value_and_type,
+    print_value_and_type,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
 use regex::Regex;
@@ -336,9 +336,9 @@ impl ElementValue {
             ElementValue::UnstructuredText(UnstructuredTextElementValue { descriptor, .. }) => {
                 ElementSchema::UnstructuredText(descriptor.clone())
             }
-            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { descriptor, .. }) => {
-                ElementSchema::UnstructuredBinary(descriptor.clone())
-            }
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                descriptor, ..
+            }) => ElementSchema::UnstructuredBinary(descriptor.clone()),
         }
     }
 }
@@ -457,7 +457,9 @@ impl ElementValue {
                 let mut value_and_type = parse_value_and_type(&typ.element_type.to_wit_naming(), s)
                     .map_err(|e| format!("Failed to parse parameter value {s}: {e}"))?;
                 value_and_type.typ = typ.element_type.clone(); // Store the original type, not the wit-naming one
-                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: value_and_type }))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: value_and_type,
+                }))
             }
             ElementSchema::UnstructuredText(descriptor) => {
                 if s.starts_with('"') && s.ends_with('"') {
@@ -466,13 +468,15 @@ impl ElementValue {
                         Value::String(data) => data,
                         _ => unreachable!(),
                     };
-                    Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                        value: TextReference::Inline(TextSource {
-                            data,
-                            text_type: None,
-                        }),
-                        descriptor: descriptor.clone(),
-                    }))
+                    Ok(ElementValue::UnstructuredText(
+                        UnstructuredTextElementValue {
+                            value: TextReference::Inline(TextSource {
+                                data,
+                                text_type: None,
+                            }),
+                            descriptor: descriptor.clone(),
+                        },
+                    ))
                 } else if s.starts_with('[') {
                     if let Some((prefix, rest)) = s.split_once(']') {
                         if rest.starts_with('"') && rest.ends_with('"') {
@@ -482,15 +486,17 @@ impl ElementValue {
                                 Value::String(data) => data,
                                 _ => unreachable!(),
                             };
-                            Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                                value: TextReference::Inline(TextSource {
-                                    data,
-                                    text_type: Some(TextType {
-                                        language_code: language_code.to_string(),
+                            Ok(ElementValue::UnstructuredText(
+                                UnstructuredTextElementValue {
+                                    value: TextReference::Inline(TextSource {
+                                        data,
+                                        text_type: Some(TextType {
+                                            language_code: language_code.to_string(),
+                                        }),
                                     }),
-                                }),
-                                descriptor: descriptor.clone(),
-                            }))
+                                    descriptor: descriptor.clone(),
+                                },
+                            ))
                         } else {
                             Err(format!("Invalid unstructured text parameter syntax: {s}"))
                         }
@@ -500,12 +506,14 @@ impl ElementValue {
                 } else {
                     let url = ::url::Url::parse(s)
                         .map_err(|e| format!("Failed to parse parameter value {s} as URL: {e}"))?;
-                    Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                        value: TextReference::Url(Url {
-                            value: url.to_string(),
-                        }),
-                        descriptor: descriptor.clone(),
-                    }))
+                    Ok(ElementValue::UnstructuredText(
+                        UnstructuredTextElementValue {
+                            value: TextReference::Url(Url {
+                                value: url.to_string(),
+                            }),
+                            descriptor: descriptor.clone(),
+                        },
+                    ))
                 }
             }
             ElementSchema::UnstructuredBinary(descriptor) => {
@@ -517,15 +525,17 @@ impl ElementValue {
                             let data = base64::engine::general_purpose::STANDARD
                                 .decode(base64_data.as_bytes())
                                 .map_err(|e| format!("Failed to decode base64 data: {e}"))?;
-                            Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                                value: BinaryReference::Inline(BinarySource {
-                                    data,
-                                    binary_type: BinaryType {
-                                        mime_type: mime_type.to_string(),
-                                    },
-                                }),
-                                descriptor: descriptor.clone(),
-                            }))
+                            Ok(ElementValue::UnstructuredBinary(
+                                UnstructuredBinaryElementValue {
+                                    value: BinaryReference::Inline(BinarySource {
+                                        data,
+                                        binary_type: BinaryType {
+                                            mime_type: mime_type.to_string(),
+                                        },
+                                    }),
+                                    descriptor: descriptor.clone(),
+                                },
+                            ))
                         } else {
                             Err(format!("Invalid unstructured text parameter syntax: {s}"))
                         }
@@ -535,12 +545,14 @@ impl ElementValue {
                 } else {
                     let url = ::url::Url::parse(s)
                         .map_err(|e| format!("Failed to parse parameter value {s} as URL: {e}"))?;
-                    Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                        value: BinaryReference::Url(Url {
-                            value: url.to_string(),
-                        }),
-                        descriptor: descriptor.clone(),
-                    }))
+                    Ok(ElementValue::UnstructuredBinary(
+                        UnstructuredBinaryElementValue {
+                            value: BinaryReference::Url(Url {
+                                value: url.to_string(),
+                            }),
+                            descriptor: descriptor.clone(),
+                        },
+                    ))
                 }
             }
         }
@@ -554,8 +566,12 @@ impl Display for ElementValue {
                 write!(f, "{}", print_value_and_type(value).unwrap_or_default())
                 // NOTE: this is expected to be always working, because we only use values in ElementValues that are printable
             }
-            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => write!(f, "{value}"),
-            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => write!(f, "{value}"),
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                write!(f, "{value}")
+            }
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                write!(f, "{value}")
+            }
         }
     }
 }
