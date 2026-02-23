@@ -25,8 +25,9 @@ use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActiva
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -55,9 +56,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
-    Timestamp, TimestampedAgentInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, ScanCursor,
+    ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation, WorkerEvent, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -67,6 +68,7 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
+use chrono::{DateTime, Utc};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -1637,10 +1639,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mode = request.mode();
 
-        let worker = self.get_or_create(&request).await?;
+        let schedule_at: Option<DateTime<Utc>> = request.schedule_at.and_then(|ts| {
+            DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
+        });
+
+        let account_id: AccountId = request
+            .component_owner_account_id
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
+            })?;
+
+        let owned_worker_id =
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
 
         let principal: Principal = request
             .principal
+            .clone()
             .map(|p| p.try_into())
             .transpose()
             .map_err(|e: String| {
@@ -1661,6 +1678,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
+                let worker = self.get_or_create(&request).await?;
                 let invocation_result = worker.invoke_and_await(invocation).await?;
 
                 match invocation_result {
@@ -1672,9 +1690,26 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
-                // TODO: scheduled invocation support (this is trigger)
-                worker.invoke(invocation).await?;
-                Ok(None)
+                match schedule_at {
+                    Some(scheduled_time) => {
+                        self.scheduler_service()
+                            .schedule(
+                                scheduled_time,
+                                ScheduledAction::Invoke {
+                                    account_id,
+                                    owned_worker_id,
+                                    invocation,
+                                },
+                            )
+                            .await;
+                        Ok(None)
+                    }
+                    None => {
+                        let worker = self.get_or_create(&request).await?;
+                        worker.invoke(invocation).await?;
+                        Ok(None)
+                    }
+                }
             }
         }
     }
