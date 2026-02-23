@@ -54,14 +54,6 @@ export default (async () => { return await import("./src/main");})();
         external: externalPackages,
         plugins: [
             virtualAgentMainPlugin(),
-            alias({
-                entries: [
-                    {
-                        find: "common",
-                        replacement: path.resolve(dir, "../common-ts/src"),
-                    },
-                ],
-            }),
             nodeResolve({
                 extensions: [".mjs", ".js", ".node", ".ts"],
             }),
