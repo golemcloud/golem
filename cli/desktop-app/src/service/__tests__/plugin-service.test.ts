@@ -105,7 +105,7 @@ describe("PluginService CLI commands", () => {
         description: "A test plugin",
         icon: "plugin.wasm",
         homepage: "https://example.com",
-        specs: [],
+        specs: { type: "App" as const },
       });
       expect(invoke).toHaveBeenCalledWith("call_golem_command", {
         command: "plugin",

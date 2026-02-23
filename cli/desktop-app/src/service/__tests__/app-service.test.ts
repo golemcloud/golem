@@ -23,6 +23,7 @@ vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
 
 import { CLIService } from "../client/cli-service";
 import { AppService } from "../client/app-service";
+import { ManifestService } from "../client/manifest-service";
 
 const mockedInvoke = invoke as MockedFunction<typeof invoke>;
 
@@ -34,7 +35,9 @@ describe("AppService CLI commands", () => {
     mockedInvoke.mockResolvedValue("true");
 
     const cliService = new CLIService();
-    service = new AppService(cliService);
+    const manifestService = new ManifestService(cliService);
+    vi.spyOn(manifestService, "migrateDeploymentSchema").mockResolvedValue();
+    service = new AppService(cliService, manifestService);
   });
 
   describe("buildApp", () => {

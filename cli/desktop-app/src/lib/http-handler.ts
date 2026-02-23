@@ -7,7 +7,7 @@
  * @param exportName - The export name to check
  * @returns true if it's an HTTP incoming handler
  */
-export function isHttpIncomingHandler(exportName: string): boolean {
+function isHttpIncomingHandler(exportName: string): boolean {
   if (!exportName) return false;
 
   const normalizedName = exportName.toLowerCase();

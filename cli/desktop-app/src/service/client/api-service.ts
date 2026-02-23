@@ -81,6 +81,7 @@ export class APIService {
   };
 
   public deployDefinition = async (appId: string, _definitionId: string) => {
+    await this.manifestService.migrateDeploymentSchema(appId);
     // CLI v1.4.2: api definition deploy removed, use root deploy command instead
     // This deploys the entire application including all API definitions
     return await this.cliService.callCLI(appId, "deploy", []);

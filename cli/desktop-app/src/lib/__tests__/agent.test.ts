@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   parseToJsonEditor,
   safeFormatJSON,
-  getCaretCoordinates,
   parseTooltipTypesData,
   parseTypesData,
   validateJsonStructure,
@@ -264,80 +263,6 @@ describe("agent utilities", () => {
 
       const result = safeFormatJSON(input);
       expect(result).toBe(input);
-    });
-  });
-
-  describe("getCaretCoordinates", () => {
-    it("should calculate caret coordinates for textarea", () => {
-      // Create a mock textarea element
-      const textarea = document.createElement("textarea");
-      textarea.value = "Hello\nWorld\nTest";
-      textarea.style.font = "14px monospace";
-      textarea.style.padding = "10px";
-      textarea.style.border = "1px solid black";
-
-      // Mock getComputedStyle
-      const mockComputedStyle = {
-        direction: "ltr",
-        boxSizing: "border-box",
-        width: "200px",
-        height: "100px",
-        overflowX: "hidden",
-        overflowY: "auto",
-        borderTopWidth: "1px",
-        borderRightWidth: "1px",
-        borderBottomWidth: "1px",
-        borderLeftWidth: "1px",
-        borderStyle: "solid",
-        paddingTop: "10px",
-        paddingRight: "10px",
-        paddingBottom: "10px",
-        paddingLeft: "10px",
-        fontStyle: "normal",
-        fontVariant: "normal",
-        fontWeight: "normal",
-        fontStretch: "normal",
-        fontSize: "14px",
-        fontSizeAdjust: "none",
-        lineHeight: "18px",
-        fontFamily: "monospace",
-        textAlign: "left",
-        textTransform: "none",
-        textIndent: "0px",
-        textDecoration: "none",
-        letterSpacing: "normal",
-        wordSpacing: "normal",
-        tabSize: "4",
-        MozTabSize: "4",
-      };
-
-      // Mock getComputedStyle function
-      const originalGetComputedStyle = window.getComputedStyle;
-      window.getComputedStyle = vi.fn(
-        () =>
-          ({
-            ...mockComputedStyle,
-            getPropertyValue: vi.fn(
-              (prop: string) =>
-                mockComputedStyle[prop as keyof typeof mockComputedStyle] || "",
-            ),
-          }) as unknown as CSSStyleDeclaration,
-      );
-
-      document.body.appendChild(textarea);
-
-      const result = getCaretCoordinates(textarea, 6); // Position after "Hello\n"
-
-      expect(result).toHaveProperty("top");
-      expect(result).toHaveProperty("left");
-      expect(result).toHaveProperty("height");
-      expect(typeof result.top).toBe("number");
-      expect(typeof result.left).toBe("number");
-      expect(typeof result.height).toBe("number");
-
-      // Clean up
-      document.body.removeChild(textarea);
-      window.getComputedStyle = originalGetComputedStyle;
     });
   });
 

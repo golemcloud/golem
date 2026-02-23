@@ -102,7 +102,7 @@ const createMenuItems = (
 /**
  * Layout component for the component details page
  */
-export const ComponentLayout = () => {
+const ComponentLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { componentId = "", appId } = useParams();

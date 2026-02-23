@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   convertToWaveFormat,
-  convertToWaveFormatWithType,
   convertPayloadToWaveArgs,
   convertValuesToWaveArgs,
 } from "../wave";
@@ -49,7 +48,7 @@ describe("WAVE format conversion", () => {
           cases: ["low", "medium", "high"],
         },
       };
-      expect(convertToWaveFormatWithType("high", parameter)).toBe("high");
+      expect(convertToWaveFormat("high", parameter.typ)).toBe("high");
     });
   });
 
@@ -69,10 +68,8 @@ describe("WAVE format conversion", () => {
           inner: { type: "str" },
         },
       };
-      expect(convertToWaveFormatWithType("hello", parameter)).toBe(
-        'some("hello")',
-      );
-      expect(convertToWaveFormatWithType(null, parameter)).toBe("none");
+      expect(convertToWaveFormat("hello", parameter.typ)).toBe('some("hello")');
+      expect(convertToWaveFormat(null, parameter.typ)).toBe("none");
     });
   });
 
@@ -93,7 +90,7 @@ describe("WAVE format conversion", () => {
           inner: { type: "str" },
         },
       };
-      expect(convertToWaveFormatWithType(["hello", "world"], parameter)).toBe(
+      expect(convertToWaveFormat(["hello", "world"], parameter.typ)).toBe(
         '["hello","world"]',
       );
     });
@@ -118,7 +115,7 @@ describe("WAVE format conversion", () => {
         },
       };
       const value = { name: "John", priority: "high" };
-      expect(convertToWaveFormatWithType(value, parameter)).toBe(
+      expect(convertToWaveFormat(value, parameter.typ)).toBe(
         '{name:"John",priority:high}',
       );
     });
@@ -229,10 +226,10 @@ describe("WAVE format conversion", () => {
       const valueWithEmail = { name: "John", email: "john@example.com" };
       const valueWithoutEmail = { name: "John", email: null };
 
-      expect(convertToWaveFormatWithType(valueWithEmail, parameter)).toBe(
+      expect(convertToWaveFormat(valueWithEmail, parameter.typ)).toBe(
         '{name:"John",email:some("john@example.com")}',
       );
-      expect(convertToWaveFormatWithType(valueWithoutEmail, parameter)).toBe(
+      expect(convertToWaveFormat(valueWithoutEmail, parameter.typ)).toBe(
         '{name:"John",email:none}',
       );
     });
@@ -258,7 +255,7 @@ describe("WAVE format conversion", () => {
         { name: "Bob", active: false },
       ];
 
-      expect(convertToWaveFormatWithType(value, parameter)).toBe(
+      expect(convertToWaveFormat(value, parameter.typ)).toBe(
         '[{name:"Alice",active:true},{name:"Bob",active:false}]',
       );
     });
@@ -284,10 +281,10 @@ describe("WAVE format conversion", () => {
       const valueWithPriority = { priority: "high" };
       const valueWithoutPriority = { priority: null };
 
-      expect(convertToWaveFormatWithType(valueWithPriority, parameter)).toBe(
+      expect(convertToWaveFormat(valueWithPriority, parameter.typ)).toBe(
         "{priority:some(high)}",
       );
-      expect(convertToWaveFormatWithType(valueWithoutPriority, parameter)).toBe(
+      expect(convertToWaveFormat(valueWithoutPriority, parameter.typ)).toBe(
         "{priority:none}",
       );
     });
@@ -339,18 +336,18 @@ describe("WAVE format conversion", () => {
         },
       };
 
-      expect(convertToWaveFormatWithType(complexValue, parameter)).toBe(
+      expect(convertToWaveFormat(complexValue, parameter.typ)).toBe(
         'some(complex({value:high,optional:some(["item1","item2"])}))',
       );
 
       // Option containing variant with simple case
       const simpleValue = { simple: "test" };
-      expect(convertToWaveFormatWithType(simpleValue, parameter)).toBe(
+      expect(convertToWaveFormat(simpleValue, parameter.typ)).toBe(
         'some(simple("test"))',
       );
 
       // None option
-      expect(convertToWaveFormatWithType(null, parameter)).toBe("none");
+      expect(convertToWaveFormat(null, parameter.typ)).toBe("none");
     });
 
     it("handles nested records with multiple levels of options and enums", () => {
@@ -416,9 +413,7 @@ describe("WAVE format conversion", () => {
         },
       };
 
-      expect(
-        convertToWaveFormatWithType(userWithFullPreferences, parameter),
-      ).toBe(
+      expect(convertToWaveFormat(userWithFullPreferences, parameter.typ)).toBe(
         '{name:"Alice",preferences:some({theme:dark,notifications:some({email:true,priority:high})})}',
       );
 
@@ -431,7 +426,7 @@ describe("WAVE format conversion", () => {
       };
 
       expect(
-        convertToWaveFormatWithType(userWithPartialPreferences, parameter),
+        convertToWaveFormat(userWithPartialPreferences, parameter.typ),
       ).toBe('{name:"Bob",preferences:some({theme:light,notifications:none})}');
 
       const userWithoutPreferences = {
@@ -439,9 +434,9 @@ describe("WAVE format conversion", () => {
         preferences: null,
       };
 
-      expect(
-        convertToWaveFormatWithType(userWithoutPreferences, parameter),
-      ).toBe('{name:"Charlie",preferences:none}');
+      expect(convertToWaveFormat(userWithoutPreferences, parameter.typ)).toBe(
+        '{name:"Charlie",preferences:none}',
+      );
     });
 
     it("handles variants with nested options and lists", () => {
@@ -499,18 +494,18 @@ describe("WAVE format conversion", () => {
         },
       };
 
-      expect(convertToWaveFormatWithType(createAction, parameter)).toBe(
+      expect(convertToWaveFormat(createAction, parameter.typ)).toBe(
         'create({data:"new item",tags:some([urgent,normal])})',
       );
 
       // Variant with optional value
       const updateAction = { update: "updated text" };
-      expect(convertToWaveFormatWithType(updateAction, parameter)).toBe(
+      expect(convertToWaveFormat(updateAction, parameter.typ)).toBe(
         'update(some("updated text"))',
       );
 
       // Unit variant
-      expect(convertToWaveFormatWithType("delete", parameter)).toBe("delete");
+      expect(convertToWaveFormat("delete", parameter.typ)).toBe("delete");
     });
 
     it("handles lists of complex nested structures", () => {
@@ -569,7 +564,7 @@ describe("WAVE format conversion", () => {
         },
       ];
 
-      expect(convertToWaveFormatWithType(listValue, parameter)).toBe(
+      expect(convertToWaveFormat(listValue, parameter.typ)).toBe(
         '[{id:"item1",status:pending(some("waiting for approval"))},{id:"item2",status:completed(true)},{id:"item3",status:cancelled}]',
       );
     });
@@ -621,7 +616,7 @@ describe("WAVE format conversion", () => {
         },
       };
 
-      expect(convertToWaveFormatWithType(permissionsValue, parameter)).toBe(
+      expect(convertToWaveFormat(permissionsValue, parameter.typ)).toBe(
         '{flags:{read,write},scope:some(restricted(["file1.txt","file2.txt"]))}',
       );
     });
@@ -680,7 +675,7 @@ describe("WAVE format conversion", () => {
         },
       };
 
-      expect(convertToWaveFormatWithType(okResult, parameter)).toBe(
+      expect(convertToWaveFormat(okResult, parameter.typ)).toBe(
         "ok({data:some([success,warning])})",
       );
 
@@ -691,7 +686,7 @@ describe("WAVE format conversion", () => {
         },
       };
 
-      expect(convertToWaveFormatWithType(errResult, parameter)).toBe(
+      expect(convertToWaveFormat(errResult, parameter.typ)).toBe(
         'err(validation(["Field required","Invalid format"]))',
       );
     });

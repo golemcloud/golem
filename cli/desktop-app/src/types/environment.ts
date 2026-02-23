@@ -1,10 +1,6 @@
 // Environment type definitions matching Rust implementation
 // Based on cli/golem-cli/src/model/environment.rs and golem-common/src/model/environment.rs
 
-export interface EnvironmentName {
-  name: string;
-}
-
 export interface DeploymentOptions {
   compatibilityCheck?: boolean;
   versionCheck?: boolean;
@@ -18,16 +14,16 @@ export interface CliOptions {
   reset?: boolean;
 }
 
-export type BuiltinServer = "local" | "cloud";
+type BuiltinServer = "local" | "cloud";
 
-export interface CustomServer {
+interface CustomServer {
   url: string;
   workerUrl?: string;
   allowInsecure?: boolean;
   auth: CustomServerAuth;
 }
 
-export type CustomServerAuth = { oauth2: true } | { staticToken: string };
+type CustomServerAuth = { oauth2: true } | { staticToken: string };
 
 export type Server =
   | { type: "builtin"; value: BuiltinServer }
@@ -45,57 +41,6 @@ export interface ManifestEnvironment {
 
 // Environments map in the manifest
 export type ManifestEnvironments = Record<string, ManifestEnvironment>;
-
-// CLI response types (from CLI commands)
-export interface EnvironmentId {
-  id: string;
-}
-
-export interface EnvironmentRevision {
-  revision: number;
-}
-
-export interface EnvironmentCurrentDeploymentView {
-  revision: {
-    currentRevision: number;
-  };
-  deploymentRevision: {
-    revision: number;
-  };
-  deploymentVersion: string;
-  deploymentHash: string;
-}
-
-// Full environment from CLI (server-side representation)
-export interface Environment {
-  id: EnvironmentId;
-  revision: EnvironmentRevision;
-  applicationId: string;
-  name: string;
-  compatibilityCheck: boolean;
-  versionCheck: boolean;
-  securityOverrides: boolean;
-  ownerAccountId: string;
-  rolesFromActiveShares: string[];
-  currentDeployment?: EnvironmentCurrentDeploymentView;
-}
-
-// Creation payload
-export interface EnvironmentCreation {
-  name: string;
-  compatibilityCheck: boolean;
-  versionCheck: boolean;
-  securityOverrides: boolean;
-}
-
-// Update payload
-export interface EnvironmentUpdate {
-  currentRevision: number;
-  name?: string;
-  compatibilityCheck?: boolean;
-  versionCheck?: boolean;
-  securityOverrides?: boolean;
-}
 
 // UI-specific types for form handling
 export interface EnvironmentFormData {

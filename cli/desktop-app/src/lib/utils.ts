@@ -54,7 +54,7 @@ export function formatTimestampInDateTimeFormat(timestamp: string) {
 }
 
 /// compare semver version
-export const compareSemver = (version1: string, version2: string) => {
+const compareSemver = (version1: string, version2: string) => {
   const semverRegex =
     /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
