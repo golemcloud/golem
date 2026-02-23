@@ -36,7 +36,7 @@ import {
 
 import * as fs from 'node:fs';
 import path from 'path';
-import { createWellKnownTypes, WellKnownTypes } from './wellknownTypes';
+import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownTypes';
 
 export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean, wellKnownTypes: WellKnownTypes): Type.Type {
   try {
@@ -81,114 +81,27 @@ function getTypeFromTsMorphInternal(
   }
   visitedTypes.add(tsMorphType);
 
-  switch (rawName) {
-    case 'Object':
-      return {
-        kind: 'others',
-        name: rawName,
-        optional: isOptional,
-        recursive: false,
-      };
-    case 'Float64Array':
+  if (isExactly(type, wellKnownTypes.object)) {
+    return {
+      kind: 'others',
+      name: rawName,
+      optional: isOptional,
+      recursive: false,
+    };
+  }
+
+  for (const [name, wk] of wellKnownTypes.containers.typedArrays) {
+    if (isExactly(type, wk)) {
       return {
         kind: 'array',
-        name: 'Float64Array',
+        name,
         element: {
           kind: 'number',
           optional: false,
         },
         optional: isOptional,
       };
-    case 'Float32Array':
-      return {
-        kind: 'array',
-        name: 'Float32Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Int8Array':
-      return {
-        kind: 'array',
-        name: 'Int8Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Uint8Array':
-      return {
-        kind: 'array',
-        name: 'Uint8Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Int16Array':
-      return {
-        kind: 'array',
-        name: 'Int16Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Uint16Array':
-      return {
-        kind: 'array',
-        name: 'Uint16Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Int32Array':
-      return {
-        kind: 'array',
-        name: 'Int32Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Uint32Array':
-      return {
-        kind: 'array',
-        name: 'Uint32Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'BigInt64Array':
-      return {
-        kind: 'array',
-        name: 'BigInt64Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'BigUint64Array':
-      return {
-        kind: 'array',
-        name: 'BigUint64Array',
-        element: {
-          kind: 'number',
-          optional: false,
-        },
-        optional: isOptional,
-      };
+    }
   }
 
   // These will handle record types. However, record type is devoid
@@ -204,7 +117,7 @@ function getTypeFromTsMorphInternal(
     };
   }
 
-  if (rawName === 'Promise' && type.getTypeArguments().length === 1) {
+  if (isExactly(type, wellKnownTypes.containers.promise)) {
     const inner = type.getTypeArguments()[0];
     const promiseType = getTypeFromTsMorphInternal(inner, false, wellKnownTypes, visitedTypes);
 
@@ -216,7 +129,7 @@ function getTypeFromTsMorphInternal(
     };
   }
 
-  if (rawName === 'Map' && type.getTypeArguments().length === 2) {
+  if (isExactly(type, wellKnownTypes.containers.map)) {
     const [keyT, valT] = type.getTypeArguments();
     const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes,  new Set(visitedTypes));
     const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes,  new Set(visitedTypes));
@@ -239,7 +152,6 @@ function getTypeFromTsMorphInternal(
 
   if (type.isLiteral()) {
     const literalValue = type.getLiteralValue() ?? type.getText();
-
     return {
       kind: 'literal',
       name: aliasName,
@@ -713,4 +625,31 @@ function getValueDeclaration(symbol: TsMorphSymbol): TsMorphNode | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function getNominalSymbol(type: TsMorphType): TsMorphSymbol | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (aliasSymbol) {
+    const declared = aliasSymbol.getDeclaredType?.();
+    if (declared) {
+      type = declared;
+    }
+  }
+
+  const target = type.getTargetType?.();
+  if (target) {
+    type = target;
+  }
+
+  return type.getSymbol();
+}
+
+function isExactly(type: TsMorphType, wellKnown: WellKnown): boolean {
+  const nominalSymbol = getNominalSymbol(type);
+  // eslint-disable-next-line eqeqeq
+  if (nominalSymbol == null) {
+    return false;
+  }
+
+  return nominalSymbol === wellKnown.symbol;
 }

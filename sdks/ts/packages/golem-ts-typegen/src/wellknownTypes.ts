@@ -25,6 +25,7 @@ export interface WellKnown {
 }
 
 export interface WellKnownTypes {
+  object: WellKnown,
   containers: {
     promise: WellKnown;
     map: WellKnown;
@@ -36,6 +37,8 @@ export function createWellKnownTypes(project: Project): WellKnownTypes {
   const sf = project.createSourceFile(
     "__golem_well_known_types__.ts",
     `
+      let _object!: Object;
+
       let _promise!: Promise<any>;
       let _map!: Map<any, any>;
 
@@ -71,6 +74,7 @@ export function createWellKnownTypes(project: Project): WellKnownTypes {
   };
 
   return {
+    object: getWellKnownFromVar(sf, "_object"),
     containers,
   };
 }
