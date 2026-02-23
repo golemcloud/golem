@@ -37,6 +37,9 @@ use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;
 use std::str::FromStr;
 use uuid::Uuid;
+use golem_common::base_model::agent::AgentTypeName;
+use golem_common::base_model::domain_registration::Domain;
+use golem_service_base::mcp::CompiledMcp;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeployRepoError {
@@ -404,6 +407,31 @@ impl DeploymentRevisionCreationRecord {
                 })
                 .collect(),
         }
+    }
+}
+
+#[derive(FromRow)]
+pub struct DeploymentMcpCapabilityRecord {
+    pub account_id: Uuid,
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub domain: String,
+    pub agent_type_names: String, // this can get extended 
+}
+
+impl TryFrom<DeploymentMcpCapabilityRecord> for CompiledMcp {
+    type Error = DeployRepoError;
+
+    fn try_from(value: DeploymentMcpCapabilityRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            account_id: AccountId(value.account_id),
+            environment_id: EnvironmentId(value.environment_id),
+            deployment_revision: value.deployment_revision_id.try_into()?,
+            domain: Domain(value.domain),
+            agent_types: vec![AgentTypeName(value
+                .agent_type_names)], // todo!
+            
+        })
     }
 }
 

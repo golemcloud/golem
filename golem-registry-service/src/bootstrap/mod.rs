@@ -43,9 +43,7 @@ use crate::services::component::{ComponentService, ComponentWriteService};
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
-use crate::services::deployment::{
-    DeployedRoutesService, DeploymentService, DeploymentWriteService,
-};
+use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService, DeploymentWriteService};
 use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
@@ -83,6 +81,7 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployed_routes_service: Arc<DeployedRoutesService>,
+    pub deployed_mcp_service: Arc<DeployedMcpService>,
     pub deployment_service: Arc<DeploymentService>,
     pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
@@ -273,6 +272,9 @@ impl Services {
 
         let deployed_routes_service =
             Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
+        
+        let deployed_mcp_service = 
+            Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
 
         Ok(Self {
             account_service,
@@ -284,6 +286,7 @@ impl Services {
             component_service,
             component_write_service,
             deployed_routes_service,
+            deployed_mcp_service,
             deployment_service,
             deployment_write_service,
             domain_registration_service,

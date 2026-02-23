@@ -147,6 +147,7 @@ message MethodParameter {
   message UnstructuredBinaryBody { }
 }
 
+
 message CompiledRoutes {
   golem.common.AccountId account_id = 1;
   golem.common.EnvironmentId environment_id = 2;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::CompiledRoutes;
+use crate::custom_api::{CompiledRoutes};
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
 use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
@@ -52,6 +52,7 @@ use std::fmt::Write;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use crate::mcp::CompiledMcp;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -160,6 +161,11 @@ pub trait RegistryService: Send + Sync {
         &self,
         domain: &Domain,
     ) -> Result<CompiledRoutes, RegistryServiceError>;
+
+    async fn get_active_mcp_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<CompiledMcp, RegistryServiceError>;
 
     async fn get_agent_deployments(
         &self,
@@ -705,6 +711,10 @@ impl RegistryService for GrpcRegistryService {
             }
             Some(get_active_routes_for_domain_response::Result::Error(error)) => Err(error.into()),
         }
+    }
+    
+    async fn get_active_mcp_routes_for_domain(&self, domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
+        todo!()
     }
 
     async fn get_agent_deployments(

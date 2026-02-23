@@ -13,10 +13,7 @@
 // limitations under the License.
 
 use super::model::BindFields;
-use super::model::deployment::{
-    CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
-    DeploymentRevisionCreationRecord,
-};
+use super::model::deployment::{CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord, DeploymentMcpCapabilityRecord, DeploymentRevisionCreationRecord};
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
@@ -93,6 +90,11 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
+    
+    async fn get_active_mcp_for_domain(
+        &self,
+        domain: &str,
+    ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>>;
 
     async fn list_compiled_routes_for_domain_and_deployment(
         &self,
@@ -292,6 +294,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>> {
         self.repo
             .list_active_compiled_routes_for_domain(domain)
+            .instrument(Self::span_domain(domain))
+            .await
+    }
+    
+    async fn get_active_mcp_for_domain(
+        &self,
+        domain: &str,
+    ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
+        self.repo
+            .get_active_mcp_for_domain(domain)
             .instrument(Self::span_domain(domain))
             .await
     }
@@ -706,6 +718,53 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         })
         .await
     }
+    
+    async fn get_active_mcp_for_domain(
+        &self,
+        domain: &str
+    ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
+        
+        self.with_ro("list_active_mcp_for_domain")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        ac.account_id,
+                        e.environment_id,
+                        cd.current_revision_id as deployment_revision_id,
+                        dr.domain,
+                        array_agg(DISTINCT r.agent_type_name) AS agent_types
+
+                    FROM deployment_compiled_mcp cm
+                    
+                    -- active deployment
+                    JOIN current_deployments cd
+                      ON cd.environment_id = r.environment_id
+                      AND cd.current_revision_id = r.deployment_revision_id
+
+                    -- parent objects not deleted
+                    JOIN environments e
+                      ON e.environment_id = r.environment_id
+                      AND e.deleted_at IS NULL
+                    JOIN applications a
+                      ON a.application_id = e.application_id
+                      AND a.deleted_at IS NULL
+                    JOIN accounts ac
+                      ON ac.account_id = a.account_id
+                      AND ac.deleted_at IS NULL
+
+                    -- registered domains
+                    JOIN domain_registrations dr
+                      ON dr.environment_id = r.environment_id
+                      AND dr.domain = r.domain
+                      AND dr.deleted_at IS NULL
+
+                    WHERE r.domain = $1
+                "#})
+                .bind(domain),
+            )
+            .await
+    }
+    
 
     async fn list_active_compiled_routes_for_domain(
         &self,

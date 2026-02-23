@@ -31,6 +31,7 @@ pub mod repo;
 pub mod service;
 pub mod storage;
 pub mod stream;
+pub mod mcp;
 
 #[cfg(test)]
 test_r::enable!();

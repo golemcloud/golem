@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package golem.mcp;
+
+import "golem/common/environment.proto";
+import "golem/common/account_id.proto";
+
+message CompiledMcp {
+  golem.common.AccountId account_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  uint64 deployment_revision = 3;
+  string domain = 4;
+  repeated string agent_types = 5;
+}
