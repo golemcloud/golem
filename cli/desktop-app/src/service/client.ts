@@ -39,6 +39,6 @@ export class Service {
       this.manifestService,
     );
     this.environmentService = new EnvironmentService(this.manifestService);
-    this.appService = new AppService(this.cliService);
+    this.appService = new AppService(this.cliService, this.manifestService);
   }
 }

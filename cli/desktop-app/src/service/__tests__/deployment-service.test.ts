@@ -45,6 +45,7 @@ describe("DeploymentService CLI commands", () => {
 
     const cliService = new CLIService();
     const manifestService = new ManifestService(cliService);
+    vi.spyOn(manifestService, "migrateDeploymentSchema").mockResolvedValue();
     service = new DeploymentService(cliService, manifestService);
   });
 
@@ -72,10 +73,14 @@ describe("DeploymentService CLI commands", () => {
         .fn()
         .mockResolvedValue("/test/app/golem.yaml");
       const manifestSaveAppManifest = vi.fn().mockResolvedValue(undefined);
+      const manifestMigrateDeploymentSchema = vi
+        .fn()
+        .mockResolvedValue(undefined);
       Object.defineProperty(service, "manifestService", {
         value: {
           getAppYamlPath: manifestGetAppYamlPath,
           saveAppManifest: manifestSaveAppManifest,
+          migrateDeploymentSchema: manifestMigrateDeploymentSchema,
         },
         writable: true,
       });
