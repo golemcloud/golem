@@ -64,15 +64,8 @@ fn all_templates(dev_mode: bool) -> Vec<Template> {
                     if let Some(template_dir) = sub_entry.as_dir() {
                         let template_dir_name =
                             template_dir.path().file_name().unwrap().to_str().unwrap();
-                        if template_dir_name != "INSTRUCTIONS"
-                            && !template_dir_name.starts_with('.')
-                        {
-                            let template = parse_template(
-                                lang,
-                                lang_dir.path(),
-                                Path::new("INSTRUCTIONS"),
-                                template_dir.path(),
-                            );
+                        if !template_dir_name.starts_with('.') {
+                            let template = parse_template(lang, template_dir.path());
 
                             if dev_mode || !template.dev_only {
                                 result.push(template);
@@ -86,13 +79,6 @@ fn all_templates(dev_mode: bool) -> Vec<Template> {
         }
     }
     result
-}
-
-pub fn all_standalone_templates() -> Vec<Template> {
-    all_templates(true)
-        .into_iter()
-        .filter(|template| matches!(template.kind, TemplateKind::Standalone))
-        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -124,7 +110,6 @@ pub fn all_composable_app_templates(
 
     for template in all_templates(dev_mode) {
         match &template.kind {
-            TemplateKind::Standalone => continue,
             TemplateKind::ComposableAppCommon { group, .. } => {
                 let common = &mut app_templates(&mut templates, template.language, group).common;
                 if let Some(common) = common {
@@ -153,7 +138,7 @@ pub fn instantiate_template(
     template: &Template,
     parameters: &TemplateParameters,
     resolve_mode: TargetExistsResolveMode,
-) -> io::Result<String> {
+) -> io::Result<()> {
     instantiate_directory(
         &TEMPLATES,
         &template.template_path,
@@ -162,7 +147,7 @@ pub fn instantiate_template(
         parameters,
         resolve_mode,
     )?;
-    Ok(render_template_instructions(template, parameters))
+    Ok(())
 }
 
 pub fn add_component_by_template(
@@ -219,17 +204,6 @@ pub fn add_component_by_template(
     }
 
     Ok(())
-}
-
-pub fn render_template_instructions(
-    template: &Template,
-    parameters: &TemplateParameters,
-) -> String {
-    transform(
-        &template.instructions,
-        parameters,
-        &[Transform::PackageAndComponent],
-    )
 }
 
 fn instantiate_directory(
@@ -502,12 +476,7 @@ fn get_resolved_contents<'a>(
     }
 }
 
-fn parse_template(
-    lang: GuestLanguage,
-    lang_path: &Path,
-    default_instructions_file_name: &Path,
-    template_root: &Path,
-) -> Template {
+fn parse_template(lang: GuestLanguage, template_root: &Path) -> Template {
     let raw_metadata = TEMPLATES
         .get_file(template_root.join("metadata.json"))
         .expect("Failed to read metadata JSON")
@@ -516,7 +485,6 @@ fn parse_template(
         .expect("Failed to parse metadata JSON");
 
     let kind = match (metadata.app_common_group, metadata.app_component_group) {
-        (None, None) => TemplateKind::Standalone,
         (Some(group), None) => TemplateKind::ComposableAppCommon {
             group: group.into(),
             skip_if_exists: metadata.app_common_skip_if_exists.map(PathBuf::from),
@@ -524,28 +492,10 @@ fn parse_template(
         (None, Some(group)) => TemplateKind::ComposableAppComponent {
             group: group.into(),
         },
-        (Some(_), Some(_)) => panic!(
-            "Only one of appCommonGroup and appComponentGroup can be specified, template root: {}",
+        _ => panic!(
+            "Exactly one of appCommonGroup and appComponentGroup must be specified, template root: {}",
             template_root.display()
         ),
-    };
-
-    let instructions = match &kind {
-        TemplateKind::Standalone => {
-            let instructions_path = match metadata.instructions {
-                Some(instructions_file_name) => lang_path.join(instructions_file_name),
-                None => lang_path.join(default_instructions_file_name),
-            };
-
-            let raw_instructions = TEMPLATES
-                .get_file(instructions_path)
-                .expect("Failed to read instructions")
-                .contents();
-
-            String::from_utf8(raw_instructions.to_vec()).expect("Failed to decode instructions")
-        }
-        TemplateKind::ComposableAppCommon { .. } => "".to_string(),
-        TemplateKind::ComposableAppComponent { .. } => "".to_string(),
     };
 
     let name: TemplateName = {
@@ -574,7 +524,6 @@ fn parse_template(
         language: lang,
         description: metadata.description,
         template_path: template_root.to_path_buf(),
-        instructions,
         dev_only: metadata.dev_only.unwrap_or(false),
     }
 }

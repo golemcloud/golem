@@ -25,7 +25,6 @@ use std::{fmt, io};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TemplateKind {
-    Standalone,
     ComposableAppCommon {
         group: ComposableAppGroupName,
         skip_if_exists: Option<PathBuf>,
@@ -140,7 +139,6 @@ pub struct Template {
     pub language: GuestLanguage,
     pub description: String,
     pub template_path: PathBuf,
-    pub instructions: String,
     pub dev_only: bool,
 }
 
@@ -162,12 +160,7 @@ pub(crate) struct TemplateMetadata {
     pub app_common_skip_if_exists: Option<String>,
     #[serde(rename = "appComponentGroup")]
     pub app_component_group: Option<String>,
-    #[serde(rename = "requiresGolemHostWIT")]
-    pub requires_golem_host_wit: Option<bool>,
-    #[serde(rename = "requiresWASI")]
-    pub requires_wasi: Option<bool>,
     pub exclude: Option<Vec<String>>,
-    pub instructions: Option<String>,
     #[serde(rename = "devOnly")]
     pub dev_only: Option<bool>,
 }
