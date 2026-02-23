@@ -58,14 +58,15 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, Value};
+use golem_wasm::Uri;
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Weak};
@@ -194,11 +195,10 @@ impl StatusManagement for Context {
 impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(full_function_name, function_input)
+            .on_agent_invocation_started(invocation)
             .await
     }
 

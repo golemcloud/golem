@@ -47,12 +47,12 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocationResult, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId,
+    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
-use golem_wasm::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
@@ -266,14 +266,9 @@ pub trait StatusManagement {
 #[async_trait]
 pub trait InvocationHooks {
     /// Called when a worker is about to be invoked
-    /// Arguments:
-    /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
-    /// - `function_input`: The input of the function being invoked
-    #[allow(clippy::ptr_arg)]
     async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when a worker invocation fails

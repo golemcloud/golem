@@ -81,8 +81,7 @@ use futures::future::try_join_all;
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, Principal};
-use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
@@ -108,7 +107,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{IntoValue, Uri, Value};
+use golem_wasm::Uri;
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -1048,7 +1047,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             store,
                             instance,
                             &component_metadata,
-                            true,
+                            None,
                         )
                         .await;
 
@@ -1252,7 +1251,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             store,
             instance,
             &component_metadata,
-            true,
+            None,
         )
         .await;
 
@@ -1541,27 +1540,24 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        mut invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
             let stack = self.get_current_invocation_context().await;
-            let idempotency_key = self.get_current_idempotency_key().await.ok_or(anyhow!(
-                "No active invocation key is associated with the worker"
-            ))?;
 
-            let invocation = AgentInvocation::AgentMethod {
-                idempotency_key,
-                method_name: full_function_name.to_string(),
-                input: UntypedDataValue::Tuple(
-                    function_input
-                        .iter()
-                        .map(|v| UntypedElementValue::ComponentModel(v.clone()))
-                        .collect(),
-                ),
-                invocation_context: stack,
-                principal: Principal::anonymous(),
-            };
+            match &mut invocation {
+                AgentInvocation::AgentInitialization {
+                    invocation_context, ..
+                } => {
+                    *invocation_context = stack;
+                }
+                AgentInvocation::AgentMethod {
+                    invocation_context, ..
+                } => {
+                    *invocation_context = stack;
+                }
+                _ => {}
+            }
 
             self.public_state
                 .worker()
@@ -1570,7 +1566,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "could not encode function input for {full_function_name} on {}: {err}",
+                        "could not encode agent invocation on {}: {err}",
                         self.worker_id()
                     )
                 });
@@ -2118,7 +2114,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             store,
                             instance,
                             &component_metadata,
-                            false,
+                            None,
                         )
                         .instrument(span)
                         .await;

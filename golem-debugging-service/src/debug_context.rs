@@ -24,11 +24,11 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId, WorkerStatusRecord};
+use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId, WorkerStatusRecord};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, Value};
+use golem_wasm::Uri;
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -194,11 +194,10 @@ impl StatusManagement for DebugContext {
 impl InvocationHooks for DebugContext {
     async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(full_function_name, function_input)
+            .on_agent_invocation_started(invocation)
             .await
     }
 

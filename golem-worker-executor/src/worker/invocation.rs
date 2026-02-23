@@ -50,7 +50,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
-    is_live: bool,
+    invocation: Option<AgentInvocation>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -62,7 +62,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
         &mut store,
         instance,
         component_metadata,
-        is_live,
+        invocation,
     )
     .await;
 
@@ -182,7 +182,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
-    is_live: bool,
+    invocation: Option<AgentInvocation>,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -201,10 +201,10 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         validate_function_parameters(&mut store, &function, &lowered.wit_fqfn, &lowered.params)
             .await?;
 
-    if is_live {
+    if let Some(invocation) = invocation {
         store
             .data_mut()
-            .on_agent_invocation_started(&lowered.wit_fqfn, &lowered.params)
+            .on_agent_invocation_started(invocation)
             .await?;
     }
 

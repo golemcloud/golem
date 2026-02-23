@@ -18,7 +18,7 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    InvokeResult, LoweredInvocation, invoke_observed_and_traced, lower_invocation,
+    InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
@@ -520,19 +520,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
 
-        let component_metadata = self.store.data().component_metadata().metadata.clone();
-        let lowered = match lower_invocation(
-            invocation,
-            &component_metadata,
-            self.parent.agent_id.as_ref(),
-        ) {
-            Ok(lowered) => lowered,
-            Err(err) => {
-                warn!("Failed to lower invocation: {err}");
-                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-            }
-        };
-
         let span = span!(
             parent: invocation_span,
             Level::INFO,
@@ -547,7 +534,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function = display_name
         );
 
-        self.invoke_agent_inner(invocation_context, idempotency_key, lowered)
+        self.invoke_agent_inner(invocation_context, idempotency_key, invocation)
             .instrument(span)
             .await
     }
@@ -559,17 +546,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        lowered: LoweredInvocation,
+        invocation: AgentInvocation,
     ) -> CommandOutcome {
-        let kind = lowered.kind;
-        let full_function_name = lowered.wit_fqfn.clone();
+        let kind = invocation.kind();
+        let display_name = invocation.display_name();
         let result = self
-            .invoke_agent_with_context(
-                invocation_context,
-                idempotency_key,
-                &full_function_name,
-                lowered,
-            )
+            .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
 
         match result {
@@ -578,7 +560,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 consumed_fuel,
             }) => {
                 self.agent_invocation_finished(
-                    full_function_name,
+                    display_name,
                     invocation_result,
                     consumed_fuel,
                     kind,
@@ -586,7 +568,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await
             }
             _ => {
-                self.agent_invocation_failed(&full_function_name, result)
+                self.agent_invocation_failed(&display_name, result)
                     .await
             }
         }
@@ -598,8 +580,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        full_function_name: &str,
-        lowered: LoweredInvocation,
+        invocation: AgentInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         self.store
             .data_mut()
@@ -611,7 +592,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         Self::extend_invocation_context(
             &mut invocation_context,
             &idempotency_key,
-            full_function_name,
+            &invocation,
             &self.owned_worker_id.worker_id(),
             &self.parent.agent_id,
         );
@@ -631,12 +612,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
         }
 
+        let invocation_for_lowering = invocation.clone();
+        let lowered = lower_invocation(
+            invocation_for_lowering,
+            &component_metadata,
+            self.parent.agent_id.as_ref(),
+        )?;
+
         let result = invoke_observed_and_traced(
             lowered,
             self.store,
             self.instance,
             &component_metadata,
-            true,
+            Some(invocation),
         )
         .await;
 
@@ -782,7 +770,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             self.store,
             self.instance,
             &component_metadata,
-            true,
+            None,
         )
         .await;
         self.store.data_mut().end_call_snapshotting_function();
@@ -926,7 +914,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     fn extend_invocation_context(
         invocation_context: &mut InvocationContextStack,
         idempotency_key: &IdempotencyKey,
-        full_function_name: &str,
+        invocation: &AgentInvocation,
         worker_id: &WorkerId,
         agent_id: &Option<AgentId>,
     ) {
@@ -941,7 +929,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         );
         invocation_span.set_attribute(
             "function_name".to_string(),
-            AttributeValue::String(full_function_name.to_string()),
+            AttributeValue::String(invocation.display_name()),
+        );
+        invocation_span.set_attribute(
+            "invocation_kind".to_string(),
+            AttributeValue::String(format!("{:?}", invocation.kind())),
         );
         invocation_span.set_attribute(
             "worker_id".to_string(),
@@ -985,7 +977,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             self.store,
             self.instance,
             &component_metadata,
-            true,
+            None,
         )
         .await;
         self.store.data_mut().end_call_snapshotting_function();
