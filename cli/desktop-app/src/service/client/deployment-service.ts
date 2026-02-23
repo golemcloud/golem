@@ -31,6 +31,7 @@ export class DeploymentService {
   }
 
   public getDeploymentApi = async (appId: string): Promise<Deployment[]> => {
+    await this.manifestService.migrateDeploymentSchema(appId);
     return (await this.cliService.callCLI(appId, "api", [
       "deployment",
       "list",
@@ -38,6 +39,7 @@ export class DeploymentService {
   };
 
   public deleteDeployment = async (appId: string, host: string) => {
+    await this.manifestService.migrateDeploymentSchema(appId);
     // CLI v1.4.2: api deployment delete command removed
     // Only delete from YAML file
     // Server-side deletion is no longer supported via CLI
@@ -50,6 +52,8 @@ export class DeploymentService {
     subdomain: string | null,
     definitions: { id: string; version: string }[],
   ) => {
+    await this.manifestService.migrateDeploymentSchema(appId);
+
     // Step 1: Write to YAML first
     await this.writeDeploymentToYaml(appId, host, subdomain, definitions);
 
@@ -103,17 +107,18 @@ export class DeploymentService {
       profileDeployments = deployments.get(profileName) as YAMLSeq;
     }
 
-    // Check if deployment with this host and subdomain already exists
+    // Combine subdomain into domain (schema only allows `domain` and `definitions`)
+    const fullDomain = subdomain ? `${subdomain}.${host}` : host;
+
+    // Check if deployment with this domain already exists
     let existingDeploymentIndex = -1;
     let existingDefinitions: Set<string> = new Set();
 
     profileDeployments.items.forEach((item, index) => {
       const deploymentMap = item as YAMLMap;
-      const existingHost = deploymentMap.get("host");
-      const existingSubdomain = deploymentMap.get("subdomain") || null;
-      const normalizedSubdomain = subdomain || null;
+      const existingDomain = deploymentMap.get("domain");
 
-      if (existingHost === host && existingSubdomain === normalizedSubdomain) {
+      if (existingDomain === fullDomain) {
         existingDeploymentIndex = index;
         // Get existing definitions
         const existingDefsSeq = deploymentMap.get("definitions") as YAMLSeq;
@@ -136,12 +141,9 @@ export class DeploymentService {
       ...formattedDefinitions,
     ]);
 
-    // Create new deployment object
+    // Create new deployment object (only `domain` and `definitions` are valid)
     const newDeployment = new YAMLMap();
-    newDeployment.set("host", host);
-    if (subdomain) {
-      newDeployment.set("subdomain", subdomain);
-    }
+    newDeployment.set("domain", fullDomain);
     const definitionsSeq = new YAMLSeq();
     mergedDefinitions.forEach(def => definitionsSeq.add(def));
     newDeployment.set("definitions", definitionsSeq);
@@ -200,7 +202,7 @@ export class DeploymentService {
     let modified = false;
     for (let i = profileDeployments.items.length - 1; i >= 0; i--) {
       const deploymentMap = profileDeployments.items[i] as YAMLMap;
-      const deploymentHost = deploymentMap.get("host");
+      const deploymentHost = deploymentMap.get("domain");
 
       if (deploymentHost === host) {
         profileDeployments.items.splice(i, 1);

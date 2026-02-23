@@ -135,9 +135,8 @@ export interface HttpApiRouteBinding {
 }
 
 interface HttpApiDeployment {
-  host: string;
-  subdomain?: string;
-  definition?: string[];
+  domain: string;
+  definitions?: string[];
 }
 
 export interface Profile {

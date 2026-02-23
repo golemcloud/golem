@@ -8,7 +8,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
 import { GolemApplicationManifest } from "@/types/golemManifest.ts";
-import { parse } from "yaml";
+import { parse, parseDocument, Document, YAMLMap, YAMLSeq } from "yaml";
 import { CLIService } from "./cli-service";
 import { Component } from "@/types/component.ts";
 import { AppYamlFiles } from "@/types/yaml-files.ts";
@@ -103,6 +103,76 @@ export class ManifestService {
     }
 
     throw new Error(`Error finding Component Manifest`);
+  }
+
+  /**
+   * Migrate legacy deployment fields in httpApi.deployments entries.
+   * Golem CLI v1.4.2 schema only allows `domain` and `definitions`.
+   * This renames `host` to `domain` and folds `subdomain` into the domain value.
+   */
+  public async migrateDeploymentSchema(appId: string): Promise<void> {
+    const yamlPath = await this.getAppYamlPath(appId);
+    if (!yamlPath) return;
+
+    const rawYaml = await readTextFile(yamlPath);
+    const manifest: Document = parseDocument(rawYaml);
+
+    const httpApi = manifest.get("httpApi") as YAMLMap | undefined;
+    if (!httpApi) return;
+
+    const deployments = httpApi.get("deployments") as YAMLMap | undefined;
+    if (!deployments) return;
+
+    let modified = false;
+
+    for (const pair of deployments.items) {
+      const profileDeployments = (pair as { value: YAMLSeq }).value;
+      if (!profileDeployments || !profileDeployments.items) continue;
+
+      for (const item of profileDeployments.items) {
+        const deploymentMap = item as YAMLMap;
+
+        // Migrate `host` → `domain`
+        const hostValue = deploymentMap.get("host");
+        if (hostValue !== undefined) {
+          const domainBase = String(hostValue);
+          const subdomain = deploymentMap.get("subdomain");
+
+          // Combine subdomain into domain if present
+          const fullDomain = subdomain
+            ? `${String(subdomain)}.${domainBase}`
+            : domainBase;
+
+          // Remove old fields and rebuild with only schema-valid fields
+          const existingDefinitions = deploymentMap.get("definitions");
+          deploymentMap.items.length = 0;
+          deploymentMap.set("domain", fullDomain);
+          if (existingDefinitions) {
+            deploymentMap.set("definitions", existingDefinitions);
+          }
+          modified = true;
+          continue;
+        }
+
+        // Handle case where `domain` exists but `subdomain` is also present
+        const subdomain = deploymentMap.get("subdomain");
+        if (subdomain !== undefined) {
+          const domainValue = String(deploymentMap.get("domain") || "");
+          const fullDomain = `${String(subdomain)}.${domainValue}`;
+          const existingDefinitions = deploymentMap.get("definitions");
+          deploymentMap.items.length = 0;
+          deploymentMap.set("domain", fullDomain);
+          if (existingDefinitions) {
+            deploymentMap.set("definitions", existingDefinitions);
+          }
+          modified = true;
+        }
+      }
+    }
+
+    if (modified) {
+      await writeTextFile(yamlPath, manifest.toString());
+    }
   }
 
   public async getAppYamlPath(appId: string): Promise<string | null> {
