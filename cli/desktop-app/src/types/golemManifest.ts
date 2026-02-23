@@ -92,8 +92,9 @@ export interface HttpApiDefinition {
   project?: string;
   routes?: HttpApiDefinitionRoute[];
 
-  // id and componentId not part of YAML
+  // id, name, and componentId not part of YAML
   id?: string;
+  name?: string;
   componentId?: string;
   draft?: boolean;
 }

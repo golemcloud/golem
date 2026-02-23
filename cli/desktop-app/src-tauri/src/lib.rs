@@ -32,7 +32,8 @@ pub fn run() {
             commands::golem_commands::call_golem_command,
             commands::golem_commands::get_component_templates,
             commands::backend_commands::set_golem_cli_path,
-            commands::backend_commands::get_golem_cli_path
+            commands::backend_commands::get_golem_cli_path,
+            commands::http_commands::http_fetch
         ])
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())

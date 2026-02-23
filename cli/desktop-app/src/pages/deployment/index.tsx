@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { ChevronRight, Copy, Layers, Plus, Trash } from "lucide-react";
+import { ChevronRight, Copy, Layers, Play, Plus, Trash } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,7 @@ import ErrorBoundary from "@/components/errorBoundary";
 import { HTTP_METHOD_COLOR } from "@/components/nav-route";
 import { useNavigate, useParams } from "react-router-dom";
 import { HttpApiDefinition } from "@/types/golemManifest";
+import { ApiTesterModal } from "./api-tester-modal";
 
 const RoutesCard = ({
   apiId,
@@ -33,12 +34,16 @@ const RoutesCard = ({
   apiList: HttpApiDefinition[];
 }) => {
   const routes = apiList.find(
-    api => api.id === apiId && api.version === version,
+    api =>
+      (api.id === apiId || api.name === apiId) &&
+      (!version || api.version === version),
   )?.routes;
-  const navigate = useNavigate();
-  const { appId } = useParams();
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [testerRoute, setTesterRoute] = useState<{
+    method: string;
+    path: string;
+  } | null>(null);
 
   const copyToClipboard = (endpoint: { path: string; method: string }) => {
     const fullUrl = `${host}${endpoint.path}`;
@@ -59,54 +64,85 @@ const RoutesCard = ({
 
   return (
     routes && (
-      <Card className="bg-transparent">
-        <CardContent className="space-y-2 p-4">
-          {routes.map((endpoint, index) => (
-            <div
-              key={index}
-              className="flex items-center justify-between p-2 rounded-lg cursor-pointer group hover:bg-muted transition"
-              onMouseEnter={() => setHoveredPath(endpoint.path)}
-              onMouseLeave={() => setHoveredPath(null)}
-              onClick={() =>
-                navigate(
-                  `/app/${appId}/apis/${apiId}/version/${version}/routes?path=${encodeURIComponent(endpoint.path)}&method=${endpoint.method}`,
-                )
-              }
-            >
-              <div className="flex flex-row gap-3">
-                <Badge
-                  variant="secondary"
-                  className={cn(
-                    HTTP_METHOD_COLOR[
-                      endpoint.method as keyof typeof HTTP_METHOD_COLOR
-                    ],
-                    "w-16 text-center justify-center",
-                  )}
-                >
-                  {endpoint.method}
-                </Badge>
-                <code className="text-sm font-mono text-foreground">
-                  {endpoint.path || "/"}
-                </code>
+      <>
+        <Card className="bg-transparent">
+          <CardContent className="space-y-2 p-4">
+            {routes.map((endpoint, index) => (
+              <div
+                key={index}
+                className="flex items-center justify-between p-2 rounded-lg cursor-pointer group hover:bg-muted transition"
+                onMouseEnter={() => setHoveredPath(endpoint.path)}
+                onMouseLeave={() => setHoveredPath(null)}
+                onClick={() =>
+                  setTesterRoute({
+                    method: endpoint.method,
+                    path: endpoint.path,
+                  })
+                }
+              >
+                <div className="flex flex-row gap-3">
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      HTTP_METHOD_COLOR[
+                        endpoint.method as keyof typeof HTTP_METHOD_COLOR
+                      ],
+                      "w-16 text-center justify-center",
+                    )}
+                  >
+                    {endpoint.method}
+                  </Badge>
+                  <code className="text-sm font-mono text-foreground">
+                    {endpoint.path || "/"}
+                  </code>
+                </div>
+                {hoveredPath === endpoint.path && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setTesterRoute({
+                          method: endpoint.method,
+                          path: endpoint.path,
+                        });
+                      }}
+                      className="flex items-center gap-1 text-muted-foreground hover:text-primary transition"
+                    >
+                      <Play className="w-4 h-4" />
+                      <span className="text-xs">Try it</span>
+                    </button>
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        copyToClipboard(endpoint);
+                      }}
+                      className="flex items-center gap-1 text-muted-foreground hover:text-primary transition"
+                    >
+                      <Copy className="w-4 h-4" />
+                      <span className="text-xs">
+                        {copiedPath === endpoint.path
+                          ? "✅ Copied!"
+                          : "Copy Curl"}
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
-              {hoveredPath === endpoint.path && (
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    copyToClipboard(endpoint);
-                  }}
-                  className="flex items-center gap-1 text-muted-foreground hover:text-primary transition"
-                >
-                  <Copy className="w-4 h-4" />
-                  <span className="text-xs">
-                    {copiedPath === endpoint.path ? "✅ Copied!" : "Copy Curl"}
-                  </span>
-                </button>
-              )}
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            ))}
+          </CardContent>
+        </Card>
+        {testerRoute && (
+          <ApiTesterModal
+            open={!!testerRoute}
+            onOpenChange={open => {
+              if (!open) setTesterRoute(null);
+            }}
+            method={testerRoute.method}
+            path={testerRoute.path}
+            host={host}
+          />
+        )}
+      </>
     )
   );
 };
@@ -127,20 +163,6 @@ export default function Deployments() {
   useEffect(() => {
     const fetchDeployments = async () => {
       try {
-        const uploadedDefinitions = await API.apiService.getUploadedDefinitions(
-          appId!,
-        );
-
-        const nonDraftDefinitions = uploadedDefinitions
-          .filter((def: HttpApiDefinition) => !def.draft)
-          .map((def: HttpApiDefinition) => ({
-            id: def.id,
-            version: def.version,
-            routes: def.routes || [],
-          }));
-
-        setApiList(nonDraftDefinitions);
-
         const deploymentResponse = await API.deploymentService.getDeploymentApi(
           appId!,
         );
@@ -163,6 +185,33 @@ export default function Deployments() {
         );
 
         setDeployments(uniqueDeployments);
+
+        // Collect unique api definition names referenced across all deployments
+        const definitionNames = new Set<string>();
+        for (const d of uniqueDeployments) {
+          for (const defStr of d.apiDefinitions) {
+            const [id = ""] = defStr.split("@");
+            definitionNames.add(id);
+          }
+        }
+
+        // Fetch full definitions from the server to get trusted routes
+        const definitions: HttpApiDefinition[] = [];
+        await Promise.all(
+          [...definitionNames].map(async name => {
+            try {
+              const def = await API.apiService.getApiDefinitionFromServer(
+                appId!,
+                name,
+              );
+              definitions.push({ ...def, id: def.id ?? name });
+            } catch (err) {
+              console.error(`Failed to fetch definition ${name}:`, err);
+            }
+          }),
+        );
+
+        setApiList(definitions);
       } catch (error) {
         console.error("Failed to fetch deployments:", error);
         setDeployments([]);
@@ -309,9 +358,17 @@ export default function Deployments() {
                     {/* API Definitions List */}
                     <div className="space-y-3">
                       {deployment.apiDefinitions.map(apiDefString => {
-                        // Parse "id@version" format
+                        // Parse "name" or "name@version" format
                         const [apiId = "", apiVersion = ""] =
                           apiDefString.split("@");
+                        const matchedDef = apiList.find(
+                          a =>
+                            (a.id === apiId || a.name === apiId) &&
+                            (!apiVersion || a.version === apiVersion),
+                        );
+                        const resolvedVersion =
+                          apiVersion || matchedDef?.version || "";
+                        const routeCount = matchedDef?.routes?.length || 0;
                         return (
                           <div key={apiDefString} className="space-y-2">
                             <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
@@ -322,32 +379,21 @@ export default function Deployments() {
                                 >
                                   {apiId}
                                 </Badge>
-                                <Badge
-                                  variant="outline"
-                                  className="font-mono text-xs"
-                                >
-                                  v{apiVersion}
-                                </Badge>
+                                {resolvedVersion && (
+                                  <Badge
+                                    variant="outline"
+                                    className="font-mono text-xs"
+                                  >
+                                    v{resolvedVersion}
+                                  </Badge>
+                                )}
                                 <span className="text-xs text-muted-foreground">
-                                  {apiList.find(
-                                    a =>
-                                      a.id === apiId &&
-                                      a.version === apiVersion,
-                                  )?.routes?.length || 0}{" "}
-                                  route
-                                  {(apiList.find(
-                                    a =>
-                                      a.id === apiId &&
-                                      a.version === apiVersion,
-                                  )?.routes?.length || 0) !== 1
-                                    ? "s"
-                                    : ""}
+                                  {routeCount} route
+                                  {routeCount !== 1 ? "s" : ""}
                                 </span>
                               </div>
 
-                              {(apiList.find(
-                                a => a.id === apiId && a.version === apiVersion,
-                              )?.routes?.length || 0) > 0 && (
+                              {routeCount > 0 && (
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -355,7 +401,7 @@ export default function Deployments() {
                                     toggleExpanded(
                                       deployment.domain,
                                       apiId,
-                                      apiVersion,
+                                      resolvedVersion,
                                     )
                                   }
                                   className="h-8 w-8 p-0"
@@ -364,7 +410,7 @@ export default function Deployments() {
                                     className={cn(
                                       "h-4 w-4 transition-transform duration-200",
                                       expandedDeployment.includes(
-                                        `${deployment.domain}.${apiId}.${apiVersion}`,
+                                        `${deployment.domain}.${apiId}.${resolvedVersion}`,
                                       ) && "rotate-90",
                                     )}
                                   />
@@ -373,12 +419,12 @@ export default function Deployments() {
                             </div>
 
                             {expandedDeployment.includes(
-                              `${deployment.domain}.${apiId}.${apiVersion}`,
+                              `${deployment.domain}.${apiId}.${resolvedVersion}`,
                             ) && (
                               <div className="pl-4">
                                 <RoutesCard
                                   apiId={apiId}
-                                  version={apiVersion}
+                                  version={resolvedVersion}
                                   apiList={apiList}
                                   host={deployment.domain}
                                 />
