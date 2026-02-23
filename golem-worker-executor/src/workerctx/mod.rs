@@ -270,7 +270,7 @@ pub trait InvocationHooks {
     /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
     /// - `function_input`: The input of the function being invoked
     #[allow(clippy::ptr_arg)]
-    async fn on_exported_function_invoked(
+    async fn on_agent_invocation_started(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,

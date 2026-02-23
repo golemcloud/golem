@@ -218,7 +218,7 @@ async fn revert_failed_worker_to_invoke_of_failed_invocation(
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         oplog
             .iter()
-            .rfind(|op| matches!(op.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))
+            .rfind(|op| matches!(op.entry, PublicOplogEntry::AgentInvocationStarted(_)))
             .cloned()
             .unwrap()
     };

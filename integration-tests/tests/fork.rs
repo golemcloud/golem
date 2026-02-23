@@ -158,8 +158,8 @@ async fn fork_running_worker_1(
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))
-        .expect("Expected ExportedFunctionInvoked in oplog");
+        .find(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .expect("Expected AgentInvocationStarted in oplog");
 
     let oplog_index_of_function_invoked = OplogIndex::from_u64((idx + 1) as u64);
 
@@ -335,7 +335,7 @@ async fn fork_idle_worker(
 
     assert!(matches!(
         &log_record.entry,
-        PublicOplogEntry::ExportedFunctionCompleted(_)
+        PublicOplogEntry::AgentInvocationFinished(_)
     ));
 
     user.fork_worker(
@@ -618,9 +618,9 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     assert!(
         matches!(
             &source_last.entry,
-            PublicOplogEntry::ExportedFunctionCompleted(_)
+            PublicOplogEntry::AgentInvocationFinished(_)
         ),
-        "Expected ExportedFunctionCompleted in source oplog"
+        "Expected AgentInvocationFinished in source oplog"
     );
 
     assert_eq!(

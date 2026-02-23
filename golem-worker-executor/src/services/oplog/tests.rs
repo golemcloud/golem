@@ -21,9 +21,9 @@ use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentId;
-use golem_common::model::oplog::{LogLevel, WorkerError};
+use golem_common::model::oplog::{AgentInvocationPayload, LogLevel, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::WorkerStatusRecord;
 use golem_common::redis::RedisPool;
@@ -335,17 +335,28 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .unwrap()
         .rounded();
     let entry2 = oplog
-        .add_exported_function_invoked(
-            "f2".to_string(),
-            &vec!["request".into_value()],
-            IdempotencyKey::fresh(),
-            InvocationContextStack::fresh_rounded(),
+        .add_agent_invocation_started(
+            AgentInvocation::AgentMethod {
+                idempotency_key: IdempotencyKey::fresh(),
+                method_name: "f2".to_string(),
+                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                    "request".into_value(),
+                )]),
+                invocation_context: InvocationContextStack::fresh_rounded(),
+            },
         )
         .await
         .unwrap()
         .rounded();
     let entry3 = oplog
-        .add_exported_function_completed(&Some("response".into_value_and_type()), 42)
+        .add_agent_invocation_finished(
+            &AgentInvocationResult::AgentMethod {
+                output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                    "response".into_value(),
+                )]),
+            },
+            42,
+        )
         .await
         .unwrap()
         .rounded();
@@ -413,27 +424,43 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p2 = match entry2 {
-        OplogEntry::ExportedFunctionInvoked { request, .. } => {
-            let request = oplog_service
-                .download_payload(&owned_worker_id, request)
+        OplogEntry::AgentInvocationStarted { payload, .. } => {
+            let payload: AgentInvocationPayload = oplog_service
+                .download_payload(&owned_worker_id, payload)
                 .await
                 .unwrap();
-            match request.first() {
-                Some(value) => String::from_value(value.clone()).unwrap(),
-                _ => panic!("unexpected entry"),
+            match payload {
+                AgentInvocationPayload::AgentMethod { input, .. } => match input {
+                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
+                        Some(UntypedElementValue::ComponentModel(value)) => {
+                            String::from_value(value).unwrap()
+                        }
+                        _ => panic!("unexpected element"),
+                    },
+                    _ => panic!("unexpected data value"),
+                },
+                _ => panic!("unexpected payload"),
             }
         }
         _ => panic!("unexpected entry"),
     };
     let p3 = match entry3 {
-        OplogEntry::ExportedFunctionCompleted { response, .. } => {
-            let response = oplog_service
-                .download_payload(&owned_worker_id, response)
+        OplogEntry::AgentInvocationFinished { result, .. } => {
+            let result: AgentInvocationResult = oplog_service
+                .download_payload(&owned_worker_id, result)
                 .await
                 .unwrap();
-            match response {
-                Some(vnt) => String::from_value_and_type(vnt).unwrap(),
-                _ => panic!("unexpected entry"),
+            match result {
+                AgentInvocationResult::AgentMethod { output } => match output {
+                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
+                        Some(UntypedElementValue::ComponentModel(value)) => {
+                            String::from_value(value).unwrap()
+                        }
+                        _ => panic!("unexpected element"),
+                    },
+                    _ => panic!("unexpected data value"),
+                },
+                _ => panic!("unexpected result"),
             }
         }
         _ => panic!("unexpected entry"),
@@ -491,17 +518,28 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .unwrap()
         .rounded();
     let entry2 = oplog
-        .add_exported_function_invoked(
-            "f2".to_string(),
-            &vec![large_payload2.clone().into_value()],
-            IdempotencyKey::fresh(),
-            InvocationContextStack::fresh_rounded(),
+        .add_agent_invocation_started(
+            AgentInvocation::AgentMethod {
+                idempotency_key: IdempotencyKey::fresh(),
+                method_name: "f2".to_string(),
+                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                    large_payload2.clone().into_value(),
+                )]),
+                invocation_context: InvocationContextStack::fresh_rounded(),
+            },
         )
         .await
         .unwrap()
         .rounded();
     let entry3 = oplog
-        .add_exported_function_completed(&Some(large_payload3.clone().into_value_and_type()), 42)
+        .add_agent_invocation_finished(
+            &AgentInvocationResult::AgentMethod {
+                output: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                    large_payload3.clone().into_value(),
+                )]),
+            },
+            42,
+        )
         .await
         .unwrap()
         .rounded();
@@ -569,27 +607,43 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         _ => panic!("unexpected entry"),
     };
     let p2 = match entry2 {
-        OplogEntry::ExportedFunctionInvoked { request, .. } => {
-            let request = oplog_service
-                .download_payload(&owned_worker_id, request)
+        OplogEntry::AgentInvocationStarted { payload, .. } => {
+            let payload: AgentInvocationPayload = oplog_service
+                .download_payload(&owned_worker_id, payload)
                 .await
                 .unwrap();
-            match request.first() {
-                Some(value) => Vec::<u8>::from_value(value.clone()).unwrap(),
-                _ => panic!("unexpected entry"),
+            match payload {
+                AgentInvocationPayload::AgentMethod { input, .. } => match input {
+                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
+                        Some(UntypedElementValue::ComponentModel(value)) => {
+                            Vec::<u8>::from_value(value).unwrap()
+                        }
+                        _ => panic!("unexpected element"),
+                    },
+                    _ => panic!("unexpected data value"),
+                },
+                _ => panic!("unexpected payload"),
             }
         }
         _ => panic!("unexpected entry"),
     };
     let p3 = match entry3 {
-        OplogEntry::ExportedFunctionCompleted { response, .. } => {
-            let response = oplog_service
-                .download_payload(&owned_worker_id, response)
+        OplogEntry::AgentInvocationFinished { result, .. } => {
+            let result: AgentInvocationResult = oplog_service
+                .download_payload(&owned_worker_id, result)
                 .await
                 .unwrap();
-            match response {
-                Some(vnt) => Vec::<u8>::from_value_and_type(vnt).unwrap(),
-                _ => panic!("unexpected entry"),
+            match result {
+                AgentInvocationResult::AgentMethod { output } => match output {
+                    UntypedDataValue::Tuple(elems) => match elems.into_iter().next() {
+                        Some(UntypedElementValue::ComponentModel(value)) => {
+                            Vec::<u8>::from_value(value).unwrap()
+                        }
+                        _ => panic!("unexpected element"),
+                    },
+                    _ => panic!("unexpected data value"),
+                },
+                _ => panic!("unexpected result"),
             }
         }
         _ => panic!("unexpected entry"),

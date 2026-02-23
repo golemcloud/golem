@@ -281,7 +281,7 @@ impl DebugServiceDefault {
             let entry = oplog.read(new_target_oplog_index).await;
 
             match entry {
-                OplogEntry::ExportedFunctionCompleted { .. } => {
+                OplogEntry::AgentInvocationFinished { .. } => {
                     return Ok(new_target_oplog_index);
                 }
                 _ => {
@@ -770,9 +770,9 @@ mod tests {
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
             if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
-                OplogEntry::ExportedFunctionCompleted {
+                OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
-                    response: OplogPayload::Inline(Box::new(None)),
+                    result: OplogPayload::Inline(Box::new(None)),
                     consumed_fuel: 0,
                 }
             } else {

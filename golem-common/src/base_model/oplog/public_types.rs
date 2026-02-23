@@ -296,7 +296,7 @@ pub struct ManualUpdateParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-pub enum PublicWorkerInvocation {
+pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
     #[unit_case]
@@ -304,6 +304,45 @@ pub enum PublicWorkerInvocation {
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
     ManualUpdate(ManualUpdateParameters),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInvocationOutputParameters {
+    #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
+    pub output: DataValue,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct FallibleResultParameters {
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSnapshotResultParameters {
+    pub snapshot: PublicSnapshotData,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicAgentInvocationResult {
+    AgentInitialization(AgentInvocationOutputParameters),
+    AgentMethod(AgentInvocationOutputParameters),
+    #[unit_case]
+    ManualUpdate(Empty),
+    LoadSnapshot(FallibleResultParameters),
+    SaveSnapshot(SaveSnapshotResultParameters),
+    ProcessOplogEntries(FallibleResultParameters),
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
@@ -395,7 +434,7 @@ pub enum PersistenceLevel {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct RawSnapshotData {

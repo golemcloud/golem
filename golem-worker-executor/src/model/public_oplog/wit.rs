@@ -15,26 +15,26 @@
 use crate::preview2::golem_api_1_x::oplog;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
-    BeginRemoteWriteParams, CancelPendingInvocationParams, ChangePersistenceLevelParams,
-    ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
-    ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostCallParams, InterruptedParams, JumpParams, LogParams,
-    ManualUpdateParameters, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAttributeValue, PublicDurableFunctionType,
-    PublicRetryConfig, PublicSpanData, PublicWorkerInvocation, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
+    BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
+    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
+    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, PendingUpdateParams,
+    PendingWorkerInvocationParams, PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams,
+    SnapshotParams, StartSpanParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    JsonSnapshotData, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
-    RawSnapshotData, SnapshotBasedUpdateParameters,
+    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData,
+    PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
-use golem_common::model::Timestamp;
+use golem_common::model::{Empty, Timestamp};
 
 impl From<PublicOplogEntry> for oplog::OplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
@@ -86,33 +86,20 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 response: response.into(),
                 wrapped_function_type: wrapped_function_type.into(),
             }),
-            PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParams {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp,
-                function_name,
-                request,
-                idempotency_key,
-                trace_id,
-                trace_states,
-                invocation_context,
-            }) => Self::ExportedFunctionInvoked(oplog::ExportedFunctionInvokedParameters {
+                invocation,
+            }) => Self::AgentInvocationStarted(oplog::AgentInvocationStartedParameters {
                 timestamp: timestamp.into(),
-                function_name,
-                request: request.into_iter().map(|v| v.into()).collect(),
-                idempotency_key: idempotency_key.value,
-                trace_id: trace_id.to_string(),
-                trace_states,
-                invocation_context: invocation_context
-                    .into_iter()
-                    .map(|inner| inner.into_iter().map(|span| span.into()).collect())
-                    .collect(),
+                invocation: invocation.into(),
             }),
-            PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+            PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
                 timestamp,
-                response,
+                result,
                 consumed_fuel,
-            }) => Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
+            }) => Self::AgentInvocationFinished(oplog::AgentInvocationFinishedParameters {
                 timestamp: timestamp.into(),
-                response: response.map(golem_wasm::golem_core_1_5_x::types::ValueAndType::from),
+                invocation_result: result.into(),
                 consumed_fuel,
             }),
             PublicOplogEntry::Suspend(SuspendParams { timestamp }) => {
@@ -420,10 +407,10 @@ impl From<golem_common::model::oplog::LogLevel> for oplog::LogLevel {
     }
 }
 
-impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
-    fn from(value: PublicWorkerInvocation) -> Self {
+impl From<PublicAgentInvocation> for oplog::AgentInvocation {
+    fn from(value: PublicAgentInvocation) -> Self {
         match value {
-            PublicWorkerInvocation::AgentInitialization(params) => {
+            PublicAgentInvocation::AgentInitialization(params) => {
                 let schema = params.constructor_parameters.extract_schema();
                 Self::AgentInitialization(oplog::AgentInitializationParameters {
                     idempotency_key: params.idempotency_key.value,
@@ -440,7 +427,7 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                         .collect(),
                 })
             }
-            PublicWorkerInvocation::AgentMethodInvocation(params) => {
+            PublicAgentInvocation::AgentMethodInvocation(params) => {
                 let schema = params.function_input.extract_schema();
                 Self::AgentMethodInvocation(oplog::AgentMethodInvocationParameters {
                     idempotency_key: params.idempotency_key.value,
@@ -458,18 +445,73 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                         .collect(),
                 })
             }
-            PublicWorkerInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
-            PublicWorkerInvocation::LoadSnapshot(_params) => {
+            PublicAgentInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
+            PublicAgentInvocation::LoadSnapshot(_params) => {
                 // TODO: implement load snapshot conversion
                 todo!("LoadSnapshot WIT conversion not yet implemented")
             }
-            PublicWorkerInvocation::ProcessOplogEntries(_params) => {
+            PublicAgentInvocation::ProcessOplogEntries(_params) => {
                 // TODO: implement process oplog entries conversion
                 todo!("ProcessOplogEntries WIT conversion not yet implemented")
             }
-            PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
+            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
                 Self::ManualUpdate(oplog::ManualUpdateParameters { target_revision: target_revision.into() })
             }
+        }
+    }
+}
+
+impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
+    fn from(value: PublicAgentInvocationResult) -> Self {
+        match value {
+            PublicAgentInvocationResult::AgentInitialization(
+                AgentInvocationOutputParameters { output },
+            ) => {
+                let schema = output.extract_schema();
+                Self::AgentInitialization(oplog::AgentInvocationOutputParameters {
+                    output: oplog::TypedDataValue {
+                        value: output.into(),
+                        schema: schema.into(),
+                    },
+                })
+            }
+            PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
+                output,
+            }) => {
+                let schema = output.extract_schema();
+                Self::AgentMethod(oplog::AgentInvocationOutputParameters {
+                    output: oplog::TypedDataValue {
+                        value: output.into(),
+                        schema: schema.into(),
+                    },
+                })
+            }
+            PublicAgentInvocationResult::ManualUpdate(Empty {}) => Self::ManualUpdate,
+            PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }) => {
+                Self::LoadSnapshot(oplog::FallibleResultParameters { error })
+            }
+            PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
+                snapshot,
+            }) => {
+                let (snapshot_bytes, mime_type) = match snapshot {
+                    PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
+                        (data, mime_type)
+                    }
+                    PublicSnapshotData::Json(JsonSnapshotData { data }) => (
+                        serde_json::to_vec(&data).unwrap_or_default(),
+                        "application/json".to_string(),
+                    ),
+                };
+                Self::SaveSnapshot(oplog::SaveSnapshotResultParameters {
+                    snapshot: crate::preview2::golem_api_1_x::host::Snapshot {
+                        data: snapshot_bytes,
+                        mime_type,
+                    },
+                })
+            }
+            PublicAgentInvocationResult::ProcessOplogEntries(FallibleResultParameters {
+                error,
+            }) => Self::ProcessOplogEntries(oplog::FallibleResultParameters { error }),
         }
     }
 }

@@ -658,8 +658,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
         // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-        // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
-        // are finished at ExportedFunctionCompleted.
+        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
+        // are finished at AgentInvocationFinished.
         for span_id in local_span_ids {
             self.store.data_mut().remove_span(&span_id)?;
         }

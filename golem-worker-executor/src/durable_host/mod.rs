@@ -94,9 +94,11 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
+use golem_common::model::agent::{UntypedDataValue, UntypedElementValue};
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -1547,25 +1549,33 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
-    async fn on_exported_function_invoked(
+    async fn on_agent_invocation_started(
         &mut self,
         full_function_name: &str,
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
             let stack = self.get_current_invocation_context().await;
+            let idempotency_key = self.get_current_idempotency_key().await.ok_or(anyhow!(
+                "No active invocation key is associated with the worker"
+            ))?;
+
+            let invocation = AgentInvocation::AgentMethod {
+                idempotency_key,
+                method_name: full_function_name.to_string(),
+                input: UntypedDataValue::Tuple(
+                    function_input
+                        .iter()
+                        .map(|v| UntypedElementValue::ComponentModel(v.clone()))
+                        .collect(),
+                ),
+                invocation_context: stack,
+            };
 
             self.public_state
                 .worker()
                 .oplog()
-                .add_exported_function_invoked(
-                    full_function_name.to_string(),
-                    function_input,
-                    self.get_current_idempotency_key().await.ok_or(anyhow!(
-                        "No active invocation key is associated with the worker"
-                    ))?,
-                    stack,
-                )
+                .add_agent_invocation_started(invocation)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -1679,10 +1689,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
+                let result = AgentInvocationResult::AgentMethod {
+                    output: UntypedDataValue::Tuple(
+                        output
+                            .as_ref()
+                            .map(|vat| {
+                                vec![UntypedElementValue::ComponentModel(vat.value.clone())]
+                            })
+                            .unwrap_or_default(),
+                    ),
+                };
+
                 self.public_state
                     .worker()
                     .oplog()
-                    .add_exported_function_completed(&output, consumed_fuel)
+                    .add_agent_invocation_finished(&result, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1710,14 +1731,31 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let response = self
                 .state
                 .replay_state
-                .get_oplog_entry_exported_function_completed()
+                .get_oplog_entry_agent_invocation_finished()
                 .await?;
 
-            if let Some(function_output) = response {
-                let is_diverged = function_output != output;
+            if let Some(invocation_result) = response {
+                let expected_output = match &invocation_result {
+                    AgentInvocationResult::AgentMethod { output: untyped }
+                    | AgentInvocationResult::AgentInitialization { output: untyped } => {
+                        match untyped {
+                            UntypedDataValue::Tuple(elements) => {
+                                elements.first().and_then(|elem| match elem {
+                                    UntypedElementValue::ComponentModel(v) => output.as_ref().map(|vat| {
+                                        ValueAndType::new(v.clone(), vat.typ.clone())
+                                    }),
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                let is_diverged = expected_output != output;
                 if is_diverged {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("{full_function_name}({function_input:?}) => {function_output:?}"),
+                        format!("{full_function_name}({function_input:?}) => {expected_output:?}"),
                         format!("{full_function_name}({function_input:?}) => {output:?}"),
                     ));
                 }
@@ -2050,7 +2088,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .state
                     .replay_state
-                    .get_oplog_entry_exported_function_invoked()
+                    .get_oplog_entry_agent_invocation_started()
                     .await;
 
                 match oplog_entry {
@@ -2064,12 +2102,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .await?;
                         break Ok(None);
                     }
-                    Ok(Some(replay_state::ExportedFunctionInvoked {
-                        function_name,
-                        function_input,
+                    Ok(Some(replay_state::AgentInvocationStartedEntry {
                         idempotency_key,
+                        invocation_payload,
                         invocation_context,
                     })) => {
+                        let (function_name, function_input) =
+                            extract_function_name_and_input(&invocation_payload);
+
                         store
                             .as_context_mut()
                             .data_mut()
@@ -2117,8 +2157,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                         // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
                         // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-                        // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
-                        // are finished at ExportedFunctionCompleted.
+                        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
+                        // are finished at AgentInvocationFinished.
                         for span_id in local_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
@@ -2689,8 +2729,8 @@ async fn last_error<T: HasOplogService + HasConfig>(
                     }
                     Some((
                         _,
-                        OplogEntry::ExportedFunctionInvoked { .. }
-                        | OplogEntry::ExportedFunctionCompleted { .. },
+                        OplogEntry::AgentInvocationStarted { .. }
+                        | OplogEntry::AgentInvocationFinished { .. },
                     )) => {
                         // Retry counting never gets across invocation boundaries
                         break;
@@ -2777,22 +2817,20 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
             }
             Some((
                 _,
-                OplogEntry::ExportedFunctionInvoked {
-                    function_name,
+                OplogEntry::AgentInvocationStarted {
                     idempotency_key,
                     ..
                 },
             )) => match &first_seen_invocation {
                 None => {
-                    first_seen_invocation = Some((function_name.clone(), idempotency_key.clone()));
+                    first_seen_invocation = Some(idempotency_key.clone());
                     stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
                     if stderr_entries.len() >= max_count {
                         break;
                     };
                 }
-                Some((expected_function, expected_idempotency_key))
-                    if function_name == expected_function
-                        && idempotency_key == expected_idempotency_key =>
+                Some(expected_idempotency_key)
+                    if idempotency_key == expected_idempotency_key =>
                 {
                     stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
                     if stderr_entries.len() >= max_count {
@@ -2811,6 +2849,47 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     }
     stderr_entries.reverse();
     stderr_entries.join("")
+}
+
+fn extract_function_name_and_input(
+    invocation_payload: &AgentInvocationPayload,
+) -> (String, Vec<Value>) {
+    match invocation_payload {
+        AgentInvocationPayload::AgentInitialization { input } => {
+            let function_input = match input {
+                UntypedDataValue::Tuple(elements) => elements
+                    .iter()
+                    .filter_map(|e| match e {
+                        UntypedElementValue::ComponentModel(v) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            };
+            ("golem:agent/guest.{initialize}".to_string(), function_input)
+        }
+        AgentInvocationPayload::AgentMethod {
+            method_name, input, ..
+        } => {
+            let function_input = match input {
+                UntypedDataValue::Tuple(elements) => elements
+                    .iter()
+                    .filter_map(|e| match e {
+                        UntypedElementValue::ComponentModel(v) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            };
+            (method_name.clone(), function_input)
+        }
+        AgentInvocationPayload::ManualUpdate { .. }
+        | AgentInvocationPayload::LoadSnapshot { .. }
+        | AgentInvocationPayload::SaveSnapshot
+        | AgentInvocationPayload::ProcessOplogEntries { .. } => {
+            (String::new(), vec![])
+        }
+    }
 }
 
 /// Indicates which step of the http request handling is responsible for closing an open

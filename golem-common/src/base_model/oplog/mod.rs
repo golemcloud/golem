@@ -36,7 +36,7 @@ mod raw_imports {
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::*;
-    pub use crate::model::{RetryConfig, AgentInvocation};
+    pub use crate::model::{RetryConfig, AgentInvocation, AgentInvocationPayload, AgentInvocationResult};
     pub use golem_wasm::wasmtime::ResourceTypeId;
     pub use golem_wasm::Value;
     pub use std::collections::{HashMap, HashSet};
@@ -108,34 +108,28 @@ oplog_entry! {
         }
     },
     /// The agent has been invoked
-    ExportedFunctionInvoked {
+    AgentInvocationStarted {
         hint: false
         raw {
-            function_name: String,
-            request: payload::OplogPayload<Vec<Value>>,
             idempotency_key: IdempotencyKey,
+            payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
         }
         public {
-            function_name: String,
-            request: Vec<ValueAndType>,
-            idempotency_key: IdempotencyKey,
-            trace_id: TraceId,
-            trace_states: Vec<String>,
-            invocation_context: Vec<Vec<PublicSpanData>>,
+            invocation: PublicAgentInvocation,
         }
     },
     /// The agent has completed an invocation
-    ExportedFunctionCompleted {
+    AgentInvocationFinished {
         hint: false
         raw {
-            response: payload::OplogPayload<Option<ValueAndType>>,
+            result: payload::OplogPayload<AgentInvocationResult>,
             consumed_fuel: i64,
         }
         public {
-            response: Option<ValueAndType>,
+            result: PublicAgentInvocationResult,
             consumed_fuel: i64,
         }
     },
@@ -245,10 +239,11 @@ oplog_entry! {
     PendingWorkerInvocation {
         hint: true
         raw {
-            invocation: AgentInvocation,
+            idempotency_key: IdempotencyKey,
+            payload: payload::OplogPayload<AgentInvocationPayload>,
         }
         public {
-            invocation: PublicWorkerInvocation
+            invocation: PublicAgentInvocation
         }
     },
     /// An update request arrived and will be applied as soon the worker restarts

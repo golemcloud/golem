@@ -15,8 +15,8 @@
 use crate::Tracing;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
@@ -107,14 +107,14 @@ async fn get_oplog_1(
     let invoke_count = oplog
         .iter()
         .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-                ExportedFunctionInvokedParams { function_name, .. }
-            ) if function_name == "golem:agent/guest.{invoke}")
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(
+                AgentInvocationStartedParams { invocation: PublicAgentInvocation::AgentMethodInvocation(_), .. }
+            ))
         })
         .count();
     assert!(
         invoke_count >= 3,
-        "Expected at least 3 ExportedFunctionInvoked entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
+        "Expected at least 3 AgentInvocationStarted entries with AgentMethodInvocation, got {invoke_count}"
     );
 
     Ok(())

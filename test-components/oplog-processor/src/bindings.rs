@@ -3584,6 +3584,22 @@ pub mod golem {
             pub type AttributeValue = super::super::super::golem::api::context::AttributeValue;
             pub type SpanId = super::super::super::golem::api::context::SpanId;
             pub type TraceId = super::super::super::golem::api::context::TraceId;
+            #[derive(Clone)]
+            pub struct TypedDataValue {
+                pub value: _rt::Vec<u8>,
+                pub schema: _rt::Vec<u8>,
+            }
+            impl ::core::fmt::Debug for TypedDataValue {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("TypedDataValue")
+                        .field("value", &self.value)
+                        .field("schema", &self.schema)
+                        .finish()
+                }
+            }
             #[derive(Clone, Copy)]
             pub enum WrappedFunctionType {
                 /// The side-effect reads from the agent's local state (for example local file system,
@@ -3720,7 +3736,7 @@ pub mod golem {
                 pub span_id: SpanId,
                 pub start: Datetime,
                 pub parent: Option<SpanId>,
-                /// Optionally an index of the exported-function-invoked-parameters's invocation-context field
+                /// Optionally an index of the invocation-context field within agent-invocation
                 pub linked_context: Option<u64>,
                 pub attributes: _rt::Vec<Attribute>,
                 pub inherited: bool,
@@ -3775,47 +3791,35 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
-            pub struct ExportedFunctionInvokedParameters {
+            pub struct AgentInvocationStartedParameters {
                 pub timestamp: Datetime,
-                pub function_name: _rt::String,
-                pub request: _rt::Vec<ValueAndType>,
-                pub idempotency_key: _rt::String,
-                pub trace_id: TraceId,
-                pub trace_states: _rt::Vec<_rt::String>,
-                /// The first one is the invocation context stack associated with the exported function invocation,
-                /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
-                pub invocation_context: _rt::Vec<_rt::Vec<SpanData>>,
+                pub invocation: AgentInvocation,
             }
-            impl ::core::fmt::Debug for ExportedFunctionInvokedParameters {
+            impl ::core::fmt::Debug for AgentInvocationStartedParameters {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("ExportedFunctionInvokedParameters")
+                    f.debug_struct("AgentInvocationStartedParameters")
                         .field("timestamp", &self.timestamp)
-                        .field("function-name", &self.function_name)
-                        .field("request", &self.request)
-                        .field("idempotency-key", &self.idempotency_key)
-                        .field("trace-id", &self.trace_id)
-                        .field("trace-states", &self.trace_states)
-                        .field("invocation-context", &self.invocation_context)
+                        .field("invocation", &self.invocation)
                         .finish()
                 }
             }
             #[derive(Clone)]
-            pub struct ExportedFunctionCompletedParameters {
+            pub struct AgentInvocationFinishedParameters {
                 pub timestamp: Datetime,
-                pub response: Option<ValueAndType>,
+                pub result: AgentInvocationResult,
                 pub consumed_fuel: i64,
             }
-            impl ::core::fmt::Debug for ExportedFunctionCompletedParameters {
+            impl ::core::fmt::Debug for AgentInvocationFinishedParameters {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("ExportedFunctionCompletedParameters")
+                    f.debug_struct("AgentInvocationFinishedParameters")
                         .field("timestamp", &self.timestamp)
-                        .field("response", &self.response)
+                        .field("result", &self.result)
                         .field("consumed-fuel", &self.consumed_fuel)
                         .finish()
                 }
@@ -3924,25 +3928,21 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
-            pub struct ExportedFunctionInvocationParameters {
+            pub struct AgentInitializationParameters {
                 pub idempotency_key: _rt::String,
-                pub function_name: _rt::String,
-                pub input: Option<_rt::Vec<ValueAndType>>,
+                pub constructor_parameters: TypedDataValue,
                 pub trace_id: _rt::String,
                 pub trace_states: _rt::Vec<_rt::String>,
-                /// The first one is the invocation context stack associated with the exported function invocation,
-                /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
                 pub invocation_context: _rt::Vec<_rt::Vec<SpanData>>,
             }
-            impl ::core::fmt::Debug for ExportedFunctionInvocationParameters {
+            impl ::core::fmt::Debug for AgentInitializationParameters {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("ExportedFunctionInvocationParameters")
+                    f.debug_struct("AgentInitializationParameters")
                         .field("idempotency-key", &self.idempotency_key)
-                        .field("function-name", &self.function_name)
-                        .field("input", &self.input)
+                        .field("constructor-parameters", &self.constructor_parameters)
                         .field("trace-id", &self.trace_id)
                         .field("trace-states", &self.trace_states)
                         .field("invocation-context", &self.invocation_context)
@@ -3950,9 +3950,79 @@ pub mod golem {
                 }
             }
             #[derive(Clone)]
+            pub struct AgentMethodInvocationParameters {
+                pub idempotency_key: _rt::String,
+                pub method_name: _rt::String,
+                pub function_input: TypedDataValue,
+                pub trace_id: _rt::String,
+                pub trace_states: _rt::Vec<_rt::String>,
+                pub invocation_context: _rt::Vec<_rt::Vec<SpanData>>,
+            }
+            impl ::core::fmt::Debug for AgentMethodInvocationParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("AgentMethodInvocationParameters")
+                        .field("idempotency-key", &self.idempotency_key)
+                        .field("method-name", &self.method_name)
+                        .field("function-input", &self.function_input)
+                        .field("trace-id", &self.trace_id)
+                        .field("trace-states", &self.trace_states)
+                        .field("invocation-context", &self.invocation_context)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
+            pub struct LoadSnapshotParameters {
+                pub snapshot: Snapshot,
+            }
+            impl ::core::fmt::Debug for LoadSnapshotParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("LoadSnapshotParameters")
+                        .field("snapshot", &self.snapshot)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
+            pub struct ProcessOplogEntriesParameters {
+                pub idempotency_key: _rt::String,
+            }
+            impl ::core::fmt::Debug for ProcessOplogEntriesParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ProcessOplogEntriesParameters")
+                        .field("idempotency-key", &self.idempotency_key)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
+            pub struct ManualUpdateParameters {
+                pub target_revision: ComponentRevision,
+            }
+            impl ::core::fmt::Debug for ManualUpdateParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ManualUpdateParameters")
+                        .field("target-revision", &self.target_revision)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
             pub enum AgentInvocation {
-                ExportedFunction(ExportedFunctionInvocationParameters),
-                ManualUpdate(ComponentRevision),
+                AgentInitialization(AgentInitializationParameters),
+                AgentMethodInvocation(AgentMethodInvocationParameters),
+                SaveSnapshot,
+                LoadSnapshot(LoadSnapshotParameters),
+                ProcessOplogEntries(ProcessOplogEntriesParameters),
+                ManualUpdate(ManualUpdateParameters),
             }
             impl ::core::fmt::Debug for AgentInvocation {
                 fn fmt(
@@ -3960,13 +4030,121 @@ pub mod golem {
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        AgentInvocation::ExportedFunction(e) => {
-                            f.debug_tuple("AgentInvocation::ExportedFunction")
+                        AgentInvocation::AgentInitialization(e) => {
+                            f.debug_tuple("AgentInvocation::AgentInitialization")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocation::AgentMethodInvocation(e) => {
+                            f.debug_tuple("AgentInvocation::AgentMethodInvocation")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocation::SaveSnapshot => {
+                            f.debug_tuple("AgentInvocation::SaveSnapshot")
+                                .finish()
+                        }
+                        AgentInvocation::LoadSnapshot(e) => {
+                            f.debug_tuple("AgentInvocation::LoadSnapshot")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocation::ProcessOplogEntries(e) => {
+                            f.debug_tuple("AgentInvocation::ProcessOplogEntries")
                                 .field(e)
                                 .finish()
                         }
                         AgentInvocation::ManualUpdate(e) => {
                             f.debug_tuple("AgentInvocation::ManualUpdate")
+                                .field(e)
+                                .finish()
+                        }
+                    }
+                }
+            }
+            #[derive(Clone)]
+            pub struct AgentInvocationOutputParameters {
+                pub output: TypedDataValue,
+            }
+            impl ::core::fmt::Debug for AgentInvocationOutputParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("AgentInvocationOutputParameters")
+                        .field("output", &self.output)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
+            pub struct FallibleResultParameters {
+                pub error: Option<_rt::String>,
+            }
+            impl ::core::fmt::Debug for FallibleResultParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("FallibleResultParameters")
+                        .field("error", &self.error)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
+            pub struct SaveSnapshotResultParameters {
+                pub snapshot: Snapshot,
+            }
+            impl ::core::fmt::Debug for SaveSnapshotResultParameters {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("SaveSnapshotResultParameters")
+                        .field("snapshot", &self.snapshot)
+                        .finish()
+                }
+            }
+            #[derive(Clone)]
+            pub enum AgentInvocationResult {
+                AgentInitialization(AgentInvocationOutputParameters),
+                AgentMethod(AgentInvocationOutputParameters),
+                ManualUpdate,
+                LoadSnapshot(FallibleResultParameters),
+                SaveSnapshot(SaveSnapshotResultParameters),
+                ProcessOplogEntries(FallibleResultParameters),
+            }
+            impl ::core::fmt::Debug for AgentInvocationResult {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    match self {
+                        AgentInvocationResult::AgentInitialization(e) => {
+                            f.debug_tuple("AgentInvocationResult::AgentInitialization")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocationResult::AgentMethod(e) => {
+                            f.debug_tuple("AgentInvocationResult::AgentMethod")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocationResult::ManualUpdate => {
+                            f.debug_tuple("AgentInvocationResult::ManualUpdate")
+                                .finish()
+                        }
+                        AgentInvocationResult::LoadSnapshot(e) => {
+                            f.debug_tuple("AgentInvocationResult::LoadSnapshot")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocationResult::SaveSnapshot(e) => {
+                            f.debug_tuple("AgentInvocationResult::SaveSnapshot")
+                                .field(e)
+                                .finish()
+                        }
+                        AgentInvocationResult::ProcessOplogEntries(e) => {
+                            f.debug_tuple("AgentInvocationResult::ProcessOplogEntries")
                                 .field(e)
                                 .finish()
                         }
@@ -4412,9 +4590,9 @@ pub mod golem {
                 /// The agent invoked a host function
                 HostCall(HostCallParameters),
                 /// The agent has been invoked
-                ExportedFunctionInvoked(ExportedFunctionInvokedParameters),
+                AgentInvocationStarted(AgentInvocationStartedParameters),
                 /// The agent has completed an invocation
-                ExportedFunctionCompleted(ExportedFunctionCompletedParameters),
+                AgentInvocationFinished(AgentInvocationFinishedParameters),
                 /// Agent suspended
                 Suspend(Timestamp),
                 /// Agent failed
@@ -4508,13 +4686,13 @@ pub mod golem {
                                 .field(e)
                                 .finish()
                         }
-                        OplogEntry::ExportedFunctionInvoked(e) => {
-                            f.debug_tuple("OplogEntry::ExportedFunctionInvoked")
+                        OplogEntry::AgentInvocationStarted(e) => {
+                            f.debug_tuple("OplogEntry::AgentInvocationStarted")
                                 .field(e)
                                 .finish()
                         }
-                        OplogEntry::ExportedFunctionCompleted(e) => {
-                            f.debug_tuple("OplogEntry::ExportedFunctionCompleted")
+                        OplogEntry::AgentInvocationFinished(e) => {
+                            f.debug_tuple("OplogEntry::AgentInvocationFinished")
                                 .field(e)
                                 .finish()
                         }

@@ -1,13 +1,12 @@
 use crate::*;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::oplog::public_oplog_entry::ExportedFunctionCompletedParams;
+use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{Timestamp, WorkerId};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::ValueAndType;
 use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
 use test_r::{inherit_test_dep, test};
 
@@ -479,23 +478,17 @@ async fn test_playback_with_overrides(
     // then construct a modified override value with the same type structure
     let original_list_entry =
         &workflow_result.oplogs[u64::from(workflow_result.list_boundary) as usize - 1];
-    let original_response = match &original_list_entry.entry {
-        PublicOplogEntry::ExportedFunctionCompleted(completed) => completed
-            .response
-            .clone()
-            .expect("Expected response in list completion"),
-        _ => panic!("Expected ExportedFunctionCompleted at list boundary"),
+    let original_result = match &original_list_entry.entry {
+        PublicOplogEntry::AgentInvocationFinished(completed) => completed
+            .result
+            .clone(),
+        _ => panic!("Expected AgentInvocationFinished at list boundary"),
     };
 
-    let override_response = ValueAndType::new(
-        original_response.value.clone(),
-        original_response.typ.clone(),
-    );
-
     let public_oplog_entry =
-        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+        PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: Timestamp::now_utc(),
-            response: Some(override_response.clone()),
+            result: original_result.clone(),
             consumed_fuel: 0,
         });
 
@@ -534,13 +527,13 @@ async fn test_playback_with_overrides(
     let entry = oplogs_in_forked_worker.last();
 
     if let Some(PublicOplogEntryWithIndex {
-        entry: PublicOplogEntry::ExportedFunctionCompleted(completed),
+        entry: PublicOplogEntry::AgentInvocationFinished(completed),
         oplog_index: _,
     }) = entry
     {
-        assert_eq!(completed.response, Some(override_response));
+        assert_eq!(completed.result, original_result);
     } else {
-        panic!("Expected ExportedFunctionCompleted entry");
+        panic!("Expected AgentInvocationFinished entry");
     }
 
     assert_eq!(
@@ -555,7 +548,7 @@ fn nth_invocation_boundary(oplogs: &[PublicOplogEntryWithIndex], n: usize) -> Op
     let index = oplogs
         .iter()
         .enumerate()
-        .filter(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionCompleted(_)))
+        .filter(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
         .nth(n - 1)
         .map(|(i, _)| i)
         .unwrap_or_else(|| panic!("No {n}th invocation boundary found"));

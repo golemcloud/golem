@@ -18,8 +18,8 @@ message OplogEntry {
   oneof entry {
     CreateParameters Create = 1;
     HostCallParameters HostCall = 2;
-    ExportedFunctionInvokedParameters ExportedFunctionInvoked = 3;
-    ExportedFunctionCompletedParameters ExportedFunctionCompleted = 4;
+    AgentInvocationStartedParameters AgentInvocationStarted = 3;
+    AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
     TimestampParameter NoOp = 7;
@@ -101,20 +101,77 @@ message HostCallParameters {
   WrappedFunctionType wrapped_function_type = 5;
 }
 
-message ExportedFunctionInvokedParameters {
+message AgentInvocationStartedParameters {
   google.protobuf.Timestamp timestamp = 1;
-  string function_name = 2;
-  repeated wasm.rpc.ValueAndType request = 3;
-  IdempotencyKey idempotency_key = 4;
-  string trace_id = 5;
-  repeated string trace_states = 6;
-  repeated InvocationSpan invocation_context = 7;
+  PublicAgentInvocation invocation = 2;
 }
 
-message ExportedFunctionCompletedParameters {
+message AgentInvocationFinishedParameters {
   google.protobuf.Timestamp timestamp = 1;
-  wasm.rpc.ValueAndType response = 2;
-  uint64 consumed_fuel = 3;
+  PublicAgentInvocationResult result = 2;
+  int64 consumed_fuel = 3;
+}
+
+message PublicAgentInvocation {
+  oneof invocation {
+    PublicAgentInitializationInvocation agent_initialization = 1;
+    PublicAgentMethodInvocation agent_method = 2;
+    golem.common.Empty save_snapshot = 3;
+    LoadSnapshotInvocationParameters load_snapshot = 4;
+    ProcessOplogEntriesInvocationParameters process_oplog_entries = 5;
+    ManualUpdateInvocationParameters manual_update = 6;
+  }
+}
+
+message PublicAgentInitializationInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  golem.component.TypedDataValue constructor_parameters = 2;
+  string trace_id = 3;
+  repeated string trace_states = 4;
+  repeated golem.worker.InvocationSpan invocation_context = 5;
+}
+
+message PublicAgentMethodInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  string method_name = 2;
+  golem.component.TypedDataValue function_input = 3;
+  string trace_id = 4;
+  repeated string trace_states = 5;
+  repeated golem.worker.InvocationSpan invocation_context = 6;
+}
+
+message LoadSnapshotInvocationParameters {
+  SnapshotData snapshot = 1;
+}
+
+message ProcessOplogEntriesInvocationParameters {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+}
+
+message ManualUpdateInvocationParameters {
+  uint64 target_revision = 1;
+}
+
+message PublicAgentInvocationResult {
+  oneof result {
+    golem.component.TypedDataValue agent_initialization_output = 1;
+    golem.component.TypedDataValue agent_method_output = 2;
+    golem.common.Empty manual_update = 3;
+    OptionalError load_snapshot = 4;
+    SnapshotData save_snapshot = 5;
+    OptionalError process_oplog_entries = 6;
+  }
+}
+
+message OptionalError {
+  optional string error = 1;
+}
+
+message SnapshotData {
+  oneof data {
+    RawSnapshotData raw = 1;
+    JsonSnapshotData json = 2;
+  }
 }
 
 message ErrorParameters {
@@ -152,16 +209,6 @@ message EndRemoteWriteParameters {
   uint64 begin_index = 2;
 }
 
-message ExportedFunctionInvocationParameters {
-  IdempotencyKey idempotency_key = 1;
-  string function_name = 2;
-  repeated wasm.rpc.ValueAndType input = 3;
-  bool valid_input = 4;
-  string trace_id = 5;
-  repeated string trace_states = 6;
-  repeated InvocationSpan invocation_context = 7;
-}
-
 message BeginRemoteTransactionParameters {
   google.protobuf.Timestamp timestamp = 1;
   string transaction_id = 2;
@@ -172,16 +219,9 @@ message RemoteTransactionParameters {
   uint64 begin_index = 2;
 }
 
-message WorkerInvocation {
-  oneof invocation {
-    ExportedFunctionInvocationParameters exported_function = 1;
-    uint64 manual_update = 2;
-  }
-}
-
 message PendingWorkerInvocationParameters {
   google.protobuf.Timestamp timestamp = 1;
-  WorkerInvocation invocation = 2;
+  PublicAgentInvocation invocation = 2;
 }
 
 message SnapshotBasedUpdateParameters {

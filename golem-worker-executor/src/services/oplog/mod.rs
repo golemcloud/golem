@@ -20,20 +20,19 @@ use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
 };
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp, WorkerId, WorkerMetadata,
-    WorkerStatusRecord,
+    AgentInvocation, AgentInvocationResult, OwnedWorkerId, ScanCursor, Timestamp, WorkerId,
+    WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{Value, ValueAndType};
+
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
@@ -293,44 +292,42 @@ pub trait OplogOps: Oplog {
         Ok(entry)
     }
 
-    async fn add_exported_function_invoked(
+    async fn add_agent_invocation_started(
         &self,
-        function_name: String,
-        request: &Vec<Value>,
-        idempotency_key: IdempotencyKey,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     ) -> Result<OplogEntry, String> {
-        let payload = self.upload_payload(request).await?;
-        let entry = OplogEntry::ExportedFunctionInvoked {
+        let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
+        let payload = self.upload_payload(&invocation_payload).await?;
+        let trace_id = ctx.trace_id.clone();
+        let trace_states = ctx.trace_states.clone();
+        let invocation_context = ctx.to_oplog_data();
+        let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            function_name,
-            request: payload,
             idempotency_key,
-            invocation_context: invocation_context.to_oplog_data(),
-            trace_id: invocation_context.trace_id,
-            trace_states: invocation_context.trace_states,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
         };
-
         self.add(entry.clone()).await;
         Ok(entry)
     }
 
-    async fn add_exported_function_completed(
+    async fn add_agent_invocation_finished(
         &self,
-        response: &Option<ValueAndType>,
+        result: &AgentInvocationResult,
         consumed_fuel: u64,
     ) -> Result<OplogEntry, String> {
-        // TODO: align types
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
         } else {
             consumed_fuel as i64
         };
 
-        let payload = self.upload_payload(response).await?;
-        let entry = OplogEntry::ExportedFunctionCompleted {
+        let payload = self.upload_payload(result).await?;
+        let entry = OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
-            response: payload,
+            result: payload,
             consumed_fuel,
         };
         self.add(entry.clone()).await;

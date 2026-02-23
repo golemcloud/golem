@@ -16,7 +16,7 @@ use golem_common::base_model::oplog::PublicSnapshotData;
 use golem_common::model::agent::{BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
-    PublicWorkerInvocation, StringAttributeValue,
+    PublicAgentInvocation, StringAttributeValue,
 };
 use golem_wasm::{print_value_and_type, ValueAndType};
 use std::fmt::Write;
@@ -67,31 +67,54 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 value_to_string(&params.response)
             );
         }
-        PublicOplogEntry::ExportedFunctionInvoked(params) => {
-            let _ = writeln!(result, "INVOKE {}", &params.function_name,);
+        PublicOplogEntry::AgentInvocationStarted(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION STARTED");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}idempotency key:   {}",
-                &params.idempotency_key,
-            );
-            let _ = writeln!(result, "{pad}input:");
-            for param in &params.request {
-                let _ = writeln!(result, "{pad}  - {}", value_to_string(param));
+            match &params.invocation {
+                PublicAgentInvocation::AgentInitialization(inner) => {
+                    let _ = writeln!(result, "{pad}type:              initialization");
+                    let _ = writeln!(
+                        result,
+                        "{pad}idempotency key:   {}",
+                        &inner.idempotency_key,
+                    );
+                }
+                PublicAgentInvocation::AgentMethodInvocation(inner) => {
+                    let _ = writeln!(result, "{pad}type:              method invocation");
+                    let _ = writeln!(result, "{pad}method:            {}", &inner.method_name);
+                    let _ = writeln!(
+                        result,
+                        "{pad}idempotency key:   {}",
+                        &inner.idempotency_key,
+                    );
+                }
+                PublicAgentInvocation::SaveSnapshot(_) => {
+                    let _ = writeln!(result, "{pad}type:              save snapshot");
+                }
+                PublicAgentInvocation::LoadSnapshot(_) => {
+                    let _ = writeln!(result, "{pad}type:              load snapshot");
+                }
+                PublicAgentInvocation::ProcessOplogEntries(_) => {
+                    let _ = writeln!(result, "{pad}type:              process oplog entries");
+                }
+                PublicAgentInvocation::ManualUpdate(inner) => {
+                    let _ = writeln!(result, "{pad}type:              manual update");
+                    let _ = writeln!(
+                        result,
+                        "{pad}target revision:   {}",
+                        &inner.target_revision,
+                    );
+                }
             }
         }
-        PublicOplogEntry::ExportedFunctionCompleted(params) => {
-            let _ = writeln!(result, "INVOKE COMPLETED");
+        PublicOplogEntry::AgentInvocationFinished(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION FINISHED");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}consumed fuel:     {}", &params.consumed_fuel,);
             let _ = writeln!(
                 result,
-                "{pad}result:            {}",
-                params
-                    .response
-                    .as_ref()
-                    .map(value_to_string)
-                    .unwrap_or("()".to_string())
+                "{pad}result:            {:?}",
+                &params.result
             );
         }
         PublicOplogEntry::Suspend(params) => {
@@ -174,7 +197,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
         PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
-            PublicWorkerInvocation::AgentInitialization(inner_params) => {
+            PublicAgentInvocation::AgentInitialization(inner_params) => {
                 let _ = writeln!(result, "ENQUEUED AGENT INITIALIZATION");
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
                 let _ = writeln!(
@@ -183,7 +206,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     &inner_params.idempotency_key,
                 );
             }
-            PublicWorkerInvocation::AgentMethodInvocation(inner_params) => {
+            PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
                 let _ = writeln!(
                     result,
                     "ENQUEUED INVOCATION {}",
@@ -196,19 +219,19 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     &inner_params.idempotency_key,
                 );
             }
-            PublicWorkerInvocation::SaveSnapshot(_) => {
+            PublicAgentInvocation::SaveSnapshot(_) => {
                 let _ = writeln!(result, "ENQUEUED SAVE SNAPSHOT");
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             }
-            PublicWorkerInvocation::LoadSnapshot(_) => {
+            PublicAgentInvocation::LoadSnapshot(_) => {
                 let _ = writeln!(result, "ENQUEUED LOAD SNAPSHOT");
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             }
-            PublicWorkerInvocation::ProcessOplogEntries(_) => {
+            PublicAgentInvocation::ProcessOplogEntries(_) => {
                 let _ = writeln!(result, "ENQUEUED PROCESS OPLOG ENTRIES");
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             }
-            PublicWorkerInvocation::ManualUpdate(inner_params) => {
+            PublicAgentInvocation::ManualUpdate(inner_params) => {
                 let _ = writeln!(result, "ENQUEUED MANUAL UPDATE");
                 let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
                 let _ = writeln!(

@@ -57,7 +57,7 @@ use crate::base_model::agent::AgentId;
 use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue};
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
+use crate::model::oplog::{OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::{grpc_uri, SafeDisplay};
 use desert_rust::{
@@ -486,7 +486,8 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
     pub env: Vec<(String, String)>,
@@ -713,17 +714,183 @@ pub enum AgentInvocation {
         invocation_context: InvocationContextStack,
     },
     LoadSnapshot {
+        idempotency_key: IdempotencyKey,
+        snapshot: RawSnapshotData
         // TODO
     },
     SaveSnapshot {
+        idempotency_key: IdempotencyKey,
         // TODO
     },
     ProcessOplogEntries {
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: WorkerMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<OplogEntry>
         // TODO
     },
 }
 
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AgentInvocationPayload {
+    ManualUpdate {
+        target_revision: ComponentRevision,
+    },
+    AgentInitialization {
+        input: UntypedDataValue,
+    },
+    AgentMethod {
+        method_name: String,
+        input: UntypedDataValue,
+    },
+    LoadSnapshot {
+        snapshot: RawSnapshotData,
+    },
+    SaveSnapshot,
+    ProcessOplogEntries {
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: WorkerMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<OplogEntry>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AgentInvocationResult {
+    AgentInitialization {
+        output: UntypedDataValue,
+    },
+    AgentMethod {
+        output: UntypedDataValue,
+    },
+    ManualUpdate,
+    LoadSnapshot {
+        error: Option<String>,
+    },
+    SaveSnapshot {
+        snapshot: RawSnapshotData,
+    },
+    ProcessOplogEntries {
+        error: Option<String>,
+    },
+}
+
 impl AgentInvocation {
+    pub fn from_parts(
+        idempotency_key: IdempotencyKey,
+        payload: AgentInvocationPayload,
+        invocation_context: InvocationContextStack,
+    ) -> Self {
+        match payload {
+            AgentInvocationPayload::ManualUpdate { target_revision } => {
+                Self::ManualUpdate { target_revision }
+            }
+            AgentInvocationPayload::AgentInitialization { input } => {
+                Self::AgentInitialization {
+                    idempotency_key,
+                    input,
+                    invocation_context,
+                }
+            }
+            AgentInvocationPayload::AgentMethod { method_name, input } => {
+                Self::AgentMethod {
+                    idempotency_key,
+                    method_name,
+                    input,
+                    invocation_context,
+                }
+            }
+            AgentInvocationPayload::LoadSnapshot { snapshot } => {
+                Self::LoadSnapshot {
+                    idempotency_key,
+                    snapshot,
+                }
+            }
+            AgentInvocationPayload::SaveSnapshot => {
+                Self::SaveSnapshot { idempotency_key }
+            }
+            AgentInvocationPayload::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+            } => Self::ProcessOplogEntries {
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+            },
+        }
+    }
+
+    pub fn into_parts(self) -> (IdempotencyKey, AgentInvocationPayload, InvocationContextStack) {
+        match self {
+            Self::ManualUpdate { target_revision } => (
+                IdempotencyKey::fresh(),
+                AgentInvocationPayload::ManualUpdate { target_revision },
+                InvocationContextStack::fresh(),
+            ),
+            Self::AgentInitialization {
+                idempotency_key,
+                input,
+                invocation_context,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::AgentInitialization { input },
+                invocation_context,
+            ),
+            Self::AgentMethod {
+                idempotency_key,
+                method_name,
+                input,
+                invocation_context,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::AgentMethod { method_name, input },
+                invocation_context,
+            ),
+            Self::LoadSnapshot {
+                idempotency_key,
+                snapshot,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::LoadSnapshot { snapshot },
+                InvocationContextStack::fresh(),
+            ),
+            Self::SaveSnapshot { idempotency_key } => (
+                idempotency_key,
+                AgentInvocationPayload::SaveSnapshot,
+                InvocationContextStack::fresh(),
+            ),
+            Self::ProcessOplogEntries {
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                },
+                InvocationContextStack::fresh(),
+            ),
+        }
+    }
+
     pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
         match self {
             Self::AgentMethod {

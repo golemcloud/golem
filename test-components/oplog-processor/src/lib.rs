@@ -3,7 +3,7 @@ mod bindings;
 
 use bindings::{
     exports::golem::api::oplog_processor,
-    golem::api::oplog::{ExportedFunctionInvokedParameters, OplogEntry},
+    golem::api::oplog::{AgentInvocation, AgentInvocationStartedParameters, OplogEntry},
 };
 use uuid::Uuid;
 
@@ -16,7 +16,7 @@ use std::{cell::RefCell, collections::HashMap};
 /// global across the entire program.
 struct State {
     invocations: Vec<String>,
-    current_invocations: HashMap<String, ExportedFunctionInvokedParameters>,
+    current_invocations: HashMap<String, AgentInvocationStartedParameters>,
 }
 
 thread_local! {
@@ -47,11 +47,11 @@ impl oplog_processor::Guest for Component {
     ) -> Result<(), String> {
         STATE.with_borrow_mut(|state| {
             for entry in entries {
-                if let OplogEntry::ExportedFunctionInvoked(params) = &entry {
+                if let OplogEntry::AgentInvocationStarted(params) = &entry {
                     state
                         .current_invocations
                         .insert(format!("{worker_id:?}"), params.clone());
-                } else if let OplogEntry::ExportedFunctionCompleted(_params) = &entry {
+                } else if let OplogEntry::AgentInvocationFinished(_params) = &entry {
                     if let Some(invocation) =
                         state.current_invocations.get(&format!("{worker_id:?}"))
                     {
@@ -65,16 +65,25 @@ impl oplog_processor::Guest for Component {
                             component_id.uuid.low_bits,
                         );
 
+                        let function_name = match &invocation.invocation {
+                            AgentInvocation::AgentInitialization(_) => "agent-initialization".to_string(),
+                            AgentInvocation::AgentMethodInvocation(method_params) => method_params.method_name.clone(),
+                            AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
+                            AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
+                            AgentInvocation::ProcessOplogEntries(_) => "process-oplog-entries".to_string(),
+                            AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
+                        };
+
                         state.invocations.push(format!(
                             "{}/{}/{}/{}",
                             account_id,
                             component_id,
                             worker_id.agent_id,
-                            invocation.function_name
+                            function_name
                         ));
                     } else {
                         println!(
-                        "ExportedFunctionCompleted without corresponding ExportedFunctionInvoked"
+                        "AgentInvocationFinished without corresponding AgentInvocationStarted"
                     )
                     }
                 }

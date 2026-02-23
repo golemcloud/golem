@@ -19,10 +19,10 @@ use golem_common::model::oplog::host_functions::{
     host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
 };
 use golem_common::model::oplog::public_oplog_entry::{
-    CreateParams, CreateResourceParams, DropResourceParams, ExportedFunctionCompletedParams,
-    FailedUpdateParams, GrowMemoryParams, HostCallParams, LogParams,
+    AgentInvocationFinishedParams, AgentInvocationStartedParams, CreateParams,
+    CreateResourceParams, DropResourceParams, FailedUpdateParams, GrowMemoryParams, HostCallParams,
+    LogParams,
 };
-use golem_common::model::oplog::types::decode_span_data;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
@@ -214,15 +214,15 @@ fn get_oplog_entry_from_public_oplog_entry(
     public_oplog_entry: PublicOplogEntry,
 ) -> Result<OplogEntry, String> {
     match public_oplog_entry {
-        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+        PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp,
             consumed_fuel,
-            response,
-        }) => Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp,
-            consumed_fuel,
-            response: OplogPayload::Inline(Box::new(response)),
-        }),
+            result,
+            ..
+        }) => {
+            // TODO: Converting PublicAgentInvocationResult back to raw AgentInvocationResult is not yet implemented
+            Err("Converting AgentInvocationFinished from public to raw oplog entry is not yet supported".to_string())
+        }
 
         PublicOplogEntry::Create(CreateParams {
             timestamp,
@@ -291,28 +291,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 durable_function_type,
             })
         }
-        PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked_parameters) => {
-            // We discard the type info provided by the user to encode it as oplog payload by converting it to
-            // golem_wasm::protobuf::Val
-            let vals = exported_function_invoked_parameters
-                .request
-                .into_iter()
-                .map(|x| x.value)
-                .collect::<Vec<_>>();
-
-            let oplog_payload = OplogPayload::Inline(Box::new(vals));
-
-            Ok(OplogEntry::ExportedFunctionInvoked {
-                timestamp: exported_function_invoked_parameters.timestamp,
-                function_name: exported_function_invoked_parameters.function_name,
-                request: oplog_payload,
-                idempotency_key: exported_function_invoked_parameters.idempotency_key,
-                trace_id: exported_function_invoked_parameters.trace_id,
-                trace_states: exported_function_invoked_parameters.trace_states,
-                invocation_context: decode_span_data(
-                    exported_function_invoked_parameters.invocation_context,
-                ),
-            })
+        PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams { .. }) => {
+            // TODO: Converting PublicAgentInvocation back to raw AgentInvocationPayload is not yet implemented
+            Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
         }
 
         PublicOplogEntry::Suspend(timestamp_parameter) => Ok(OplogEntry::Suspend {

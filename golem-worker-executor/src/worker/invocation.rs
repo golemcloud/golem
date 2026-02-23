@@ -200,7 +200,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     if is_live {
         store
             .data_mut()
-            .on_exported_function_invoked(&full_function_name, &function_input)
+            .on_agent_invocation_started(&full_function_name, &function_input)
             .await?;
     }
 

@@ -116,7 +116,7 @@ impl OplogEntry {
                     DurableFunctionType::ReadRemote => true,
                     _ => false,
                 },
-                OplogEntry::ExportedFunctionCompleted { .. } => false,
+                OplogEntry::AgentInvocationFinished { .. } => false,
                 _ => true,
             }
         }

@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::worker::{log_event, LogEvent};
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
-use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
+use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{
@@ -793,14 +793,14 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     let invoke_count = oplog
         .iter()
         .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-                ExportedFunctionInvokedParams { function_name, .. }
-            ) if function_name == "golem:agent/guest.{invoke}")
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(
+                AgentInvocationStartedParams { invocation: golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(params), .. }
+            ) if params.method_name == "golem:agent/guest.{invoke}")
         })
         .count();
     assert!(
         invoke_count >= 3,
-        "Expected at least 3 ExportedFunctionInvoked entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
+        "Expected at least 3 AgentInvocationStarted entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
     );
 
     Ok(())

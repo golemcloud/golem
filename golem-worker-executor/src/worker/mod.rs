@@ -49,8 +49,8 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AgentInvocation, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedAgentInvocation,
-    WorkerId, WorkerMetadata, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp,
+    TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -823,7 +823,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        let entry = OplogEntry::pending_worker_invocation(invocation.clone());
+        let (idempotency_key, invocation_payload, _invocation_context) = invocation.clone().into_parts();
+        let payload = self.oplog.upload_payload(&invocation_payload).await
+            .map_err(|e| WorkerExecutorError::invalid_request(format!("Failed to upload invocation payload: {e}")))?;
+        let entry = OplogEntry::pending_worker_invocation(idempotency_key, payload);
         let timestamped_invocation = TimestampedAgentInvocation {
             timestamp: entry.timestamp(),
             invocation,
@@ -1088,14 +1091,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    /// Starting from the end of the oplog, find the Nth ExportedFunctionInvoked entry's index.
+    /// Starting from the end of the oplog, find the Nth AgentInvocationStarted entry's index.
     async fn find_nth_invocation_from_end(&self, n: usize) -> Option<OplogIndex> {
         let mut current = self.oplog.current_oplog_index().await;
         let mut found = 0;
         loop {
             let entry = self.oplog.read(current).await;
 
-            if matches!(entry, OplogEntry::ExportedFunctionInvoked { .. }) {
+            if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
                 found += 1;
                 if found == n {
                     return Some(current);
@@ -2190,10 +2193,19 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                    let value: Option<ValueAndType> =
-                        services.oplog().download_payload(response).await.expect("failed to deserialize function response payload");
+                OplogEntry::AgentInvocationFinished { result, .. } => {
+                    let invocation_result: AgentInvocationResult =
+                        services.oplog().download_payload(result).await.expect("failed to deserialize function response payload");
 
+                    // Extract the output value if present
+                    let value = match invocation_result {
+                        AgentInvocationResult::AgentMethod { output } |
+                        AgentInvocationResult::AgentInitialization { output } => {
+                            // TODO: convert UntypedDataValue to ValueAndType
+                            None
+                        }
+                        _ => None,
+                    };
                     Ok(value)
                 }
                 OplogEntry::Error { error, retry_from, .. } => {

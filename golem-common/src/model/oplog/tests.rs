@@ -17,15 +17,16 @@ use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams,
     CreateResourceParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
-    ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
+    AgentInvocationFinishedParams, AgentInvocationStartedParams, ErrorParams, ExitedParams,
     FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams,
     JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
     RestartParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentMethodInvocationParameters, LogLevel, PluginInstallationDescription, PublicAttribute,
-    PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    AgentInvocationOutputParameters, AgentMethodInvocationParameters, LogLevel,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
+    PublicOplogEntry, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
     SnapshotBasedUpdateParameters, StringAttributeValue, WorkerResourceId,
 };
 use crate::model::regions::OplogRegion;
@@ -101,36 +102,40 @@ fn host_call_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn exported_function_invoked_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParams {
+fn agent_invocation_started_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        function_name: "test".to_string(),
-        request: vec![
-            ValueAndType {
-                value: Value::String("test".to_string()),
-                typ: str(),
-            },
-            ValueAndType {
-                value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                typ: record(vec![field("x", s16()), field("y", s16())]),
-            },
-        ],
-        idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-        trace_id: TraceId::generate(),
-        trace_states: vec!["a".to_string(), "b".to_string()],
-        invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
-            span_id: SpanId::generate(),
-            start: Timestamp::now_utc().rounded(),
-            parent_id: None,
-            linked_context: None,
-            attributes: vec![PublicAttribute {
-                key: "a".to_string(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "b".to_string(),
-                }),
-            }],
-            inherited: true,
-        })]],
+        invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            method_name: "test".to_string(),
+            function_input: DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
+                        value: Value::String("test".to_string()),
+                        typ: str(),
+                    } }),
+                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
+                        value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                        typ: record(vec![field("x", s16()), field("y", s16())]),
+                    } }),
+                ],
+            }),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["a".to_string(), "b".to_string()],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: Timestamp::now_utc().rounded(),
+                parent_id: None,
+                linked_context: None,
+                attributes: vec![PublicAttribute {
+                    key: "a".to_string(),
+                    value: PublicAttributeValue::String(StringAttributeValue {
+                        value: "b".to_string(),
+                    }),
+                }],
+                inherited: true,
+            })]],
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -138,12 +143,18 @@ fn exported_function_invoked_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn exported_function_completed_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+fn agent_invocation_finished_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        response: Some(ValueAndType {
-            value: Value::Enum(1),
-            typ: r#enum(&["red", "green", "blue"]),
+        result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
+            output: DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType {
+                        value: Value::Enum(1),
+                        typ: r#enum(&["red", "green", "blue"]),
+                    } }),
+                ],
+            }),
         }),
         consumed_fuel: 100,
     });
@@ -281,7 +292,7 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation: PublicWorkerInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+        invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             method_name: "test".to_string(),
             function_input: DataValue::Tuple(ElementValues {

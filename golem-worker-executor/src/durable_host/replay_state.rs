@@ -21,9 +21,11 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{ForkResult, IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{
+    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey,
+    OwnedWorkerId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
 use std::hash::Hasher;
@@ -41,10 +43,9 @@ pub enum ReplayEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExportedFunctionInvoked {
-    pub function_name: String,
-    pub function_input: Vec<Value>,
+pub struct AgentInvocationStartedEntry {
     pub idempotency_key: IdempotencyKey,
+    pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
 }
 
@@ -196,7 +197,7 @@ impl ReplayState {
                         OplogEntry::ChangePersistenceLevel { level, .. } => {
                             level != &PersistenceLevel::PersistNothing
                         }
-                        OplogEntry::ExportedFunctionCompleted { .. } => true,
+                        OplogEntry::AgentInvocationFinished { .. } => true,
                         _ => false,
                     })
                     .await;
@@ -484,42 +485,40 @@ impl ReplayState {
         }
     }
 
-    pub async fn get_oplog_entry_exported_function_invoked(
+    pub async fn get_oplog_entry_agent_invocation_started(
         &mut self,
-    ) -> Result<Option<ExportedFunctionInvoked>, WorkerExecutorError> {
+    ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match oplog_entry {
-                    OplogEntry::ExportedFunctionInvoked {
-                        function_name,
+                    OplogEntry::AgentInvocationStarted {
                         idempotency_key,
+                        payload,
                         trace_id,
-                        trace_states: trace_state,
+                        trace_states,
                         invocation_context: spans,
-                        request,
                         ..
                     } => {
-                        let request = self
+                        let invocation_payload = self
                             .oplog
-                            .download_payload(request)
+                            .download_payload(payload)
                             .await
-                            .expect("failed to deserialize function request payload");
+                            .expect("failed to deserialize agent invocation payload");
 
                         let invocation_context =
-                            InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);
+                            InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
 
-                        break Ok(Some(ExportedFunctionInvoked {
-                            function_name: function_name.to_string(),
-                            function_input: request,
-                            idempotency_key: idempotency_key.clone(),
+                        break Ok(Some(AgentInvocationStartedEntry {
+                            idempotency_key,
+                            invocation_payload,
                             invocation_context,
                         }));
                     }
                     entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "ExportedFunctionInvoked",
+                            "AgentInvocationStarted",
                             format!("{oplog_entry:?}"),
                         ));
                     }
@@ -530,26 +529,26 @@ impl ReplayState {
         }
     }
 
-    pub async fn get_oplog_entry_exported_function_completed(
+    pub async fn get_oplog_entry_agent_invocation_finished(
         &mut self,
-    ) -> Result<Option<Option<ValueAndType>>, WorkerExecutorError> {
+    ) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
                 match oplog_entry {
-                    OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                        let response: Option<ValueAndType> = self
+                    OplogEntry::AgentInvocationFinished { result, .. } => {
+                        let result: AgentInvocationResult = self
                             .oplog
-                            .download_payload(response)
+                            .download_payload(result)
                             .await
-                            .expect("failed to deserialize function response payload");
+                            .expect("failed to deserialize agent invocation result payload");
 
-                        break Ok(Some(response));
+                        break Ok(Some(result));
                     }
                     entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "ExportedFunctionCompleted",
+                            "AgentInvocationFinished",
                             format!("{oplog_entry:?}"),
                         ));
                     }

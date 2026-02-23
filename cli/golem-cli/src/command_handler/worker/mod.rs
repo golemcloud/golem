@@ -58,8 +58,8 @@ use golem_client::model::{
     UpdateWorkerRequest, WorkerCreationRequest,
 };
 use golem_common::model::agent::{
-    AgentId, AgentType, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    UntypedJsonDataValue,
+    AgentId, AgentType, ComponentModelElementValue, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues, UntypedJsonDataValue,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -2064,7 +2064,11 @@ impl WorkerCommandHandler {
                         function_name.log_color_error_highlight()
                     ));
                     logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new_agent(component, &agent_id, &agent_type));
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                        component,
+                        &agent_id,
+                        &agent_type,
+                    ));
                     bail!(NonSuccessfulExit);
                 }
 
@@ -2174,16 +2178,20 @@ fn wave_args_to_agent_method_parameters(
             ElementSchema::ComponentModel(cm) => {
                 match lenient_parse_type_annotated_value(&cm.element_type, wave_arg) {
                     Ok(vt) => {
-                        element_values.push(ElementValue::ComponentModel(vt));
+                        element_values.push(ElementValue::ComponentModel(
+                            ComponentModelElementValue { value: vt },
+                        ));
                         error_entries.push(None);
                     }
                     Err(err) => {
                         has_errors = true;
                         element_values.push(ElementValue::ComponentModel(
-                            golem_wasm::ValueAndType::new(
-                                golem_wasm::Value::Bool(false),
-                                golem_wasm::analysis::analysed_type::bool(),
-                            ),
+                            ComponentModelElementValue {
+                                value: golem_wasm::ValueAndType::new(
+                                    golem_wasm::Value::Bool(false),
+                                    golem_wasm::analysis::analysed_type::bool(),
+                                ),
+                            },
                         ));
                         error_entries.push(Some(err));
                     }

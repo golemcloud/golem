@@ -29,7 +29,7 @@ use golem_common::model::agent::{BinaryReference, ComponentModelElementValue, Da
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, PublicWorkerInvocation, StringAttributeValue,
+    PublicUpdateDescription, PublicAgentInvocation, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
 use golem_common::model::Timestamp;
@@ -358,26 +358,39 @@ impl TextView for PublicOplogEntry {
                     value_to_string(&params.response)
                 ));
             }
-            PublicOplogEntry::ExportedFunctionInvoked(params) => {
-                logln(format!(
-                    "{} {}",
-                    format_message_highlight("INVOKE"),
-                    format_id(&params.function_name),
-                ));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}idempotency key:   {}",
-                    format_id(&params.idempotency_key),
-                ));
-                logln(format!("{pad}input:"));
-                for param in &params.request {
-                    logln(format!("{pad}  - {}", value_to_string(param)));
+            PublicOplogEntry::AgentInvocationStarted(params) => {
+                match &params.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(inner) => {
+                        logln(format!(
+                            "{} {}",
+                            format_message_highlight("INVOKE"),
+                            format_id(&inner.method_name),
+                        ));
+                        logln(format!(
+                            "{pad}at:                {}",
+                            format_id(&params.timestamp)
+                        ));
+                        logln(format!(
+                            "{pad}idempotency key:   {}",
+                            format_id(&inner.idempotency_key),
+                        ));
+                        logln(format!("{pad}input:"));
+                        log_data_value(&pad, &inner.function_input);
+                    }
+                    other => {
+                        logln(format!(
+                            "{} {:?}",
+                            format_message_highlight("INVOKE"),
+                            other,
+                        ));
+                        logln(format!(
+                            "{pad}at:                {}",
+                            format_id(&params.timestamp)
+                        ));
+                    }
                 }
             }
-            PublicOplogEntry::ExportedFunctionCompleted(params) => {
+            PublicOplogEntry::AgentInvocationFinished(params) => {
                 logln(format_message_highlight("INVOKE COMPLETED"));
                 logln(format!(
                     "{pad}at:                {}",
@@ -388,12 +401,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.consumed_fuel),
                 ));
                 logln(format!(
-                    "{pad}result:            {}",
-                    params
-                        .response
-                        .as_ref()
-                        .map(value_to_string)
-                        .unwrap_or_else(|| "()".to_string())
+                    "{pad}result:            {:?}",
+                    params.result
                 ));
             }
             PublicOplogEntry::Suspend(params) => {
@@ -520,7 +529,7 @@ impl TextView for PublicOplogEntry {
                 ));
             }
             PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
-                PublicWorkerInvocation::AgentInitialization(inner_params) => {
+                PublicAgentInvocation::AgentInitialization(inner_params) => {
                     logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));
                     logln(format!(
                         "{pad}at:                {}",
@@ -531,7 +540,7 @@ impl TextView for PublicOplogEntry {
                         format_id(&inner_params.idempotency_key),
                     ));
                 }
-                PublicWorkerInvocation::AgentMethodInvocation(inner_params) => {
+                PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
                     logln(format!(
                         "{} {}",
                         format_message_highlight("ENQUEUED INVOCATION"),
@@ -546,28 +555,28 @@ impl TextView for PublicOplogEntry {
                         format_id(&inner_params.idempotency_key),
                     ));
                 }
-                PublicWorkerInvocation::SaveSnapshot(_) => {
+                PublicAgentInvocation::SaveSnapshot(_) => {
                     logln(format_message_highlight("ENQUEUED SAVE SNAPSHOT"));
                     logln(format!(
                         "{pad}at:                {}",
                         format_id(&params.timestamp)
                     ));
                 }
-                PublicWorkerInvocation::LoadSnapshot(_) => {
+                PublicAgentInvocation::LoadSnapshot(_) => {
                     logln(format_message_highlight("ENQUEUED LOAD SNAPSHOT"));
                     logln(format!(
                         "{pad}at:                {}",
                         format_id(&params.timestamp)
                     ));
                 }
-                PublicWorkerInvocation::ProcessOplogEntries(_) => {
+                PublicAgentInvocation::ProcessOplogEntries(_) => {
                     logln(format_message_highlight("ENQUEUED PROCESS OPLOG ENTRIES"));
                     logln(format!(
                         "{pad}at:                {}",
                         format_id(&params.timestamp)
                     ));
                 }
-                PublicWorkerInvocation::ManualUpdate(inner_params) => {
+                PublicAgentInvocation::ManualUpdate(inner_params) => {
                     logln(format_message_highlight("ENQUEUED MANUAL UPDATE"));
                     logln(format!(
                         "{pad}at:                {}",
@@ -918,7 +927,6 @@ fn format_worker_name(worker_name: &WorkerName) -> String {
     textwrap::wrap(&worker_name.to_string(), 80).join("\n")
 }
 
-#[allow(dead_code)]
 fn log_data_value(pad: &str, value: &DataValue) {
     match value {
         DataValue::Tuple(values) => {
