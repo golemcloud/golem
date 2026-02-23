@@ -133,12 +133,7 @@ private = true
 script_runner = "@duckscript"
 script = """
 components = array
-array_push ${components} agent-counters/.wit
-array_push ${components} agent-invocation-context/.wit
-array_push ${components} agent-updates-v1/.wit
-array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks
-array_push ${components} initial-file-system/.wit
 array_push ${components} oplog-processor
 
 for component in ${components}
