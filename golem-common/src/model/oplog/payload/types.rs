@@ -1112,7 +1112,7 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
             agent_id: value.worker_id,
             args: vec![],
             env: value.env,
-            config_vars: value.wasi_config_vars,
+            config_vars: value.config_vars,
             status: value.last_known_status.status,
             component_revision: value.last_known_status.component_revision,
             retry_count: value

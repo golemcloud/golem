@@ -917,6 +917,15 @@ impl Layer for ComponentLayer {
                     properties.env.value().clone(),
                 ),
             );
+
+            value.config_vars.apply_layer(
+                id,
+                selection,
+                (
+                    properties.config_vars_merge_mode.unwrap_or_default(),
+                    properties.config_vars.value().clone(),
+                ),
+            );
         }
 
         Ok(())
@@ -1065,6 +1074,10 @@ impl<'a> Component<'a> {
         &self.properties().env
     }
 
+    pub fn config_vars(&self) -> &BTreeMap<String, String> {
+        &self.properties().config_vars
+    }
+
     pub fn files(&self) -> &Vec<InitialComponentFile> {
         &self.properties().files
     }
@@ -1118,6 +1131,9 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_vars_merge_mode: Option<MapMergeMode>,
+    pub config_vars: MapProperty<ComponentLayer, String, String>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -1139,6 +1155,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.plugins.unwrap_or_default().into(),
             env_merge_mode: value.env_merge_mode,
             env: value.env.unwrap_or_default().into(),
+            config_vars_merge_mode: value.config_vars_merge_mode,
+            config_vars: value.config_vars.unwrap_or_default().into(),
         }
     }
 }
@@ -1156,6 +1174,7 @@ impl ComponentLayerProperties {
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
+        self.config_vars.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -1197,6 +1216,7 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
 }
 
 impl ComponentProperties {
@@ -1227,6 +1247,12 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
+            config_vars: merged
+                .config_vars
+                .value()
+                .into_iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         };
 
         for (name, value) in [

@@ -20,7 +20,6 @@ use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::worker::WasiConfigVars;
 use crate::base_model::{IdempotencyKey, OplogIndex, Timestamp, TransactionId, WorkerId};
 use crate::oplog_entry;
 use golem_wasm::ValueAndType;
@@ -74,7 +73,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginPriority>,
-            wasi_config_vars: BTreeMap<String, String>,
+            config_vars: BTreeMap<String, String>,
             original_phantom_id: Option<Uuid>
         }
         public {
@@ -87,7 +86,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config_vars: WasiConfigVars,
+            config_vars: BTreeMap<String, String>,
             original_phantom_id: Option<Uuid>
         }
     },

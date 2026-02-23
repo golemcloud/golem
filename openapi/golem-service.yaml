@@ -10108,17 +10108,6 @@ components:
           type: string
       required:
       - version
-    WasiConfigVarsEntry:
-      title: WasiConfigVarsEntry
-      type: object
-      properties:
-        key:
-          type: string
-        value:
-          type: string
-      required:
-      - key
-      - value
     WorkerAndFilter:
       title: WorkerAndFilter
       type: object
@@ -10129,6 +10118,20 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
+    WorkerConfigVarsFilter:
+      title: WorkerConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
     WorkerCreatedAtFilter:
       title: WorkerCreatedAtFilter
       type: object
@@ -10152,10 +10155,10 @@ components:
           additionalProperties:
             type: string
         configVars:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
       required:
       - name
       - env
@@ -10211,7 +10214,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
+          ConfigVars: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
@@ -10222,7 +10225,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -10235,6 +10238,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerAndFilter'
+    WorkerFilter_WorkerConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ConfigVars
+            type: string
+            enum:
+            - ConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerConfigVarsFilter'
     WorkerFilter_WorkerCreatedAtFilter:
       allOf:
       - type: object
@@ -10319,18 +10334,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerStatusFilter'
-    WorkerFilter_WorkerWasiConfigVarsFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WasiConfigVars
-            type: string
-            enum:
-            - WasiConfigVars
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       title: WorkerId
       type: object
@@ -10359,10 +10362,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentRevision:
@@ -10419,7 +10422,7 @@ components:
       - environmentId
       - createdBy
       - env
-      - wasiConfigVars
+      - configVars
       - status
       - componentRevision
       - retryCount
@@ -10519,20 +10522,6 @@ components:
       enum:
       - automatic
       - manual
-    WorkerWasiConfigVarsFilter:
-      title: WorkerWasiConfigVarsFilter
-      type: object
-      properties:
-        name:
-          type: string
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - name
-      - comparator
-      - value
     WorkersMetadataRequest:
       title: WorkersMetadataRequest
       type: object
@@ -10697,10 +10686,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
         originalPhantomId:
           type: string
           format: uuid
@@ -10714,7 +10703,7 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - wasiConfigVars
+      - configVars
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object
@@ -11546,6 +11535,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        configVars:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
         agentTypes:
           default: []
           type: array
@@ -11610,6 +11604,14 @@ components:
           type: object
           additionalProperties:
             type: string
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
+        originalConfigVars:
+          type: object
+          additionalProperties:
+            type: string
         wasmHash:
           type: string
           format: hash
@@ -11629,6 +11631,8 @@ components:
       - installedPlugins
       - env
       - originalEnv
+      - configVars
+      - originalConfigVars
       - wasmHash
     ComponentFileOptions:
       title: ComponentFileOptions
@@ -11701,6 +11705,10 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
         env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
           type: object
           additionalProperties:
             type: string

@@ -141,14 +141,14 @@ impl WorkerService for DefaultWorkerService {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins,
-                    wasi_config_vars,
+                    config_vars,
                     original_phantom_id,
                 },
             )) => {
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id,
                     env,
-                    wasi_config_vars,
+                    config_vars,
                     environment_id,
                     created_by,
                     created_at: timestamp,

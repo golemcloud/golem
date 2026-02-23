@@ -22,7 +22,6 @@ import "golem/component/component_id.proto";
 import "golem/worker/update_mode.proto";
 import "golem/worker/filesystem.proto";
 import "golem/auth/auth_ctx.proto";
-import "golem/worker/wasi_config_vars.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -39,7 +38,7 @@ message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
   string name = 2;
   map<string, string> env = 4;
-  golem.worker.WasiConfigVars wasi_config_vars = 5;
+  map<string, string> config_vars = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
 }

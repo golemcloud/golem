@@ -6,7 +6,6 @@ import "golem/common/account_id.proto";
 import "golem/component/agent.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
-import "golem/worker/wasi_config_vars.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
 import "golem/common/environment.proto";
@@ -15,21 +14,21 @@ message WorkerMetadata {
   WorkerId worker_id = 1;
   golem.common.AccountId created_by = 2;
   map<string, string> env = 4;
-  WorkerStatus status = 5;
-  uint64 component_revision = 6;
-  uint32 retry_count = 7;
-  uint64 pending_invocation_count = 8;
-  repeated UpdateRecord updates = 9;
-  google.protobuf.Timestamp created_at = 10;
-  optional string last_error = 11;
-  uint64 component_size = 12;
-  uint64 total_linear_memory_size = 13;
-  repeated ResourceDescription owned_resources = 14;
-  repeated int32 active_plugins = 15;
-  repeated OplogRegion skipped_regions = 16;
-  repeated OplogRegion deleted_regions = 17;
-  golem.common.EnvironmentId environment_id = 18;
-  WasiConfigVars wasi_config_vars = 19;
+  map<string, string> config_vars = 5;
+  WorkerStatus status = 6;
+  uint64 component_revision = 7;
+  uint32 retry_count = 8;
+  uint64 pending_invocation_count = 9;
+  repeated UpdateRecord updates = 10;
+  google.protobuf.Timestamp created_at = 11;
+  optional string last_error = 12;
+  uint64 component_size = 13;
+  uint64 total_linear_memory_size = 14;
+  repeated ResourceDescription owned_resources = 15;
+  repeated int32 active_plugins = 16;
+  repeated OplogRegion skipped_regions = 17;
+  repeated OplogRegion deleted_regions = 18;
+  golem.common.EnvironmentId environment_id = 19;
 }
 
 message UpdateRecord {

@@ -156,13 +156,13 @@ impl Display for WorkerEnvFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerWasiConfigVarsFilter {
+pub struct WorkerConfigVarsFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
     pub value: String,
 }
 
-impl WorkerWasiConfigVarsFilter {
+impl WorkerConfigVarsFilter {
     pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
         Self {
             name,
@@ -172,11 +172,11 @@ impl WorkerWasiConfigVarsFilter {
     }
 }
 
-impl Display for WorkerWasiConfigVarsFilter {
+impl Display for WorkerConfigVarsFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "wasi_config_vars.{} {} {}",
+            "config_vars.{} {} {}",
             self.name, self.comparator, self.value
         )
     }
@@ -289,7 +289,7 @@ pub enum WorkerFilter {
     And(WorkerAndFilter),
     Or(WorkerOrFilter),
     Not(WorkerNotFilter),
-    WasiConfigVars(WorkerWasiConfigVarsFilter),
+    ConfigVars(WorkerConfigVarsFilter),
 }
 
 impl WorkerFilter {
@@ -335,12 +335,12 @@ impl WorkerFilter {
         WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_wasi_config_vars(
+    pub fn new_config_vars(
         name: String,
         comparator: StringFilterComparator,
         value: String,
     ) -> Self {
-        WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter::new(name, comparator, value))
+        WorkerFilter::ConfigVars(WorkerConfigVarsFilter::new(name, comparator, value))
     }
 
     pub fn new_revision(comparator: FilterComparator, value: ComponentRevision) -> Self {
@@ -382,7 +382,7 @@ impl Display for WorkerFilter {
             WorkerFilter::Env(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::WasiConfigVars(filter) => {
+            WorkerFilter::ConfigVars(filter) => {
                 write!(f, "{filter}")
             }
             WorkerFilter::Not(filter) => {
