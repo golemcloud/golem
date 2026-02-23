@@ -170,6 +170,72 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@24.3.1)
 
+  packages/golem-ts-sdk-tests:
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.33.0
+        version: 9.35.0
+      '@golemcloud/golem-ts-sdk':
+        specifier: workspace:*
+        version: link:../golem-ts-sdk
+      '@golemcloud/golem-ts-typegen':
+        specifier: workspace:*
+        version: link:../golem-ts-typegen
+      '@golemcloud/golem-ts-types-core':
+        specifier: workspace:*
+        version: link:../golem-ts-types-core
+      '@rollup/plugin-commonjs':
+        specifier: ^28.0.6
+        version: 28.0.6(rollup@4.50.0)
+      '@rollup/plugin-node-resolve':
+        specifier: ^16.0.1
+        version: 16.0.1(rollup@4.50.0)
+      '@types/ms':
+        specifier: ^2.1.0
+        version: 2.1.0
+      '@types/node':
+        specifier: ^24.3.0
+        version: 24.3.1
+      '@typescript-eslint/eslint-plugin':
+        specifier: ^8.39.0
+        version: 8.42.0(@typescript-eslint/parser@8.42.0(eslint@9.35.0)(typescript@5.9.2))(eslint@9.35.0)(typescript@5.9.2)
+      '@typescript-eslint/parser':
+        specifier: ^8.39.0
+        version: 8.42.0(eslint@9.35.0)(typescript@5.9.2)
+      eslint:
+        specifier: ^9.33.0
+        version: 9.35.0
+      fast-check:
+        specifier: ^4.2.0
+        version: 4.3.0
+      prettier:
+        specifier: ^3.6.2
+        version: 3.6.2
+      reflect-metadata:
+        specifier: ^0.1.14
+        version: 0.1.14
+      rollup:
+        specifier: ^4.46.2
+        version: 4.50.0
+      rollup-plugin-dts:
+        specifier: ^6.2.1
+        version: 6.2.3(rollup@4.50.0)(typescript@5.9.2)
+      rollup-plugin-typescript2:
+        specifier: ^0.36.0
+        version: 0.36.0(rollup@4.50.0)(typescript@5.9.2)
+      ts-morph:
+        specifier: ^26.0.0
+        version: 26.0.0
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.2
+      typescript-eslint:
+        specifier: ^8.39.0
+        version: 8.42.0(eslint@9.35.0)(typescript@5.9.2)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@24.3.1)
+
   packages/golem-ts-typegen:
     dependencies:
       '@golemcloud/golem-ts-types-core':
@@ -1414,7 +1480,7 @@ packages:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
 
   uuid@13.0.0:
-    resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==, tarball: https://registry.npmjs.org/uuid/-/uuid-13.0.0.tgz}
+    resolution: {integrity: sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w==}
     hasBin: true
 
   vite-node@3.2.4:

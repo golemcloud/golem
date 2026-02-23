@@ -39,6 +39,8 @@ import path from 'path';
 
 import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownTypes.js';
 
+export * from '@golemcloud/golem-ts-types-core';
+
 export function getTypeFromTsMorph(tsMorphType: TsMorphType, isOptional: boolean, wellKnownTypes: WellKnownTypes): Type.Type {
   try {
     return getTypeFromTsMorphInternal(tsMorphType, isOptional, wellKnownTypes, new Set());
@@ -143,7 +145,9 @@ function getTypeFromTsMorphInternal(
     };
   }
 
-  if (isExactly(type, wellKnownTypes.sdk.principal)) {
+  // Should use nominal type matching, but only possible after switching
+  // principal to class.
+  if (type.isAssignableTo(wellKnownTypes.sdk.principal)) {
     return {
       kind: 'principal',
       name: aliasName,
@@ -594,6 +598,7 @@ export function loadTypeMetadataFromJsonFile() {
   }
 
   const raw = fs.readFileSync(filePath, 'utf-8');
+  console.log(`loading types from ${raw}`)
   const json = JSON.parse(raw);
 
   TypeMetadata.loadFromJson(json);

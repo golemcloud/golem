@@ -4,7 +4,7 @@ import { Command } from 'commander';
 import { Project } from 'ts-morph';
 import pc from 'picocolors';
 import logSymbols from 'log-symbols';
-import { saveAndClearInMemoryMetadata, updateMetadataFromSourceFiles } from '../index.js';
+import { ClassMetadataGenConfig, saveAndClearInMemoryMetadata, updateMetadataFromSourceFiles } from '../index.js';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import path from 'path';
 
@@ -43,7 +43,7 @@ program
 
       console.log(logSymbols.info, pc.blue(`Processing ${sourceFiles.length} source files…`));
 
-      const genConfig = {
+      const genConfig: ClassMetadataGenConfig = {
         sourceFiles: sourceFiles,
         classDecorators: options.includeClassDecorators,
         includeOnlyPublicScope: options.includeOnlyPublicScope,

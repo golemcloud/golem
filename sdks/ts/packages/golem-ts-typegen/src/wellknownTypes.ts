@@ -16,7 +16,8 @@ import {
   Project,
   SourceFile,
   Type as TsMorphType,
-  Symbol
+  Symbol,
+  ScriptKind
 } from 'ts-morph';
 
 export interface WellKnown {
@@ -32,13 +33,13 @@ export interface WellKnownTypes {
     typedArrays: Map<string, WellKnown>;
   };
   sdk: {
-    principal: WellKnown
+    principal: TsMorphType
   }
 }
 
 export function createWellKnownTypes(project: Project): WellKnownTypes {
   const sf = project.createSourceFile(
-    "__golem_well_known_types__.ts",
+    `__golem_well_known_types__.ts`,
     `
       import { Principal } from '@golemcloud/golem-ts-sdk';
 
@@ -60,7 +61,7 @@ export function createWellKnownTypes(project: Project): WellKnownTypes {
 
       let _principal!: Principal;
     `,
-    { overwrite: true }
+    { overwrite: true, scriptKind: ScriptKind.TS }
   );
 
   const containers = {
@@ -81,7 +82,7 @@ export function createWellKnownTypes(project: Project): WellKnownTypes {
   };
 
   const sdk = {
-    principal: getWellKnownFromVar(sf, "_principal"),
+    principal: sf.getVariableDeclarationOrThrow("_principal").getType(),
   };
 
   return {

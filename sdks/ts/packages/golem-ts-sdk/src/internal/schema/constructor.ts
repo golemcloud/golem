@@ -62,7 +62,7 @@ interface ConstructorParamHandler {
 }
 
 const principalHandler: ConstructorParamHandler = {
-  canHandle: (param) => param.type.name === 'Principal',
+  canHandle: (param) => param.type.kind === 'principal',
 
   handle: (agentClassName, param, _, collection) => {
     AgentConstructorParamRegistry.setType(agentClassName, param.name, {

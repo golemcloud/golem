@@ -15,6 +15,6 @@
     "emitDeclarationOnly": false,
     "types": ["vitest/globals"]
   },
-  "include": ["src/**/*", "types", "tests/support"],
+  "include": ["typegen-tests/**/*"],
   "exclude": ["node_modules"]
 }

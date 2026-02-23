@@ -32,7 +32,6 @@
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "test": "tsc --noEmit && vitest run",
     "build": "pnpm run build:lib && pnpm run build:cli",
     "build:lib": "tsc --noEmit && rollup -c",
     "build:cli": "tsc src/bin/golem-typegen.ts --outDir dist --module node16 --target ES2020 --esModuleInterop",
