@@ -229,6 +229,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
+        principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<Option<UntypedDataValue>>;
 }
 
@@ -1249,6 +1250,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
+        principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<Option<UntypedDataValue>> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -1270,6 +1272,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
                             context: invocation_context.clone(),
+                            principal: Some(principal.clone()),
                         },
                     ))
                 },

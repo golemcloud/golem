@@ -48,7 +48,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, DataValue, UntypedDataValue};
+use golem_common::model::agent::{AgentId, AgentMode, DataValue, Principal, UntypedDataValue};
 use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -1649,11 +1649,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 },
             )?;
 
+        let principal: Principal = request
+            .principal
+            .map(|p| p.try_into())
+            .transpose()
+            .map_err(|e: String| {
+                WorkerExecutorError::invalid_request(format!(
+                    "failed converting principal: {e}"
+                ))
+            })?
+            .unwrap_or_else(Principal::anonymous);
+
         let function_name = "golem:agent/guest.{invoke}".to_string();
         let function_input: Vec<golem_wasm::Value> = vec![
             method_name.into_value(),
             method_parameters_typed.into_value(),
-            golem_common::model::agent::Principal::anonymous().into_value(),
+            principal.into_value(),
         ];
 
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());

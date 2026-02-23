@@ -406,6 +406,10 @@ impl WorkerGrpcApi {
             .method_parameters
             .ok_or_else(|| bad_request_error("Missing method_parameters"))?;
 
+        let principal = request.principal.unwrap_or_else(|| {
+            golem_common::model::agent::Principal::anonymous().into()
+        });
+
         let result = self
             .worker_service
             .invoke_agent(
@@ -417,6 +421,7 @@ impl WorkerGrpcApi {
                 request.idempotency_key.map(|k| k.into()),
                 request.context,
                 auth,
+                principal,
             )
             .await?;
 

@@ -21,7 +21,9 @@ use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
-use golem_common::model::agent::{AgentId, DataValue, UntypedDataValue};
+use golem_common::model::agent::{
+    AgentId, DataValue, GolemUserPrincipal, Principal, UntypedDataValue,
+};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -700,6 +702,7 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         invocation_context: Option<InvocationContext>,
         auth_ctx: AuthCtx,
+        principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<Option<UntypedDataValue>> {
         let component = self
             .component_service
@@ -727,6 +730,7 @@ impl WorkerService {
                 component.environment_id,
                 environment_auth_details.account_id_owning_environment,
                 auth_ctx,
+                principal,
             )
             .await
     }
@@ -829,6 +833,12 @@ impl WorkerService {
             nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
+        let principal: golem_api_grpc::proto::golem::component::Principal =
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: auth.account_id(),
+            })
+            .into();
+
         let result = self
             .invoke_agent(
                 &worker_id,
@@ -839,6 +849,7 @@ impl WorkerService {
                 request.idempotency_key,
                 None,
                 auth,
+                principal,
             )
             .await?;
 

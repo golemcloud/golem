@@ -76,9 +76,9 @@ impl CallAgentHandler {
             tracing: Some(request.invocation_context().into()),
         });
 
-        let _principal = principal_from_request(request)?;
-        debug!("Using principal for invocation: {_principal:?}");
-        // TODO: principal
+        let principal = principal_from_request(request)?;
+        debug!("Using principal for invocation: {principal:?}");
+        let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
 
         let agent_response = self
             .worker_service
@@ -91,6 +91,7 @@ impl CallAgentHandler {
                 Some(IdempotencyKey::fresh()),
                 invocation_context,
                 AuthCtx::impersonated_user(resolved_route.route.account_id),
+                proto_principal,
             )
             .await?;
 

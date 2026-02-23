@@ -313,6 +313,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 }))
             })
             .await?

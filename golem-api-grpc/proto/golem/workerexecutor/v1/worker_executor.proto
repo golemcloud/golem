@@ -423,6 +423,7 @@ message InvokeAgentRequest {
   golem.common.EnvironmentId environment_id = 11;
   golem.auth.AuthCtx auth_ctx = 12;
   optional golem.worker.InvocationContext context = 13;
+  golem.component.Principal principal = 14;
 }
 
 message InvokeAgentResponse {
