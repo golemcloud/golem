@@ -14,9 +14,7 @@
 
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
-use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
-use anyhow::anyhow;
 use golem_common::model::agent::AgentError;
 use golem_common::model::agent::AgentId;
 use golem_common::model::agent::UntypedDataValue;
@@ -26,15 +24,12 @@ use golem_common::model::oplog::RawSnapshotData;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::{AgentInvocation, AgentInvocationKind, AgentInvocationResult, OplogIndex};
-use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
 use golem_wasm::{FromValue, IntoValue, Value};
-use tracing::{Instrument, debug, error};
+use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContext, AsContextMut, StoreContextMut};
-use wasmtime_wasi_http::WasiHttpView;
-use wasmtime_wasi_http::bindings::Proxy;
 
 /// Invokes a function on a worker.
 ///
@@ -112,10 +107,6 @@ fn find_function<'a, Ctx: WorkerCtx>(
     instance: &'a wasmtime::component::Instance,
     parsed_function_name: &ParsedFunctionName,
 ) -> Result<FindFunctionResult, WorkerExecutorError> {
-    if *parsed_function_name == *virtual_exports::http_incoming_handler::PARSED_FUNCTION_NAME {
-        return Ok(FindFunctionResult::IncomingHttpHandlerBridge);
-    };
-
     let parsed_function_ref = parsed_function_name.function();
 
     if matches!(
@@ -238,16 +229,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             // Special function: drop
             drop_resource(&mut store, &lowered.params, &lowered.wit_fqfn, kind).await
         }
-        FindFunctionResult::IncomingHttpHandlerBridge => {
-            invoke_http_handler(
-                &mut store,
-                instance,
-                &lowered.params,
-                &lowered.wit_fqfn,
-                kind,
-            )
-            .await
-        }
     };
 
     store.data().set_suspended();
@@ -349,7 +330,6 @@ async fn validate_function_parameters(
 
             Ok(vec![])
         }
-        FindFunctionResult::IncomingHttpHandlerBridge => Ok(vec![]),
     }
 }
 
@@ -408,104 +388,6 @@ async fn invoke<Ctx: WorkerCtx>(
             Ok(InvokeResult::from_error::<Ctx>(
                 consumed_fuel,
                 &err,
-                retry_from,
-            ))
-        }
-    }
-}
-
-async fn invoke_http_handler<Ctx: WorkerCtx>(
-    store: &mut impl AsContextMut<Data = Ctx>,
-    instance: &wasmtime::component::Instance,
-    function_input: &[Value],
-    raw_function_name: &str,
-    kind: AgentInvocationKind,
-) -> Result<InvokeResult, WorkerExecutorError> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-
-    let proxy = Proxy::new(&mut *store, instance)?;
-    let mut store_context = store.as_context_mut();
-
-    let idempotency_key = store_context.data().get_current_idempotency_key().await;
-    if let Some(idempotency_key) = &idempotency_key {
-        store_context
-            .data()
-            .get_public_state()
-            .event_service()
-            .emit_invocation_start(
-                raw_function_name,
-                idempotency_key,
-                store_context.data().is_live(),
-            );
-    }
-
-    debug!("Invoking wasi:http/incoming-http-handler handle");
-
-    let (_, mut task_exits) = {
-        let (scheme, hyper_request) =
-            virtual_export_compat::http_incoming_handler::input_to_hyper_request(function_input)?;
-        let incoming = store_context
-            .data_mut()
-            .as_wasi_http_view()
-            .new_incoming_request(scheme, hyper_request)?;
-        let outgoing = store_context
-            .data_mut()
-            .as_wasi_http_view()
-            .new_response_outparam(sender)?;
-
-        // unsafety comes from scope_and_collect:
-        //
-        // This function is not completely safe:
-        // please see cancellation_soundness in [tests.rs](https://github.com/rmanoka/async-scoped/blob/master/src/tests.rs) for a test-case that suggests how this can lead to invalid memory access if not dealt with care.
-        // The caller must ensure that the lifetime ’a is valid until the returned future is fully driven. Dropping the future is okay, but blocks the current thread until all spawned futures complete.
-        unsafe {
-            async_scoped::TokioScope::scope_and_collect(|s| {
-                s.spawn(
-                    proxy
-                        .wasi_http_incoming_handler()
-                        .call_handle(store_context, incoming, outgoing)
-                        .in_current_span(),
-                );
-            })
-            .await
-        }
-    };
-
-    let out = receiver.await;
-
-    let res_or_error = match out {
-        Ok(Ok(resp)) => {
-            Ok(virtual_export_compat::http_incoming_handler::http_response_to_output(resp).await?)
-        }
-        Ok(Err(e)) => Err(anyhow::Error::from(e)),
-        Err(_) => {
-            // An error in the receiver (`RecvError`) only indicates that the
-            // task exited before a response was sent (i.e., the sender was
-            // dropped); it does not describe the underlying cause of failure.
-            // Instead, we retrieve and propagate the error from inside the task
-            // which should more clearly tell the user what went wrong. Note
-            // that we assume the task has already exited at this point, so the
-            // `await` should be resolved immediately.
-            let task_exit = task_exits.remove(0);
-            let e = match task_exit {
-                Ok(r) => r.expect_err("if the receiver has an error, the task must have failed"),
-                Err(_e) => anyhow!("failed joining wasm task"),
-            };
-            Err(e)?
-        }
-    };
-
-    let consumed_fuel =
-        finish_invocation_and_get_fuel_consumption(&mut store.as_context_mut(), raw_function_name)
-            .await?;
-
-    match res_or_error {
-        Ok(resp) => wrap_output_as_agent_result(kind, Some(resp), consumed_fuel),
-        Err(e) => {
-            let retry_from = store.as_context().data().get_current_retry_point().await;
-            Ok(InvokeResult::from_error::<Ctx>(
-                consumed_fuel,
-                &e,
                 retry_from,
             ))
         }
@@ -983,5 +865,4 @@ fn decode_result_error(
 enum FindFunctionResult {
     ExportedFunction(Func),
     ResourceDrop,
-    IncomingHttpHandlerBridge,
 }
