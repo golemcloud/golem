@@ -24,16 +24,15 @@ use crate::model::app::{
     CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, WithSource,
     DEFAULT_CONFIG_FILE_NAME,
 };
-use crate::model::app_raw;
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
+use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::anyhow;
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};

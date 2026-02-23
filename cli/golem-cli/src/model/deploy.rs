@@ -14,8 +14,8 @@
 
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::model::worker::WorkerName;
+use crate::model::GuestLanguage;
 use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

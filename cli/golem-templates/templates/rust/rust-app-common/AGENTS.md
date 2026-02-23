@@ -27,14 +27,9 @@ components-rust/                  # Component crates (each becomes a WASM compon
     src/lib.rs                    # Agent definitions and implementations
     Cargo.toml                    # Must use crate-type = ["cdylib"]
     golem.yaml                    # Component-level manifest (templates, env, dependencies)
-    .wit/wit/                     # WIT interface files (auto-managed)
-common-rust/                      # Shared library crates (not compiled to WASM directly)
-  common-lib/
-    src/lib.rs
-    Cargo.toml
-  golem.yaml                     # Build templates for all Rust components
-.wit/wit/deps/                   # Shared WIT dependencies (auto-managed)
-golem-temp/                      # Build artifacts (gitignored)
+common-rust/                      # Shared Golem Rust templates
+  golem.yaml                      # Build templates for all Rust components
+golem-temp/                       # Build artifacts (gitignored)
 ```
 
 ## Prerequisites

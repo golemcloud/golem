@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::fs;
+use crate::model::GuestLanguage;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, Snapshotting, TextDescriptor,
 };
 use golem_common::model::Empty;
-use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{
     case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
     unit_result, variant,

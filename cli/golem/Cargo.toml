@@ -29,26 +29,15 @@ golem-worker-service = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
-async-trait = { workspace = true }
-bytes = { workspace = true }
-clap = { workspace = true }
 clap-verbosity-flag = { workspace = true }
 dirs = { workspace = true }
-http-body-util = { workspace = true }
-hyper = { workspace = true }
-futures = { workspace = true }
-include_dir = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 prometheus = { workspace = true }
-regex = { workspace = true }
-reqwest = { workspace = true }
 rlimit = { workspace = true }
 rustls = { workspace = true }
-serde = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

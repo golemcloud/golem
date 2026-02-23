@@ -29,8 +29,7 @@ components-ts/                    # Component directories (each becomes a WASM c
     rollup.config.mjs             # Rollup config (imports shared base config)
     tsconfig.json                 # TypeScript config (extends shared base)
     golem.yaml                    # Component-level manifest (templates, env, dependencies)
-common-ts/                        # Shared TypeScript code and build configuration
-  src/lib.ts                      # Shared library code
+common-ts/                        # Shared TypeScript Golem templates and configuration
   golem.yaml                      # Build templates for all TS components
   rollup.config.component.mjs     # Shared Rollup configuration
   tsconfig.component.json         # Shared TypeScript configuration

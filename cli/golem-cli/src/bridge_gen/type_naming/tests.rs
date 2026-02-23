@@ -14,7 +14,7 @@
 
 use crate::bridge_gen::type_naming::{TypeName, TypeNaming};
 use crate::model::agent::test::code_first_snippets_agent_type;
-use golem_templates::model::GuestLanguage;
+use crate::model::GuestLanguage;
 
 pub(crate) fn test_type_naming<TN: TypeName>(language: GuestLanguage, agent_name: &str) {
     let agent_type = code_first_snippets_agent_type(language, agent_name);

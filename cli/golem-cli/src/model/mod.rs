@@ -31,6 +31,7 @@ pub mod text;
 pub mod wave;
 pub mod worker;
 
+use crate::app_template::model::{Template, TemplateName};
 use crate::command::shared_args::ComponentTemplateName;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
@@ -41,17 +42,69 @@ use clap::{Arg, Error};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
-use golem_templates::model::{GuestLanguage, GuestLanguageTier, Template, TemplateName};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsStr;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::io::Read;
 use std::path::PathBuf;
 use std::str::FromStr;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use url::Url;
 
-// TODO: move non generic entities into mods
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, Serialize, Deserialize,
+)]
+pub enum GuestLanguage {
+    Rust,
+    TypeScript,
+}
+
+impl GuestLanguage {
+    pub fn from_string(s: impl AsRef<str>) -> Option<GuestLanguage> {
+        match s.as_ref().to_lowercase().as_str() {
+            "rust" => Some(GuestLanguage::Rust),
+            "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            _ => None,
+        }
+    }
+
+    pub fn id(&self) -> &'static str {
+        match self {
+            GuestLanguage::Rust => "rust",
+            GuestLanguage::TypeScript => "ts",
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            GuestLanguage::Rust => "Rust",
+            GuestLanguage::TypeScript => "TypeScript",
+        }
+    }
+}
+
+impl fmt::Display for GuestLanguage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl FromStr for GuestLanguage {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        GuestLanguage::from_string(s).ok_or({
+            let all = GuestLanguage::iter()
+                .map(|x| format!("\"{x}\""))
+                .collect::<Vec<String>>()
+                .join(", ");
+            format!("Unknown guest language: {s}. Expected one of {all}")
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct JsonValueParser;
@@ -93,7 +146,6 @@ impl TypedValueParser for JsonValueParser {
 pub struct TemplateDescription {
     pub name: TemplateName,
     pub language: GuestLanguage,
-    pub tier: GuestLanguageTier,
     pub description: String,
 }
 
@@ -103,7 +155,6 @@ impl TemplateDescription {
             name: template.name.clone(),
             language: template.language,
             description: template.description.clone(),
-            tier: template.language.tier(),
         }
     }
 }
@@ -203,33 +254,4 @@ impl From<golem_client::model::Account> for AccountDetails {
 pub struct NewInteractiveApp {
     pub app_name: ApplicationName,
     pub templated_component_names: Vec<(ComponentTemplateName, ComponentName)>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenApiDefinitionOutputFormat {
-    Json,
-    Yaml,
-}
-
-impl FromStr for OpenApiDefinitionOutputFormat {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "json" => Ok(OpenApiDefinitionOutputFormat::Json),
-            "yaml" | "yml" => Ok(OpenApiDefinitionOutputFormat::Yaml),
-            _ => Err(format!(
-                "Invalid API definition format: {s}. Expected one of \"json\", \"yaml\""
-            )),
-        }
-    }
-}
-
-impl Display for OpenApiDefinitionOutputFormat {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OpenApiDefinitionOutputFormat::Json => write!(f, "json"),
-            OpenApiDefinitionOutputFormat::Yaml => write!(f, "yaml"),
-        }
-    }
 }
