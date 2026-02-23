@@ -711,22 +711,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .download_payload(owned_worker_id, data)
                     .await?;
 
-                let snapshot_data = if mime_type == "application/json" {
-                    match serde_json::from_slice(&bytes) {
-                        Ok(json_value) => {
-                            PublicSnapshotData::Json(JsonSnapshotData { data: json_value })
-                        }
-                        Err(_) => PublicSnapshotData::Raw(RawSnapshotData {
-                            data: bytes,
-                            mime_type,
-                        }),
-                    }
-                } else {
-                    PublicSnapshotData::Raw(RawSnapshotData {
+                let snapshot_data =
+                    raw_snapshot_to_public(RawSnapshotData {
                         data: bytes,
                         mime_type,
-                    })
-                };
+                    });
 
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp,
@@ -734,6 +723,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 }))
             }
         }
+    }
+}
+
+fn raw_snapshot_to_public(snapshot: RawSnapshotData) -> PublicSnapshotData {
+    if snapshot.mime_type == "application/json" {
+        match serde_json::from_slice(&snapshot.data) {
+            Ok(json_value) => PublicSnapshotData::Json(JsonSnapshotData { data: json_value }),
+            Err(_) => PublicSnapshotData::Raw(snapshot),
+        }
+    } else {
+        PublicSnapshotData::Raw(snapshot)
     }
 }
 
@@ -867,7 +867,7 @@ async fn agent_invocation_to_public(
         AgentInvocation::SaveSnapshot { .. } => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
         AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(
             PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
-                snapshot: PublicSnapshotData::Raw(snapshot),
+                snapshot: raw_snapshot_to_public(snapshot),
             }),
         ),
         AgentInvocation::ProcessOplogEntries {
@@ -916,10 +916,7 @@ async fn agent_invocation_result_to_public(
         ),
         AgentInvocationResult::SaveSnapshot { snapshot } => Ok(
             PublicAgentInvocationResult::SaveSnapshot(SaveSnapshotResultParameters {
-                snapshot: PublicSnapshotData::Raw(RawSnapshotData {
-                    data: snapshot.data,
-                    mime_type: snapshot.mime_type,
-                }),
+                snapshot: raw_snapshot_to_public(snapshot),
             }),
         ),
         AgentInvocationResult::ProcessOplogEntries { error } => Ok(
