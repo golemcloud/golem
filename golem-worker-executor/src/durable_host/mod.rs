@@ -61,7 +61,7 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
 use crate::wasi_host;
 use crate::worker::invocation::{
-    InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{RetryDecision, Worker};
@@ -1047,7 +1047,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             store,
                             instance,
                             &component_metadata,
-                            None,
+                            InvocationMode::Replay,
                         )
                         .await;
 
@@ -1251,7 +1251,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             store,
             instance,
             &component_metadata,
-            None,
+            InvocationMode::Replay,
         )
         .await;
 
@@ -2114,7 +2114,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             store,
                             instance,
                             &component_metadata,
-                            None,
+                            InvocationMode::Replay,
                         )
                         .instrument(span)
                         .await;

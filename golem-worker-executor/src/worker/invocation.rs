@@ -25,6 +25,14 @@ use golem_common::model::oplog::WorkerError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::{AgentInvocation, AgentInvocationKind, AgentInvocationResult, OplogIndex};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+
+/// Describes how an invocation is being executed with respect to the oplog.
+pub enum InvocationMode {
+    /// The invocation is happening live and should write oplog markers.
+    Live(AgentInvocation),
+    /// The invocation is being replayed from the oplog; no markers need to be written.
+    Replay,
+}
 use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
 use golem_wasm::{FromValue, IntoValue, Value};
 use tracing::{debug, error};
@@ -45,7 +53,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
-    invocation: Option<AgentInvocation>,
+    mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -57,7 +65,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
         &mut store,
         instance,
         component_metadata,
-        invocation,
+        mode,
     )
     .await;
 
@@ -173,7 +181,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
-    invocation: Option<AgentInvocation>,
+    mode: InvocationMode,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -192,7 +200,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         validate_function_parameters(&mut store, &function, &lowered.wit_fqfn, &lowered.params)
             .await?;
 
-    if let Some(invocation) = invocation {
+    if let InvocationMode::Live(invocation) = mode {
         store
             .data_mut()
             .on_agent_invocation_started(invocation)

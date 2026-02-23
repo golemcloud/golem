@@ -18,7 +18,7 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    InvokeResult, invoke_observed_and_traced, lower_invocation,
+    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
@@ -624,7 +624,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             self.store,
             self.instance,
             &component_metadata,
-            Some(invocation),
+            InvocationMode::Live(invocation),
         )
         .await;
 
@@ -770,7 +770,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             self.store,
             self.instance,
             &component_metadata,
-            None,
+            InvocationMode::Replay,
         )
         .await;
         self.store.data_mut().end_call_snapshotting_function();
@@ -977,7 +977,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             self.store,
             self.instance,
             &component_metadata,
-            None,
+            InvocationMode::Replay,
         )
         .await;
         self.store.data_mut().end_call_snapshotting_function();
