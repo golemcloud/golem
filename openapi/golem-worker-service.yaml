@@ -2913,7 +2913,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
@@ -2954,7 +2954,7 @@ components:
           EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
           EndRemoteWrite: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
-          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+          PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
@@ -3301,6 +3301,18 @@ components:
             - NoOp
             example: NoOp
       - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#PendingAgentInvocationParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PendingAgentInvocation
+            example: PendingAgentInvocation
+      - $ref: '#/components/schemas/r#PendingAgentInvocationParams'
     PublicOplogEntry_r#PendingUpdateParams:
       allOf:
       - type: object
@@ -3313,18 +3325,6 @@ components:
             - PendingUpdate
             example: PendingUpdate
       - $ref: '#/components/schemas/r#PendingUpdateParams'
-    PublicOplogEntry_r#PendingWorkerInvocationParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - PendingWorkerInvocation
-            example: PendingWorkerInvocation
-      - $ref: '#/components/schemas/r#PendingWorkerInvocationParams'
     PublicOplogEntry_r#PreCommitRemoteTransactionParams:
       allOf:
       - type: object
@@ -5007,6 +5007,18 @@ components:
         timestamp:
           type: string
           format: date-time
+    r#PendingAgentInvocationParams:
+      type: object
+      title: r#PendingAgentInvocationParams
+      required:
+      - timestamp
+      - invocation
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicAgentInvocation'
     r#PendingUpdateParams:
       type: object
       title: r#PendingUpdateParams
@@ -5023,18 +5035,6 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
-    r#PendingWorkerInvocationParams:
-      type: object
-      title: r#PendingWorkerInvocationParams
-      required:
-      - timestamp
-      - invocation
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        invocation:
-          $ref: '#/components/schemas/PublicAgentInvocation'
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams

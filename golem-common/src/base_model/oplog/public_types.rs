@@ -299,7 +299,7 @@ pub struct ManualUpdateParameters {
 pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
-    #[unit_case]
+    #[cfg_attr(feature = "full", unit_case)]
     SaveSnapshot(Empty),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
@@ -338,7 +338,7 @@ pub struct SaveSnapshotResultParameters {
 pub enum PublicAgentInvocationResult {
     AgentInitialization(AgentInvocationOutputParameters),
     AgentMethod(AgentInvocationOutputParameters),
-    #[unit_case]
+    #[cfg_attr(feature = "full", unit_case)]
     ManualUpdate(Empty),
     LoadSnapshot(FallibleResultParameters),
     SaveSnapshot(SaveSnapshotResultParameters),

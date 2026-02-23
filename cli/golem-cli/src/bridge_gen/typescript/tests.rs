@@ -20,7 +20,7 @@ use crate::model::agent::test::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_client::model::ValueAndType;
+use golem_wasm::ValueAndType;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,

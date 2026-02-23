@@ -195,7 +195,7 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
-    let mut gen = RustBridgeGenerator::new(agent_type, target_dir, false).unwrap();
+    let mut gen = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
     gen.generate().expect("Failed to generate Rust bridge");
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");

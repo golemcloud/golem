@@ -88,10 +88,23 @@ impl BridgeGenerator for RustBridgeGenerator {
 impl RustBridgeGenerator {
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let golem_path = std::env::var("GOLEM_RUST_PATH").ok().and_then(|p| {
-            p.strip_suffix("/sdks/rust/golem-rust")
-                .map(|p| p.to_string())
-        });
+        let golem_path = if self.testing {
+            // In test mode, use local workspace path so we test against the current code
+            let cwd = std::env::current_dir()
+                .map_err(|e| anyhow!("Failed to get current directory: {e}"))?;
+            Some(
+                cwd.join("../..")
+                    .canonicalize()
+                    .map_err(|e| anyhow!("Failed to canonicalize workspace root: {e}"))?
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            std::env::var("GOLEM_RUST_PATH").ok().and_then(|p| {
+                p.strip_suffix("/sdks/rust/golem-rust")
+                    .map(|p| p.to_string())
+            })
+        };
 
         let _package_name = self.package_name();
 
