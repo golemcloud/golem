@@ -130,6 +130,8 @@ impl WorkerApi {
                 wasi_config_vars.into(),
                 false,
                 auth,
+                None,
+                None,
             )
             .await?;
 

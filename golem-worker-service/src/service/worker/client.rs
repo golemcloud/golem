@@ -66,6 +66,8 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<WorkerId>;
 
     async fn connect(
@@ -403,6 +405,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         account_id: AccountId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<WorkerId> {
         let worker_id_clone = worker_id.clone();
         let account_id_clone = account_id;
@@ -419,7 +423,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     wasi_config_vars: Some(config_vars.clone().into()),
                     ignore_already_existing,
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    principal: principal.clone(),
+                    invocation_context: invocation_context.clone(),
                 }))
             },
             |response| match response.into_inner() {

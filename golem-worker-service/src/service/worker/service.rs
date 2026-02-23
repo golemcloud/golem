@@ -71,6 +71,8 @@ impl WorkerService {
         config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<ComponentRevision> {
         let component = self
             .component_service
@@ -84,6 +86,8 @@ impl WorkerService {
             config_vars,
             ignore_already_existing,
             auth_ctx,
+            invocation_context,
+            principal,
         )
         .await
     }
@@ -97,6 +101,8 @@ impl WorkerService {
         config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<ComponentRevision> {
         assert!(component.id == worker_id.component_id);
 
@@ -118,6 +124,8 @@ impl WorkerService {
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,
                 auth_ctx,
+                invocation_context,
+                principal,
             )
             .await?;
 

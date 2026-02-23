@@ -280,6 +280,8 @@ impl WorkerGrpcApi {
                 wasi_config_vars,
                 request.ignore_already_existing,
                 auth,
+                request.context,
+                request.principal,
             )
             .await?;
 

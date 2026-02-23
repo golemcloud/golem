@@ -49,9 +49,12 @@ pub trait WorkerProxy: Send + Sync {
     async fn start(
         &self,
         owned_worker_id: &OwnedWorkerId,
+        caller_worker_id: &WorkerId,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        principal: Principal,
     ) -> Result<(), WorkerProxyError>;
 
     async fn invoke_agent(
@@ -230,9 +233,12 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn start(
         &self,
         owned_worker_id: &OwnedWorkerId,
+        caller_worker_id: &WorkerId,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
+        principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_worker_id=%owned_worker_id, "Starting remote worker");
 
@@ -246,10 +252,17 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(owned_worker_id.component_id().into()),
                     name: owned_worker_id.worker_name(),
-                    env: caller_env,
+                    env: caller_env.clone(),
                     wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+                        parent: Some(caller_worker_id.clone().into()),
+                        env: caller_env,
+                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        tracing: Some(caller_stack.clone().into()),
+                    }),
+                    principal: Some(principal.clone().into()),
                 }))
             })
             .await?

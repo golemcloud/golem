@@ -255,21 +255,25 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         owned_worker_id: &OwnedWorkerId,
         self_created_by: AccountId,
-        _self_worker_id: &WorkerId,
+        self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
-        _self_stack: InvocationContextStack, // TODO: make invocation context propagating through the worker start API
+        self_stack: InvocationContextStack,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
+        let principal = caller_agent_principal(self_worker_id);
         let demand = LoggingDemand::new(owned_worker_id.worker_id());
 
         self.worker_proxy
             .start(
                 owned_worker_id,
+                self_worker_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
+                self_stack,
                 self_created_by,
+                principal,
             )
             .await?;
 

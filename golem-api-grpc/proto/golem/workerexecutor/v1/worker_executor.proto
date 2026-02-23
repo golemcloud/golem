@@ -124,6 +124,7 @@ message CreateWorkerRequest {
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
   optional golem.component.Principal principal = 8;
+  optional golem.worker.InvocationContext invocation_context = 9;
 }
 
 message CreateWorkerResponse {

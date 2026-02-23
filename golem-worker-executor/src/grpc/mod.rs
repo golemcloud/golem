@@ -228,6 +228,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
+        let invocation_context = from_proto_invocation_context(&request.invocation_context);
+
         let worker = Worker::get_or_create_suspended(
             self,
             auth_ctx.account_id(),
@@ -243,7 +245,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
             None,
             None,
-            &InvocationContextStack::fresh(),
+            &invocation_context,
             principal,
         )
         .await?;
