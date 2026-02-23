@@ -32,12 +32,10 @@ harness = false
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-wasm = { workspace = true, default-features = true }
-golem-wasm-derive = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
 ariadne = { workspace = true }
-assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
 base64 = { workspace = true }
@@ -54,8 +52,6 @@ crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 evcxr = { workspace = true }
-fancy-regex = { workspace = true }
-flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
@@ -80,15 +76,12 @@ quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 rustyline = { workspace = true }
-semver = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
-similar = { workspace = true }
-spdx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
@@ -112,14 +105,10 @@ version-compare = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
-wasmparser = { workspace = true }
-wasm-encoder = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
-wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wit-component = { workspace = true }
-wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
@@ -127,14 +116,12 @@ openssl = { workspace = true }
 openssl-sys = { workspace = true }
 
 [dev-dependencies]
-assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = { workspace = true }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 reqwest = { workspace = true }
-serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
 
