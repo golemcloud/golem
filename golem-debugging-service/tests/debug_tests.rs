@@ -488,6 +488,7 @@ async fn test_playback_with_overrides(
             timestamp: Timestamp::now_utc(),
             result: original_result.clone(),
             consumed_fuel: 0,
+            component_revision: 0,
         });
 
     let oplog_overrides = PlaybackOverride {

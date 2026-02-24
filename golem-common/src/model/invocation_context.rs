@@ -19,7 +19,6 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     Evolution, SerializationContext,
 };
-use golem_wasm_derive::{FromValue, IntoValue};
 use lazy_static::lazy_static;
 use nonempty_collections::NEVec;
 use std::collections::{HashMap, HashSet};
@@ -171,7 +170,6 @@ impl golem_wasm::IntoValue for AttributeValue {
 
 impl golem_wasm::FromValue for AttributeValue {
     fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        use golem_wasm::FromValue as _;
         match value {
             golem_wasm::Value::Variant {
                 case_idx: 0,

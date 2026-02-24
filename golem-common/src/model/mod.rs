@@ -609,7 +609,6 @@ pub struct RetryConfig {
 
 impl golem_wasm::IntoValue for RetryConfig {
     fn into_value(self) -> golem_wasm::Value {
-        use golem_wasm::IntoValue as _;
         golem_wasm::Value::Record(vec![
             self.max_attempts.into_value(),
             (self.min_delay.as_nanos() as u64).into_value(),
@@ -635,7 +634,6 @@ impl golem_wasm::IntoValue for RetryConfig {
 
 impl golem_wasm::FromValue for RetryConfig {
     fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        use golem_wasm::FromValue as _;
         match value {
             golem_wasm::Value::Record(fields) if fields.len() == 5 => {
                 let mut iter = fields.into_iter();

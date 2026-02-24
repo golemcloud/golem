@@ -87,7 +87,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let case_labels = data
                     .variants
                     .iter()
-                    .map(|variant| variant_case_name(variant))
+                    .map(variant_case_name)
                     .collect::<Vec<_>>();
 
                 let naming = apply_naming(&wit, &default_name);

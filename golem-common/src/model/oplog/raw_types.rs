@@ -52,7 +52,6 @@ impl From<AttributeMap> for HashMap<String, AttributeValue> {
 
 impl golem_wasm::IntoValue for AttributeMap {
     fn into_value(self) -> golem_wasm::Value {
-        use golem_wasm::IntoValue as _;
         golem_wasm::Value::List(
             self.0
                 .into_iter()
@@ -81,7 +80,6 @@ impl golem_wasm::IntoValue for AttributeMap {
 
 impl golem_wasm::FromValue for AttributeMap {
     fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        use golem_wasm::FromValue as _;
         match value {
             golem_wasm::Value::List(items) => {
                 let mut map = HashMap::new();

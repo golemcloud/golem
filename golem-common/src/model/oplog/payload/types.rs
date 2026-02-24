@@ -34,7 +34,7 @@ use desert_rust::{
 };
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
-use golem_wasm::{FromValue, IntoValue, NodeIndex, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, NodeIndex, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;

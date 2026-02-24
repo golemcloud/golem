@@ -780,6 +780,7 @@ mod tests {
                         AgentInvocationResult::AgentInitialization,
                     )),
                     consumed_fuel: 0,
+                    component_revision: 0,
                 }
             } else {
                 // Any other oplog entry other than export function completed

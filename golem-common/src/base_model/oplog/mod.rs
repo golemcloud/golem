@@ -40,7 +40,7 @@ mod raw_imports {
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult, RetryConfig};
     pub use golem_wasm::wasmtime::ResourceTypeId;
 
-    pub use std::collections::{HashMap, HashSet};
+    pub use std::collections::HashSet;
 }
 
 #[cfg(feature = "full")]
