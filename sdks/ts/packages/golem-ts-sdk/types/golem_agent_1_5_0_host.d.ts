@@ -33,6 +33,15 @@ declare module 'golem:agent/host@1.5.0' {
    *   from a different agent type will trap.
    */
   export function createWebhook(promiseId: PromiseId): string;
+  /**
+   * Get the current value of the config key.
+   * Only keys that are declared by the agent-type are allowed to be accessed. Trying
+   * to access an undeclared key will trap.
+   * Getting a local key will get values defined as part of the current
+   * component revision + overrides declared during agent creation.
+   * Getting a shared key will get the current value of the key in the environment.
+   */
+  export function getConfigValue(key: string[]): WitValue;
   export class WasmRpc {
     /**
      * Constructs the RPC client connecting to the given target agent
@@ -82,6 +91,7 @@ declare module 'golem:agent/host@1.5.0' {
   export type ComponentId = golemCore150Types.ComponentId;
   export type Uuid = golemCore150Types.Uuid;
   export type PromiseId = golemCore150Types.PromiseId;
+  export type WitValue = golemCore150Types.WitValue;
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type Pollable = wasiIo023Poll.Pollable;
   export type AgentError = golemAgent150Common.AgentError;

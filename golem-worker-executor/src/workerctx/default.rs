@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{HasWasiConfigVars, LogEventEmitBehaviour};
+use super::{HasConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
@@ -539,6 +539,10 @@ impl AgentHost for Context {
     ) -> anyhow::Result<String> {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
+
+    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<golem_wasm::WitValue> {
+        AgentHost::get_config_value(&mut self.durable_ctx, key).await
+    }
 }
 
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
@@ -609,9 +613,9 @@ impl InvocationContextManagement for Context {
     }
 }
 
-impl HasWasiConfigVars for Context {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.wasi_config_vars()
+impl HasConfigVars for Context {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.config_vars()
     }
 }
 

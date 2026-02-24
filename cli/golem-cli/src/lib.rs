@@ -15,11 +15,15 @@
 use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
 use golem_common::tracing::directive::{debug, warn};
+use lenient_bool::LenientBool;
 use shadow_rs::shadow;
+use std::future::Future;
+use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
+pub mod app_template;
 pub mod auth;
 pub mod bridge_gen;
 pub mod client;
@@ -30,6 +34,7 @@ pub mod config;
 pub mod context;
 pub mod diagnose;
 pub mod error;
+pub mod evcxr_repl;
 pub mod fs;
 pub mod fuzzy;
 pub mod log;
@@ -50,6 +55,10 @@ pub fn command_name() -> String {
                 .map(|name| name.to_string_lossy().to_string())
         })
         .unwrap_or("golem-cli".to_string())
+}
+
+pub fn binary_path_to_string() -> anyhow::Result<String> {
+    Ok(fs::path_to_str(&std::env::current_exe()?)?.to_string())
 }
 
 pub fn version() -> &'static str {
@@ -105,58 +114,27 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::command::GolemCliCommand;
-    use clap::{ArgAction, Command, CommandFactory};
-
-    #[test]
-    fn dump_commands() {
-        let command = GolemCliCommand::command();
-        dump_command(0, &command);
+pub fn main_wrapper<F>(golem_main: impl FnOnce() -> F) -> ExitCode
+where
+    F: Future<Output = ExitCode>,
+{
+    if is_golem_evcxr_repl_set() {
+        evcxr_repl::main()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to build tokio runtime")
+            .block_on(golem_main())
     }
+}
 
-    fn dump_command(level: usize, command: &Command) {
-        print!("{}{}", "\t".repeat(level), command.get_name());
+pub const GOLEM_EVCXR_REPL: &str = "GOLEM_EVCXR_REPL";
 
-        let aliases = command.get_aliases().collect::<Vec<_>>();
-        if !aliases.is_empty() {
-            print!(" ({})", aliases.join(", "));
-        }
-
-        let (positional, flag_args): (Vec<_>, Vec<_>) =
-            command.get_arguments().partition(|arg| arg.is_positional());
-
-        if !positional.is_empty() {
-            for arg in positional {
-                let id = arg.get_id().to_string().to_uppercase();
-                if arg.is_required_set() && arg.get_default_values().is_empty() {
-                    print!(" <{id}>");
-                } else {
-                    print!(" [{id}]");
-                }
-                if let ArgAction::Append = arg.get_action() {
-                    print!("...")
-                }
-            }
-        }
-
-        println!();
-
-        if !flag_args.is_empty() {
-            print!("{}", "\t".repeat(level + 2));
-            for arg in flag_args.clone() {
-                print!(" --{}", arg.get_long().unwrap(),);
-                arg.get_short().iter().for_each(|short| print!("({short})"));
-            }
-            println!()
-        }
-
-        let subcommand_level = level + 1;
-        for subcommand in command.get_subcommands() {
-            dump_command(subcommand_level, subcommand);
-        }
-    }
+fn is_golem_evcxr_repl_set() -> bool {
+    std::env::var(GOLEM_EVCXR_REPL)
+        .ok()
+        .and_then(|s| s.parse::<LenientBool>().ok())
+        .map(|b| b.into())
+        .unwrap_or(false)
 }

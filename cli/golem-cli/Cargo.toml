@@ -29,14 +29,13 @@ test = true
 harness = false
 
 [dependencies]
-golem-templates = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-wasm = { workspace = true , default-features = true }
-golem-wasm-derive = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 
 # External deps
 anyhow = { workspace = true }
+ariadne = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
 base64 = { workspace = true }
@@ -49,14 +48,17 @@ clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
+crossbeam-channel = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+evcxr = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
+include_dir = { workspace = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }
 inquire = { workspace = true }
@@ -73,15 +75,13 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
-semver = { workspace = true }
+rustyline = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
-similar = { workspace = true }
-spdx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
@@ -98,20 +98,17 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
+unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
-wasmparser = { workspace = true }
-wasm-encoder = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
-wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wit-component = { workspace = true }
-wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
@@ -119,16 +116,15 @@ openssl = { workspace = true }
 openssl-sys = { workspace = true }
 
 [dev-dependencies]
-assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = { workspace = true }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 reqwest = { workspace = true }
-serde_json_path = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
+
 [build-dependencies]
 lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }

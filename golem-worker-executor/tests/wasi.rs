@@ -31,7 +31,7 @@ use golem_worker_executor_test_utils::{
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
@@ -336,7 +336,7 @@ async fn initial_file_read_write(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     let result = executor
@@ -533,7 +533,7 @@ async fn initial_file_reading_through_api(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     // run the agent so it can update the files.
@@ -1091,7 +1091,7 @@ async fn environment_variables(
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     let result = executor
@@ -1186,7 +1186,7 @@ async fn http_client_response_persisted_between_invocations(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
@@ -1278,7 +1278,7 @@ async fn http_client_interrupting_response_stream(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -1407,7 +1407,7 @@ async fn http_client_interrupting_response_stream_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -3059,10 +3059,10 @@ async fn wasi_config_initial_worker_config(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            vec![
+            HashMap::from_iter(vec![
                 ("k1".to_string(), "v1".to_string()),
                 ("k2".to_string(), "v2".to_string()),
-            ],
+            ]),
         )
         .await?;
 
@@ -3113,6 +3113,126 @@ async fn wasi_config_initial_worker_config(
                     Value::String("k2".to_string()),
                     Value::String("v2".to_string())
                 ])
+            ])
+        )
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn wasi_config_component_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_config_vars(vec![
+            ("k1".to_string(), "v0".to_string()),
+            ("k3".to_string(), "v3".to_string()),
+        ])
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("wasi-config", "worker-1");
+
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::new(),
+            HashMap::from_iter(vec![
+                ("k1".to_string(), "v1".to_string()),
+                ("k2".to_string(), "v2".to_string()),
+            ]),
+        )
+        .await?;
+
+    {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Tuple(vec![
+                    Value::String("k1".to_string()),
+                    Value::String("v1".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k2".to_string()),
+                    Value::String("v2".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k3".to_string()),
+                    Value::String("v3".to_string())
+                ]),
+            ])
+        )
+    }
+
+    let updated_component = executor
+        .update_component_with(
+            &component.id,
+            component.revision,
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            Some(BTreeMap::from_iter(vec![
+                ("k1".to_string(), "v2".to_string()),
+                ("k3".to_string(), "v4".to_string()),
+                ("k4".to_string(), "v4".to_string()),
+            ])),
+        )
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    {
+        let result = executor
+            .invoke_and_await_agent(&updated_component, &agent_id, "get_all", data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))?;
+
+        assert_eq!(
+            result,
+            Value::List(vec![
+                Value::Tuple(vec![
+                    Value::String("k1".to_string()),
+                    Value::String("v1".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k2".to_string()),
+                    Value::String("v2".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k3".to_string()),
+                    Value::String("v4".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k4".to_string()),
+                    Value::String("v4".to_string())
+                ]),
             ])
         )
     }

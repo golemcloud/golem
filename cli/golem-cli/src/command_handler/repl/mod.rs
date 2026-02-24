@@ -25,9 +25,9 @@ use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::DeployConfig;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::repl::{BridgeReplArgs, ReplLanguage, ReplMetadata, ReplScriptSource};
+use crate::model::GuestLanguage;
 use anyhow::bail;
 use golem_common::model::component::ComponentName;
-use golem_templates::model::GuestLanguage;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -152,6 +152,13 @@ impl ReplHandler {
             let repl_cli_commands_metadata_json_path =
                 fs::canonicalize_path(&repl_cli_commands_metadata_json_path)?;
 
+            let repl_metadata_json_path = app_ctx.application().repl_metadata_json(language);
+            // TODO: cleanup
+            if !repl_metadata_json_path.exists() {
+                fs::write(&repl_metadata_json_path, "")?;
+            }
+            let repl_metadata_json_path = fs::canonicalize_path(&repl_metadata_json_path)?;
+
             let component_names = app_ctx.application().component_names().cloned().collect();
 
             BridgeReplArgs {
@@ -166,6 +173,7 @@ impl ReplHandler {
                 repl_bridge_sdk_target,
                 repl_history_file_path,
                 repl_cli_commands_metadata_json_path,
+                repl_metadata_json_path,
             }
         };
 

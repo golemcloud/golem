@@ -1443,7 +1443,7 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
                 )
             }
             golem_api_1_x::host::AgentPropertyFilter::WasiConfigVars(filter) => {
-                golem_common::model::WorkerFilter::new_wasi_config_vars(
+                golem_common::model::WorkerFilter::new_config_vars(
                     filter.name,
                     filter.comparator.into(),
                     filter.value,

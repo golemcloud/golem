@@ -114,7 +114,7 @@ impl WorkerApi {
         let WorkerCreationRequest {
             name,
             env,
-            config_vars: wasi_config_vars,
+            config_vars,
         } = request;
 
         let (worker_id, component) = self
@@ -127,7 +127,7 @@ impl WorkerApi {
                 &worker_id,
                 component,
                 env,
-                wasi_config_vars.into(),
+                config_vars,
                 false,
                 auth,
                 None,

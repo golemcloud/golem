@@ -14,16 +14,12 @@
 
 use golem::command_handler::ServerCommandHandler;
 use golem_cli::command_handler::CommandHandler;
+use golem_cli::main_wrapper;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 fn main() -> ExitCode {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed to build tokio runtime for golem main")
-        .block_on(CommandHandler::handle_args(
-            std::env::args_os(),
-            Arc::new(ServerCommandHandler {}),
-        ))
+    main_wrapper(|| {
+        CommandHandler::handle_args(std::env::args_os(), Arc::new(ServerCommandHandler {}))
+    })
 }

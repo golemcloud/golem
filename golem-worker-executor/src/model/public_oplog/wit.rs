@@ -51,7 +51,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                wasi_config_vars,
+                config_vars,
                 original_phantom_id: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
@@ -68,11 +68,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     .into_iter()
                     .map(|pr| pr.into())
                     .collect(),
-                config_vars: wasi_config_vars
-                    .0
-                    .into_iter()
-                    .map(|entry| (entry.key, entry.value))
-                    .collect(),
+                config_vars: config_vars.into_iter().collect(),
             }),
             PublicOplogEntry::HostCall(HostCallParams {
                 timestamp,
@@ -759,7 +755,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .into_iter()
                     .map(golem_common::model::component::PluginPriority)
                     .collect(),
-                wasi_config_vars: params.wasi_config_vars.into_iter().collect(),
+                config_vars: params.wasi_config_vars.into_iter().collect(),
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
@@ -799,7 +795,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     result: oplog_payload_from_wit(params.result),
                     consumed_fuel: params.consumed_fuel,
-                    component_revision: params.component_revision.try_into().map_err(|e: String| e)?,
+                    component_revision: params
+                        .component_revision
+                        .try_into()
+                        .map_err(|e: String| e)?,
                 })
             }
             oplog::OplogEntry::Suspend(ts) => Ok(Self::Suspend {

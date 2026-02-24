@@ -214,7 +214,7 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
-        wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
+        config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: WorkerStatusRecord {
@@ -289,14 +289,14 @@ fn worker_filter_matches() {
     ))
     .matches(&worker_metadata));
 
-    assert!(WorkerFilter::new_wasi_config_vars(
+    assert!(WorkerFilter::new_config_vars(
         "var1".to_string(),
         StringFilterComparator::Equal,
         "value1".to_string(),
     )
     .matches(&worker_metadata));
 
-    assert!(!WorkerFilter::new_wasi_config_vars(
+    assert!(!WorkerFilter::new_config_vars(
         "var1".to_string(),
         StringFilterComparator::Equal,
         "value2".to_string(),

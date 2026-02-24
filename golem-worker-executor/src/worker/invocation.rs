@@ -635,11 +635,7 @@ pub fn lower_invocation(
                         )));
                     }
                     Some(method) => {
-                        validate_input_against_schema(
-                            &input,
-                            &method.input_schema,
-                            &method_name,
-                        )?;
+                        validate_input_against_schema(&input, &method.input_schema, &method_name)?;
                     }
                 }
             }
@@ -901,10 +897,7 @@ fn validate_input_against_schema(
 ) -> Result<(), WorkerExecutorError> {
     let (elements, schema_elements) = match (input, schema) {
         (UntypedDataValue::Tuple(elems), DataSchema::Tuple(schema)) => {
-            let schema_elems: Vec<_> = elems
-                .iter()
-                .map(|e| (None, e))
-                .collect();
+            let schema_elems: Vec<_> = elems.iter().map(|e| (None, e)).collect();
             let schema_defs: Vec<_> = schema.elements.iter().collect();
             (schema_elems, schema_defs)
         }
@@ -936,8 +929,7 @@ fn validate_input_against_schema(
         )));
     }
 
-    for (i, ((name, elem), schema_elem)) in
-        elements.iter().zip(schema_elements.iter()).enumerate()
+    for (i, ((name, elem), schema_elem)) in elements.iter().zip(schema_elements.iter()).enumerate()
     {
         validate_element_against_schema(elem, schema_elem, method_name, i, *name)?;
     }

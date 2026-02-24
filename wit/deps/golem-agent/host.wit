@@ -1,7 +1,7 @@
 package golem:agent@1.5.0;
 
 interface host {
-    use golem:core/types@1.5.0.{component-id, uuid, promise-id};
+    use golem:core/types@1.5.0.{component-id, uuid, promise-id, wit-value};
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use wasi:io/poll@0.2.3.{pollable};
     use common.{agent-error, agent-type, data-value, registered-agent-type};
@@ -80,4 +80,12 @@ interface host {
       /// Cancel the scheduled invocation
       cancel: func();
     }
+
+    /// Get the current value of the config key.
+    /// Only keys that are declared by the agent-type are allowed to be accessed. Trying
+    /// to access an undeclared key will trap.
+    /// Getting a local key will get values defined as part of the current
+    /// component revision + overrides declared during agent creation.
+    /// Getting a shared key will get the current value of the key in the environment.
+    get-config-value: func(key: list<string>) -> wit-value;
 }

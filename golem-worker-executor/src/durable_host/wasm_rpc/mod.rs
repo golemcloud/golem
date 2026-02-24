@@ -13,19 +13,24 @@
 // limitations under the License.
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::get_oplog_entry;
 use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError as InternalRpcError};
-use crate::workerctx::WorkerCtx;
+use crate::services::HasWorker;
+use crate::workerctx::{
+    HasConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
+};
 use anyhow::Error;
 use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
     GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke,
@@ -50,14 +55,10 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::{Instrument, error};
+use tracing::{error, Instrument};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
-use crate::get_oplog_entry;
-use crate::services::HasWorker;
-use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::workerctx::{HasWasiConfigVars, InvocationContextManagement, InvocationManagement};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
@@ -73,7 +74,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
 
         let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
             self,
@@ -100,7 +101,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             golem_common::model::WorkerId::from_agent_id(component_id, &agent_id)
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
 
-        construct_wasm_rpc_resource(self, remote_worker_id, &env, wasi_config_vars).await
+        construct_wasm_rpc_resource(self, remote_worker_id, &env, config_vars).await
     }
 
     async fn invoke_and_await(
@@ -115,7 +116,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -180,7 +181,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     created_by,
                     &worker_id,
                     &env,
-                    wasi_config_vars,
+                    config_vars,
                     stack,
                 ),
                 interrupt_signal,
@@ -233,7 +234,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -287,7 +288,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self.created_by(),
                     self.worker_id(),
                     &env,
-                    wasi_config_vars,
+                    config_vars,
                     stack,
                 )
                 .await;
@@ -323,7 +324,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
         let begin_index = self
@@ -382,7 +383,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             created_by,
                             &worker_id,
                             &env,
-                            wasi_config_vars,
+                            config_vars,
                             stack,
                         )
                         .await)
@@ -406,7 +407,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self_worker_id: worker_id,
                     self_created_by: created_by,
                     env,
-                    wasi_config_vars,
+                    wasi_config_vars: config_vars,
                     method_name,
                     method_parameters: input_untyped,
                     idempotency_key,
@@ -679,7 +680,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                 self_worker_id,
                                 self_created_by,
                                 env,
-                                wasi_config_vars,
+                                wasi_config_vars: config_vars,
                                 method_name,
                                 method_parameters,
                                 idempotency_key,
@@ -699,7 +700,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                     self_created_by,
                                     &self_worker_id,
                                     &env,
-                                    wasi_config_vars,
+                                    config_vars,
                                     stack,
                                 )
                                 .await)

@@ -1004,7 +1004,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         },
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![],
-        wasi_config_vars: BTreeMap::new(),
+        config_vars: BTreeMap::new(),
         environment_id,
         created_by: account_id,
         parent: None,

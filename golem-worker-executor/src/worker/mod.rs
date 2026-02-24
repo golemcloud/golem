@@ -136,7 +136,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         account_id: AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
+        worker_config_vars: Option<BTreeMap<String, String>>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -151,7 +151,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 owned_worker_id,
                 account_id,
                 worker_env,
-                worker_wasi_config_vars,
+                worker_config_vars,
                 component_revision,
                 parent,
                 invocation_context_stack,
@@ -166,7 +166,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         account_id: AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
+        worker_config_vars: Option<BTreeMap<String, String>>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             account_id,
             owned_worker_id,
             worker_env,
-            worker_wasi_config_vars,
+            worker_config_vars,
             component_revision,
             parent,
             invocation_context_stack,
@@ -1492,7 +1492,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
-        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
+        worker_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_worker_id.component_id();
@@ -1624,7 +1624,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
                     env: worker_env,
-                    wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
+                    config_vars: worker_config_vars.unwrap_or_default(),
                     environment_id: owned_worker_id.environment_id(),
                     created_by: *account_id,
                     created_at,
@@ -1651,7 +1651,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
-                    initial_worker_metadata.wasi_config_vars.clone(),
+                    initial_worker_metadata.config_vars.clone(),
                     initial_worker_metadata.original_phantom_id,
                 );
 
@@ -2123,7 +2123,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
                 worker_metadata.created_by,
-                worker_metadata.wasi_config_vars,
+                worker_metadata.config_vars,
                 if pending_update.is_none()
                     && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
                 {

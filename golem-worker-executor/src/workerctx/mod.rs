@@ -75,7 +75,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
-    + HasWasiConfigVars
+    + HasConfigVars
     + Send
     + Sync
     + Sized
@@ -419,8 +419,8 @@ pub trait InvocationContextManagement {
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
 }
 
-pub trait HasWasiConfigVars {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String>;
+pub trait HasConfigVars {
+    fn config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

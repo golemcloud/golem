@@ -14,9 +14,9 @@
 
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::GuestLanguage;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
-use golem_templates::model::GuestLanguage;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -97,6 +97,7 @@ pub struct BridgeReplArgs {
     pub app_main_dir: PathBuf,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
+    pub repl_metadata_json_path: PathBuf,
     pub repl_cli_commands_metadata_json_path: PathBuf,
     pub repl_bridge_sdk_target: CustomBridgeSdkTarget,
     pub repl_history_file_path: PathBuf,

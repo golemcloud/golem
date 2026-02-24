@@ -44,9 +44,8 @@ pub fn validate_value_matches_type(value: &Value, expected: &AnalysedType) -> Re
         // List: validate all items against the inner type
         (Value::List(items), AnalysedType::List(list_type)) => {
             for (i, item) in items.iter().enumerate() {
-                validate_value_matches_type(item, &list_type.inner).map_err(|e| {
-                    format!("list element {i}: {e}")
-                })?;
+                validate_value_matches_type(item, &list_type.inner)
+                    .map_err(|e| format!("list element {i}: {e}"))?;
             }
             Ok(())
         }
@@ -61,9 +60,8 @@ pub fn validate_value_matches_type(value: &Value, expected: &AnalysedType) -> Re
                 ));
             }
             for (i, (val, typ)) in values.iter().zip(tuple_type.items.iter()).enumerate() {
-                validate_value_matches_type(val, typ).map_err(|e| {
-                    format!("tuple element {i}: {e}")
-                })?;
+                validate_value_matches_type(val, typ)
+                    .map_err(|e| format!("tuple element {i}: {e}"))?;
             }
             Ok(())
         }
@@ -78,15 +76,20 @@ pub fn validate_value_matches_type(value: &Value, expected: &AnalysedType) -> Re
                 ));
             }
             for (val, field_def) in fields.iter().zip(record_type.fields.iter()) {
-                validate_value_matches_type(val, &field_def.typ).map_err(|e| {
-                    format!("record field '{}': {e}", field_def.name)
-                })?;
+                validate_value_matches_type(val, &field_def.typ)
+                    .map_err(|e| format!("record field '{}': {e}", field_def.name))?;
             }
             Ok(())
         }
 
         // Variant: case index in range + payload validation
-        (Value::Variant { case_idx, case_value }, AnalysedType::Variant(variant_type)) => {
+        (
+            Value::Variant {
+                case_idx,
+                case_value,
+            },
+            AnalysedType::Variant(variant_type),
+        ) => {
             let idx = *case_idx as usize;
             if idx >= variant_type.cases.len() {
                 return Err(format!(
@@ -97,11 +100,8 @@ pub fn validate_value_matches_type(value: &Value, expected: &AnalysedType) -> Re
             }
             let case_def = &variant_type.cases[idx];
             match (&case_def.typ, case_value) {
-                (Some(expected_typ), Some(val)) => {
-                    validate_value_matches_type(val, expected_typ).map_err(|e| {
-                        format!("variant case '{}': {e}", case_def.name)
-                    })
-                }
+                (Some(expected_typ), Some(val)) => validate_value_matches_type(val, expected_typ)
+                    .map_err(|e| format!("variant case '{}': {e}", case_def.name)),
                 (None, None) => Ok(()),
                 (Some(_), None) => Err(format!(
                     "variant case '{}' expects a payload but none was provided",
@@ -143,9 +143,8 @@ pub fn validate_value_matches_type(value: &Value, expected: &AnalysedType) -> Re
         // Option: validate inner value if present
         (Value::Option(opt_val), AnalysedType::Option(opt_type)) => {
             if let Some(val) = opt_val {
-                validate_value_matches_type(val, &opt_type.inner).map_err(|e| {
-                    format!("option value: {e}")
-                })
+                validate_value_matches_type(val, &opt_type.inner)
+                    .map_err(|e| format!("option value: {e}"))
             } else {
                 Ok(())
             }
@@ -154,28 +153,18 @@ pub fn validate_value_matches_type(value: &Value, expected: &AnalysedType) -> Re
         // Result: validate ok/err payloads
         (Value::Result(result_val), AnalysedType::Result(result_type)) => match result_val {
             Ok(ok_val) => match (&result_type.ok, ok_val) {
-                (Some(ok_type), Some(val)) => {
-                    validate_value_matches_type(val, ok_type).map_err(|e| {
-                        format!("result ok value: {e}")
-                    })
-                }
+                (Some(ok_type), Some(val)) => validate_value_matches_type(val, ok_type)
+                    .map_err(|e| format!("result ok value: {e}")),
                 (None, None) => Ok(()),
                 (Some(_), None) => Err("result ok expects a value but none was provided".into()),
-                (None, Some(_)) => {
-                    Err("result ok expects no value but one was provided".into())
-                }
+                (None, Some(_)) => Err("result ok expects no value but one was provided".into()),
             },
             Err(err_val) => match (&result_type.err, err_val) {
-                (Some(err_type), Some(val)) => {
-                    validate_value_matches_type(val, err_type).map_err(|e| {
-                        format!("result err value: {e}")
-                    })
-                }
+                (Some(err_type), Some(val)) => validate_value_matches_type(val, err_type)
+                    .map_err(|e| format!("result err value: {e}")),
                 (None, None) => Ok(()),
                 (Some(_), None) => Err("result err expects a value but none was provided".into()),
-                (None, Some(_)) => {
-                    Err("result err expects no value but one was provided".into())
-                }
+                (None, Some(_)) => Err("result err expects no value but one was provided".into()),
             },
         },
 
@@ -451,7 +440,10 @@ mod tests {
             ]),
         ]);
         let inner_tuple = tuple(vec![u32(), u32()]);
-        let typ = record(vec![field("name", str()), field("items", list(inner_tuple))]);
+        let typ = record(vec![
+            field("name", str()),
+            field("items", list(inner_tuple)),
+        ]);
         let err = validate_value_matches_type(&val, &typ).unwrap_err();
         assert!(err.contains("record field 'items'"));
         assert!(err.contains("list element 1"));

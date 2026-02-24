@@ -24,12 +24,13 @@ use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app_raw;
 use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
-use crate::process::{with_hidden_output_unless_error, CommandExt};
+use crate::process::{with_hidden_output_unless_error, CommandExt, HiddenOutput};
 use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
 use tokio::process::Command;
+use tracing::{enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
@@ -90,12 +91,15 @@ async fn execute_inject_to_prebuilt_quick_js(
                 );
                 let _indent = LogIndent::new();
 
-                with_hidden_output_unless_error(|| {
-                    moonbit_component_generator::get_script::generate_get_script_component(
-                        &js_module_contents,
-                        &js_module_wasm,
-                    )
-                })?;
+                with_hidden_output_unless_error(
+                    HiddenOutput::hide_stderr_if(!enabled!(Level::WARN)),
+                    || {
+                        moonbit_component_generator::get_script::generate_get_script_component(
+                            &js_module_contents,
+                            &js_module_wasm,
+                        )
+                    },
+                )?;
 
                 compose(
                     base_wasm.as_std_path(),

@@ -216,6 +216,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .try_into()?,
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
+                config_vars: create.config_vars.into_iter().collect(),
                 environment_id: create
                     .environment_id
                     .ok_or("Missing environment_id field")?
@@ -224,10 +225,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .created_by
                     .ok_or("Missing created_by field")?
                     .try_into()?,
-                wasi_config_vars: create
-                    .wasi_config_vars
-                    .ok_or("Missing wasi_config_vars field")?
-                    .into(),
                 parent: match create.parent {
                     Some(parent) => Some(parent.try_into()?),
                     None => None,
@@ -609,9 +606,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         worker_id: Some(create.worker_id.into()),
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
+                        config_vars: create.config_vars.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
-                        wasi_config_vars: Some(create.wasi_config_vars.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
                         initial_total_linear_memory_size: create.initial_total_linear_memory_size,

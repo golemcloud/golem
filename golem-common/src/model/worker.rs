@@ -18,49 +18,13 @@ mod protobuf {
     use super::WorkerMetadataDto;
     use super::{
         ExportedResourceMetadata, FailedUpdate, PendingUpdate, SuccessfulUpdate, UpdateRecord,
-        WasiConfigVars,
     };
-    use super::{
-        RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, WasiConfigVarsEntry,
-        WorkerUpdateMode,
-    };
+    use super::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, WorkerUpdateMode};
     use crate::model::component::PluginPriority;
     use crate::model::oplog::WorkerResourceId;
     use crate::model::regions::OplogRegion;
     use crate::model::{OplogIndex, WorkerResourceDescription};
     use std::collections::HashSet;
-
-    impl From<golem_api_grpc::proto::golem::worker::WasiConfigVars> for WasiConfigVars {
-        fn from(value: golem_api_grpc::proto::golem::worker::WasiConfigVars) -> Self {
-            Self(
-                value
-                    .entries
-                    .into_iter()
-                    .map(|e| WasiConfigVarsEntry {
-                        key: e.key,
-                        value: e.value,
-                    })
-                    .collect(),
-            )
-        }
-    }
-
-    impl From<WasiConfigVars> for golem_api_grpc::proto::golem::worker::WasiConfigVars {
-        fn from(value: WasiConfigVars) -> Self {
-            Self {
-                entries: value
-                    .0
-                    .into_iter()
-                    .map(
-                        |e| golem_api_grpc::proto::golem::worker::WasiConfigVarsEntry {
-                            key: e.key,
-                            value: e.value,
-                        },
-                    )
-                    .collect(),
-            }
-        }
-    }
 
     impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadataDto {
         type Error = String;
@@ -88,10 +52,7 @@ mod protobuf {
                     .try_into()?,
                 created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
                 env: value.env,
-                wasi_config_vars: value
-                    .wasi_config_vars
-                    .ok_or("Missing wasi_config_vars field")?
-                    .into(),
+                config_vars: value.config_vars.into_iter().collect(),
                 status: value.status.try_into()?,
                 component_revision: value.component_revision.try_into()?,
                 retry_count: value.retry_count,
@@ -142,7 +103,7 @@ mod protobuf {
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
-                wasi_config_vars: Some(value.wasi_config_vars.into()),
+                config_vars: value.config_vars.into_iter().collect(),
                 status: value.status.into(),
                 component_revision: value.component_revision.into(),
                 retry_count: value.retry_count,

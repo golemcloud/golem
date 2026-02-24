@@ -58,7 +58,7 @@ async fn fork_interrupted_worker(
 
     let source_agent_id = agent_id!("http-client2");
     let worker_id = user
-        .start_agent_with(&component.id, source_agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, source_agent_id.clone(), env, HashMap::new())
         .await?;
 
     let target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
@@ -210,7 +210,7 @@ async fn fork_running_worker_2(
 
     let source_agent_id = agent_id!("http-client2");
     let source_worker_id = user
-        .start_agent_with(&component.id, source_agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, source_agent_id.clone(), env, HashMap::new())
         .await?;
 
     let target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
@@ -726,7 +726,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 
     let source_agent_id = agent_id!("golem-host-api", "source-worker");
     let source_worker_id = user
-        .start_agent_with(&component.id, source_agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, source_agent_id.clone(), env, HashMap::new())
         .await?;
 
     user.log_output(&source_worker_id).await?;

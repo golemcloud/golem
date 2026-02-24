@@ -1,7 +1,7 @@
 use crate::app::{cmd, flag, replace_string_in_file, TestContext};
 use crate::Tracing;
 
-use golem_templates::model::GuestLanguage;
+use golem_cli::model::GuestLanguage;
 use heck::ToKebabCase;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, tag, test};

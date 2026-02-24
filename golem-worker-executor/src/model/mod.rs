@@ -67,7 +67,7 @@ pub struct WorkerConfig {
     pub total_linear_memory_size: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
-    pub initial_wasi_config_vars: BTreeMap<String, String>,
+    pub initial_config_vars: BTreeMap<String, String>,
     pub last_snapshot_index: Option<OplogIndex>,
 }
 
@@ -77,7 +77,7 @@ impl WorkerConfig {
         total_linear_memory_size: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
-        initial_wasi_config_vars: BTreeMap<String, String>,
+        initial_config_vars: BTreeMap<String, String>,
         last_snapshot_index: Option<OplogIndex>,
     ) -> WorkerConfig {
         WorkerConfig {
@@ -85,7 +85,7 @@ impl WorkerConfig {
             total_linear_memory_size,
             component_revision_for_replay,
             created_by,
-            initial_wasi_config_vars,
+            initial_config_vars,
             last_snapshot_index,
         }
     }

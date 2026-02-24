@@ -59,7 +59,7 @@ fn create_serialization_poem_serde_equivalence() {
             .into_iter()
             .collect(),
         created_by: AccountId::new(),
-        wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
+        config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
         environment_id: EnvironmentId::new(),
         parent: Some(WorkerId {
             component_id: ComponentId(

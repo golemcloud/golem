@@ -19,6 +19,7 @@ use crate::bridge_gen::BridgeGenerator;
 use crate::model::agent::test::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
+use crate::model::GuestLanguage;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
@@ -28,7 +29,6 @@ use golem_common::model::agent::{
     UntypedJsonElementValues, UntypedJsonNamedElementValue, UntypedJsonNamedElementValues,
 };
 use golem_common::model::Empty;
-use golem_templates::model::GuestLanguage;
 use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;

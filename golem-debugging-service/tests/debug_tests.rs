@@ -1,4 +1,5 @@
 use crate::*;
+use golem_common::base_model::component::ComponentRevision;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
@@ -488,7 +489,7 @@ async fn test_playback_with_overrides(
             timestamp: Timestamp::now_utc(),
             result: original_result.clone(),
             consumed_fuel: 0,
-            component_revision: 0,
+            component_revision: ComponentRevision::INITIAL,
         });
 
     let oplog_overrides = PlaybackOverride {

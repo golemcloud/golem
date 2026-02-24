@@ -488,7 +488,7 @@ async fn get_running_workers(
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("http-client2", Uuid::new_v4());
         let worker_id = user
-            .start_agent_with(&component.id, aid.clone(), env.clone(), vec![])
+            .start_agent_with(&component.id, aid.clone(), env.clone(), HashMap::new())
             .await?;
 
         workers.push((worker_id, aid));
@@ -970,7 +970,7 @@ async fn worker_use_initial_files(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = user
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     let result = user
@@ -1157,7 +1157,7 @@ async fn worker_read_files(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
     let worker_id = user
-        .start_agent_with(&component.id, agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     // run the worker so it can update the files.
@@ -1481,7 +1481,7 @@ async fn worker_suspends_when_running_out_of_fuel(
 
     let http_agent_id = agent_id!("http-client");
     let worker_id = user
-        .start_agent_with(&component.id, http_agent_id.clone(), env, vec![])
+        .start_agent_with(&component.id, http_agent_id.clone(), env, HashMap::new())
         .await?;
 
     let invoker_task = tokio::spawn({

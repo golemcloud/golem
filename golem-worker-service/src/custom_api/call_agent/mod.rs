@@ -72,7 +72,7 @@ impl CallAgentHandler {
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
             env: Default::default(),
-            wasi_config_vars: Some(std::collections::BTreeMap::new().into()),
+            config_vars: Default::default(),
             tracing: Some(request.invocation_context().into()),
         });
 

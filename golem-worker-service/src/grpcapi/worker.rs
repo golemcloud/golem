@@ -33,7 +33,6 @@ use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{proto_component_id_string, proto_worker_id_string};
 use golem_service_base::model::auth::AuthCtx;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -262,11 +261,6 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let wasi_config_vars: BTreeMap<String, String> = request
-            .wasi_config_vars
-            .ok_or_else(|| bad_request_error("no wasi_config_vars field"))?
-            .into();
-
         let worker_id = WorkerId {
             component_id,
             worker_name: request.name,
@@ -277,7 +271,7 @@ impl WorkerGrpcApi {
             .create(
                 &worker_id,
                 request.env,
-                wasi_config_vars,
+                request.config_vars.into_iter().collect(),
                 request.ignore_already_existing,
                 auth,
                 request.context,

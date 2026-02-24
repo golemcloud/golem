@@ -201,6 +201,19 @@ declare module 'golem:agent/common@1.5.0' {
     tag: 'enabled'
     val: SnapshottingConfig
   };
+  export type ConfigValueType = 
+  {
+    tag: 'local'
+    val: WitType
+  } |
+  {
+    tag: 'shared'
+    val: WitType
+  };
+  export type ConfigKeyValueType = {
+    key: string[];
+    value: ConfigValueType;
+  };
   export type AgentType = {
     typeName: string;
     description: string;
@@ -210,6 +223,7 @@ declare module 'golem:agent/common@1.5.0' {
     mode: AgentMode;
     httpMount?: HttpMountDetails;
     snapshotting: Snapshotting;
+    config: ConfigKeyValueType[];
   };
   /**
    * Associates an agent type with a component that implements it

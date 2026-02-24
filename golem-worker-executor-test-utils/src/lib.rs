@@ -116,7 +116,7 @@ use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
@@ -464,9 +464,9 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
-impl HasWasiConfigVars for TestWorkerCtx {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.wasi_config_vars()
+impl HasConfigVars for TestWorkerCtx {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.config_vars()
     }
 }
 

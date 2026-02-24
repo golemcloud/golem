@@ -51,13 +51,11 @@ use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 
+use crate::app_template::add_component_by_template;
+use crate::model::GuestLanguage;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::add_component_by_template;
-use golem_templates::model::{
-    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
-};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -179,15 +177,12 @@ impl ComponentCommandHandler {
         let (common_template, component_template) =
             app_handler.get_template(&template, self.ctx.dev_mode())?;
 
-        let application_name = TemplateApplicationName::from(application_name.0);
-
         match add_component_by_template(
             common_template,
             Some(component_template),
             &PathBuf::from("."),
             &application_name,
-            &PackageName::from_string(component_name.0.clone())
-                .expect("Failed to parse component name"),
+            &component_name,
             Some(self.ctx.template_sdk_overrides()),
         ) {
             Ok(()) => {
@@ -915,12 +910,15 @@ impl ComponentCommandHandler {
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
+        let config_vars = component.config_vars().clone();
+
         Ok(ComponentDeployProperties {
             wasm_path,
             agent_types,
             files,
             plugins,
             env,
+            config_vars,
         })
     }
 
@@ -1018,6 +1016,11 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
+                config_vars: properties
+                    .config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             }
             .into(),
             wasm_hash: component_binary_hash.into(),
@@ -1068,6 +1071,7 @@ impl ComponentCommandHandler {
                         .map(|files| files.file_options.clone())
                         .unwrap_or_default(),
                     env: component_stager.env(),
+                    config_vars: component_stager.config_vars(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1161,6 +1165,7 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
+                    config_vars: component_stager.config_vars_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

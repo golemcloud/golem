@@ -54,7 +54,7 @@ pub trait WorkerProxy: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         caller_worker_id: &WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -70,7 +70,7 @@ pub trait WorkerProxy: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -238,7 +238,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         owned_worker_id: &OwnedWorkerId,
         caller_worker_id: &WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -251,18 +251,18 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("launch_new_worker", move |client| {
                 let caller_env = caller_env.clone();
-                let caller_wasi_config_vars = caller_wasi_config_vars.clone();
+                let caller_config_vars = caller_config_vars.clone();
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(owned_worker_id.component_id().into()),
                     name: owned_worker_id.worker_name(),
                     env: caller_env.clone(),
-                    wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                    config_vars: caller_config_vars.clone().into_iter().collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env,
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        config_vars: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
@@ -293,7 +293,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         caller_worker_id: WorkerId,
         caller_env: HashMap<String, String>,
-        caller_wasi_config_vars: BTreeMap<String, String>,
+        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -326,7 +326,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
+                        config_vars: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
