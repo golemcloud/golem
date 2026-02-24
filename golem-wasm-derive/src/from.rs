@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{is_unit_case, parse_wit_field_attribute, WitField};
+use crate::{is_unit_case, parse_wit_field_attribute, parse_wit_type_attrs, WitField};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Fields, Type};
@@ -24,6 +24,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("wit_transparent"));
+    let wit = parse_wit_type_attrs(&ast.attrs);
 
     let from_value = match ast.data {
         Data::Struct(data) => {
@@ -63,7 +64,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                 .iter()
                 .all(|variant| variant.fields.is_empty());
 
-            if is_simple_enum {
+            if is_simple_enum && !wit.as_variant {
                 let case_branches = data
                     .variants
                     .iter()
@@ -84,6 +85,30 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                             _ => Err(format!("Invalid enum index: {}", idx)),
                         },
                         _ => Err(format!("Expected Enum value, got {:?}", value)),
+                    }
+                }
+            } else if is_simple_enum && wit.as_variant {
+                // as_variant: all-unit enum deserialized from WIT variant
+                let case_branches = data
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, variant)| {
+                        let case_ident = &variant.ident;
+                        let idx = idx as u32;
+                        quote! {
+                            #idx => Ok(#ident::#case_ident)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                quote! {
+                    match value {
+                        golem_wasm::Value::Variant { case_idx, case_value: _ } => match case_idx {
+                            #(#case_branches),*,
+                            _ => Err(format!("Invalid variant case index: {}", case_idx)),
+                        },
+                        _ => Err(format!("Expected Variant value, got {:?}", value)),
                     }
                 }
             } else {

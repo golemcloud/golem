@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{is_unit_case, parse_wit_field_attribute, WitField};
+use crate::{
+    apply_naming, is_unit_case, parse_wit_field_attribute, parse_wit_type_attrs, variant_case_name,
+    WitField, WitTypeAttrs,
+};
 use heck::*;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
@@ -26,7 +29,8 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("wit_transparent"));
-    let lit_name = LitStr::new(&ident.to_string(), Span::call_site());
+    let wit = parse_wit_type_attrs(&ast.attrs);
+    let default_name = LitStr::new(&ident.to_string(), Span::call_site());
 
     let (into_value, get_type) = match ast.data {
         Data::Struct(data) => {
@@ -58,7 +62,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
             match newtype_result {
                 Some(newtype_result) => newtype_result,
-                None => record_or_tuple(&lit_name, &data.fields),
+                None => record_or_tuple(&wit, &default_name, &data.fields),
             }
         }
         Data::Enum(data) => {
@@ -67,7 +71,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 .iter()
                 .all(|variant| variant.fields.is_empty());
 
-            if is_simple_enum {
+            if is_simple_enum && !wit.as_variant {
                 let case_branches = data
                     .variants
                     .iter()
@@ -83,9 +87,10 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let case_labels = data
                     .variants
                     .iter()
-                    .map(|variant| variant.ident.to_string().to_kebab_case())
+                    .map(|variant| variant_case_name(variant))
                     .collect::<Vec<_>>();
 
+                let naming = apply_naming(&wit, &default_name);
                 let into_value = quote! {
                     match self {
                         #(#case_branches),*
@@ -95,7 +100,48 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let get_type = quote! {
                     golem_wasm::analysis::analysed_type::r#enum(
                         &[#(#case_labels),*]
-                    ).named(#lit_name)
+                    )#naming
+                };
+
+                (into_value, get_type)
+            } else if is_simple_enum && wit.as_variant {
+                // as_variant: all-unit enum rendered as WIT variant with unit cases
+                let case_branches = data
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, variant)| {
+                        let case_ident = &variant.ident;
+                        let idx = idx as u32;
+                        quote! {
+                            #ident::#case_ident => golem_wasm::Value::Variant {
+                                case_idx: #idx,
+                                case_value: None
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let case_defs = data
+                    .variants
+                    .iter()
+                    .map(|variant| {
+                        let case_name = variant_case_name(variant);
+                        quote! {
+                            golem_wasm::analysis::analysed_type::unit_case(#case_name)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let naming = apply_naming(&wit, &default_name);
+                let into_value = quote! {
+                    match self {
+                        #(#case_branches),*
+                    }
+                };
+                let get_type = quote! {
+                    golem_wasm::analysis::analysed_type::variant(
+                        vec![#(#case_defs),*]
+                    )#naming
                 };
 
                 (into_value, get_type)
@@ -243,7 +289,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                             })
                             .collect::<Vec<_>>();
 
-                        let case_name = variant.ident.to_string().to_kebab_case();
+                        let case_name = variant_case_name(variant);
                         if is_unit_case(variant) {
                             quote! {
                                 golem_wasm::analysis::analysed_type::unit_case(#case_name)
@@ -258,7 +304,9 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 golem_wasm::analysis::analysed_type::case(#case_name, <#typ as golem_wasm::IntoValue>::get_type())
                             }
                         } else {
-                            let (_, inner_get_type) = record_or_tuple(&LitStr::new(&case_name, Span::call_site()), &variant.fields);
+                            let no_wit = WitTypeAttrs::default();
+                            let case_lit = LitStr::new(&case_name, Span::call_site());
+                            let (_, inner_get_type) = record_or_tuple(&no_wit, &case_lit, &variant.fields);
 
                             quote! {
                                 golem_wasm::analysis::analysed_type::case(#case_name, #inner_get_type)
@@ -267,6 +315,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                     })
                     .collect::<Vec<_>>();
 
+                let naming = apply_naming(&wit, &default_name);
                 let into_value = quote! {
                     match self {
                         #(#case_branches),*
@@ -275,7 +324,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 let get_type = quote! {
                     golem_wasm::analysis::analysed_type::variant(
                         vec![#(#case_defs),*]
-                    ).named(#lit_name)
+                    )#naming
                 };
 
                 (into_value, get_type)
@@ -302,7 +351,8 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 }
 
 fn record_or_tuple(
-    lit_name: &LitStr,
+    wit: &WitTypeAttrs,
+    default_name: &LitStr,
     fields: &Fields,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
@@ -366,6 +416,7 @@ fn record_or_tuple(
             })
             .collect::<Vec<_>>();
 
+        let naming = apply_naming(wit, default_name);
         let into_value = quote! {
             golem_wasm::Value::Record(vec![
                 #(#field_values),*
@@ -374,7 +425,7 @@ fn record_or_tuple(
         let get_type = quote! {
             golem_wasm::analysis::analysed_type::record(vec![
                 #(#field_defs),*
-            ]).named(#lit_name)
+            ])#naming
         };
 
         (into_value, get_type)
@@ -398,6 +449,7 @@ fn record_or_tuple(
             })
             .collect::<Vec<_>>();
 
+        let naming = apply_naming(wit, default_name);
         let into_value = quote! {
             golem_wasm::Value::Tuple(vec![
                 #(#tuple_field_values),*
@@ -406,7 +458,7 @@ fn record_or_tuple(
         let get_type = quote! {
             golem_wasm::analysis::analysed_type::tuple(vec![
                 #(#tuple_field_types),*
-            ]).named(#lit_name)
+            ])#naming
         };
 
         (into_value, get_type)

@@ -18,6 +18,7 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, Sp
 use crate::model::oplog::OplogPayload;
 use crate::model::Timestamp;
 use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -304,8 +305,9 @@ pub struct TimestampedUpdateDescription {
     pub description: UpdateDescription,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, golem_wasm_derive::IntoValue, golem_wasm_derive::FromValue)]
 #[desert(evolution())]
+#[wit(name = "wrapped-function-type", owner = "golem:api@1.5.0/oplog")]
 pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
@@ -335,8 +337,9 @@ pub enum DurableFunctionType {
 }
 
 /// Describes the error that occurred in the worker
-#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
+#[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
 pub enum WorkerError {
     Unknown(String),
     InvalidRequest(String),
@@ -367,164 +370,6 @@ impl WorkerError {
             "".to_string()
         };
         format!("{message}{error_logs}")
-    }
-}
-
-impl golem_wasm::IntoValue for WorkerError {
-    fn into_value(self) -> golem_wasm::Value {
-        match self {
-            WorkerError::Unknown(s) => golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(golem_wasm::Value::String(s))),
-            },
-            WorkerError::InvalidRequest(s) => golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(golem_wasm::Value::String(s))),
-            },
-            WorkerError::StackOverflow => golem_wasm::Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            WorkerError::OutOfMemory => golem_wasm::Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            WorkerError::ExceededMemoryLimit => golem_wasm::Value::Variant {
-                case_idx: 4,
-                case_value: None,
-            },
-            WorkerError::AgentError(s) => golem_wasm::Value::Variant {
-                case_idx: 5,
-                case_value: Some(Box::new(golem_wasm::Value::String(s))),
-            },
-        }
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::*;
-        variant(vec![
-            case("unknown", str()),
-            case("invalid-request", str()),
-            unit_case("stack-overflow"),
-            unit_case("out-of-memory"),
-            unit_case("exceeded-memory-limit"),
-            case("agent-error", str()),
-        ])
-        .named("worker-error")
-        .owned("golem:api@1.5.0/oplog")
-    }
-}
-
-impl golem_wasm::FromValue for WorkerError {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Variant {
-                case_idx,
-                case_value,
-            } => match case_idx {
-                0 => {
-                    let s =
-                        String::from_value(*case_value.ok_or("Expected case_value for unknown")?)?;
-                    Ok(WorkerError::Unknown(s))
-                }
-                1 => {
-                    let s = String::from_value(
-                        *case_value.ok_or("Expected case_value for invalid-request")?,
-                    )?;
-                    Ok(WorkerError::InvalidRequest(s))
-                }
-                2 => Ok(WorkerError::StackOverflow),
-                3 => Ok(WorkerError::OutOfMemory),
-                4 => Ok(WorkerError::ExceededMemoryLimit),
-                5 => {
-                    let s = String::from_value(
-                        *case_value.ok_or("Expected case_value for agent-error")?,
-                    )?;
-                    Ok(WorkerError::AgentError(s))
-                }
-                _ => Err(format!("Invalid case_idx for WorkerError: {case_idx}")),
-            },
-            other => Err(format!("Expected Variant for WorkerError, got {other:?}")),
-        }
-    }
-}
-
-impl golem_wasm::IntoValue for DurableFunctionType {
-    fn into_value(self) -> golem_wasm::Value {
-        match self {
-            DurableFunctionType::ReadLocal => golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value: None,
-            },
-            DurableFunctionType::WriteLocal => golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: None,
-            },
-            DurableFunctionType::ReadRemote => golem_wasm::Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            },
-            DurableFunctionType::WriteRemote => golem_wasm::Value::Variant {
-                case_idx: 3,
-                case_value: None,
-            },
-            DurableFunctionType::WriteRemoteBatched(opt) => golem_wasm::Value::Variant {
-                case_idx: 4,
-                case_value: Some(Box::new(opt.into_value())),
-            },
-            DurableFunctionType::WriteRemoteTransaction(opt) => golem_wasm::Value::Variant {
-                case_idx: 5,
-                case_value: Some(Box::new(opt.into_value())),
-            },
-        }
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::*;
-        variant(vec![
-            unit_case("read-local"),
-            unit_case("write-local"),
-            unit_case("read-remote"),
-            unit_case("write-remote"),
-            case("write-remote-batched", option(OplogIndex::get_type())),
-            case("write-remote-transaction", option(OplogIndex::get_type())),
-        ])
-        .named("wrapped-function-type")
-        .owned("golem:api@1.5.0/oplog")
-    }
-}
-
-impl golem_wasm::FromValue for DurableFunctionType {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Variant {
-                case_idx,
-                case_value,
-            } => match case_idx {
-                0 => Ok(DurableFunctionType::ReadLocal),
-                1 => Ok(DurableFunctionType::WriteLocal),
-                2 => Ok(DurableFunctionType::ReadRemote),
-                3 => Ok(DurableFunctionType::WriteRemote),
-                4 => {
-                    let opt = Option::<OplogIndex>::from_value(
-                        *case_value.ok_or("Expected case_value for write-remote-batched")?,
-                    )?;
-                    Ok(DurableFunctionType::WriteRemoteBatched(opt))
-                }
-                5 => {
-                    let opt = Option::<OplogIndex>::from_value(
-                        *case_value.ok_or("Expected case_value for write-remote-transaction")?,
-                    )?;
-                    Ok(DurableFunctionType::WriteRemoteTransaction(opt))
-                }
-                _ => Err(format!(
-                    "Invalid case_idx for DurableFunctionType: {case_idx}"
-                )),
-            },
-            other => Err(format!(
-                "Expected Variant for DurableFunctionType, got {other:?}"
-            )),
-        }
     }
 }
 
