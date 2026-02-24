@@ -617,7 +617,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::StartSpan {
                 timestamp,
                 span_id,
-                parent_id,
+                parent: parent_id,
                 linked_context_id,
                 attributes,
             } => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
@@ -626,6 +626,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 parent_id,
                 linked_context: linked_context_id,
                 attributes: attributes
+                    .0
                     .into_iter()
                     .map(|(k, v)| PublicAttribute {
                         key: k,
@@ -650,12 +651,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 key,
                 value: value.into(),
             })),
-            OplogEntry::ChangePersistenceLevel { timestamp, level } => Ok(
-                PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
+            OplogEntry::ChangePersistenceLevel {
+                timestamp,
+                persistence_level,
+            } => Ok(PublicOplogEntry::ChangePersistenceLevel(
+                ChangePersistenceLevelParams {
                     timestamp,
-                    persistence_level: level,
-                }),
-            ),
+                    persistence_level,
+                },
+            )),
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,

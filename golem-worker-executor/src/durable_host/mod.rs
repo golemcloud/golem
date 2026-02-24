@@ -1891,9 +1891,9 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .add_to_oplog(OplogEntry::StartSpan {
                     timestamp: span.start().unwrap_or(Timestamp::now_utc()),
                     span_id: span.span_id().clone(),
-                    parent_id: Some(parent.clone()),
+                    parent: Some(parent.clone()),
                     linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
-                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()),
+                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
                 })
                 .await;
         }

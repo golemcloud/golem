@@ -17,6 +17,7 @@ macro_rules! oplog_entry {
     (
         $($(#[$casemeta:meta])* $case:ident {
           hint: $hint:literal
+          wit_raw_type: $wit_raw_type:literal
           raw {
             $($(#[$meta:meta])* $field:ident: $typ:ty),* $(,)?
           }
@@ -107,9 +108,13 @@ macro_rules! oplog_entry {
                                     <$typ as golem_wasm::IntoValue>::get_type()
                                 )),*
                             ])
+                            .named($wit_raw_type)
+                            .owned("golem:api@1.5.0/oplog")
                         )
                     ),*
                 ])
+                .named("oplog-entry")
+                .owned("golem:api@1.5.0/oplog")
             }
         }
 

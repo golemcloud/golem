@@ -554,16 +554,26 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::IntoValue for Oplog
 
     fn get_type() -> golem_wasm::analysis::AnalysedType {
         use golem_wasm::analysis::analysed_type::*;
+        let uuid_type = record(vec![
+            field("high-bits", u64()),
+            field("low-bits", u64()),
+        ])
+        .named("uuid")
+        .owned("golem:core@1.5.0/types");
         variant(vec![
             case("inline", list(u8())),
             case(
                 "external",
                 record(vec![
-                    field("payload-id", str()),
+                    field("payload-id", uuid_type),
                     field("md5-hash", list(u8())),
-                ]),
+                ])
+                .named("oplog-external-payload")
+                .owned("golem:api@1.5.0/oplog"),
             ),
         ])
+        .named("oplog-payload")
+        .owned("golem:api@1.5.0/oplog")
     }
 }
 

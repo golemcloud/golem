@@ -33,6 +33,8 @@ use typed_path::Utf8UnixPathBuf;
 
 newtype_uuid!(
     ComponentId,
+    wit_name: "component-id",
+    wit_owner: "golem:core@1.5.0/types",
     golem_api_grpc::proto::golem::component::ComponentId
 );
 

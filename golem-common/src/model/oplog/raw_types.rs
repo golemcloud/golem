@@ -25,6 +25,87 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(transparent)]
+pub struct AttributeMap(pub HashMap<String, AttributeValue>);
+
+impl std::ops::Deref for AttributeMap {
+    type Target = HashMap<String, AttributeValue>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<HashMap<String, AttributeValue>> for AttributeMap {
+    fn from(map: HashMap<String, AttributeValue>) -> Self {
+        Self(map)
+    }
+}
+
+impl From<AttributeMap> for HashMap<String, AttributeValue> {
+    fn from(map: AttributeMap) -> Self {
+        map.0
+    }
+}
+
+impl golem_wasm::IntoValue for AttributeMap {
+    fn into_value(self) -> golem_wasm::Value {
+        use golem_wasm::IntoValue as _;
+        golem_wasm::Value::List(
+            self.0
+                .into_iter()
+                .map(|(key, value)| {
+                    golem_wasm::Value::Record(vec![
+                        golem_wasm::Value::String(key),
+                        value.into_value(),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        list(
+            record(vec![
+                field("key", str()),
+                field("value", AttributeValue::get_type()),
+            ])
+            .named("attribute")
+            .owned("golem:api@1.5.0/context"),
+        )
+    }
+}
+
+impl golem_wasm::FromValue for AttributeMap {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        use golem_wasm::FromValue as _;
+        match value {
+            golem_wasm::Value::List(items) => {
+                let mut map = HashMap::new();
+                for item in items {
+                    match item {
+                        golem_wasm::Value::Record(fields) if fields.len() == 2 => {
+                            let mut iter = fields.into_iter();
+                            let key = String::from_value(iter.next().unwrap())?;
+                            let value = AttributeValue::from_value(iter.next().unwrap())?;
+                            map.insert(key, value);
+                        }
+                        other => {
+                            return Err(format!(
+                                "Expected Record with 2 fields for attribute, got {other:?}"
+                            ));
+                        }
+                    }
+                }
+                Ok(AttributeMap(map))
+            }
+            other => Err(format!("Expected List for AttributeMap, got {other:?}")),
+        }
+    }
+}
+
 pub struct OplogIndexRange {
     current: u64,
     end: u64,
@@ -329,6 +410,8 @@ impl golem_wasm::IntoValue for WorkerError {
             unit_case("exceeded-memory-limit"),
             case("agent-error", str()),
         ])
+        .named("worker-error")
+        .owned("golem:api@1.5.0/oplog")
     }
 }
 
@@ -406,6 +489,8 @@ impl golem_wasm::IntoValue for DurableFunctionType {
             case("write-remote-batched", option(OplogIndex::get_type())),
             case("write-remote-transaction", option(OplogIndex::get_type())),
         ])
+        .named("wrapped-function-type")
+        .owned("golem:api@1.5.0/oplog")
     }
 }
 
@@ -475,9 +560,13 @@ impl golem_wasm::IntoValue for UpdateDescription {
                     field("target-revision", ComponentRevision::get_type()),
                     field("payload", OplogPayload::<Vec<u8>>::get_type()),
                     field("mime-type", str()),
-                ]),
+                ])
+                .named("raw-snapshot-based-update")
+                .owned("golem:api@1.5.0/oplog"),
             ),
         ])
+        .named("raw-update-description")
+        .owned("golem:api@1.5.0/oplog")
     }
 }
 
@@ -573,7 +662,9 @@ impl golem_wasm::IntoValue for SpanData {
         let attribute_type = record(vec![
             field("key", str()),
             field("value", AttributeValue::get_type()),
-        ]);
+        ])
+        .named("attribute")
+        .owned("golem:api@1.5.0/context");
         variant(vec![
             case(
                 "local-span",
@@ -584,13 +675,19 @@ impl golem_wasm::IntoValue for SpanData {
                     field("linked-context", option(u64())),
                     field("attributes", list(attribute_type)),
                     field("inherited", bool()),
-                ]),
+                ])
+                .named("local-span-data")
+                .owned("golem:api@1.5.0/oplog"),
             ),
             case(
                 "external-span",
-                record(vec![field("span-id", SpanId::get_type())]),
+                record(vec![field("span-id", SpanId::get_type())])
+                    .named("external-span-data")
+                    .owned("golem:api@1.5.0/oplog"),
             ),
         ])
+        .named("span-data")
+        .owned("golem:api@1.5.0/oplog")
     }
 }
 

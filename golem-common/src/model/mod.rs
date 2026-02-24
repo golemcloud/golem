@@ -595,7 +595,7 @@ impl WorkerFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
 pub struct RetryConfig {
     pub max_attempts: u32,
@@ -605,6 +605,58 @@ pub struct RetryConfig {
     pub max_delay: Duration,
     pub multiplier: f64,
     pub max_jitter_factor: Option<f64>,
+}
+
+impl golem_wasm::IntoValue for RetryConfig {
+    fn into_value(self) -> golem_wasm::Value {
+        use golem_wasm::IntoValue as _;
+        golem_wasm::Value::Record(vec![
+            self.max_attempts.into_value(),
+            (self.min_delay.as_nanos() as u64).into_value(),
+            (self.max_delay.as_nanos() as u64).into_value(),
+            self.multiplier.into_value(),
+            self.max_jitter_factor.into_value(),
+        ])
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        record(vec![
+            field("max-attempts", u32()),
+            field("min-delay", u64()),
+            field("max-delay", u64()),
+            field("multiplier", f64()),
+            field("max-jitter-factor", option(f64())),
+        ])
+        .named("retry-policy")
+        .owned("golem:api@1.5.0/host")
+    }
+}
+
+impl golem_wasm::FromValue for RetryConfig {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        use golem_wasm::FromValue as _;
+        match value {
+            golem_wasm::Value::Record(fields) if fields.len() == 5 => {
+                let mut iter = fields.into_iter();
+                let max_attempts = u32::from_value(iter.next().unwrap())?;
+                let min_delay_ns = u64::from_value(iter.next().unwrap())?;
+                let max_delay_ns = u64::from_value(iter.next().unwrap())?;
+                let multiplier = f64::from_value(iter.next().unwrap())?;
+                let max_jitter_factor = Option::<f64>::from_value(iter.next().unwrap())?;
+                Ok(RetryConfig {
+                    max_attempts,
+                    min_delay: Duration::from_nanos(min_delay_ns),
+                    max_delay: Duration::from_nanos(max_delay_ns),
+                    multiplier,
+                    max_jitter_factor,
+                })
+            }
+            other => Err(format!(
+                "Expected Record with 5 fields for RetryConfig, got {other:?}"
+            )),
+        }
+    }
 }
 
 impl SafeDisplay for RetryConfig {

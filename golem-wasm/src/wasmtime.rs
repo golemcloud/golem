@@ -63,6 +63,8 @@ impl crate::IntoValue for ResourceTypeId {
     fn get_type() -> crate::analysis::AnalysedType {
         use crate::analysis::analysed_type::*;
         record(vec![field("name", str()), field("owner", str())])
+            .named("resource-type-id")
+            .owned("golem:api@1.5.0/oplog")
     }
 }
 

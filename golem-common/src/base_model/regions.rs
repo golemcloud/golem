@@ -22,7 +22,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -33,6 +33,42 @@ use std::ops::RangeInclusive;
 pub struct OplogRegion {
     pub start: OplogIndex,
     pub end: OplogIndex,
+}
+
+impl golem_wasm::IntoValue for OplogRegion {
+    fn into_value(self) -> golem_wasm::Value {
+        use golem_wasm::IntoValue as _;
+        golem_wasm::Value::Record(vec![self.start.into_value(), self.end.into_value()])
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::IntoValue as _;
+        use golem_wasm::analysis::analysed_type::*;
+        record(vec![
+            field("start", OplogIndex::get_type()),
+            field("end", OplogIndex::get_type()),
+        ])
+        .named("oplog-region")
+        .owned("golem:api@1.5.0/oplog")
+    }
+}
+
+impl golem_wasm::FromValue for OplogRegion {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        use golem_wasm::FromValue as _;
+        match value {
+            golem_wasm::Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                Ok(OplogRegion {
+                    start: OplogIndex::from_value(iter.next().unwrap())?,
+                    end: OplogIndex::from_value(iter.next().unwrap())?,
+                })
+            }
+            other => Err(format!(
+                "Expected Record with 2 fields for OplogRegion, got {other:?}"
+            )),
+        }
+    }
 }
 
 impl OplogRegion {

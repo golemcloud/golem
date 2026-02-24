@@ -401,7 +401,7 @@ impl Display for WorkerResourceId {
 }
 
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(u8)]
 pub enum LogLevel {
@@ -423,14 +423,97 @@ pub enum LogLevel {
     Critical,
 }
 
-#[derive(
-    Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize, IntoValue, FromValue,
-)]
+impl golem_wasm::IntoValue for LogLevel {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::Enum(self as u32)
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        r#enum(&[
+            "stdout", "stderr", "trace", "debug", "info", "warn", "error", "critical",
+        ])
+        .named("log-level")
+        .owned("golem:api@1.5.0/oplog")
+    }
+}
+
+impl golem_wasm::FromValue for LogLevel {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Enum(idx) => match idx {
+                0 => Ok(LogLevel::Stdout),
+                1 => Ok(LogLevel::Stderr),
+                2 => Ok(LogLevel::Trace),
+                3 => Ok(LogLevel::Debug),
+                4 => Ok(LogLevel::Info),
+                5 => Ok(LogLevel::Warn),
+                6 => Ok(LogLevel::Error),
+                7 => Ok(LogLevel::Critical),
+                _ => Err(format!("Invalid enum index for LogLevel: {idx}")),
+            },
+            other => Err(format!("Expected Enum for LogLevel, got {other:?}")),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,
     Smart,
+}
+
+impl golem_wasm::IntoValue for PersistenceLevel {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            PersistenceLevel::PersistNothing => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: None,
+            },
+            PersistenceLevel::PersistRemoteSideEffects => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: None,
+            },
+            PersistenceLevel::Smart => golem_wasm::Value::Variant {
+                case_idx: 2,
+                case_value: None,
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![
+            unit_case("persist-nothing"),
+            unit_case("persist-remote-side-effects"),
+            unit_case("smart"),
+        ])
+        .named("persistence-level")
+        .owned("golem:api@1.5.0/host")
+    }
+}
+
+impl golem_wasm::FromValue for PersistenceLevel {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value: _,
+            } => match case_idx {
+                0 => Ok(PersistenceLevel::PersistNothing),
+                1 => Ok(PersistenceLevel::PersistRemoteSideEffects),
+                2 => Ok(PersistenceLevel::Smart),
+                _ => Err(format!(
+                    "Invalid case_idx for PersistenceLevel: {case_idx}"
+                )),
+            },
+            other => Err(format!(
+                "Expected Variant for PersistenceLevel, got {other:?}"
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]

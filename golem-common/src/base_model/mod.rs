@@ -132,6 +132,8 @@ impl IntoValue for Timestamp {
 
     fn get_type() -> AnalysedType {
         record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+            .named("datetime")
+            .owned("wasi:clocks@0.2.3/wall-clock")
     }
 }
 
@@ -253,8 +255,6 @@ impl golem_wasm::IntoValue for ShardId {
     Hash,
     serde::Serialize,
     serde::Deserialize,
-    IntoValue,
-    FromValue,
 )]
 #[cfg_attr(
     feature = "full",
@@ -265,8 +265,42 @@ impl golem_wasm::IntoValue for ShardId {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
-    #[wit_field(rename = "agent-id")]
     pub worker_name: String,
+}
+
+impl IntoValue for WorkerId {
+    fn into_value(self) -> Value {
+        Value::Record(vec![self.component_id.into_value(), Value::String(self.worker_name)])
+    }
+
+    fn get_type() -> AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        record(vec![
+            field("component-id", ComponentId::get_type()),
+            field("agent-id", str()),
+        ])
+        .named("agent-id")
+        .owned("golem:core@1.5.0/types")
+    }
+}
+
+impl FromValue for WorkerId {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let component_id = ComponentId::from_value(iter.next().unwrap())?;
+                let worker_name = String::from_value(iter.next().unwrap())?;
+                Ok(WorkerId {
+                    component_id,
+                    worker_name,
+                })
+            }
+            other => Err(format!(
+                "Expected Record with 2 fields for WorkerId, got {other:?}"
+            )),
+        }
+    }
 }
 
 impl WorkerId {

@@ -127,7 +127,11 @@ impl OplogEntry {
         _idx: OplogIndex,
         persistence_level: &mut PersistenceLevel,
     ) {
-        if let OplogEntry::ChangePersistenceLevel { level, .. } = self {
+        if let OplogEntry::ChangePersistenceLevel {
+            persistence_level: level,
+            ..
+        } = self
+        {
             *persistence_level = *level
         }
     }

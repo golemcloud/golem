@@ -14,7 +14,13 @@
 
 #[macro_export]
 macro_rules! newtype_uuid {
+    ($name:ident, wit_name: $wit_name:literal, wit_owner: $wit_owner:literal $(, $proto_type:path)?) => {
+        $crate::newtype_uuid!(@inner $name, $wit_name, $wit_owner $(, $proto_type)?);
+    };
     ($name:ident $(, $proto_type:path)?) => {
+        $crate::newtype_uuid!(@inner $name, "", "" $(, $proto_type)?);
+    };
+    (@inner $name:ident, $wit_name:literal, $wit_owner:literal $(, $proto_type:path)?) => {
         #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
         #[derive(serde::Serialize, serde::Deserialize)]
         #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -144,21 +150,31 @@ macro_rules! newtype_uuid {
             }
 
             fn get_type() -> golem_wasm::analysis::AnalysedType {
+                let uuid_type = $name::uuid_analysed_type();
+                let rec = golem_wasm::analysis::analysed_type::record(vec![
+                    golem_wasm::analysis::analysed_type::field("uuid", uuid_type),
+                ]);
+                let wit_name: &str = $wit_name;
+                let wit_owner: &str = $wit_owner;
+                let rec = if !wit_name.is_empty() { rec.named(wit_name) } else { rec };
+                if !wit_owner.is_empty() { rec.owned(wit_owner) } else { rec }
+            }
+        }
+
+        impl $name {
+            pub fn uuid_analysed_type() -> golem_wasm::analysis::AnalysedType {
                 golem_wasm::analysis::analysed_type::record(vec![
                     golem_wasm::analysis::analysed_type::field(
-                        "uuid",
-                        golem_wasm::analysis::analysed_type::record(vec![
-                            golem_wasm::analysis::analysed_type::field(
-                                "high-bits",
-                                golem_wasm::analysis::analysed_type::u64(),
-                            ),
-                            golem_wasm::analysis::analysed_type::field(
-                                "low-bits",
-                                golem_wasm::analysis::analysed_type::u64(),
-                            ),
-                        ]),
+                        "high-bits",
+                        golem_wasm::analysis::analysed_type::u64(),
+                    ),
+                    golem_wasm::analysis::analysed_type::field(
+                        "low-bits",
+                        golem_wasm::analysis::analysed_type::u64(),
                     ),
                 ])
+                .named("uuid")
+                .owned("golem:core@1.5.0/types")
             }
         }
 

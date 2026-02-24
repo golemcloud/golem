@@ -387,8 +387,16 @@ impl<T: FromValue + Eq + std::hash::Hash> FromValue for std::collections::HashSe
 impl FromValue for uuid::Uuid {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::String(s) => uuid::Uuid::parse_str(&s).map_err(|e| format!("Invalid UUID: {e}")),
-            _ => Err(format!("Expected String value for UUID, got {value:?}")),
+            Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let hi = u64::from_value(iter.next().unwrap())?;
+                let lo = u64::from_value(iter.next().unwrap())?;
+                Ok(uuid::Uuid::from_u64_pair(hi, lo))
+            }
+            Value::String(s) => {
+                uuid::Uuid::parse_str(&s).map_err(|e| format!("Invalid UUID: {e}"))
+            }
+            _ => Err(format!("Expected Record with 2 fields for UUID, got {value:?}")),
         }
     }
 }

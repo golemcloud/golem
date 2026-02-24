@@ -36,6 +36,7 @@ use crate::model::{
 use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
 use poem_openapi::types::ToJSON;
+use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
 use test_r::test;
 use uuid::Uuid;

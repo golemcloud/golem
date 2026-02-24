@@ -447,13 +447,14 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::StartSpan(start_span) => Ok(OplogEntry::StartSpan {
             timestamp: start_span.timestamp,
             span_id: start_span.span_id,
-            parent_id: start_span.parent_id,
+            parent: start_span.parent_id,
             linked_context_id: start_span.linked_context,
             attributes: start_span
                 .attributes
                 .into_iter()
                 .map(|attr| (attr.key, attr.value.into()))
-                .collect(),
+                .collect::<HashMap<_, _>>()
+                .into(),
         }),
         PublicOplogEntry::FinishSpan(finish_span) => Ok(OplogEntry::FinishSpan {
             timestamp: finish_span.timestamp,
@@ -470,7 +471,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::ChangePersistenceLevel(change_persistence_level) => {
             Ok(OplogEntry::ChangePersistenceLevel {
                 timestamp: change_persistence_level.timestamp,
-                level: change_persistence_level.persistence_level,
+                persistence_level: change_persistence_level.persistence_level,
             })
         }
         PublicOplogEntry::Snapshot(snapshot_params) => {

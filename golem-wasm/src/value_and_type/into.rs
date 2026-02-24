@@ -397,11 +397,17 @@ impl<T: IntoValue> IntoValue for HashSet<T> {
 
 impl IntoValue for Uuid {
     fn into_value(self) -> Value {
-        Value::String(self.to_string())
+        let (hi, lo) = self.as_u64_pair();
+        Value::Record(vec![Value::U64(hi), Value::U64(lo)])
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::str()
+        analysed_type::record(vec![
+            analysed_type::field("high-bits", analysed_type::u64()),
+            analysed_type::field("low-bits", analysed_type::u64()),
+        ])
+        .named("uuid")
+        .owned("golem:core@1.5.0/types")
     }
 }
 

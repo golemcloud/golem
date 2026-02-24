@@ -36,6 +36,7 @@ mod raw_imports {
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::*;
+    pub use crate::model::oplog::raw_types::AttributeMap;
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult, RetryConfig};
     pub use golem_wasm::wasmtime::ResourceTypeId;
 
@@ -64,6 +65,7 @@ oplog_entry! {
     /// The first entry of every oplog
     Create {
         hint: false
+        wit_raw_type: "raw-create-parameters"
         raw {
             worker_id: WorkerId,
             component_revision: ComponentRevision,
@@ -94,6 +96,7 @@ oplog_entry! {
     /// The agent invoked a host function
     HostCall {
         hint: false
+        wit_raw_type: "raw-host-call-parameters"
         raw {
             function_name: payload::host_functions::HostFunctionName,
             request: payload::OplogPayload<payload::HostRequest>,
@@ -110,6 +113,7 @@ oplog_entry! {
     /// The agent has been invoked
     AgentInvocationStarted {
         hint: false
+        wit_raw_type: "raw-agent-invocation-started-parameters"
         raw {
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
@@ -124,6 +128,7 @@ oplog_entry! {
     /// The agent has completed an invocation
     AgentInvocationFinished {
         hint: false
+        wit_raw_type: "raw-agent-invocation-finished-parameters"
         raw {
             result: payload::OplogPayload<AgentInvocationResult>,
             consumed_fuel: i64,
@@ -136,12 +141,14 @@ oplog_entry! {
     /// Worker suspended
     Suspend {
         hint: true
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
     /// Worker failed
     Error {
         hint: true
+        wit_raw_type: "raw-error-parameters"
         raw {
             error: WorkerError,
             /// Points to the oplog index where the retry should start from. Normally this can be just the
@@ -159,6 +166,7 @@ oplog_entry! {
     /// more predictable.
     NoOp {
         hint: false
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
@@ -168,6 +176,7 @@ oplog_entry! {
     /// ignore all recorded operations in between.
     Jump {
         hint: false
+        wit_raw_type: "jump-parameters"
         raw {
             jump: OplogRegion,
         }
@@ -179,18 +188,21 @@ oplog_entry! {
     /// Only used to recompute the worker's (cached) status, has no effect on execution.
     Interrupted {
         hint: true
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
     /// Indicates that the worker has been exited using WASI's exit function.
     Exited {
         hint: true
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
     /// Overrides the worker's retry policy
     ChangeRetryPolicy {
         hint: false
+        wit_raw_type: "change-retry-policy-parameters"
         raw {
             new_policy: RetryConfig,
         }
@@ -202,6 +214,7 @@ oplog_entry! {
     /// recovery except if there is a corresponding `EndAtomicRegion` entry.
     BeginAtomicRegion {
         hint: false
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
@@ -210,6 +223,7 @@ oplog_entry! {
     /// compaction.
     EndAtomicRegion {
         hint: false
+        wit_raw_type: "end-atomic-region-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -222,12 +236,14 @@ oplog_entry! {
     /// unfinished remote writes cannot be recovered.
     BeginRemoteWrite {
         hint: false
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
     /// Marks the end of a remote write operation. Only used when idempotence mode is off.
     EndRemoteWrite {
         hint: false
+        wit_raw_type: "end-remote-write-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -238,6 +254,7 @@ oplog_entry! {
     /// An invocation request arrived while the worker was busy
     PendingAgentInvocation {
         hint: true
+        wit_raw_type: "raw-pending-agent-invocation-parameters"
         raw {
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
@@ -252,6 +269,7 @@ oplog_entry! {
     /// For manual updates, this entry is only inserted when the worker is idle, and it is also restarted.
     PendingUpdate {
         hint: true
+        wit_raw_type: "raw-pending-update-parameters"
         raw {
             description: UpdateDescription,
         }
@@ -263,6 +281,7 @@ oplog_entry! {
     /// An update was successfully applied
     SuccessfulUpdate {
         hint: true
+        wit_raw_type: "raw-successful-update-parameters"
         raw {
             target_revision: ComponentRevision,
             new_component_size: u64,
@@ -277,6 +296,7 @@ oplog_entry! {
     /// An update failed to be applied
     FailedUpdate {
         hint: true
+        wit_raw_type: "failed-update-parameters"
         raw {
             target_revision: ComponentRevision,
             details: Option<String>,
@@ -289,6 +309,7 @@ oplog_entry! {
     /// Increased total linear memory size
     GrowMemory {
         hint: true
+        wit_raw_type: "grow-memory-parameters"
         raw {
             delta: u64
         }
@@ -299,6 +320,7 @@ oplog_entry! {
     /// Created a resource instance
     CreateResource {
         hint: true
+        wit_raw_type: "raw-create-resource-parameters"
         raw {
             id: WorkerResourceId,
             resource_type_id: ResourceTypeId,
@@ -312,6 +334,7 @@ oplog_entry! {
     /// Dropped a resource instance
     DropResource {
         hint: true
+        wit_raw_type: "raw-drop-resource-parameters"
         raw {
             id: WorkerResourceId,
             resource_type_id: ResourceTypeId,
@@ -325,6 +348,7 @@ oplog_entry! {
     /// The worker emitted a log message
     Log {
         hint: true
+        wit_raw_type: "log-parameters"
         raw {
             level: LogLevel,
             context: String,
@@ -339,12 +363,14 @@ oplog_entry! {
     /// Marks the point where the worker was restarted from clean initial state
     Restart {
         hint: true
+        wit_raw_type: "timestamp"
         raw {}
         public {}
     },
     /// Activates a plugin for the worker
     ActivatePlugin {
         hint: true
+        wit_raw_type: "raw-activate-plugin-parameters"
         raw {
             plugin_priority: PluginPriority,
         }
@@ -355,6 +381,7 @@ oplog_entry! {
     /// Deactivates a plugin for the worker
     DeactivatePlugin {
         hint: true
+        wit_raw_type: "raw-deactivate-plugin-parameters"
         raw {
             plugin_priority: PluginPriority,
         }
@@ -365,6 +392,7 @@ oplog_entry! {
     /// Similar to `Jump` but caused by an external revert request.
     Revert {
         hint: true
+        wit_raw_type: "revert-parameters"
         raw {
             dropped_region: OplogRegion,
         }
@@ -375,6 +403,7 @@ oplog_entry! {
     /// Removes a pending invocation from the invocation queue
     CancelPendingInvocation {
         hint: true
+        wit_raw_type: "cancel-pending-invocation-parameters"
         raw {
             idempotency_key: IdempotencyKey,
         }
@@ -385,11 +414,12 @@ oplog_entry! {
     /// Starts a new span in the invocation context
     StartSpan {
         hint: false
+        wit_raw_type: "start-span-parameters"
         raw {
             span_id: SpanId,
-            parent_id: Option<SpanId>,
+            parent: Option<SpanId>,
             linked_context_id: Option<SpanId>,
-            attributes: HashMap<String, AttributeValue>,
+            attributes: AttributeMap,
         }
         public {
             span_id: SpanId,
@@ -401,6 +431,7 @@ oplog_entry! {
     /// Finishes an open span in the invocation context
     FinishSpan {
         hint: false
+        wit_raw_type: "finish-span-parameters"
         raw {
             span_id: SpanId,
         }
@@ -411,6 +442,7 @@ oplog_entry! {
     /// Set an attribute on an open span in the invocation contex
     SetSpanAttribute {
         hint: false
+        wit_raw_type: "set-span-attribute-parameters"
         raw {
             span_id: SpanId,
             key: String,
@@ -425,8 +457,9 @@ oplog_entry! {
     /// Change persistence level
     ChangePersistenceLevel {
         hint: false
+        wit_raw_type: "change-persistence-level-parameters"
         raw {
-            level: PersistenceLevel,
+            persistence_level: PersistenceLevel,
         }
         public {
             persistence_level: PersistenceLevel
@@ -435,6 +468,7 @@ oplog_entry! {
     /// Marks the beginning of a remote transaction
     BeginRemoteTransaction {
         hint: false
+        wit_raw_type: "raw-begin-remote-transaction-parameters"
         raw {
             transaction_id: TransactionId,
             /// BeginRemoteTransaction entries need to be repeated on retries, because they may need a new
@@ -449,6 +483,7 @@ oplog_entry! {
     /// Marks the point before a remote transaction is committed
     PreCommitRemoteTransaction {
         hint: false
+        wit_raw_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -459,6 +494,7 @@ oplog_entry! {
     /// Marks the point before a remote transaction is rolled back
     PreRollbackRemoteTransaction {
         hint: false
+        wit_raw_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -469,6 +505,7 @@ oplog_entry! {
     /// Marks the point after a remote transaction is committed
     CommittedRemoteTransaction {
         hint: false
+        wit_raw_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -479,6 +516,7 @@ oplog_entry! {
     /// Marks the point after a remote transaction is rolled back
     RolledBackRemoteTransaction {
         hint: false
+        wit_raw_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -489,6 +527,7 @@ oplog_entry! {
     /// A snapshot of the agent's state
     Snapshot {
         hint: true
+        wit_raw_type: "raw-snapshot-parameters"
         raw {
             data: payload::OplogPayload<Vec<u8>>,
             mime_type: String,
