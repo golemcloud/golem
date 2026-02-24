@@ -14,6 +14,7 @@
 
 use crate::hooks::NoHooks;
 use golem_cli::command_handler::CommandHandler;
+use golem_cli::main_wrapper;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -65,12 +66,5 @@ mod hooks {
 }
 
 fn main() -> ExitCode {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed to build tokio runtime for golem-cli main")
-        .block_on(CommandHandler::handle_args(
-            std::env::args_os(),
-            Arc::new(NoHooks {}),
-        ))
+    main_wrapper(|| CommandHandler::handle_args(std::env::args_os(), Arc::new(NoHooks {})))
 }

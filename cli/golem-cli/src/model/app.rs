@@ -17,7 +17,6 @@ use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
-use crate::model::app_raw;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
@@ -26,16 +25,16 @@ use crate::model::cascade::property::Property;
 use crate::model::component::AppComponentType;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
+use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
+
+use crate::app_template::model::TemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::validate_lower_kebab_case_identifier;
-use golem_templates::model::GuestLanguage;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -43,15 +42,12 @@ use heck::{
 use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::{Serialize, Serializer};
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 use url::Url;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
@@ -104,6 +100,12 @@ impl BuildConfig {
             self.steps_filter.contains(&step)
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RustDependencyOverride {
+    pub path_override: Option<PathBuf>,
+    pub version_override: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -258,8 +260,7 @@ pub struct ComponentStubInterfaces {
 #[clap(rename_all = "kebab_case")]
 pub enum AppBuildStep {
     GenWit,
-    Componentize,
-    Link,
+    Build,
     AddMetadata,
     GenBridge,
     GenBridgeRepl,
@@ -278,33 +279,6 @@ pub struct CustomBridgeSdkTarget {
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct TemplateName(String);
-
-impl TemplateName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Display for TemplateName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for TemplateName {
-    fn from(value: String) -> Self {
-        TemplateName(value)
-    }
-}
-
-impl From<&str> for TemplateName {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
@@ -342,215 +316,6 @@ impl<T: Default> Default for WithSource<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default, EnumIter)]
-pub enum DependencyType {
-    #[default]
-    /// Dynamic ("stubless") wasm-rpc
-    DynamicWasmRpc,
-    /// Static (composed with compiled stub) wasm-rpc
-    StaticWasmRpc,
-    /// Composes the two WASM components together
-    Wasm,
-}
-
-impl DependencyType {
-    pub const STATIC_WASM_RPC: &'static str = "static-wasm-rpc";
-    pub const WASM_RPC: &'static str = "wasm-rpc";
-    pub const WASM: &'static str = "wasm";
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DependencyType::DynamicWasmRpc => Self::WASM_RPC,
-            DependencyType::StaticWasmRpc => Self::STATIC_WASM_RPC,
-            DependencyType::Wasm => Self::WASM,
-        }
-    }
-
-    pub fn describe(&self) -> &'static str {
-        match self {
-            DependencyType::DynamicWasmRpc => "WASM RPC dependency",
-            DependencyType::StaticWasmRpc => "Statically composed WASM RPC dependency",
-            DependencyType::Wasm => "WASM component dependency",
-        }
-    }
-
-    pub fn is_wasm_rpc(&self) -> bool {
-        matches!(
-            self,
-            DependencyType::DynamicWasmRpc | DependencyType::StaticWasmRpc
-        )
-    }
-
-    pub fn interactively_selectable_types() -> Vec<Self> {
-        Self::iter()
-            .filter(|dep_type| dep_type != &DependencyType::StaticWasmRpc)
-            .collect()
-    }
-}
-
-impl FromStr for DependencyType {
-    type Err = String;
-
-    fn from_str(str: &str) -> Result<Self, Self::Err> {
-        match str {
-            Self::WASM_RPC => Ok(Self::DynamicWasmRpc),
-            Self::STATIC_WASM_RPC => Ok(Self::StaticWasmRpc),
-            Self::WASM => Ok(Self::Wasm),
-            _ => {
-                let all = DependencyType::iter()
-                    .map(|dt| format!("\"{dt}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!(
-                    "Unknown dependency type: {str}. Expected one of {all}"
-                ))
-            }
-        }
-    }
-}
-
-impl Display for DependencyType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum BinaryComponentSource {
-    AppComponent { name: ComponentName },
-    LocalFile { path: PathBuf },
-    Url { url: Url },
-}
-
-impl Display for BinaryComponentSource {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BinaryComponentSource::AppComponent { name } => write!(f, "{name}"),
-            BinaryComponentSource::LocalFile { path } => write!(f, "{}", path.display()),
-            BinaryComponentSource::Url { url } => write!(f, "{url}"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DependentComponent {
-    pub source: BinaryComponentSource,
-    pub dep_type: DependencyType,
-}
-
-impl DependentComponent {
-    pub fn from_raw(
-        validation: &mut ValidationBuilder,
-        source: &Path,
-        dependency: app_raw::Dependency,
-    ) -> Option<Self> {
-        let (dep, _) = validation.with_context_returning(
-            vec![("source", source.to_string_lossy().to_string())],
-            |validation| {
-                let dep_type = DependencyType::from_str(&dependency.type_);
-                if let Ok(dep_type) = dep_type {
-                    let binary_component_source = match (dependency.target, dependency.path, dependency.url)
-                    {
-                        (Some(target_name), None, None) => Some(BinaryComponentSource::AppComponent {
-                            name: ComponentName(target_name),
-                        }),
-                        (None, Some(path), None) => Some(BinaryComponentSource::LocalFile {
-                            path: Path::new(&path).to_path_buf(),
-                        }),
-                        (None, None, Some(url)) => match Url::from_str(&url) {
-                            Ok(url) => Some(BinaryComponentSource::Url { url }),
-                            Err(_) => {
-                                validation.add_error(format!(
-                                    "Invalid URL for component dependency: {}",
-                                    url.log_color_highlight()
-                                ));
-                                None
-                            }
-                        },
-                        (None, None, None) => {
-                            validation.add_error(format!(
-                                "Missing one of the {}/{}/{} fields for component dependency",
-                                "target".log_color_error_highlight(),
-                                "path".log_color_error_highlight(),
-                                "url".log_color_error_highlight()
-                            ));
-                            None
-                        }
-                        _ => {
-                            validation.add_error(format!(
-                                "Only one of the {}/{}/{} fields can be specified for a component dependency",
-                                "target".log_color_error_highlight(),
-                                "path".log_color_error_highlight(),
-                                "url".log_color_error_highlight()
-                            ));
-                            None
-                        }
-                    };
-
-                    binary_component_source.map(|source| Self { source, dep_type })
-                } else {
-                    validation.add_error(format!(
-                        "Unknown component dependency type: {}",
-                        dependency.type_.log_color_error_highlight()
-                    ));
-                    None
-                }
-            });
-        dep
-    }
-
-    pub fn from_raw_vec(
-        validation: &mut ValidationBuilder,
-        source: &Path,
-        dependencies: Vec<app_raw::Dependency>,
-    ) -> BTreeSet<Self> {
-        dependencies
-            .into_iter()
-            .filter_map(|dependencies| Self::from_raw(validation, source, dependencies))
-            .collect()
-    }
-
-    pub fn as_dependent_app_component(&self) -> Option<DependentAppComponent> {
-        match &self.source {
-            BinaryComponentSource::AppComponent { name } => Some(DependentAppComponent {
-                name: name.clone(),
-                dep_type: self.dep_type,
-            }),
-            _ => None,
-        }
-    }
-}
-
-impl PartialOrd for DependentComponent {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for DependentComponent {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.source.cmp(&other.source)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DependentAppComponent {
-    pub name: ComponentName,
-    pub dep_type: DependencyType,
-}
-
-impl PartialOrd for DependentAppComponent {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for DependentAppComponent {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.name.cmp(&other.name)
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ApplicationNameAndEnvironments {
     pub application_name: WithSource<ApplicationName>,
@@ -567,7 +332,6 @@ pub struct Application {
     #[allow(unused)]
     temp_dir: Option<WithSource<String>>,
     resolved_temp_dir: PathBuf,
-    wit_deps: WithSource<Vec<String>>,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
@@ -633,15 +397,6 @@ impl Application {
 
     pub fn common_clean(&self) -> &Vec<WithSource<String>> {
         &self.clean
-    }
-
-    pub fn wit_deps(&self) -> Vec<PathBuf> {
-        self.wit_deps
-            .value
-            .iter()
-            .cloned()
-            .map(|path| self.wit_deps.source.join(path))
-            .collect()
     }
 
     pub fn all_custom_commands(&self) -> BTreeSet<String> {
@@ -722,19 +477,6 @@ impl Application {
                 .get(component_name)
                 .unwrap_or_else(|| panic!("Component not found: {component_name}")),
         }
-    }
-
-    pub fn component_dependencies(
-        &self,
-        component_name: &ComponentName,
-    ) -> &BTreeSet<DependentComponent> {
-        &self
-            .components
-            .get(component_name)
-            .unwrap_or_else(|| panic!("Component not found: {component_name}"))
-            .value
-            .0
-            .dependencies
     }
 
     pub fn http_api_deployments(
@@ -901,7 +643,7 @@ impl ComponentLayerId {
         parent_ids
             .into_vec()
             .into_iter()
-            .map(|parent_id| Self::TemplateCustomPresets(TemplateName(parent_id.to_string())))
+            .map(|parent_id| Self::TemplateCustomPresets(parent_id.into()))
             .collect()
     }
 }
@@ -1096,14 +838,14 @@ impl Layer for ComponentLayer {
                     .map_err(|err| format!("Failed to render componentWasm: {}", err))?,
             );
 
-            value.linked_wasm.apply_layer(
+            value.output_wasm.apply_layer(
                 id,
                 selection,
                 properties
-                    .linked_wasm
+                    .output_wasm
                     .value()
                     .render_or_clone(template_env, template_ctx)
-                    .map_err(|err| format!("Failed to render linkedWasm: {}", err))?,
+                    .map_err(|err| format!("Failed to render outputWasm: {}", err))?,
             );
 
             value.build.apply_layer(
@@ -1176,14 +918,14 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.dependencies.apply_layer(
+            value.config_vars.apply_layer(
                 id,
                 selection,
                 (
-                    properties.dependencies_merge_mode.unwrap_or_default(),
-                    properties.dependencies.value().clone(),
+                    properties.config_vars_merge_mode.unwrap_or_default(),
+                    properties.config_vars.value().clone(),
                 ),
-            )
+            );
         }
 
         Ok(())
@@ -1270,11 +1012,12 @@ impl<'a> Component<'a> {
         exports_package_name: &wit_parser::PackageName,
     ) -> PathBuf {
         self.generated_base_wit()
-            .join(naming::wit::DEPS_DIR)
-            .join(naming::wit::package_dep_dir_name_from_parser(
-                exports_package_name,
+            .join("deps")
+            .join(format!(
+                "{}_{}",
+                exports_package_name.namespace, exports_package_name.name
             ))
-            .join(naming::wit::EXPORTS_WIT_FILE_NAME)
+            .join("exports.wit")
     }
 
     pub fn generated_wit(&self) -> PathBuf {
@@ -1287,22 +1030,15 @@ impl<'a> Component<'a> {
             .join(self.properties().component_wasm.clone())
     }
 
-    /// Temporary target of the component composition (linking) step
-    pub fn temp_linked_wasm(&self) -> PathBuf {
-        self.temp_dir
-            .join("temp-linked-wasm")
-            .join(format!("{}.wasm", self.component_name.as_str()))
-    }
-
-    /// The final linked component WASM
-    pub fn final_linked_wasm(&self) -> PathBuf {
+    /// The final output component WASM
+    pub fn final_wasm(&self) -> PathBuf {
         self.properties()
-            .linked_wasm
+            .output_wasm
             .as_ref()
-            .map(|linked_wasm| self.source_dir().join(linked_wasm))
+            .map(|output_wasm| self.source_dir().join(output_wasm))
             .unwrap_or_else(|| {
                 self.temp_dir
-                    .join("final-linked-wasm")
+                    .join("final-wasm")
                     .join(format!("{}.wasm", self.component_name.as_str()))
             })
     }
@@ -1322,7 +1058,7 @@ impl<'a> Component<'a> {
 
         custom_source
             .map(|path| self.source_dir().join(path))
-            .unwrap_or_else(|| self.final_linked_wasm())
+            .unwrap_or_else(|| self.final_wasm())
     }
 
     /// File for storing extracted agent types
@@ -1338,34 +1074,16 @@ impl<'a> Component<'a> {
         &self.properties().env
     }
 
+    pub fn config_vars(&self) -> &BTreeMap<String, String> {
+        &self.properties().config_vars
+    }
+
     pub fn files(&self) -> &Vec<InitialComponentFile> {
         &self.properties().files
     }
 
     pub fn plugins(&self) -> &Vec<PluginInstallation> {
         &self.properties().plugins
-    }
-
-    fn client_base_build_dir(&self) -> PathBuf {
-        self.temp_dir.join("client")
-    }
-
-    pub fn client_temp_build_dir(&self) -> PathBuf {
-        self.client_base_build_dir()
-            .join(self.name_as_safe_path_elem())
-            .join("temp-build")
-    }
-
-    pub fn client_wasm(&self) -> PathBuf {
-        self.client_base_build_dir()
-            .join(self.name_as_safe_path_elem())
-            .join("client.wasm")
-    }
-
-    pub fn client_wit(&self) -> PathBuf {
-        self.client_base_build_dir()
-            .join(self.name_as_safe_path_elem())
-            .join(naming::wit::WIT_DIR)
     }
 
     pub fn is_deployable(&self) -> bool {
@@ -1397,7 +1115,7 @@ pub struct ComponentLayerProperties {
     pub source_wit: OptionalProperty<ComponentLayer, String>,
     pub generated_wit: OptionalProperty<ComponentLayer, String>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
-    pub linked_wasm: OptionalProperty<ComponentLayer, String>,
+    pub output_wasm: OptionalProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
@@ -1413,9 +1131,9 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies_merge_mode: Option<VecMergeMode>,
-    pub dependencies: VecProperty<ComponentLayer, app_raw::Dependency>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_vars_merge_mode: Option<MapMergeMode>,
+    pub config_vars: MapProperty<ComponentLayer, String, String>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -1425,7 +1143,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             source_wit: value.source_wit.into(),
             generated_wit: value.generated_wit.into(),
             component_wasm: value.component_wasm.into(),
-            linked_wasm: value.linked_wasm.into(),
+            output_wasm: value.output_wasm.into(),
             build_merge_mode: value.build_merge_mode,
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
@@ -1437,8 +1155,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.plugins.unwrap_or_default().into(),
             env_merge_mode: value.env_merge_mode,
             env: value.env.unwrap_or_default().into(),
-            dependencies_merge_mode: value.dependencies_merge_mode,
-            dependencies: value.dependencies.unwrap_or_default().into(),
+            config_vars_merge_mode: value.config_vars_merge_mode,
+            config_vars: value.config_vars.unwrap_or_default().into(),
         }
     }
 }
@@ -1448,7 +1166,7 @@ impl ComponentLayerProperties {
         self.source_wit.compact_trace();
         self.generated_wit.compact_trace();
         self.component_wasm.compact_trace();
-        self.linked_wasm.compact_trace();
+        self.output_wasm.compact_trace();
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
@@ -1456,7 +1174,7 @@ impl ComponentLayerProperties {
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
-        self.dependencies.compact_trace();
+        self.config_vars.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -1490,7 +1208,7 @@ pub struct ComponentProperties {
     pub source_wit: String,
     pub generated_wit: String,
     pub component_wasm: String,
-    pub linked_wasm: Option<String>,
+    pub output_wasm: Option<String>,
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
@@ -1498,7 +1216,7 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
-    pub dependencies: BTreeSet<DependentComponent>,
+    pub config_vars: BTreeMap<String, String>,
 }
 
 impl ComponentProperties {
@@ -1511,17 +1229,12 @@ impl ComponentProperties {
             InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
-        let dependencies = DependentComponent::from_raw_vec(
-            validation,
-            source,
-            merged.dependencies.value().clone(),
-        );
 
         let properties = Self {
             source_wit: merged.source_wit.value().clone().unwrap_or_default(),
             generated_wit: merged.generated_wit.value().clone().unwrap_or_default(),
             component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
-            linked_wasm: merged.linked_wasm.value().clone(),
+            output_wasm: merged.output_wasm.value().clone(),
             build: merged.build.value().clone(),
             custom_commands: merged
                 .custom_commands
@@ -1534,7 +1247,12 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
-            dependencies,
+            config_vars: merged
+                .config_vars
+                .value()
+                .into_iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         };
 
         for (name, value) in [
@@ -1727,13 +1445,14 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use crate::app_template::model::TemplateName;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, BinaryComponentSource, ComponentLayer,
-        ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
-        ComponentPresetName, ComponentPresetSelector, ComponentProperties, DependencyType,
-        PartitionedComponentPresets, TemplateName, WithSource, DEFAULT_TEMP_DIR,
+        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerId,
+        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
+        ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, WithSource,
+        DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1777,7 +1496,6 @@ mod app_builder {
         App,
         Include,
         TempDir,
-        WitDeps,
         CustomCommand(String),
         Template(TemplateName),
         Component(ComponentName),
@@ -1792,7 +1510,6 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::App => property,
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
-                UniqueSourceCheckedEntityKey::WitDeps => property,
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -1809,9 +1526,6 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::TempDir => {
                     "tempDir".log_color_highlight().to_string()
-                }
-                UniqueSourceCheckedEntityKey::WitDeps => {
-                    "witDeps".log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::CustomCommand(command_name) => {
                     command_name.log_color_highlight().to_string()
@@ -1840,7 +1554,6 @@ mod app_builder {
         // For app build
         include: Vec<String>,
         temp_dir: Option<WithSource<String>>,
-        wit_deps: WithSource<Vec<String>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
 
@@ -1883,7 +1596,6 @@ mod app_builder {
             // TODO: atomic: validate presets used in envs and template references
             //               before component resolve, and skip if they are not valid
             builder.resolve_and_validate_components(&mut validation, &component_presets);
-            builder.validate_dependency_targets(&mut validation);
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
@@ -1901,7 +1613,6 @@ mod app_builder {
                 all_sources: builder.all_sources,
                 temp_dir: builder.temp_dir,
                 resolved_temp_dir,
-                wit_deps: builder.wit_deps,
                 components: builder.components,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
@@ -1998,14 +1709,6 @@ mod app_builder {
                         .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
                     {
                         self.include = app.application.includes;
-                    }
-
-                    if !app.application.wit_deps.is_empty()
-                        && self
-                        .add_entity_source(UniqueSourceCheckedEntityKey::WitDeps, &app.source)
-                    {
-                        self.wit_deps =
-                            WithSource::new(app_source_dir.to_path_buf(), app.application.wit_deps);
                     }
 
                     for (template_name, template) in app.application.component_templates {
@@ -2208,70 +1911,73 @@ mod app_builder {
             template_name: TemplateName,
             template: app_raw::ComponentTemplate,
         ) {
-            validation.with_context(vec![("template", template_name.0.clone())], |validation| {
-                if let Some(err) = self
-                    .component_layer_store
-                    .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateCommon(template_name.clone()),
-                        parents: ComponentLayerId::parent_ids_from_raw_template_references(
-                            template.templates,
-                        ),
-                        properties: ComponentLayerPropertiesKind::Common(Box::new(
-                            template.component_properties.into(),
-                        )),
-                    })
-                    .err()
-                {
-                    validation.add_error(err.to_string())
-                }
+            validation.with_context(
+                vec![("template", template_name.to_string())],
+                |validation| {
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::TemplateCommon(template_name.clone()),
+                            parents: ComponentLayerId::parent_ids_from_raw_template_references(
+                                template.templates,
+                            ),
+                            properties: ComponentLayerPropertiesKind::Common(Box::new(
+                                template.component_properties.into(),
+                            )),
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
 
-                let presets = PartitionedComponentPresets::new(template.presets);
+                    let presets = PartitionedComponentPresets::new(template.presets);
 
-                if let Some(err) = self
-                    .component_layer_store
-                    .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
-                        parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
-                        properties: {
-                            if presets.env_presets.is_empty() {
-                                ComponentLayerPropertiesKind::Empty
-                            } else {
-                                ComponentLayerPropertiesKind::Presets {
-                                    presets: presets.env_presets,
-                                    default_preset: "".to_string(),
-                                }
-                            }
-                        },
-                    })
-                    .err()
-                {
-                    validation.add_error(err.to_string())
-                }
-
-                if let Some(err) = self
-                    .component_layer_store
-                    .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
-                        parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
-                            template_name.clone(),
-                        )],
-                        properties: {
-                            match presets.default_custom_preset {
-                                Some(default_custom_preset) => {
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
+                            parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
+                            properties: {
+                                if presets.env_presets.is_empty() {
+                                    ComponentLayerPropertiesKind::Empty
+                                } else {
                                     ComponentLayerPropertiesKind::Presets {
-                                        presets: presets.custom_presets,
-                                        default_preset: default_custom_preset,
+                                        presets: presets.env_presets,
+                                        default_preset: "".to_string(),
                                     }
                                 }
-                                None => ComponentLayerPropertiesKind::Empty,
-                            }
-                        },
-                    })
-                    .err()
-                {
-                    validation.add_error(err.to_string())
-                }
-            });
+                            },
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
+                            parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
+                                template_name.clone(),
+                            )],
+                            properties: {
+                                match presets.default_custom_preset {
+                                    Some(default_custom_preset) => {
+                                        ComponentLayerPropertiesKind::Presets {
+                                            presets: presets.custom_presets,
+                                            default_preset: default_custom_preset,
+                                        }
+                                    }
+                                    None => ComponentLayerPropertiesKind::Empty,
+                                }
+                            },
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+                },
+            );
         }
 
         fn add_component(
@@ -2376,78 +2082,6 @@ mod app_builder {
                 })
         }
 
-        fn validate_dependency_targets(&mut self, validation: &mut ValidationBuilder) {
-            for (component_name, component) in &self.components {
-                for target in &component.value.0.dependencies {
-                    let invalid_source =
-                        !self.component_names_to_source.contains_key(component_name);
-                    let invalid_target = match &target.source {
-                        BinaryComponentSource::AppComponent { name } => {
-                            !self.component_names_to_source.contains_key(name)
-                        }
-                        BinaryComponentSource::LocalFile { path } => {
-                            !std::fs::exists(path).unwrap_or(false)
-                        }
-                        BinaryComponentSource::Url { .. } => false,
-                    };
-                    let invalid_target_source = match (&target.dep_type, &target.source) {
-                        (
-                            DependencyType::DynamicWasmRpc,
-                            BinaryComponentSource::AppComponent { .. },
-                        ) => {
-                            false // valid
-                        }
-                        (
-                            DependencyType::StaticWasmRpc,
-                            BinaryComponentSource::AppComponent { .. },
-                        ) => {
-                            false // valid
-                        }
-                        (DependencyType::Wasm, _) => {
-                            false // valid
-                        }
-                        _ => true,
-                    };
-
-                    if invalid_source || invalid_target || invalid_target_source {
-                        validation.with_context(
-                            vec![("source", component.source.to_string_lossy().to_string())],
-                            |validation| {
-                                if invalid_source {
-                                    validation.add_error(format!(
-                                        "{} {} - {} references unknown component: {}\n\n{}",
-                                        target.dep_type.describe(),
-                                        component_name.as_str().log_color_highlight(),
-                                        target.source.to_string().log_color_highlight(),
-                                        component_name.as_str().log_color_error_highlight(),
-                                        self.available_components(component_name.as_str())
-                                    ))
-                                }
-                                if invalid_target {
-                                    validation.add_error(format!(
-                                        "{} {} - {} references unknown target component: {}\n\n{}",
-                                        target.dep_type.describe(),
-                                        component_name.as_str().log_color_highlight(),
-                                        target.source.to_string().log_color_highlight(),
-                                        target.source.to_string().log_color_error_highlight(),
-                                        self.available_components(&target.source.to_string())
-                                    ))
-                                }
-                                if invalid_target_source {
-                                    validation.add_error(format!(
-                                        "{} {} - {}: this dependency type only supports local component targets\n",
-                                        target.dep_type.describe(),
-                                        component_name.as_str().log_color_highlight(),
-                                        target.source.to_string().log_color_highlight(),
-                                    ))
-                                }
-                            },
-                        );
-                    }
-                }
-            }
-        }
-
         fn resolve_and_validate_components(
             &mut self,
             validation: &mut ValidationBuilder,
@@ -2549,15 +2183,6 @@ mod app_builder {
             todo!()
         }
 
-        fn available_components(&self, unknown: &str) -> String {
-            self.available_options_help(
-                "components",
-                "component names",
-                unknown,
-                self.raw_component_names.iter().map(|name| name.as_str()),
-            )
-        }
-
         fn available_options_help<'a, I: IntoIterator<Item = &'a str>>(
             &self,
             entity_plural: &str,
@@ -2653,9 +2278,8 @@ mod app_builder {
 mod test {
     use crate::model::app::{Application, ApplicationNameAndEnvironments, ComponentPresetSelector};
     use crate::model::app_raw;
-    use assert2::assert;
-    use assert2::let_assert;
     use indoc::indoc;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use test_r::test;
 
@@ -2700,7 +2324,7 @@ mod test {
         let component_name = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
-        assert!(component.source_wit() == PathBuf::from("./a.wit"),);
+        assert_eq!(component.source_wit(), PathBuf::from("./a.wit"));
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> Application {
@@ -2713,12 +2337,13 @@ mod test {
             Application::environments_from_raw_apps(&raw_apps).into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        let_assert!(
-            Some(ApplicationNameAndEnvironments {
-                application_name,
-                environments
-            }) = app_name_and_envs
-        );
+        let Some(ApplicationNameAndEnvironments {
+            application_name,
+            environments,
+        }) = app_name_and_envs
+        else {
+            panic!("expected Some(ApplicationNameAndEnvironments)")
+        };
 
         let (app, warns, errors) =
             Application::from_raw_apps(application_name, environments, selector.clone(), raw_apps)

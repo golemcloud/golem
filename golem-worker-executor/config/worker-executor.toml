@@ -107,6 +107,9 @@ max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
 
+[oplog.default_snapshotting]
+type = "Disabled"
+
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
@@ -284,7 +287,6 @@ without_time = false
 # initial_component_files_bucket = "golem-initial-component-files"
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
-# plugin_wasm_files_bucket = "golem-plugin-wasm-files"
 # region = "us-east-1"
 # 
 # [blob_storage.config.retries]
@@ -369,6 +371,9 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# 
+# [oplog.default_snapshotting]
+# type = "Disabled"
 # 
 # [public_worker_api]
 # connect_timeout = "10s"
@@ -580,6 +585,9 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# 
+# [oplog.default_snapshotting]
+# type = "Disabled"
 # 
 # [public_worker_api]
 # connect_timeout = "10s"

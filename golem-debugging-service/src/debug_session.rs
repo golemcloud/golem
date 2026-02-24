@@ -26,7 +26,7 @@ use golem_common::model::oplog::types::decode_span_data;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
-use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry};
+use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
 use golem_common::model::{OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata};
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
@@ -231,7 +231,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             env,
             environment_id,
             created_by,
-            wasi_config_vars,
+            config_vars,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -244,7 +244,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             env: env.into_iter().collect(),
             environment_id,
             created_by,
-            wasi_config_vars: wasi_config_vars.into(),
+            config_vars,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -490,6 +490,20 @@ fn get_oplog_entry_from_public_oplog_entry(
             Ok(OplogEntry::ChangePersistenceLevel {
                 timestamp: change_persistence_level.timestamp,
                 level: change_persistence_level.persistence_level,
+            })
+        }
+        PublicOplogEntry::Snapshot(snapshot_params) => {
+            let bytes = match snapshot_params.data {
+                PublicSnapshotData::Raw(raw) => (raw.data, raw.mime_type),
+                PublicSnapshotData::Json(json) => (
+                    serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
+                    "application/json".to_string(),
+                ),
+            };
+            Ok(OplogEntry::Snapshot {
+                timestamp: snapshot_params.timestamp,
+                data: OplogPayload::Inline(Box::new(bytes.0)),
+                mime_type: bytes.1,
             })
         }
     }

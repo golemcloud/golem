@@ -20,7 +20,6 @@ mod cli;
 mod clocks;
 mod config;
 pub mod durability;
-mod dynamic_linking;
 mod filesystem;
 pub mod golem;
 pub mod http;
@@ -65,7 +64,7 @@ use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{interpret_function_result, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
+    ExternalOperations, FileSystemReading, HasConfigVars, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
@@ -92,7 +91,7 @@ use golem_common::model::oplog::{
     PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
-use golem_common::model::regions::{DeletedRegions, OplogRegion};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
@@ -207,10 +206,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        // TODO: pass config vars from component metadata
-        let wasi_config_vars = effective_wasi_config_vars(
-            worker_config.initial_wasi_config_vars.clone(),
-            BTreeMap::new(),
+        let config_vars = effective_config_vars(
+            worker_config.initial_config_vars.clone(),
+            component_metadata.config_vars.clone(),
         );
 
         let stdin = ManagedStdIn::disabled();
@@ -266,11 +264,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
-                worker_config.initial_wasi_config_vars,
-                wasi_config_vars,
+                worker_config.initial_config_vars,
+                config_vars,
                 shard_service,
                 pending_update,
                 original_phantom_id,
+                worker_config.last_snapshot_index,
             )
             .await,
             temp_dir,
@@ -949,9 +948,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasWasiConfigVars for DurableWorkerCtx<Ctx> {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.state.wasi_config_vars.read().unwrap().clone()
+impl<Ctx: WorkerCtx> HasConfigVars for DurableWorkerCtx<Ctx> {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.state.config_vars.read().unwrap().clone()
     }
 }
 
@@ -986,7 +985,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .get_upload_description_payload(description)
                     .await
                 {
-                    Ok(Some(data)) => {
+                    Ok(Some((data, mime_type))) => {
                         let component_metadata = store
                             .as_context()
                             .data()
@@ -1011,7 +1010,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
                                 let load_result = invoke_observed_and_traced(
                                     load_snapshot.name.to_string(),
-                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                    vec![Value::Record(vec![
+                                        Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
+                                        Value::String(mime_type),
+                                    ])],
                                     store,
                                     instance,
                                     &component_metadata,
@@ -1122,6 +1124,190 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             }
         }
     }
+
+    async fn try_load_snapshot(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        instance: &Instance,
+    ) -> SnapshotRecoveryResult {
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index;
+
+        let snapshot_index = match snapshot_index {
+            Some(idx) => idx,
+            None => return SnapshotRecoveryResult::NotAttempted,
+        };
+
+        debug!("Attempting snapshot-based recovery from oplog index {snapshot_index}");
+
+        let oplog_entry = store
+            .as_context()
+            .data()
+            .get_public_state()
+            .oplog()
+            .read(snapshot_index)
+            .await;
+
+        let (data_payload, mime_type) = match oplog_entry {
+            OplogEntry::Snapshot {
+                data, mime_type, ..
+            } => (data, mime_type),
+            _ => {
+                warn!("Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+        };
+
+        let data = match store
+            .as_context()
+            .data()
+            .get_public_state()
+            .oplog()
+            .download_payload(data_payload)
+            .await
+        {
+            Ok(data) => data,
+            Err(err) => {
+                warn!("Failed to download snapshot payload: {err}; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+        };
+
+        let component_metadata = store
+            .as_context()
+            .data()
+            .component_metadata()
+            .metadata
+            .clone();
+
+        let load_snapshot_fn = match component_metadata.load_snapshot() {
+            Ok(Some(f)) => f,
+            Ok(None) => {
+                warn!("Component does not export load-snapshot; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+            Err(err) => {
+                warn!("Failed to find load-snapshot function: {err}; falling back to full replay");
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .drop_override_and_restart()
+                    .await;
+                return SnapshotRecoveryResult::NotAttempted;
+            }
+        };
+
+        let idempotency_key = IdempotencyKey::fresh();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .begin_call_snapshotting_function();
+
+        let load_result = invoke_observed_and_traced(
+            load_snapshot_fn.name.to_string(),
+            vec![Value::Record(vec![
+                Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
+                Value::String(mime_type),
+            ])],
+            store,
+            instance,
+            &component_metadata,
+            true,
+        )
+        .await;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .end_call_snapshotting_function();
+
+        let failed = match load_result {
+            Err(error) => Some(format!(
+                "Snapshot recovery failed to load snapshot: {error}"
+            )),
+            Ok(InvokeResult::Failed { error, .. }) => {
+                let stderr = store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .event_service()
+                    .get_last_invocation_errors();
+                let error = error.to_string(&stderr);
+                Some(format!(
+                    "Snapshot recovery failed to load snapshot: {error}"
+                ))
+            }
+            Ok(InvokeResult::Succeeded { output, .. }) => {
+                if let Some(output) = output {
+                    match output {
+                        Value::Result(Err(Some(boxed_error_value))) => match &*boxed_error_value {
+                            Value::String(error) => Some(format!(
+                                "Snapshot recovery load-snapshot returned error: {error}"
+                            )),
+                            _ => Some(
+                                "Unexpected result value from load-snapshot function".to_string(),
+                            ),
+                        },
+                        _ => None,
+                    }
+                } else {
+                    Some("Unexpected empty result from load-snapshot function".to_string())
+                }
+            }
+            Ok(_) => Some("Snapshot recovery interrupted".to_string()),
+        };
+
+        if let Some(error) = failed {
+            warn!("{error}; re-creating instance for full replay");
+            SnapshotRecoveryResult::Failed
+        } else {
+            debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
+            SnapshotRecoveryResult::Success
+        }
+    }
+}
+
+enum SnapshotRecoveryResult {
+    Success,
+    NotAttempted,
+    Failed,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -1236,11 +1422,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        // TODO: take config vars from component metadata
-        let mut wasi_config_vars = self.state.wasi_config_vars.write().unwrap();
-        *wasi_config_vars = effective_wasi_config_vars(
-            self.state.initial_wasi_config_vars.clone(),
-            BTreeMap::new(),
+        let mut config_vars = self.state.config_vars.write().unwrap();
+        *config_vars = effective_config_vars(
+            self.state.initial_config_vars.clone(),
+            new_metadata.config_vars.clone(),
         );
 
         self.state.component_metadata = new_metadata;
@@ -1536,7 +1721,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
             }
         }
-        debug!("Function {full_function_name} finished with {output:?}");
+        debug!("Function {full_function_name} finished");
 
         Ok(())
     }
@@ -2196,12 +2381,28 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         }
                     }
                 }
-                None => {
-                    let result = Self::resume_replay(store, instance, false).await;
-                    record_resume_worker(start.elapsed());
-
-                    result
-                }
+                None => match Self::try_load_snapshot(store, instance).await {
+                    SnapshotRecoveryResult::Success => {
+                        let result = Self::resume_replay(store, instance, false).await;
+                        record_resume_worker(start.elapsed());
+                        result
+                    }
+                    SnapshotRecoveryResult::NotAttempted => {
+                        let result = Self::resume_replay(store, instance, false).await;
+                        record_resume_worker(start.elapsed());
+                        result
+                    }
+                    SnapshotRecoveryResult::Failed => {
+                        store
+                            .as_context()
+                            .data()
+                            .get_public_state()
+                            .worker()
+                            .snapshot_recovery_disabled
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        Ok(Some(RetryDecision::Immediate))
+                    }
+                },
             }
         };
         match prepare_result {
@@ -2684,9 +2885,9 @@ struct PrivateDurableWorkerState {
     shard_service: Arc<dyn ShardService>,
 
     /// The initial config vars that the worker was configured with
-    initial_wasi_config_vars: BTreeMap<String, String>,
+    initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    wasi_config_vars: RwLock<BTreeMap<String, String>>,
+    config_vars: RwLock<BTreeMap<String, String>>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
@@ -2711,6 +2912,7 @@ struct PrivateDurableWorkerState {
 
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
+    last_snapshot_index: Option<OplogIndex>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2741,12 +2943,26 @@ impl PrivateDurableWorkerState {
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
-        initial_wasi_config_vars: BTreeMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        initial_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        last_snapshot_index: Option<OplogIndex>,
     ) -> Self {
+        let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
+            let mut regions = deleted_regions;
+            let snapshot_skip =
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    OplogIndex::INITIAL.next()..=snapshot_idx,
+                )])
+                .build();
+            regions.set_override(snapshot_skip);
+            regions
+        } else {
+            deleted_regions
+        };
+
         let replay_state =
             ReplayState::new(owned_worker_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
@@ -2789,8 +3005,8 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
-            initial_wasi_config_vars,
-            wasi_config_vars: RwLock::new(wasi_config_vars),
+            initial_config_vars,
+            config_vars: RwLock::new(config_vars),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
@@ -2798,6 +3014,7 @@ impl PrivateDurableWorkerState {
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
             current_phantom_id: original_phantom_id,
+            last_snapshot_index,
         }
     }
 
@@ -3261,17 +3478,17 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
     HashSet::from_iter(ro_paths)
 }
 
-fn effective_wasi_config_vars(
-    worker_wasi_config_vars: BTreeMap<String, String>,
-    component_wasi_config_vars: BTreeMap<String, String>,
+fn effective_config_vars(
+    worker_config_vars: BTreeMap<String, String>,
+    component_config_vars: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
 
-    for (k, v) in component_wasi_config_vars {
+    for (k, v) in component_config_vars {
         result.insert(k, v);
     }
 
-    for (k, v) in worker_wasi_config_vars {
+    for (k, v) in worker_config_vars {
         result.insert(k, v);
     }
 

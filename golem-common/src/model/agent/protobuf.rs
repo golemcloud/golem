@@ -6,6 +6,7 @@ use super::{
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
     NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
     PathVariable, Principal, QueryVariable, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
     SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextSource, TextType,
     Url,
 };
@@ -59,6 +60,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
                 .map(AgentDependency::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
             http_mount: proto.http_mount.map(TryInto::try_into).transpose()?,
+            snapshotting: proto
+                .snapshotting
+                .map(TryInto::try_into)
+                .transpose()?
+                .unwrap_or(Snapshotting::Disabled(Empty {})),
         })
     }
 }
@@ -81,6 +87,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
                 .map(golem_api_grpc::proto::golem::component::AgentDependency::from)
                 .collect(),
             http_mount: value.http_mount.map(Into::into),
+            snapshotting: Some(value.snapshotting.into()),
         }
     }
 }
@@ -1204,6 +1211,84 @@ impl From<GolemUserPrincipal> for golem_api_grpc::proto::golem::component::Golem
     fn from(value: GolemUserPrincipal) -> Self {
         Self {
             account_id: Some(value.account_id.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::Snapshotting> for Snapshotting {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::Snapshotting,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::snapshotting::Value;
+
+        match value
+            .value
+            .ok_or_else(|| "Missing field: value".to_string())?
+        {
+            Value::Disabled(_) => Ok(Self::Disabled(Empty {})),
+            Value::Enabled(config) => Ok(Self::Enabled(config.try_into()?)),
+        }
+    }
+}
+
+impl From<Snapshotting> for golem_api_grpc::proto::golem::component::Snapshotting {
+    fn from(value: Snapshotting) -> Self {
+        use golem_api_grpc::proto::golem::component::snapshotting::Value;
+
+        Self {
+            value: Some(match value {
+                Snapshotting::Disabled(_) => {
+                    Value::Disabled(golem_api_grpc::proto::golem::common::Empty {})
+                }
+                Snapshotting::Enabled(config) => Value::Enabled(config.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::SnapshottingConfig> for SnapshottingConfig {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::SnapshottingConfig,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::snapshotting_config::Value;
+
+        match value
+            .value
+            .ok_or_else(|| "Missing field: value".to_string())?
+        {
+            Value::Default(_) => Ok(Self::Default(Empty {})),
+            Value::PeriodicNanos(nanos) => Ok(Self::Periodic(SnapshottingPeriodic {
+                duration_nanos: nanos,
+            })),
+            Value::EveryNInvocation(n) => {
+                Ok(Self::EveryNInvocation(SnapshottingEveryNInvocation {
+                    count: n as u16,
+                }))
+            }
+        }
+    }
+}
+
+impl From<SnapshottingConfig> for golem_api_grpc::proto::golem::component::SnapshottingConfig {
+    fn from(value: SnapshottingConfig) -> Self {
+        use golem_api_grpc::proto::golem::component::snapshotting_config::Value;
+
+        Self {
+            value: Some(match value {
+                SnapshottingConfig::Default(_) => {
+                    Value::Default(golem_api_grpc::proto::golem::common::Empty {})
+                }
+                SnapshottingConfig::Periodic(periodic) => {
+                    Value::PeriodicNanos(periodic.duration_nanos)
+                }
+                SnapshottingConfig::EveryNInvocation(every_n) => {
+                    Value::EveryNInvocation(every_n.count as u32)
+                }
+            }),
         }
     }
 }

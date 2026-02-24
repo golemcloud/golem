@@ -15,7 +15,6 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::base64::Base64;
 use crate::base_model::component::{ComponentId, ComponentRevision};
-use crate::base_model::Empty;
 use crate::{declare_structs, declare_unions, newtype_uuid};
 
 newtype_uuid!(
@@ -44,13 +43,6 @@ declare_structs! {
         pub spec: PluginSpecDto,
     }
 
-    pub struct ComponentTransformerPluginSpec {
-        pub provided_wit_package: Option<String>,
-        pub json_schema: Option<serde_json::Value>,
-        pub validate_url: String,
-        pub transform_url: String,
-    }
-
     pub struct OplogProcessorPluginSpec {
         pub component_id: ComponentId,
         pub component_revision: ComponentRevision
@@ -59,9 +51,6 @@ declare_structs! {
 
 declare_unions! {
     pub enum PluginSpecDto {
-        ComponentTransformer(ComponentTransformerPluginSpec),
-        OplogProcessor(OplogProcessorPluginSpec),
-        App(Empty),
-        Library(Empty)
+        OplogProcessor(OplogProcessorPluginSpec)
     }
 }

@@ -21,19 +21,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PluginTypeSpecificManifest {
-    ComponentTransformer(ComponentTransformerManifest),
     OplogProcessor(OplogProcessorManifest),
-    App(AppManifest),
-    Library(LibraryManifest),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentTransformerManifest {
-    pub provided_wit_package: Option<String>,
-    pub json_schema: Option<serde_json::Value>,
-    pub validate_url: String,
-    pub transform_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,18 +29,6 @@ pub struct ComponentTransformerManifest {
 pub struct OplogProcessorManifest {
     pub component_id: Uuid,
     pub component_revision: ComponentRevision,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppManifest {
-    pub component: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LibraryManifest {
-    pub component: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

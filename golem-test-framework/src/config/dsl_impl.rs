@@ -15,7 +15,8 @@
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
-    build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended, WorkerLogEventStream,
+    build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended,
+    WorkerInvocationResult, WorkerLogEventStream,
 };
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
@@ -31,15 +32,16 @@ use golem_client::api::{
 use golem_client::model::{
     CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
 };
+use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::AgentError;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::RevertWorkerTarget;
@@ -49,8 +51,7 @@ use golem_common::model::worker::{
 use golem_common::model::{IdempotencyKey, WorkerEvent};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
-use golem_wasm::json::OptionallyValueAndTypeJson;
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValueAndType, Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -62,6 +63,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
+use tracing::debug;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -73,19 +75,48 @@ pub struct TestUserContext<Deps> {
     pub auto_deploy_enabled: bool,
 }
 
-impl<Deps> TestUserContext<Deps> {
+impl<Deps: TestDependencies> TestUserContext<Deps> {
     pub fn with_auto_deploy(self, enabled: bool) -> Self {
         Self {
             auto_deploy_enabled: enabled,
             ..self
         }
     }
+
+    // TODO: Old invocation implementation, to be removed
+    async fn invoke_and_await_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> WorkerInvocationResult<Vec<Value>> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .invoke_and_await_function(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                Some(&idempotency_key.value),
+                function_name,
+                &InvokeParameters {
+                    params: params
+                        .into_iter()
+                        .map(|p| p.try_into())
+                        .collect::<Result<_, _>>()
+                        .map_err(|e| anyhow!("Failed converting params: {e}"))?,
+                },
+            )
+            .await?;
+        Ok(Ok(result.result.into_iter().map(|v| v.value).collect()))
+    }
 }
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
-    type WorkerInvocationResult<T> = anyhow::Result<T>;
-
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis()
     }
@@ -98,8 +129,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -110,11 +141,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         } else {
             ComponentName(name.to_string())
         };
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
 
         let source_path = if !unverified {
             rename_component_if_needed(
@@ -156,8 +182,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &ComponentCreation {
                     component_name,
                     file_options,
-                    dynamic_linking,
                     env,
+                    config_vars,
                     plugins,
                     agent_types,
                 },
@@ -183,6 +209,18 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(component)
     }
 
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
+        let client = self.deps.registry_service().client(&self.token).await;
+        let component = client
+            .get_component_revision(&component_id.0, revision.get())
+            .await?;
+        Ok(component)
+    }
+
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
@@ -190,8 +228,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let client = self.deps.registry_service().client(&self.token).await;
@@ -241,8 +279,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     current_revision: previous_revision,
                     new_file_options,
                     removed_files,
-                    dynamic_linking,
                     env,
+                    config_vars,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
@@ -261,51 +299,44 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(component)
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
+        config_vars: HashMap<String, String>,
+    ) -> WorkerInvocationResult<WorkerId> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
-        let wasi_config_vars: BTreeMap<String, String> = wasi_config_vars.into_iter().collect();
+        let config_vars: BTreeMap<String, String> = config_vars.into_iter().collect();
         let response = client
             .launch_new_worker(
                 &component_id.0,
                 &WorkerCreationRequest {
-                    name: name.to_string(),
+                    name: id.to_string(),
                     env,
-                    config_vars: wasi_config_vars.into(),
+                    config_vars,
                 },
             )
             .await?;
 
-        Ok(response.worker_id)
+        Ok(Ok(response.worker_id))
     }
 
-    async fn start_worker_with(
+    async fn invoke_agent_with_key(
         &self,
         component_id: &ComponentId,
-        name: &str,
-        env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
-        self.try_start_worker_with(component_id, name, env, wasi_config_vars)
-            .await
-    }
-
-    async fn invoke_with_key(
-        &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
+        method_name: &str,
+        params: DataValue,
     ) -> anyhow::Result<()> {
+        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
+            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+
         let client = self
             .deps
             .worker_service()
@@ -316,91 +347,96 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &worker_id.component_id.0,
                 &worker_id.worker_name,
                 Some(&idempotency_key.value),
-                function_name,
+                "golem:agent/guest.{invoke}",
                 &InvokeParameters {
-                    params: params
-                        .into_iter()
-                        .map(|p| p.try_into())
-                        .collect::<Result<_, _>>()
-                        .map_err(|e| anyhow!("Failed converting params: {e}"))?,
+                    params: vec![
+                        method_name.into_value_and_type(),
+                        params.into_value_and_type(),
+                        golem_common::model::agent::Principal::anonymous().into_value_and_type(),
+                    ]
+                    .into_iter()
+                    .map(|p| p.try_into())
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| anyhow!("Failed converting params: {e}"))?,
                 },
             )
             .await?;
         Ok(())
     }
 
-    async fn invoke_and_await_with_key(
+    async fn invoke_and_await_agent_impl(
         &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Vec<Value>> {
-        Ok(self
-            .invoke_and_await_typed_with_key(worker_id, idempotency_key, function_name, params)
-            .await?
-            .into_iter()
-            .map(|v| v.value)
-            .collect())
-    }
-
-    async fn invoke_and_await_typed_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Option<ValueAndType>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
-        let result = client
-            .invoke_and_await_function(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
-                Some(&idempotency_key.value),
-                function_name,
-                &InvokeParameters {
-                    params: params
-                        .into_iter()
-                        .map(|p| p.try_into())
-                        .collect::<Result<_, _>>()
-                        .map_err(|e| anyhow!("Failed converting params: {e}"))?,
-                },
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: Option<&IdempotencyKey>,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        // TODO: temporarily going through the dynamic invocation route, will be migrated to the new invocation API
+        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
+            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        let key = idempotency_key
+            .cloned()
+            .unwrap_or_else(IdempotencyKey::fresh);
+        let invoke_result = self
+            .invoke_and_await_with_key(
+                &worker_id,
+                &key,
+                "golem:agent/guest.{invoke}",
+                vec![
+                    method_name.into_value_and_type(),
+                    params.into_value_and_type(),
+                    golem_common::model::agent::Principal::anonymous().into_value_and_type(),
+                ],
             )
             .await?;
-        Ok(result.result)
-    }
+        match invoke_result {
+            Ok(mut values) if values.len() == 1 => {
+                let worker_metadata = self.get_worker_metadata(&worker_id).await?;
+                let component = self
+                    .get_component_at_revision(component_id, worker_metadata.component_revision)
+                    .await?;
+                let agent_type = component
+                    .metadata
+                    .find_agent_type_by_wrapper_name(&agent_id.agent_type)
+                    .map_err(|err| anyhow!("Agent type not found: {err}"))?
+                    .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
+                let agent_method = agent_type
+                    .methods
+                    .iter()
+                    .find(|method| method.name == method_name)
+                    .ok_or_else(|| {
+                        debug!("Agent method not found: {}", method_name);
+                        debug!("In agent type: {:#?}", agent_type);
+                        debug!(
+                            "Got for worker-id: {worker_id} with component revision {}",
+                            worker_metadata.component_revision
+                        );
 
-    async fn invoke_and_await_json_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> anyhow::Result<Option<ValueAndType>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
-        let result = client
-            .invoke_and_await_function(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
-                Some(&idempotency_key.value),
-                function_name,
-                &InvokeParameters {
-                    params: params
-                        .into_iter()
-                        .map(|value| OptionallyValueAndTypeJson { typ: None, value })
-                        .collect(),
-                },
-            )
-            .await?;
-        Ok(result.result)
+                        anyhow!("Agent method not found: {}", method_name)
+                    })?;
+
+                let result = match values.remove(0) {
+                    Value::Result(Ok(Some(data_value_value))) => {
+                        let untyped_data_value = UntypedDataValue::from_value(*data_value_value)
+                            .map_err(|err| anyhow!("Unexpected DataValue value: {err}"))?;
+                        Ok(DataValue::try_from_untyped(
+                            untyped_data_value,
+                            agent_method.output_schema.clone(),
+                        )
+                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))?)
+                    }
+                    Value::Result(Err(Some(agent_error_value))) => {
+                        Err(AgentError::from_value(*agent_error_value)
+                            .map_err(|err| anyhow!("Unexpected AgentError value: {err}"))?)
+                    }
+                    _ => Err(anyhow!("Unexpected return value from agent invocation",))?,
+                };
+                Ok(result.map_err(|err| anyhow!("Agent invocation error: {err}"))?)
+            }
+            Ok(_) => Err(anyhow!("Unexpected return value from agent invocation")),
+            Err(err) => Err(anyhow!("Agent invocation failed: {err}")),
+        }
     }
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {

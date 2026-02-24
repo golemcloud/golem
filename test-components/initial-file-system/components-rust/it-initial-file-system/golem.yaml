@@ -1,0 +1,11 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+components:
+  it:initial-file-system:
+    templates: rust

@@ -734,7 +734,7 @@ fn normalized_diff_deployment(
                                 Some(metadata) => diff::ComponentMetadata {
                                     version: metadata.version.clone(),
                                     env: safe_env(&metadata.env),
-                                    dynamic_linking_wasm_rpc: Default::default(),
+                                    config_vars: metadata.config_vars.clone(),
                                 }
                                 .into(),
                                 None => component.metadata.hash().into(),

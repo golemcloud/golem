@@ -15,12 +15,10 @@
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, log_error, log_warn, log_warn_action, logln, LogColorize};
-use crate::model::app::{BinaryComponentSource, DependencyType};
-use crate::model::component::AppComponentType;
+use crate::log::{log_warn, log_warn_action, logln, LogColorize};
 use crate::model::format::Format;
 use crate::model::worker::WorkerName;
-use crate::model::NewInteractiveApp;
+use crate::model::{GuestLanguage, NewInteractiveApp};
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
@@ -28,7 +26,6 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::model::GuestLanguage;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
@@ -36,7 +33,6 @@ use inquire::{Confirm, CustomType, InquireError, Select, Text};
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -328,238 +324,6 @@ impl InteractiveHandler {
             component_names,
         )
         .prompt()?)
-    }
-
-    pub async fn create_component_dependency(
-        &self,
-        component_name: Option<ComponentName>,
-        target_component_name: Option<ComponentName>,
-        target_component_file: Option<PathBuf>,
-        target_component_url: Option<Url>,
-        dependency_type: Option<DependencyType>,
-    ) -> anyhow::Result<Option<(ComponentName, BinaryComponentSource, DependencyType)>> {
-        let component_type_by_name =
-            async |component_name: &ComponentName| -> anyhow::Result<AppComponentType> {
-                let app_ctx = self.ctx.app_context_lock().await;
-                let app_ctx = app_ctx.some_or_err()?;
-                Ok(app_ctx
-                    .application()
-                    .component(component_name)
-                    .component_type())
-            };
-
-        fn validate_component_type_for_dependency_type(
-            dependency_type: DependencyType,
-            component_type: AppComponentType,
-        ) -> bool {
-            match dependency_type {
-                DependencyType::DynamicWasmRpc | DependencyType::StaticWasmRpc => {
-                    match component_type {
-                        AppComponentType::Agent => true,
-                        AppComponentType::Library => false,
-                    }
-                }
-                DependencyType::Wasm => match component_type {
-                    AppComponentType::Agent => false,
-                    AppComponentType::Library => true,
-                },
-            }
-        }
-
-        let component_names = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            app_ctx
-                .application()
-                .component_names()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
-        let component_name = {
-            match component_name {
-                Some(component_name) => {
-                    if !component_names.contains(&component_name) {
-                        log_error(format!(
-                            "Component {} not found, available components: {}",
-                            component_name.as_str().log_color_highlight(),
-                            component_names
-                                .iter()
-                                .map(|name| name.as_str().log_color_highlight())
-                                .join(", ")
-                        ));
-                        bail!(NonSuccessfulExit);
-                    }
-                    component_name
-                }
-                None => {
-                    if component_names.is_empty() {
-                        log_error(format!(
-                            "No components found! Use the '{}' subcommand to create components.",
-                            "component new".log_color_highlight()
-                        ));
-                        bail!(NonSuccessfulExit);
-                    }
-
-                    match Select::new(
-                        "Select a component to which you want to add a new dependency:",
-                        component_names.clone(),
-                    )
-                    .prompt()
-                    .none_if_not_interactive_logged()?
-                    {
-                        Some(component_name) => component_name,
-                        None => return Ok(None),
-                    }
-                }
-            }
-        };
-
-        let component_type = component_type_by_name(&component_name).await?;
-
-        log_action(
-            "Selected",
-            format!(
-                "component {} with component type {}",
-                component_name.as_str().log_color_highlight(),
-                component_type.to_string().log_color_highlight()
-            ),
-        );
-
-        let dependency_type = {
-            let (offered_dependency_types, valid_dependency_types) = match component_type {
-                AppComponentType::Agent => (
-                    vec![DependencyType::DynamicWasmRpc, DependencyType::Wasm],
-                    vec![
-                        DependencyType::DynamicWasmRpc,
-                        DependencyType::StaticWasmRpc,
-                        DependencyType::Wasm,
-                    ],
-                ),
-                AppComponentType::Library => {
-                    (vec![DependencyType::Wasm], vec![DependencyType::Wasm])
-                }
-            };
-
-            match dependency_type {
-                Some(dependency_type) => {
-                    if !valid_dependency_types.contains(&dependency_type) {
-                        log_error(format!(
-                            "The requested {} dependency type is not valid for {} component, valid dependency types: {}",
-                            dependency_type.as_str().log_color_highlight(),
-                            component_name.as_str().log_color_highlight(),
-                            valid_dependency_types
-                                .iter()
-                                .map(|name| name.as_str().log_color_highlight())
-                                .join(", ")
-                        ));
-                        bail!(NonSuccessfulExit);
-                    }
-                    dependency_type
-                }
-                None => {
-                    match Select::new("Select dependency type:", offered_dependency_types)
-                        .prompt()
-                        .none_if_not_interactive_logged()?
-                    {
-                        Some(dependency_type) => dependency_type,
-                        None => return Ok(None),
-                    }
-                }
-            }
-        };
-
-        let target_component_source = match (
-            target_component_name,
-            target_component_file,
-            target_component_url,
-        ) {
-            (None, Some(target_component_file), None) => BinaryComponentSource::LocalFile {
-                path: target_component_file,
-            },
-            (None, None, Some(target_component_url)) => BinaryComponentSource::Url {
-                url: target_component_url,
-            },
-            (Some(target_component_name), None, None) => {
-                if !component_names.contains(&target_component_name) {
-                    log_error(format!(
-                        "Target component {} not found, available components: {}",
-                        target_component_name.as_str().log_color_highlight(),
-                        component_names
-                            .iter()
-                            .map(|name| name.as_str().log_color_highlight())
-                            .join(", ")
-                    ));
-                    bail!(NonSuccessfulExit);
-                }
-
-                let target_component_type = component_type_by_name(&target_component_name).await?;
-                if !validate_component_type_for_dependency_type(
-                    dependency_type,
-                    target_component_type,
-                ) {
-                    log_error(
-                        format!(
-                            "The target component type {} is not compatible with the selected dependency type {}!",
-                            target_component_type.to_string().log_color_highlight(),
-                            dependency_type.as_str().log_color_highlight(),
-                        )
-                    );
-                    logln("");
-                    logln("Use a different target component or dependency type.");
-                }
-
-                BinaryComponentSource::AppComponent {
-                    name: target_component_name,
-                }
-            }
-            _ => {
-                let target_component_names = {
-                    let app_ctx = self.ctx.app_context_lock().await;
-                    let app_ctx = app_ctx.some_or_err()?;
-                    app_ctx
-                        .application()
-                        .component_names()
-                        .filter(|component_name| {
-                            validate_component_type_for_dependency_type(
-                                dependency_type,
-                                app_ctx
-                                    .application()
-                                    .component(component_name)
-                                    .component_type(),
-                            )
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>()
-                };
-
-                if target_component_names.is_empty() {
-                    log_error(
-                        "No target components are available for the selected dependency type!",
-                    );
-                    bail!(NonSuccessfulExit);
-                }
-
-                match Select::new(
-                    "Select target dependency component:",
-                    target_component_names,
-                )
-                .prompt()
-                .none_if_not_interactive_logged()?
-                {
-                    Some(target_component_name) => BinaryComponentSource::AppComponent {
-                        name: target_component_name,
-                    },
-                    None => return Ok(None),
-                }
-            }
-        };
-
-        Ok(Some((
-            component_name,
-            target_component_source,
-            dependency_type,
-        )))
     }
 
     pub fn select_new_app_name_and_components(&self) -> anyhow::Result<Option<NewInteractiveApp>> {

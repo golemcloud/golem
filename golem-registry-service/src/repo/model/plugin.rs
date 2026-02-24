@@ -17,20 +17,12 @@ use super::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
-use golem_common::model::plugin_registration::WasmContentHash;
-use golem_common::model::plugin_registration::{
-    ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationId,
-};
-use golem_service_base::model::plugin_registration::{
-    AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
-};
+use golem_common::model::plugin_registration::{OplogProcessorPluginSpec, PluginRegistrationId};
+use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 use sqlx::FromRow;
 use sqlx::types::Json;
 use uuid::Uuid;
 
-const APP_PLUGIN_TYPE: i16 = 0;
-const LIBRARY_PLUGIN_TYPE: i16 = 1;
-const COMPONENT_TRANSFORMER_PLUGIN_TYPE: i16 = 2;
 const OPLOG_PROCESSOR_PLUGIN_TYPE: i16 = 3;
 
 #[derive(Debug, Clone, PartialEq, FromRow)]
@@ -66,60 +58,6 @@ pub struct PluginRecord {
 impl PluginRecord {
     pub fn from_model(model: PluginRegistration, audit: ImmutableAuditFields) -> Self {
         match model.spec {
-            PluginSpec::App(inner) => Self {
-                plugin_id: model.id.0,
-                account_id: model.account_id.0,
-                name: model.name,
-                version: model.version,
-                audit,
-                description: model.description,
-                icon: model.icon,
-                homepage: model.homepage,
-                plugin_type: APP_PLUGIN_TYPE,
-                provided_wit_package: None,
-                json_schema: None,
-                validate_url: None,
-                transform_url: None,
-                component_id: None,
-                component_revision_id: None,
-                wasm_content_hash: Some(inner.wasm_content_hash.0.into()),
-            },
-            PluginSpec::Library(inner) => Self {
-                plugin_id: model.id.0,
-                account_id: model.account_id.0,
-                name: model.name,
-                version: model.version,
-                audit,
-                description: model.description,
-                icon: model.icon,
-                homepage: model.homepage,
-                plugin_type: LIBRARY_PLUGIN_TYPE,
-                provided_wit_package: None,
-                json_schema: None,
-                validate_url: None,
-                transform_url: None,
-                component_id: None,
-                component_revision_id: None,
-                wasm_content_hash: Some(inner.wasm_content_hash.0.into()),
-            },
-            PluginSpec::ComponentTransformer(inner) => Self {
-                plugin_id: model.id.0,
-                account_id: model.account_id.0,
-                name: model.name,
-                version: model.version,
-                audit,
-                description: model.description,
-                icon: model.icon,
-                homepage: model.homepage,
-                plugin_type: COMPONENT_TRANSFORMER_PLUGIN_TYPE,
-                provided_wit_package: inner.provided_wit_package,
-                json_schema: inner.json_schema.map(Json),
-                validate_url: Some(inner.validate_url),
-                transform_url: Some(inner.transform_url),
-                component_id: None,
-                component_revision_id: None,
-                wasm_content_hash: None,
-            },
             PluginSpec::OplogProcessor(inner) => Self {
                 plugin_id: model.id.0,
                 account_id: model.account_id.0,
@@ -147,57 +85,6 @@ impl TryFrom<PluginRecord> for PluginRegistration {
 
     fn try_from(value: PluginRecord) -> Result<Self, Self::Error> {
         match value.plugin_type {
-            APP_PLUGIN_TYPE => Ok(Self {
-                id: PluginRegistrationId(value.plugin_id),
-                account_id: AccountId(value.account_id),
-                name: value.name,
-                version: value.version,
-                description: value.description,
-                icon: value.icon,
-                homepage: value.homepage,
-                spec: PluginSpec::App(AppPluginSpec {
-                    wasm_content_hash: WasmContentHash(
-                        value
-                            .wasm_content_hash
-                            .ok_or(anyhow!("no wasm_content_hash field"))?
-                            .into(),
-                    ),
-                }),
-            }),
-            LIBRARY_PLUGIN_TYPE => Ok(Self {
-                id: PluginRegistrationId(value.plugin_id),
-                account_id: AccountId(value.account_id),
-                name: value.name,
-                version: value.version,
-                description: value.description,
-                icon: value.icon,
-                homepage: value.homepage,
-                spec: PluginSpec::Library(LibraryPluginSpec {
-                    wasm_content_hash: WasmContentHash(
-                        value
-                            .wasm_content_hash
-                            .ok_or(anyhow!("no wasm_content_hash field"))?
-                            .into(),
-                    ),
-                }),
-            }),
-            COMPONENT_TRANSFORMER_PLUGIN_TYPE => Ok(Self {
-                id: PluginRegistrationId(value.plugin_id),
-                account_id: AccountId(value.account_id),
-                name: value.name,
-                version: value.version,
-                description: value.description,
-                icon: value.icon,
-                homepage: value.homepage,
-                spec: PluginSpec::ComponentTransformer(ComponentTransformerPluginSpec {
-                    provided_wit_package: value.provided_wit_package,
-                    json_schema: value.json_schema.map(|v| v.0),
-                    validate_url: value.validate_url.ok_or(anyhow!("no validate_url field"))?,
-                    transform_url: value
-                        .transform_url
-                        .ok_or(anyhow!("no transform_url field"))?,
-                }),
-            }),
             OPLOG_PROCESSOR_PLUGIN_TYPE => Ok(Self {
                 id: PluginRegistrationId(value.plugin_id),
                 account_id: AccountId(value.account_id),

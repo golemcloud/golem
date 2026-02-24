@@ -1,36 +1,11 @@
 # golem-app-manifest-header
 
-# httpApi:
-#   definitions:
-#     component-name-api:
-#       version: '0.0.1'
-#       routes:
-#         - method: GET
-#           path: /component-name-api/chat/{chat-name}/history
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let name: string = request.path.chat-name;
-#               let agent = chat-agent(name);
-#               let response = agent.history();
-#               { status: 200, body: response }
-#         - method: POST
-#           path: /component-name-api/chat/{chat-name}/ask
-#           binding:
-#             type: default
-#             __cn__: componentname
-#             response: |
-#               let name: string = request.path.chat-name;
-#               let agent = chat-agent(name);
-#               let response = agent.ask(request.body);
-#               { status: 200, body: response }
-
-#   deployments:
-#     local:
-#       - domain: app-name.localhost:9006
-#         definitions:
-#           - component-name-api
+httpApi:
+  deployments:
+    local:
+    - domain: app-name.localhost:9006
+      agents:
+        chat-agent: {}
 
 components:
   componentname:
@@ -39,10 +14,5 @@ components:
     # golem-app-manifest-env-doc
     env:
     # golem-app-manifest-dep-env-vars-doc
-
-    dependencies:
-      - type: wasm
-        url: https://github.com/golemcloud/golem-ai/releases/download/v0.5.0-dev.1/golem_llm_ollama-dev.wasm
-    # golem-app-manifest-deps-doc
 
     # golem-app-manifest-env-presets

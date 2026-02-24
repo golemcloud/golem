@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component_metadata::dynamic_linking_to_diffable;
 use crate::model::diff;
 use uuid::Uuid;
 
@@ -28,9 +27,11 @@ impl ComponentDto {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
-                    self.metadata.dynamic_linking(),
-                ),
+                config_vars: self
+                    .config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             }
             .into(),
             wasm_hash: self.wasm_hash,
@@ -218,8 +219,13 @@ mod protobuf {
                 .collect::<Result<Vec<_>, _>>()?;
 
             let original_env = value.original_env.into_iter().collect::<BTreeMap<_, _>>();
-
             let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
+
+            let original_config_vars = value
+                .original_config_vars
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+            let config_vars = value.config_vars.into_iter().collect::<BTreeMap<_, _>>();
 
             let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
 
@@ -243,6 +249,8 @@ mod protobuf {
                 installed_plugins,
                 original_env,
                 env,
+                original_config_vars,
+                config_vars,
                 wasm_hash,
                 hash,
             })
@@ -276,6 +284,8 @@ mod protobuf {
                     .collect(),
                 original_env: value.original_env.into_iter().collect(),
                 env: value.env.into_iter().collect(),
+                original_config_vars: value.original_config_vars.into_iter().collect(),
+                config_vars: value.config_vars.into_iter().collect(),
                 wasm_hash: Some(value.wasm_hash.into()),
                 hash: Some(value.hash.into()),
             }

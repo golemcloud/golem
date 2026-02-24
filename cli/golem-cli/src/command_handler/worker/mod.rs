@@ -62,19 +62,17 @@ use golem_common::model::agent::{AgentId, DataValue, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component_metadata::ParsedFunctionSite;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::worker::{
-    RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WasiConfigVars,
-};
+use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
 use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{parse_value_and_type, ValueAndType};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use rib::ParsedFunctionSite;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -99,7 +97,8 @@ impl WorkerCommandHandler {
             AgentSubcommand::New {
                 agent_id: worker_name,
                 env,
-            } => self.cmd_new(worker_name, env).await,
+                config_vars,
+            } => self.cmd_new(worker_name, env, config_vars).await,
             AgentSubcommand::Invoke {
                 agent_id: worker_name,
                 function_name,
@@ -224,6 +223,7 @@ impl WorkerCommandHandler {
         &self,
         worker_name: AgentIdArgs,
         env: Vec<(String, String)>,
+        config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -254,6 +254,7 @@ impl WorkerCommandHandler {
             component.id.0,
             worker_name_match.worker_name.0.clone(),
             env.into_iter().collect(),
+            BTreeMap::from_iter(config_vars),
         )
         .await?;
 
@@ -1198,6 +1199,7 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         worker_name: String,
         env: HashMap<String, String>,
+        config_vars: BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
@@ -1208,7 +1210,7 @@ impl WorkerCommandHandler {
                 &WorkerCreationRequest {
                     name: worker_name,
                     env,
-                    config_vars: WasiConfigVars::default(),
+                    config_vars,
                 },
             )
             .await
@@ -1673,6 +1675,7 @@ impl WorkerCommandHandler {
             worker_metadata.worker_id.component_id.0,
             worker_metadata.worker_id.worker_name,
             worker_metadata.env,
+            worker_metadata.config_vars,
         )
         .await?;
         log_action("Recreated", "agent");
@@ -2332,21 +2335,24 @@ fn split_worker_name(worker_name: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use crate::command_handler::worker::split_worker_name;
-    use assert2::assert;
+    use pretty_assertions::assert_eq;
     use test_r::test;
 
     #[test]
     fn test_split_worker_name() {
-        assert!(split_worker_name("a") == vec!["a"]);
-        assert!(split_worker_name("a()") == vec!["a()"]);
-        assert!(split_worker_name("a(\"///\")") == vec!["a(\"///\")"]);
-        assert!(split_worker_name("a/b") == vec!["a", "b"]);
-        assert!(split_worker_name("a/b()") == vec!["a", "b()"]);
-        assert!(split_worker_name("a/b(\"///\")") == vec!["a", "b(\"///\")"]);
-        assert!(split_worker_name("a/b/c") == vec!["a", "b", "c"]);
-        assert!(split_worker_name("a/b/c()") == vec!["a", "b", "c()"]);
-        assert!(split_worker_name("a/b/c(\"/\")") == vec!["a", "b", "c(\"/\")"]);
-        assert!(split_worker_name("/") == vec!["", ""]);
-        assert!(split_worker_name("a(/") == vec!["a(/"]);
+        assert_eq!(split_worker_name("a"), vec!["a"]);
+        assert_eq!(split_worker_name("a()"), vec!["a()"]);
+        assert_eq!(split_worker_name("a(\"///\")"), vec!["a(\"///\")"]);
+        assert_eq!(split_worker_name("a/b"), vec!["a", "b"]);
+        assert_eq!(split_worker_name("a/b()"), vec!["a", "b()"]);
+        assert_eq!(split_worker_name("a/b(\"///\")"), vec!["a", "b(\"///\")"]);
+        assert_eq!(split_worker_name("a/b/c"), vec!["a", "b", "c"]);
+        assert_eq!(split_worker_name("a/b/c()"), vec!["a", "b", "c()"]);
+        assert_eq!(
+            split_worker_name("a/b/c(\"/\")"),
+            vec!["a", "b", "c(\"/\")"]
+        );
+        assert_eq!(split_worker_name("/"), vec!["", ""]);
+        assert_eq!(split_worker_name("a(/"), vec!["a(/"]);
     }
 }

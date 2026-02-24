@@ -3,7 +3,6 @@
   "workspaces": [
     "common-js/*/*",
     "components-js/*/*",
-    "common-ts/*/*",
     "components-ts/*/*"
   ],
   "dependencies": {

@@ -19,13 +19,14 @@ use crate::bridge_gen::BridgeGenerator;
 use crate::model::agent::test::{
     code_first_snippets_agent_type, multi_agent_wrapper_2_types, single_agent_wrapper_types,
 };
+use crate::model::GuestLanguage;
 use camino::Utf8Path;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
-    NamedElementSchemas,
+    NamedElementSchemas, Snapshotting,
 };
-use golem_templates::model::GuestLanguage;
+use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{f64, str};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -128,6 +129,7 @@ fn rust_counter_agent() -> GeneratedPackage {
         dependencies: vec![],
         mode: AgentMode::Durable,
         http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
     };
 
     GeneratedPackage::new(agent_type)
@@ -200,7 +202,6 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
     let shared_target_dir = cwd.join("../../target/shared_bridge_tests");
 
     let status = std::process::Command::new("cargo")
-        .arg("-v")
         .arg("check")
         .arg("--manifest-path")
         .arg(target_dir.join("Cargo.toml").as_std_path())
@@ -211,7 +212,6 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
     assert!(status.success(), "`cargo check` failed: {:?}", status);
 
     let status = std::process::Command::new("cargo")
-        .arg("-v")
         .arg("build")
         .arg("--manifest-path")
         .arg(target_dir.join("Cargo.toml").as_std_path())

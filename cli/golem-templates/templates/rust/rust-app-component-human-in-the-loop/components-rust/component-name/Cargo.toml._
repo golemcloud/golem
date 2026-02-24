@@ -8,11 +8,9 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-# To use common shared agent definitions, place them in common_lib and uncomment the line below
-# common-lib = { path = "../../common-rust/common-lib" }
-
 log = { workspace = true }
 golem-rust = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 wstd = { workspace = true }

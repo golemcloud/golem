@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{to_anyhow, ApplicationContext, BuildContext};
+use crate::app::context::{to_anyhow, BuildContext};
 
 use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::command::component::ComponentSubcommand;
@@ -50,14 +50,12 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
-use golem_common::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
+
+use crate::app_template::add_component_by_template;
+use crate::model::GuestLanguage;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::add_component_by_template;
-use golem_templates::model::{
-    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
-};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -179,15 +177,12 @@ impl ComponentCommandHandler {
         let (common_template, component_template) =
             app_handler.get_template(&template, self.ctx.dev_mode())?;
 
-        let application_name = TemplateApplicationName::from(application_name.0);
-
         match add_component_by_template(
             common_template,
             Some(component_template),
             &PathBuf::from("."),
             &application_name,
-            &PackageName::from_string(component_name.0.clone())
-                .expect("Failed to parse component name"),
+            &component_name,
             Some(self.ctx.template_sdk_overrides()),
         ) {
             Ok(()) => {
@@ -901,19 +896,13 @@ impl ComponentCommandHandler {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
 
-        let agent_types = {
-            if app_ctx.wit().await.is_agent(component_name) {
-                extract_and_store_agent_types(
-                    &BuildContext::new(app_ctx, &BuildConfig::new()),
-                    component_name,
-                )
-                .await?
-            } else {
-                vec![]
-            }
-        };
+        let agent_types = extract_and_store_agent_types(
+            &BuildContext::new(app_ctx, &BuildConfig::new()),
+            component_name,
+        )
+        .await?;
         let component = app_ctx.application().component(component_name);
-        let linked_wasm_path = component.final_linked_wasm();
+        let wasm_path = component.final_wasm();
 
         if !component.component_type().is_deployable() {
             bail!("Component {component_name} is not deployable");
@@ -921,15 +910,15 @@ impl ComponentCommandHandler {
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
-        let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
+        let config_vars = component.config_vars().clone();
 
         Ok(ComponentDeployProperties {
-            linked_wasm_path,
+            wasm_path,
             agent_types,
             files,
-            dynamic_linking,
             plugins,
             env,
+            config_vars,
         })
     }
 
@@ -948,7 +937,7 @@ impl ComponentCommandHandler {
                     component_name.as_str().log_color_highlight()
                 ),
             );
-            let file = std::fs::File::open(&properties.linked_wasm_path)?;
+            let file = std::fs::File::open(&properties.wasm_path)?;
             let mut component_hasher = blake3::Hasher::new();
             component_hasher
                 .update_reader(&file)
@@ -1027,7 +1016,11 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(&properties.dynamic_linking),
+                config_vars: properties
+                    .config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             }
             .into(),
             wasm_hash: component_binary_hash.into(),
@@ -1058,7 +1051,7 @@ impl ComponentCommandHandler {
             None,
         );
 
-        let linked_wasm = component_stager.open_linked_wasm().await?;
+        let wasm = component_stager.open_wasm().await?;
         let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
@@ -1077,12 +1070,12 @@ impl ComponentCommandHandler {
                         .as_ref()
                         .map(|files| files.file_options.clone())
                         .unwrap_or_default(),
-                    dynamic_linking: component_stager.dynamic_linking(),
                     env: component_stager.env(),
+                    config_vars: component_stager.config_vars(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
-                linked_wasm,
+                wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
                     .await
                     .transpose()?,
@@ -1155,7 +1148,7 @@ impl ComponentCommandHandler {
             Some(diff),
         );
 
-        let linked_wasm = component_stager.open_linked_wasm_if_changed().await?;
+        let wasm = component_stager.open_wasm_if_changed().await?;
         let agent_types = component_stager.agent_types_if_changed().cloned();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
@@ -1172,12 +1165,12 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
-                    dynamic_linking: component_stager.dynamic_linking_if_changed(),
+                    config_vars: component_stager.config_vars_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),
                 },
-                linked_wasm,
+                wasm,
                 changed_files.open_archive().await?,
             )
             .await
@@ -1242,56 +1235,6 @@ impl ComponentCommandHandler {
             .await
             .map_err(|err| anyhow!(err))
     }
-}
-
-fn app_component_dynamic_linking(
-    _app_ctx: &mut ApplicationContext,
-    _component_name: &ComponentName,
-) -> anyhow::Result<HashMap<String, DynamicLinkedInstance>> {
-    Ok(HashMap::new())
-
-    // TODO: WASM RPC cleanup
-    /*
-    let mut mapping = Vec::new();
-    let wasm_rpc_deps = app_ctx
-        .application()
-        .component_dependencies(component_name)
-        .iter()
-        .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
-        .filter_map(|dep| dep.as_dependent_app_component())
-        .collect::<Vec<_>>();
-
-    for wasm_rpc_dep in wasm_rpc_deps {
-        mapping.push(app_ctx.component_stub_interfaces(&wasm_rpc_dep.name)?);
-    }
-
-    Ok(mapping
-        .into_iter()
-        .map(|stub_interfaces| {
-            (
-                stub_interfaces.stub_interface_name,
-                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                    targets: HashMap::from_iter(
-                        stub_interfaces
-                            .exported_interfaces_per_stub_resource
-                            .into_iter()
-                            .map(|(resource_name, interface_name)| {
-                                (
-                                    resource_name,
-                                    WasmRpcTarget {
-                                        interface_name,
-                                        component_name: stub_interfaces
-                                            .component_name
-                                            .as_str()
-                                            .to_string(),
-                                    },
-                                )
-                            }),
-                    ),
-                }),
-            )
-        })
-        .collect())*/
 }
 
 fn resolve_env_vars(

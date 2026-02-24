@@ -353,4 +353,11 @@ declare module 'golem:api/host@1.3.0' {
     tag: 'forked'
     val: ForkDetails
   };
+  /**
+   * Snapshot payload
+   */
+  export type Snapshot = {
+    data: Uint8Array;
+    mimeType: string;
+  };
 }

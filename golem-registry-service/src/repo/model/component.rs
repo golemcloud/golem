@@ -26,7 +26,7 @@ use golem_common::model::component::{
     ComponentFileContentHash, ComponentFilePath, ComponentFilePermissions, ComponentName,
     ComponentRevision, InitialComponentFile, InstalledPlugin,
 };
-use golem_common::model::component_metadata::{ComponentMetadata, dynamic_linking_to_diffable};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
@@ -161,6 +161,8 @@ pub struct ComponentRevisionRecord {
     pub metadata: Blob<ComponentMetadata>,
     pub original_env: Json<BTreeMap<String, String>>,
     pub env: Json<BTreeMap<String, String>>,
+    pub original_config_vars: Json<BTreeMap<String, String>>,
+    pub config_vars: Json<BTreeMap<String, String>>,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
     pub transformed_object_store_key: String,
@@ -168,10 +170,10 @@ pub struct ComponentRevisionRecord {
     #[sqlx(skip)]
     pub original_files: Vec<ComponentFileRecord>,
     #[sqlx(skip)]
-    pub plugins: Vec<ComponentPluginInstallationRecord>,
+    pub files: Vec<ComponentFileRecord>,
 
     #[sqlx(skip)]
-    pub files: Vec<ComponentFileRecord>,
+    pub plugins: Vec<ComponentPluginInstallationRecord>,
 }
 
 impl ComponentRevisionRecord {
@@ -213,6 +215,8 @@ impl ComponentRevisionRecord {
             metadata: Blob::new(ComponentMetadata::default()),
             env: Default::default(),
             original_env: Default::default(),
+            config_vars: Default::default(),
+            original_config_vars: Default::default(),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
             transformed_object_store_key: "".to_string(),
@@ -233,9 +237,11 @@ impl ComponentRevisionRecord {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
-                    self.metadata.value().dynamic_linking(),
-                ),
+                config_vars: self
+                    .config_vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             }
             .into(),
             wasm_hash: self.binary_hash.into(),
@@ -320,6 +326,8 @@ impl ComponentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             original_env: Json(value.original_env),
             env: Json(value.env),
+            original_config_vars: Json(value.original_config_vars),
+            config_vars: Json(value.config_vars),
             audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
@@ -365,6 +373,7 @@ impl ComponentExtRevisionRecord {
                 .map(|p| p.try_into())
                 .collect::<Result<_, _>>()?,
             env: self.revision.env.0,
+            config_vars: self.revision.config_vars.0,
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
             original_files: self
@@ -374,6 +383,7 @@ impl ComponentExtRevisionRecord {
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
             original_env: self.revision.original_env.0,
+            original_config_vars: self.revision.original_config_vars.0,
             transformed_object_store_key: self.revision.transformed_object_store_key,
             hash: self.revision.hash.into(),
         })

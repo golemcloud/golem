@@ -1,5 +1,4 @@
 {
   "description": "An example agent using promises to implement a human in the loop workflow.",
-  "instructions": "After the template is deployed, a new workflow can be created by POSTing to http://localhost:9006/workflows. This will block until the workflow is completed. In a separate tab http://localhost:9006/human/bob/pending and http://localhost:9006/human/bob/decide can be used to approve or reject the workflow.",
   "appComponentGroup": "default"
 }

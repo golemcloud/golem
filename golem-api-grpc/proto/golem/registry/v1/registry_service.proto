@@ -13,7 +13,6 @@ import "golem/component/agent.proto";
 import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
-import "golem/component/dynamic_linked_instance.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/agent_deployment.proto";
 import "golem/registry/v1/registry_service_error.proto";

@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::model::agent::{AgentError, AgentType};
-use anyhow::anyhow;
-use rib::ParsedFunctionName;
+use crate::model::parsed_function_name::ParsedFunctionName;
+use anyhow::{anyhow, Context};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
@@ -118,14 +118,21 @@ pub async fn extract_agent_types_with_streams(
             Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
             crate::model::agent::bindings::golem::agent::common::AgentError,
         >,
-    )>(&mut store)?;
+    )>(&mut store)
+    .context(
+        "The component's golem:agent/guest interface does not match the expected type signature. \
+         This usually means the golem-rust (or golem-ts) SDK version used to build the component \
+         is incompatible with this version of golem-cli. \
+         Try updating the SDK dependency or setting GOLEM_RUST_PATH / GOLEM_TS_PACKAGES_PATH \
+         to point to a compatible local SDK."
+    )?;
     let results = typed_func.call_async(&mut store, ()).await?;
     typed_func.post_return_async(&mut store).await?;
 
     match results.0 {
         Ok(results) => {
             let agent_types = results.into_iter().map(AgentType::from).collect();
-            debug!("Discovered agent types: {:#?}", agent_types);
+            trace!("Discovered agent types: {:#?}", agent_types);
             Ok(agent_types)
         }
         Err(agent_error) => {
@@ -348,7 +355,7 @@ mod tests {
     #[test]
     async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
         let result = extract_agent_types(
-            &PathBuf::from_str("../test-components/caller.wasm")?,
+            &PathBuf::from_str("../test-components/golem_it_agent_rpc_rust_release.wasm")?,
             false,
             false,
         )
@@ -360,7 +367,7 @@ mod tests {
     #[test]
     async fn can_extract_agent_types_2() -> anyhow::Result<()> {
         let result = extract_agent_types(
-            &PathBuf::from_str("../test-components/golem_it_agent_self_rpc.wasm")?,
+            &PathBuf::from_str("../test-components/golem_it_agent_rpc.wasm")?,
             false,
             false,
         )

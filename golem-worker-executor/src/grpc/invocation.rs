@@ -19,6 +19,7 @@ use golem_common::base_model::WorkerId;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::{IdempotencyKey, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -26,7 +27,6 @@ use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionPar
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::protobuf::Val;
 use golem_wasm::{Value, ValueAndType};
-use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;
@@ -35,7 +35,7 @@ pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
-    fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
+    fn config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn parent(&self) -> Option<WorkerId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
@@ -86,16 +86,9 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .map(|ctx| ctx.env.clone().into_iter().collect::<Vec<_>>())
     }
 
-    fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError> {
+    fn config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError> {
         match self.proto_invocation_context() {
-            Some(ctx) => Ok(Some(
-                ctx.wasi_config_vars
-                    .clone()
-                    .ok_or(WorkerExecutorError::invalid_request(
-                        "wasi_config_vars not found",
-                    ))?
-                    .into(),
-            )),
+            Some(ctx) => Ok(Some(ctx.config_vars.clone().into_iter().collect())),
             None => Ok(None),
         }
     }

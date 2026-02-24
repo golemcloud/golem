@@ -386,6 +386,19 @@ fn setup_dependencies(
         "loadSnapshot",
     )?;
     component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/loadSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("host")
+            .join("host.mi"),
+        "host",
+    )?;
+    component.add_dependency(
         &format!("{moonbit_root_package}/gen/interface/golem/api/saveSnapshot"),
         &Utf8Path::new("target")
             .join("wasm")
@@ -397,6 +410,19 @@ fn setup_dependencies(
             .join("saveSnapshot")
             .join("saveSnapshot.mi"),
         "saveSnapshot",
+    )?;
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/saveSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("host")
+            .join("host.mi"),
+        "host",
     )?;
 
     if has_types {
@@ -485,22 +511,51 @@ fn setup_dependencies(
     depends_on_wasm_rpc_types(component, "interface/golem/agent/common")?;
     depends_on_wasm_rpc_types(component, "interface/golem/agent/guest")?;
 
+    let depends_on_wasi_io_poll = |component: &mut MoonBitComponent, name: &str| {
+        component.add_dependency(
+            &format!("{moonbit_root_package}/{name}"),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("wasi")
+                .join("io")
+                .join("poll")
+                .join("poll.mi"),
+            "poll",
+        )
+    };
+
+    let depends_on_golem_api_host = |component: &mut MoonBitComponent, name: &str| {
+        component.add_dependency(
+            &format!("{moonbit_root_package}/{name}"),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("golem")
+                .join("api")
+                .join("host")
+                .join("host.mi"),
+            "host",
+        )
+    };
+
+    depends_on_wasm_rpc_types(component, "interface/golem/api/host")?;
+    depends_on_wasi_io_poll(component, "interface/golem/api/host")?;
+
+    depends_on_golem_api_host(component, "interface/golem/api/loadSnapshot")?;
+    depends_on_golem_api_host(component, "interface/golem/api/saveSnapshot")?;
+
+    depends_on_wasi_io_poll(component, "interface/wasi/clocks/monotonicClock")?;
+
     depends_on_golem_agent_common(component, "gen")?;
     depends_on_wasm_rpc_types(component, "gen")?;
+    depends_on_golem_api_host(component, "gen")?;
 
-    component.add_dependency(
-        &format!("{moonbit_root_package}/interface/golem/rpc/types"),
-        &Utf8Path::new("target")
-            .join("wasm")
-            .join("release")
-            .join("build")
-            .join("interface")
-            .join("wasi")
-            .join("io")
-            .join("poll")
-            .join("poll.mi"),
-        "poll",
-    )?;
+    depends_on_wasi_io_poll(component, "interface/golem/rpc/types")?;
     component.add_dependency(
         &format!("{moonbit_root_package}/interface/golem/rpc/types"),
         &Utf8Path::new("target")
@@ -1501,8 +1556,8 @@ mod tests {
         reproducer_for_multiple_types_called_element,
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
+    use crate::model::GuestLanguage;
     use golem_common::model::component::ComponentName;
-    use golem_templates::model::GuestLanguage;
     use tempfile::NamedTempFile;
     use test_r::test;
 

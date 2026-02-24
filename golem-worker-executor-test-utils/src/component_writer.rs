@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::agent::AgentType;
@@ -23,7 +24,7 @@ use golem_common::model::component::{
     InitialComponentFile,
 };
 use golem_common::model::component_metadata::{
-    ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata,
+    ComponentMetadata, LinearMemory, RawComponentMetadata,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
@@ -31,13 +32,26 @@ use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tracing::{debug, info};
 use uuid::Uuid;
 
 const WASMS_DIRNAME: &str = "wasms";
 
+#[derive(Clone)]
+struct CachedAnalysis {
+    memories: Vec<LinearMemory>,
+    exports: Vec<AnalysedExport>,
+    agent_types: Vec<AgentType>,
+    root_package_name: Option<String>,
+    root_package_version: Option<String>,
+}
+
 pub struct FileSystemComponentWriter {
     root: PathBuf,
+    analysis_cache: Cache<blake3::Hash, (), CachedAnalysis, String>,
+    component_cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
+    latest_revisions: Mutex<HashMap<ComponentId, ComponentRevision>>,
 }
 
 impl FileSystemComponentWriter {
@@ -51,6 +65,19 @@ impl FileSystemComponentWriter {
 
         Self {
             root: root.to_path_buf(),
+            analysis_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_analysis",
+            ),
+            component_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_metadata",
+            ),
+            latest_revisions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -62,12 +89,13 @@ impl FileSystemComponentWriter {
         component_revision: ComponentRevision,
         files: Vec<InitialComponentFile>,
         skip_analysis: bool,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
 
@@ -88,30 +116,54 @@ impl FileSystemComponentWriter {
         let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_revision}.wasm");
         let target_path = target_dir.join(&wasm_filename);
 
-        let wasm_hash = {
-            let content = tokio::fs::read(source_path).await?;
-            let hash = blake3::hash(&content);
-            golem_common::model::diff::Hash::from(hash)
-        };
+        let content = tokio::fs::read(source_path).await?;
+        let blake3_hash = blake3::hash(&content);
+        let analysis_cache_key = original_source_hash.unwrap_or(blake3_hash);
+        let wasm_hash = golem_common::model::diff::Hash::from(blake3_hash);
 
         tokio::fs::copy(source_path, &target_path)
             .await
             .map_err(|err| anyhow!("Failed to copy WASM to the local component store: {err:#}"))?;
 
-        let (raw_component_metadata, memories, exports) = if skip_analysis {
-            (RawComponentMetadata::default(), vec![], vec![])
+        let CachedAnalysis {
+            memories,
+            exports,
+            agent_types,
+            root_package_name,
+            root_package_version,
+        } = if skip_analysis {
+            CachedAnalysis {
+                memories: vec![],
+                exports: vec![],
+                agent_types: vec![],
+                root_package_name: None,
+                root_package_version: None,
+            }
         } else {
-            Self::analyze_memories_and_exports(&target_path)
-                .await
-                .map_err(|err| anyhow!("Failed to analyze component: {err:#}"))?
-        };
+            let target_path_clone = target_path.clone();
+            self.analysis_cache
+                .get_or_insert_simple(&analysis_cache_key, async || {
+                    debug!("Analyzing component {component_id} (hash {blake3_hash})");
 
-        let agent_types = if skip_analysis {
-            vec![]
-        } else {
-            extract_agent_types(&target_path, false, true)
+                    let (raw_component_metadata, memories, exports) =
+                        Self::analyze_memories_and_exports(&target_path_clone)
+                            .await
+                            .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
+
+                    let agent_types = extract_agent_types(&target_path_clone, false, true)
+                        .await
+                        .map_err(|err| format!("Failed analyzing component: {err}"))?;
+
+                    Ok(CachedAnalysis {
+                        memories,
+                        exports,
+                        agent_types,
+                        root_package_name: raw_component_metadata.root_package_name,
+                        root_package_version: raw_component_metadata.root_package_version,
+                    })
+                })
                 .await
-                .map_err(|err| anyhow!("Failed analyzing component: {err}"))?
+                .map_err(|err| anyhow!("{err}"))?
         };
 
         let size = tokio::fs::metadata(&target_path)
@@ -128,15 +180,15 @@ impl FileSystemComponentWriter {
             revision: component_revision,
             files,
             size,
-            memories: memories.clone(),
-            exports: exports.clone(),
-            dynamic_linking,
+            memories,
+            exports,
             wasm_filename,
             env,
+            config_vars,
             agent_types,
             target_path,
-            root_package_name: raw_component_metadata.root_package_name.clone(),
-            root_package_version: raw_component_metadata.root_package_version.clone(),
+            root_package_name,
+            root_package_version,
             wasm_hash,
             environment_roles_from_shares,
             final_hash: Hash::empty(),
@@ -148,6 +200,17 @@ impl FileSystemComponentWriter {
             &target_dir.join(metadata_filename(component_id, component_revision)),
         )
         .await?;
+
+        self.latest_revisions
+            .lock()
+            .unwrap()
+            .entry(*component_id)
+            .and_modify(|rev| {
+                if component_revision > *rev {
+                    *rev = component_revision;
+                }
+            })
+            .or_insert(component_revision);
 
         tracing::info!(
             "Wrote component {} with revision {} to local component service",
@@ -175,16 +238,7 @@ impl FileSystemComponentWriter {
         component_id: &ComponentId,
         component_revision: ComponentRevision,
     ) -> anyhow::Result<LocalFileSystemComponentMetadata> {
-        let path = self
-            .root
-            .join(metadata_filename(component_id, component_revision));
-
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .context("failed to read old metadata")?;
-
-        let result = serde_json::from_str(&content)?;
-        Ok(result)
+        load_metadata_from(&self.root, component_id, component_revision).await
     }
 
     pub async fn get_or_add_component(
@@ -192,25 +246,27 @@ impl FileSystemComponentWriter {
         local_path: &Path,
         name: &str,
         files: Vec<InitialComponentFile>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> ComponentDto {
         self.add_component(
             local_path,
             name,
             files,
-            dynamic_linking,
             unverified,
             env,
+            config_vars,
             environment_id,
             application_id,
             account_id,
             environment_roles_from_shares,
+            original_source_hash,
         )
         .await
         .expect("Failed to add component")
@@ -221,13 +277,14 @@ impl FileSystemComponentWriter {
         local_path: &Path,
         name: &str,
         files: Vec<InitialComponentFile>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
         self.write_component_to_filesystem(
             local_path,
@@ -236,12 +293,13 @@ impl FileSystemComponentWriter {
             ComponentRevision::INITIAL,
             files,
             unverified,
-            dynamic_linking,
             env,
+            config_vars,
             environment_id,
             application_id,
             account_id,
             environment_roles_from_shares,
+            original_source_hash,
         )
         .await
     }
@@ -263,12 +321,13 @@ impl FileSystemComponentWriter {
             ComponentRevision::INITIAL,
             Vec::new(),
             false,
-            HashMap::new(),
+            BTreeMap::new(),
             BTreeMap::new(),
             environment_id,
             application_id,
             account_id,
             environment_roles_from_shares,
+            None,
         )
         .await
     }
@@ -279,8 +338,9 @@ impl FileSystemComponentWriter {
         local_path: Option<&Path>,
         new_files: Vec<InitialComponentFile>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
+        original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
 
@@ -317,12 +377,13 @@ impl FileSystemComponentWriter {
                 new_revision,
                 files,
                 false,
-                dynamic_linking.unwrap_or(old_metadata.dynamic_linking),
                 env.unwrap_or(old_metadata.env),
+                config_vars.unwrap_or(old_metadata.config_vars),
                 old_metadata.environment_id,
                 old_metadata.application_id,
                 old_metadata.account_id,
                 old_metadata.environment_roles_from_shares,
+                original_source_hash,
             )
             .await
             .expect("Failed to write component to filesystem");
@@ -331,6 +392,10 @@ impl FileSystemComponentWriter {
     }
 
     pub async fn get_latest_revision(&self, component_id: &ComponentId) -> ComponentRevision {
+        if let Some(rev) = self.latest_revisions.lock().unwrap().get(component_id) {
+            return *rev;
+        }
+
         let target_dir = &self.root;
 
         let component_id_str = component_id.to_string();
@@ -351,7 +416,12 @@ impl FileSystemComponentWriter {
             })
             .collect::<Vec<u64>>();
         revisions.sort();
-        ComponentRevision::new(*revisions.last().unwrap_or(&0)).unwrap()
+        let rev = ComponentRevision::new(*revisions.last().unwrap_or(&0)).unwrap();
+        self.latest_revisions
+            .lock()
+            .unwrap()
+            .insert(*component_id, rev);
+        rev
     }
 
     pub async fn get_latest_component_metadata(
@@ -359,9 +429,27 @@ impl FileSystemComponentWriter {
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
         let revision = self.get_latest_revision(component_id).await;
-        let metadata = self.load_metadata(component_id, revision).await?;
-        let component: golem_common::model::component::ComponentDto = metadata.into();
-        Ok(component)
+        self.get_component_metadata_at_revision(component_id, revision)
+            .await
+    }
+
+    pub async fn get_component_metadata_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
+        let key = (*component_id, revision);
+        let root = self.root.clone();
+        self.component_cache
+            .get_or_insert_simple(&key, async || {
+                let metadata = load_metadata_from(&root, &key.0, key.1)
+                    .await
+                    .map_err(|err| format!("Failed to load component metadata: {err:#}"))?;
+                let component: ComponentDto = metadata.into();
+                Ok(component)
+            })
+            .await
+            .map_err(|err| anyhow!("{err}"))
     }
 }
 
@@ -374,6 +462,21 @@ async fn write_metadata_to_file(
     tokio::fs::write(path, json)
         .await
         .map_err(|_| anyhow!("Failed to write component file properties".to_string()))
+}
+
+async fn load_metadata_from(
+    root: &Path,
+    component_id: &ComponentId,
+    component_revision: ComponentRevision,
+) -> anyhow::Result<LocalFileSystemComponentMetadata> {
+    let path = root.join(metadata_filename(component_id, component_revision));
+
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .context("failed to read old metadata")?;
+
+    let result = serde_json::from_str(&content)?;
+    Ok(result)
 }
 
 fn metadata_filename(component_id: &ComponentId, component_revision: ComponentRevision) -> String {
@@ -394,8 +497,8 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub files: Vec<InitialComponentFile>,
     pub component_name: String,
     pub wasm_filename: String,
-    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub env: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentType>,
     pub environment_roles_from_shares: HashSet<EnvironmentRole>,
@@ -430,7 +533,6 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
             metadata: ComponentMetadata::from_parts(
                 value.exports,
                 value.memories,
-                value.dynamic_linking,
                 value.root_package_name,
                 value.root_package_version,
                 value.agent_types,
@@ -441,6 +543,8 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
             installed_plugins: vec![],
             original_env: value.env.clone(),
             env: value.env,
+            original_config_vars: value.config_vars.clone(),
+            config_vars: value.config_vars,
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,
         }

@@ -69,7 +69,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `export_golem_agentic` | Full agentic framework support |
 | `export_load_snapshot` | Snapshot loading support |
 | `export_save_snapshot` | Snapshot saving support |
-| `golem_ai` | AI/LLM integration bindings |
+
 | `chrono` | Chrono type conversions |
 | `uuid` | UUID type conversions (always enabled) |
 | `url` | URL type conversions |

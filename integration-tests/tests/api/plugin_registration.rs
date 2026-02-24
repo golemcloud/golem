@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
 };
@@ -21,9 +20,9 @@ use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
-use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
@@ -52,14 +51,13 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
     // check user can fetch plugin
     {
         let fetched_plugin = client.get_plugin_by_id(&plugin.id.0).await?;
-        assert!(fetched_plugin == plugin);
+        assert_eq!(fetched_plugin, plugin);
     }
 
     // check other user cannot fetch plugin
@@ -67,11 +65,12 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
         let user_2 = deps.user().await?;
         let client_2 = user_2.registry_service_client().await;
         let result = client_2.get_plugin_by_id(&plugin.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     // delete plugin
@@ -80,11 +79,12 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
     // fetching plugin after deletion fails with 404
     {
         let result = client.get_plugin_by_id(&plugin.id.0).await;
-        assert!(
-            let Err(golem_client::Error::Item(
+        assert!(matches!(
+            result,
+            Err(golem_client::Error::Item(
                 RegistryServiceGetPluginByIdError::Error404(_)
-            )) = result
-        );
+            ))
+        ));
     }
 
     Ok(())
@@ -95,43 +95,41 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
 async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
 
-    let app_plugin = client
+    let component = user.component(&env.id, "oplog-processor").store().await?;
+
+    let plugin1 = client
         .create_plugin(
             &user.account_id.0,
             &PluginRegistrationCreation {
-                name: "test-app-plugin".to_string(),
+                name: "test-oplog-processor-1".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::App(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                }),
             },
-            Some(
-                tokio::fs::File::open(deps.component_directory().join("app_and_library_app.wasm"))
-                    .await?,
-            ),
         )
         .await?;
 
-    let library_plugin = client
+    let plugin2 = client
         .create_plugin(
             &user.account_id.0,
             &PluginRegistrationCreation {
-                name: "test-library-plugin".to_string(),
+                name: "test-oplog-processor-2".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::Library(Empty {}),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                }),
             },
-            Some(
-                tokio::fs::File::open(
-                    deps.component_directory()
-                        .join("app_and_library_library.wasm"),
-                )
-                .await?,
-            ),
         )
         .await?;
 
@@ -142,7 +140,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             .into_iter()
             .map(|p| p.id)
             .collect::<HashSet<_>>();
-        assert!(plugin_ids == HashSet::from_iter(vec![app_plugin.id, library_plugin.id]));
+        assert_eq!(plugin_ids, HashSet::from_iter(vec![plugin1.id, plugin2.id]));
     }
 
     Ok(())
@@ -157,7 +155,11 @@ async fn fails_with_bad_request_if_user_creates_oplog_processor_from_invalid_com
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user.component(&env.id, "shopping-cart").store().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
     let result = client
         .create_plugin(
             &user.account_id.0,
@@ -172,15 +174,15 @@ async fn fails_with_bad_request_if_user_creates_oplog_processor_from_invalid_com
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreatePluginError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -210,7 +212,6 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 
@@ -228,15 +229,15 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreatePluginError::Error409(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -268,15 +269,15 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await;
 
-    assert!(
-        let Err(golem_client::Error::Item(
+    assert!(matches!(
+        result,
+        Err(golem_client::Error::Item(
             RegistryServiceCreatePluginError::Error400(_)
-        )) = result
-    );
+        ))
+    ));
 
     Ok(())
 }
@@ -311,7 +312,6 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
                     component_revision: component.revision,
                 }),
             },
-            None::<Vec<u8>>,
         )
         .await?;
 

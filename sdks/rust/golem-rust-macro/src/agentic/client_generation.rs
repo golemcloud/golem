@@ -195,17 +195,20 @@ fn get_remote_agent_methods_info(
             let method_name = &method.sig.ident;
             let trigger_name = format_ident!("trigger_{}", method_name);
             let schedule_name = format_ident!("schedule_{}", method_name);
+            let schedule_cancelable_name = format_ident!("schedule_cancelable_{}", method_name);
 
             agent_method_names.extend(vec![
                 method_name.to_string(),
                 trigger_name.to_string(),
                 schedule_name.to_string(),
+                schedule_cancelable_name.to_string(),
             ]);
 
             Some(generate_method_code(
                 method_name,
                 &trigger_name,
                 &schedule_name,
+                &schedule_cancelable_name,
                 &agent_type_name,
                 &input_defs,
                 &input_idents,
@@ -307,6 +310,7 @@ fn generate_method_code(
     method_name: &syn::Ident,
     trigger_name: &syn::Ident,
     schedule_name: &syn::Ident,
+    schedule_cancelable_name: &syn::Ident,
     agent_type_name: &str,
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
@@ -373,6 +377,18 @@ fn generate_method_code(
                 #remote_token,
                 &wit_values
             );
+        }
+
+        pub fn #schedule_cancelable_name(#(#input_defs),*, scheduled_time: golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime) -> golem_rust::golem_wasm::golem_rpc_0_2_x::types::CancellationToken {
+            let wit_values: Vec<golem_rust::golem_wasm::WitValue> =
+                vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents)
+                    .expect("Failed")),*];
+
+            self.wasm_rpc.schedule_cancelable_invocation(
+                scheduled_time,
+                #remote_token,
+                &wit_values
+            )
         }
     }
 }

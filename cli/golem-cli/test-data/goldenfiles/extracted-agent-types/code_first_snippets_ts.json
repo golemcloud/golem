@@ -5007,6 +5007,9 @@
       }
     ],
     "mode": "Durable",
+    "snapshotting": {
+      "type": "Disabled"
+    },
     "typeName": "BarAgent"
   },
   {
@@ -9955,6 +9958,9 @@
       }
     ],
     "mode": "Durable",
+    "snapshotting": {
+      "type": "Disabled"
+    },
     "typeName": "FooAgent"
   }
 ]

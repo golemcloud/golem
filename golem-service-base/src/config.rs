@@ -141,7 +141,6 @@ pub struct S3BlobStorageConfig {
     pub compressed_oplog_buckets: Vec<String>,
     pub initial_component_files_bucket: String,
     pub components_bucket: String,
-    pub plugin_wasm_files_bucket: String,
 }
 
 impl SafeDisplay for S3BlobStorageConfig {
@@ -188,11 +187,6 @@ impl SafeDisplay for S3BlobStorageConfig {
             self.initial_component_files_bucket
         );
         let _ = writeln!(&mut result, "components bucket: {}", self.components_bucket);
-        let _ = writeln!(
-            &mut result,
-            "plugin wasm files bucket: {}",
-            self.plugin_wasm_files_bucket
-        );
 
         result
     }
@@ -213,7 +207,6 @@ impl Default for S3BlobStorageConfig {
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             initial_component_files_bucket: "golem-initial-component-files".to_string(),
             components_bucket: "component-store".to_string(),
-            plugin_wasm_files_bucket: "golem-plugin-wasm-files".to_string(),
         }
     }
 }

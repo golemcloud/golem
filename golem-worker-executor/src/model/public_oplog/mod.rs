@@ -31,16 +31,16 @@ use golem_common::model::oplog::public_oplog_entry::{
     InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
     PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams, StartSpanParams,
     SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     ExportedFunctionParameters, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostResponse, ManualUpdateParameters, OplogEntry,
-    OplogIndex, PluginInstallationDescription, PublicAttribute, PublicOplogEntry,
-    PublicUpdateDescription, PublicWorkerInvocation, SnapshotBasedUpdateParameters,
-    UpdateDescription,
+    HostRequestGolemRpcScheduledInvocation, HostResponse, JsonSnapshotData, ManualUpdateParameters,
+    OplogEntry, OplogIndex, PluginInstallationDescription, PublicAttribute, PublicOplogEntry,
+    PublicSnapshotData, PublicUpdateDescription, PublicWorkerInvocation, RawSnapshotData,
+    SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{Empty, OwnedWorkerId, WorkerId, WorkerInvocation};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -226,7 +226,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                wasi_config_vars,
+                config_vars,
                 original_phantom_id,
             } => {
                 let metadata = components
@@ -255,7 +255,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
-                    wasi_config_vars: wasi_config_vars.into(),
+                    config_vars,
                     original_phantom_id,
                 }))
             }
@@ -488,12 +488,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     UpdateDescription::Automatic { .. } => {
                         PublicUpdateDescription::Automatic(Empty {})
                     }
-                    UpdateDescription::SnapshotBased { payload, .. } => {
+                    UpdateDescription::SnapshotBased {
+                        payload, mime_type, ..
+                    } => {
                         let bytes = oplog_service
                             .download_payload(owned_worker_id, payload)
                             .await?;
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
+                            mime_type,
                         })
                     }
                 };
@@ -733,6 +736,37 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     begin_index,
                 },
             )),
+            OplogEntry::Snapshot {
+                timestamp,
+                data,
+                mime_type,
+            } => {
+                let bytes: Vec<u8> = oplog_service
+                    .download_payload(owned_worker_id, data)
+                    .await?;
+
+                let snapshot_data = if mime_type == "application/json" {
+                    match serde_json::from_slice(&bytes) {
+                        Ok(json_value) => {
+                            PublicSnapshotData::Json(JsonSnapshotData { data: json_value })
+                        }
+                        Err(_) => PublicSnapshotData::Raw(RawSnapshotData {
+                            data: bytes,
+                            mime_type,
+                        }),
+                    }
+                } else {
+                    PublicSnapshotData::Raw(RawSnapshotData {
+                        data: bytes,
+                        mime_type,
+                    })
+                };
+
+                Ok(PublicOplogEntry::Snapshot(SnapshotParams {
+                    timestamp,
+                    data: snapshot_data,
+                }))
+            }
         }
     }
 }

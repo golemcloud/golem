@@ -1,0 +1,63 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+componentTemplates:
+  rust:
+    presets:
+      debug:
+        default: true
+        build:
+        - command: cargo-component build
+          sources:
+          - src
+          - ../../common-rust
+          - Cargo.toml
+          - ../../Cargo.toml
+          targets:
+          - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+          basedOnCompiledWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+          withAgent: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+          to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
+        sourceWit: .wit/wit
+        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
+        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
+        outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
+        clean:
+        - src/bindings.rs
+        customCommands:
+          copy:
+            - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../../{{ component_name | to_snake_case }}_v4_debug.wasm
+      release:
+        build:
+        - command: cargo-component build --release
+          sources:
+          - src
+          - ../../common-rust
+          - Cargo.toml
+          - ../../Cargo.toml
+          targets:
+          - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+          basedOnCompiledWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+          withAgent: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+          to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
+        sourceWit: .wit/wit
+        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
+        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
+        outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
+        clean:
+        - src/bindings.rs
+        customCommands:
+          copy:
+            - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm ../../../{{ component_name | to_snake_case }}_v4_release.wasm
+customCommands:
+  cargo-clean:
+  - command: cargo clean

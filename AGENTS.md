@@ -50,6 +50,8 @@ Choose the appropriate test command based on what you're changing:
 | API changes (HTTP) | `cargo make api-tests-http` |
 | API changes (gRPC) | `cargo make api-tests-grpc` |
 
+**Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
+
 For specific tests during development:
 ```shell
 cargo test -p <crate> <test_module> -- --report-time
@@ -62,7 +64,9 @@ cargo make worker-executor-tests-group1  # Run specific group
 
 ## Test Components
 
-Worker executor tests and integration tests use pre-compiled WASM files from the `test-components/` directory. These are checked into the repository and **rebuilding them is not automated**. Do not attempt to rebuild test components - use the existing compiled WASM files.
+Worker executor tests and integration tests use pre-compiled WASM files from the `test-components/` directory. These are checked into the repository and **rebuilding them is not automated**. Do not attempt to rebuild test components - use the existing compiled WASM files, EXCEPT if the test component itself has an AGENTS.md file with instructions of how to do so.
+
+**Important:** When modifying SDK code (`sdks/rust/` or `sdks/ts/`), you must rebuild any test components that depend on the changed SDK. For TS SDK changes, you must first rebuild the agent template wasm (`npx pnpm run build-agent-template` in `sdks/ts/`) before rebuilding TS test components. See each test component's `AGENTS.md` for build instructions.
 
 ## Running Locally
 

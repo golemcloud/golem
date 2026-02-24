@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app_template::APP_MANIFEST_JSON_SCHEMA;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
+use crate::model::GuestLanguage;
 use anyhow::{anyhow, Context};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
@@ -25,8 +27,6 @@ use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_templates::model::GuestLanguage;
-use golem_templates::APP_MANIFEST_JSON_SCHEMA;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -37,10 +37,23 @@ use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use url::Url;
 
+struct NoopRetriever;
+
+impl jsonschema::Retrieve for NoopRetriever {
+    fn retrieve(
+        &self,
+        uri: &jsonschema::Uri<String>,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+        Err(format!("External schema retrieval is disabled: {uri}").into())
+    }
+}
+
 static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
     let schema = serde_json::from_str::<serde_json::Value>(APP_MANIFEST_JSON_SCHEMA)
         .expect("Invalid Application manifest JSON schema: cannot parse as JSON");
-    jsonschema::validator_for(&schema)
+    jsonschema::options()
+        .with_retriever(NoopRetriever)
+        .build(&schema)
         .expect("Invalid Application manifest JSON schema: cannot create validator")
 });
 
@@ -77,8 +90,6 @@ pub struct Application {
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temp_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub wit_deps: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub component_templates: IndexMap<String, ComponentTemplate>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -391,7 +402,7 @@ pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub linked_wasm: Option<String>,
+    pub output_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -415,9 +426,9 @@ pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies_merge_mode: Option<VecMergeMode>,
+    pub config_vars_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies: Option<Vec<Dependency>>,
+    pub config_vars: Option<IndexMap<String, String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -530,19 +541,6 @@ pub struct InjectToPrebuiltQuickJs {
     pub module_wasm: String,
     /// The path to the output WASM component containing the injected JS module
     pub into: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Dependency {
-    #[serde(rename = "type")]
-    pub type_: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -695,7 +693,6 @@ fn json_value_without_null_fields(value: serde_json::Value) -> serde_json::Value
 mod test {
     mod app_manifest_json_schema_validation {
         use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
-        use assert2::assert;
         use test_r::test;
 
         #[test]

@@ -27,20 +27,14 @@ components-rust/                  # Component crates (each becomes a WASM compon
     src/lib.rs                    # Agent definitions and implementations
     Cargo.toml                    # Must use crate-type = ["cdylib"]
     golem.yaml                    # Component-level manifest (templates, env, dependencies)
-    .wit/wit/                     # WIT interface files (auto-managed)
-common-rust/                      # Shared library crates (not compiled to WASM directly)
-  common-lib/
-    src/lib.rs
-    Cargo.toml
-  golem.yaml                     # Build templates for all Rust components
-.wit/wit/deps/                   # Shared WIT dependencies (auto-managed)
-golem-temp/                      # Build artifacts (gitignored)
+common-rust/                      # Shared Golem Rust templates
+  golem.yaml                      # Build templates for all Rust components
+golem-temp/                       # Build artifacts (gitignored)
 ```
 
 ## Prerequisites
 
 - Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
-- `cargo-component` version 0.21.1: `cargo install --force cargo-component@0.21.1`
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
 ## Building
@@ -398,7 +392,7 @@ From workspace `Cargo.toml`:
 - `serde` / `serde_json` — serialization
 - Optional: `golem-wasi-http` — advanced HTTP client alternative
 
-To enable AI features, uncomment `golem_ai` feature in workspace `Cargo.toml` and uncomment the relevant provider dependency in the component's `golem.yaml`.
+To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
 ## Debugging
 

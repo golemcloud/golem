@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app_template::model::SdkOverrides;
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
@@ -88,10 +89,11 @@ impl BridgeGenerator for RustBridgeGenerator {
 impl RustBridgeGenerator {
     /// Generates the Cargo.toml manifest file
     fn generate_cargo_toml(&self, path: &Utf8Path) -> anyhow::Result<()> {
-        let golem_path = std::env::var("GOLEM_RUST_PATH").ok().and_then(|p| {
-            p.strip_suffix("/sdks/rust/golem-rust")
-                .map(|p| p.to_string())
-        });
+        // TODO: get version through sdk overrides once golem-client is published
+        let golem_path = std::env::var("GOLEM_RUST_PATH")
+            .ok()
+            .map(|p| SdkOverrides::golem_repo_path_from_golem_rust_path(&p))
+            .transpose()?;
 
         let _package_name = self.package_name();
 
@@ -153,7 +155,7 @@ impl RustBridgeGenerator {
         doc["dependencies"]["golem-common"] = golem_dep("golem-common", &["client"]);
         doc["dependencies"]["golem-wasm"] = golem_dep("golem-wasm", &["client"]);
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
-        doc["dependencies"]["reqwest"] = dep("0.12", &["default-tls"]);
+        doc["dependencies"]["reqwest"] = dep("0.12", &["rustls-tls"]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())
@@ -177,8 +179,7 @@ impl RustBridgeGenerator {
     fn generate_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
         let agent_type_name = &self.agent_type.type_name.0;
         let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
-        let client_struct_name =
-            Ident::new(&agent_type_name.to_upper_camel_case(), Span::call_site());
+        let client_struct_name = Ident::new(agent_type_name, Span::call_site());
 
         let input_schema = self.agent_type.constructor.input_schema.clone();
         let constructor_params = self.parameter_list(&input_schema)?;

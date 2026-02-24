@@ -2618,17 +2618,9 @@ paths:
         style: simple
       requestBody:
         content:
-          multipart/form-data:
+          application/json; charset=utf-8:
             schema:
-              type: object
-              properties:
-                metadata:
-                  $ref: '#/components/schemas/PluginRegistrationCreation'
-                pluginWasm:
-                  type: string
-                  format: binary
-              required:
-              - metadata
+              $ref: '#/components/schemas/PluginRegistrationCreation'
         required: true
       responses:
         '200':
@@ -8610,6 +8602,13 @@ components:
         value: {}
       required:
       - value
+    JsonSnapshotData:
+      title: JsonSnapshotData
+      type: object
+      properties:
+        data: {}
+      required:
+      - data
     LogLevel:
       description: Worker log levels including the special stdout and stderr channels
       type: string
@@ -8879,6 +8878,7 @@ components:
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
           CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
+          Snapshot: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -8918,6 +8918,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -9338,6 +9339,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+    PublicOplogEntry_r#SnapshotParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Snapshot
+            type: string
+            enum:
+            - Snapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/r#SnapshotParams'
     PublicOplogEntry_r#StartSpanParams:
       allOf:
       - type: object
@@ -9398,6 +9411,40 @@ components:
       - minDelay
       - maxDelay
       - multiplier
+    PublicSnapshotData:
+      discriminator:
+        propertyName: type
+        mapping:
+          Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
+          Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+    PublicSnapshotData_JsonSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Json
+            type: string
+            enum:
+            - Json
+        required:
+        - type
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_RawSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Raw
+            type: string
+            enum:
+            - Raw
+        required:
+        - type
+      - $ref: '#/components/schemas/RawSnapshotData'
     PublicSpanData:
       discriminator:
         propertyName: type
@@ -9500,6 +9547,20 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ManualUpdateParameters'
+    RawSnapshotData:
+      title: RawSnapshotData
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+      required:
+      - data
+      - mimeType
     ResumeResponse:
       title: ResumeResponse
       type: object
@@ -9580,8 +9641,11 @@ components:
           items:
             type: integer
             format: uint8
+        mimeType:
+          type: string
       required:
       - payload
+      - mimeType
     StringAttributeValue:
       title: StringAttributeValue
       type: object
@@ -10044,17 +10108,6 @@ components:
           type: string
       required:
       - version
-    WasiConfigVarsEntry:
-      title: WasiConfigVarsEntry
-      type: object
-      properties:
-        key:
-          type: string
-        value:
-          type: string
-      required:
-      - key
-      - value
     WorkerAndFilter:
       title: WorkerAndFilter
       type: object
@@ -10065,6 +10118,20 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
+    WorkerConfigVarsFilter:
+      title: WorkerConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
     WorkerCreatedAtFilter:
       title: WorkerCreatedAtFilter
       type: object
@@ -10088,10 +10155,10 @@ components:
           additionalProperties:
             type: string
         configVars:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
       required:
       - name
       - env
@@ -10147,7 +10214,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
+          ConfigVars: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
@@ -10158,7 +10225,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -10171,6 +10238,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerAndFilter'
+    WorkerFilter_WorkerConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ConfigVars
+            type: string
+            enum:
+            - ConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerConfigVarsFilter'
     WorkerFilter_WorkerCreatedAtFilter:
       allOf:
       - type: object
@@ -10255,18 +10334,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerStatusFilter'
-    WorkerFilter_WorkerWasiConfigVarsFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WasiConfigVars
-            type: string
-            enum:
-            - WasiConfigVars
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       title: WorkerId
       type: object
@@ -10295,10 +10362,10 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentRevision:
@@ -10355,7 +10422,7 @@ components:
       - environmentId
       - createdBy
       - env
-      - wasiConfigVars
+      - configVars
       - status
       - componentRevision
       - retryCount
@@ -10455,20 +10522,6 @@ components:
       enum:
       - automatic
       - manual
-    WorkerWasiConfigVarsFilter:
-      title: WorkerWasiConfigVarsFilter
-      type: object
-      properties:
-        name:
-          type: string
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - name
-      - comparator
-      - value
     WorkersMetadataRequest:
       title: WorkersMetadataRequest
       type: object
@@ -10633,10 +10686,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
         originalPhantomId:
           type: string
           format: uuid
@@ -10650,7 +10703,7 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - wasiConfigVars
+      - configVars
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object
@@ -11017,6 +11070,18 @@ components:
       - spanId
       - key
       - value
+    r#SnapshotParams:
+      title: r#SnapshotParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/PublicSnapshotData'
+      required:
+      - timestamp
+      - data
     r#StartSpanParams:
       title: r#StartSpanParams
       type: object
@@ -11304,6 +11369,8 @@ components:
           $ref: '#/components/schemas/AgentMode'
         httpMount:
           $ref: '#/components/schemas/HttpMountDetails'
+        snapshotting:
+          $ref: '#/components/schemas/Snapshotting'
       required:
       - typeName
       - description
@@ -11311,6 +11378,7 @@ components:
       - methods
       - dependencies
       - mode
+      - snapshotting
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -11462,12 +11530,12 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
+        env:
           default: {}
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
-        env:
+            type: string
+        configVars:
           default: {}
           type: object
           additionalProperties:
@@ -11536,6 +11604,14 @@ components:
           type: object
           additionalProperties:
             type: string
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
+        originalConfigVars:
+          type: object
+          additionalProperties:
+            type: string
         wasmHash:
           type: string
           format: hash
@@ -11555,6 +11631,8 @@ components:
       - installedPlugins
       - env
       - originalEnv
+      - configVars
+      - originalConfigVars
       - wasmHash
     ComponentFileOptions:
       title: ComponentFileOptions
@@ -11590,10 +11668,6 @@ components:
           type: string
         rootPackageVersion:
           type: string
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
         agentTypes:
           type: array
           items:
@@ -11603,7 +11677,6 @@ components:
       - producers
       - memories
       - binaryWit
-      - dynamicLinking
       - agentTypes
     ComponentModelElementSchema:
       title: ComponentModelElementSchema
@@ -11613,20 +11686,6 @@ components:
           $ref: '#/components/schemas/AnalysedType'
       required:
       - elementType
-    ComponentTransformerPluginSpec:
-      title: ComponentTransformerPluginSpec
-      type: object
-      properties:
-        providedWitPackage:
-          type: string
-        jsonSchema: {}
-        validateUrl:
-          type: string
-        transformUrl:
-          type: string
-      required:
-      - validateUrl
-      - transformUrl
     ComponentUpdate:
       title: ComponentUpdate
       type: object
@@ -11645,11 +11704,11 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
+        env:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
-        env:
+            type: string
+        configVars:
           type: object
           additionalProperties:
             type: string
@@ -11903,37 +11962,6 @@ components:
           type: string
       required:
       - domain
-    DynamicLinkedInstance:
-      discriminator:
-        propertyName: type
-        mapping:
-          WasmRpc: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/DynamicLinkedInstance_DynamicLinkedWasmRpc'
-    DynamicLinkedInstance_DynamicLinkedWasmRpc:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: WasmRpc
-            type: string
-            enum:
-            - WasmRpc
-        required:
-        - type
-      - $ref: '#/components/schemas/DynamicLinkedWasmRpc'
-    DynamicLinkedWasmRpc:
-      title: DynamicLinkedWasmRpc
-      type: object
-      properties:
-        targets:
-          description: Maps resource names within the dynamic linked interface to target information
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/WasmRpcTarget'
-      required:
-      - targets
     ElementSchema:
       discriminator:
         propertyName: type
@@ -13030,40 +13058,10 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          ComponentTransformer: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
           OplogProcessor: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
-          App: '#/components/schemas/PluginSpecDto_Empty'
-          Library: '#/components/schemas/PluginSpecDto_Empty'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PluginSpecDto_ComponentTransformerPluginSpec'
       - $ref: '#/components/schemas/PluginSpecDto_OplogProcessorPluginSpec'
-      - $ref: '#/components/schemas/PluginSpecDto_Empty'
-      - $ref: '#/components/schemas/PluginSpecDto_Empty'
-    PluginSpecDto_ComponentTransformerPluginSpec:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ComponentTransformer
-            type: string
-            enum:
-            - ComponentTransformer
-        required:
-        - type
-      - $ref: '#/components/schemas/ComponentTransformerPluginSpec'
-    PluginSpecDto_Empty:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Library
-            type: string
-            enum:
-            - Library
-        required:
-        - type
-      - $ref: '#/components/schemas/Empty'
     PluginSpecDto_OplogProcessorPluginSpec:
       allOf:
       - type: object
@@ -13231,6 +13229,106 @@ components:
             type: string
       required:
       - currentRevision
+    Snapshotting:
+      discriminator:
+        propertyName: type
+        mapping:
+          Disabled: '#/components/schemas/Snapshotting_Empty'
+          Enabled: '#/components/schemas/Snapshotting_SnapshottingConfig'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Snapshotting_Empty'
+      - $ref: '#/components/schemas/Snapshotting_SnapshottingConfig'
+    SnapshottingConfig:
+      discriminator:
+        propertyName: configType
+        mapping:
+          Default: '#/components/schemas/SnapshottingConfig_Empty'
+          Periodic: '#/components/schemas/SnapshottingConfig_SnapshottingPeriodic'
+          EveryNInvocation: '#/components/schemas/SnapshottingConfig_SnapshottingEveryNInvocation'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SnapshottingConfig_Empty'
+      - $ref: '#/components/schemas/SnapshottingConfig_SnapshottingPeriodic'
+      - $ref: '#/components/schemas/SnapshottingConfig_SnapshottingEveryNInvocation'
+    SnapshottingConfig_Empty:
+      allOf:
+      - type: object
+        properties:
+          configType:
+            example: Default
+            type: string
+            enum:
+            - Default
+        required:
+        - configType
+      - $ref: '#/components/schemas/Empty'
+    SnapshottingConfig_SnapshottingEveryNInvocation:
+      allOf:
+      - type: object
+        properties:
+          configType:
+            example: EveryNInvocation
+            type: string
+            enum:
+            - EveryNInvocation
+        required:
+        - configType
+      - $ref: '#/components/schemas/SnapshottingEveryNInvocation'
+    SnapshottingConfig_SnapshottingPeriodic:
+      allOf:
+      - type: object
+        properties:
+          configType:
+            example: Periodic
+            type: string
+            enum:
+            - Periodic
+        required:
+        - configType
+      - $ref: '#/components/schemas/SnapshottingPeriodic'
+    SnapshottingEveryNInvocation:
+      title: SnapshottingEveryNInvocation
+      type: object
+      properties:
+        count:
+          type: integer
+          format: uint16
+      required:
+      - count
+    SnapshottingPeriodic:
+      title: SnapshottingPeriodic
+      type: object
+      properties:
+        durationNanos:
+          type: integer
+          format: uint64
+      required:
+      - durationNanos
+    Snapshotting_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Disabled
+            type: string
+            enum:
+            - Disabled
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    Snapshotting_SnapshottingConfig:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Enabled
+            type: string
+            enum:
+            - Enabled
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshottingConfig'
     SystemVariable:
       type: string
       enum:
@@ -13333,17 +13431,6 @@ components:
       required:
       - name
       - version
-    WasmRpcTarget:
-      title: WasmRpcTarget
-      type: object
-      properties:
-        interfaceName:
-          type: string
-        componentName:
-          type: string
-      required:
-      - interfaceName
-      - componentName
   securitySchemes:
     Cookie:
       type: apiKey

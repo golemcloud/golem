@@ -23,12 +23,12 @@ use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::worker::UpdateRecord;
 use golem_common::model::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use golem_wasm::analysis::AnalysedExport;
-use rib::{ParsedFunctionName, ParsedFunctionReference};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
@@ -97,6 +97,7 @@ pub struct WorkerMetadataView {
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
     pub env: HashMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     pub status: WorkerStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
@@ -124,6 +125,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
+            config_vars: value.config_vars,
             status: value.status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
@@ -145,6 +147,7 @@ pub struct WorkerMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub env: HashMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     pub status: WorkerStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
@@ -168,6 +171,7 @@ impl WorkerMetadata {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
+            config_vars: value.config_vars,
             status: value.status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,

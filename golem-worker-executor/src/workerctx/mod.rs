@@ -56,8 +56,8 @@ use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
-use wasmtime::component::{Component, Instance, Linker};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime::component::Instance;
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -74,9 +74,8 @@ pub trait WorkerCtx:
     + ResourceStore
     + UpdateManagement
     + FileSystemReading
-    + DynamicLinking<Self>
     + InvocationContextManagement
-    + HasWasiConfigVars
+    + HasConfigVars
     + Send
     + Sync
     + Sized
@@ -432,19 +431,8 @@ pub trait InvocationContextManagement {
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
 }
 
-#[async_trait]
-pub trait DynamicLinking<Ctx: WorkerCtx> {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<Ctx>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()>;
-}
-
-pub trait HasWasiConfigVars {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String>;
+pub trait HasConfigVars {
+    fn config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

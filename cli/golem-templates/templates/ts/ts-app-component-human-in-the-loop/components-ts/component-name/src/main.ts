@@ -7,23 +7,30 @@ import {
   PromiseId,
   createPromise,
   awaitPromise,
-  completePromise
+  completePromise,
+  endpoint
 } from '@golemcloud/golem-ts-sdk';
 
 type WorkflowId = string;
 
 // --- Workflow Agent ---
-@agent()
-class ApprovalWorkflow extends BaseAgent {
+@agent({
+  mount: '/workflows',
+  // The agent identity is not fully described by the constructor parameters,
+  // so we need to enable phantom mode to allow duplicates.
+  phantom: true,
+})
+class WorkflowAgent extends BaseAgent {
   private readonly workflowId: WorkflowId;
 
-  constructor(workflowId: WorkflowId) {
+  constructor() {
     super();
-    this.workflowId = workflowId;
+    this.workflowId = crypto.randomUUID();
   }
 
   @prompt("Start approval process")
   @description("Starts a workflow that requires human approval before continuing")
+  @endpoint({ post: "/" })
   async start(): Promise<string> {
     // 1. Create a promise that represents waiting for human input
     const approvalPromiseId = createPromise();
@@ -47,7 +54,9 @@ class ApprovalWorkflow extends BaseAgent {
 }
 
 // --- Human Agent ---
-@agent()
+@agent({
+  mount: "/humans/{username}"
+})
 class HumanAgent extends BaseAgent {
   private readonly username: string;
   private pending: Map<WorkflowId, PromiseId> = new Map();
@@ -66,12 +75,14 @@ class HumanAgent extends BaseAgent {
 
   @prompt("List pending approvals")
   @description("Lists all workflows that are waiting for this human’s approval")
+  @endpoint({ get: "/pending" })
   async listPendingApprovals(): Promise<string[]> {
     return Array.from(this.pending.keys());
   }
 
   @prompt("Approve or reject a workflow")
   @description("Makes a decision on a workflow approval request")
+  @endpoint({ post: "/decisions" })
   async decideApproval(workflowId: string, decision: string): Promise<string> {
     if (!["approved", "rejected"].includes(decision)) {
       return `Received invalid approval decision ${decision}`

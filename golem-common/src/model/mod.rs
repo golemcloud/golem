@@ -19,7 +19,6 @@ pub mod auth;
 pub mod base64;
 pub mod certificate;
 pub mod component;
-pub mod component_constraint;
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
@@ -35,6 +34,8 @@ pub mod login;
 pub mod lucene;
 pub mod oplog;
 pub mod optional_field_update;
+#[cfg(feature = "full")]
+pub mod parsed_function_name;
 pub mod plan;
 pub mod plugin_registration;
 pub mod poem;
@@ -491,7 +492,7 @@ pub struct WorkerMetadata {
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
-    pub wasi_config_vars: BTreeMap<String, String>,
+    pub config_vars: BTreeMap<String, String>,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
@@ -509,7 +510,7 @@ impl WorkerMetadata {
             env: vec![],
             environment_id,
             created_by,
-            wasi_config_vars: BTreeMap::new(),
+            config_vars: BTreeMap::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
@@ -548,12 +549,12 @@ impl WorkerFilter {
                 }
                 result
             }
-            WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+            WorkerFilter::ConfigVars(WorkerConfigVarsFilter {
                 name,
                 comparator,
                 value,
             }) => {
-                let env_value = metadata.wasi_config_vars.get(&name);
+                let env_value = metadata.config_vars.get(&name);
                 env_value
                     .map(|ev| comparator.matches(ev, &value))
                     .unwrap_or(false)
@@ -650,6 +651,7 @@ pub struct WorkerStatusRecord {
     /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
     /// the last invocation boundary.
     pub current_retry_count: HashMap<OplogIndex, u32>,
+    pub last_snapshot_index: Option<OplogIndex>,
 }
 
 impl Default for WorkerStatusRecord {
@@ -673,6 +675,7 @@ impl Default for WorkerStatusRecord {
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_count: HashMap::new(),
+            last_snapshot_index: None,
         }
     }
 }

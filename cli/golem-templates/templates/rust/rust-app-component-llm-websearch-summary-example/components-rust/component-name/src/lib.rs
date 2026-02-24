@@ -1,8 +1,11 @@
-use golem_rust::golem_ai::golem::llm::llm;
-use golem_rust::golem_ai::golem::llm::llm::{Config, ContentPart, Message, Role};
-use golem_rust::golem_ai::golem::web_search::types;
-use golem_rust::golem_ai::golem::web_search::web_search;
-use golem_rust::{agent_definition, agent_implementation, description, Schema};
+use golem_ai_llm::model::*;
+use golem_ai_llm::LlmProvider;
+use golem_ai_web_search::model::web_search;
+use golem_ai_web_search::model::types;
+use golem_rust::{agent_definition, agent_implementation, description, Schema, endpoint};
+
+type Provider = golem_ai_llm_openai::DurableOpenAI;
+type SearchProvider = golem_ai_web_search_google::DurableGoogleCustomSearch;
 
 #[derive(Clone, Schema, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
@@ -11,11 +14,15 @@ pub struct SearchResult {
     snippet: String,
 }
 
-#[agent_definition]
+#[agent_definition(
+    mount = "/research",
+    phantom_agent = true
+)]
 pub trait ResearchAgent {
     fn new() -> Self;
 
     #[description("Research and summarize a topic")]
+    #[endpoint(get = "/?topic={topic}")]
     fn research(&self, topic: String) -> String;
 }
 
@@ -69,13 +76,13 @@ impl ResearchAgent for ResearchAgentImpl {
             provider_options: None,
         };
 
-        let events = vec![llm::Event::Message(Message {
+        let events = vec![Event::Message(Message {
             role: Role::Assistant,
             name: Some("research-agent".to_string()),
             content: vec![ContentPart::Text(prompt)],
         })];
 
-        let response = llm::send(&events, &config).expect("Failed to send message to LLM");
+        let response = Provider::send(events, config).expect("Failed to send message to LLM");
 
         let text_result = response
             .content
@@ -94,7 +101,7 @@ impl ResearchAgent for ResearchAgentImpl {
 fn search_web_for_topic(topic: &str) -> Vec<SearchResult> {
     let pages_to_retrieve = 3;
 
-    let session = web_search::start_search(&web_search::SearchParams {
+    let session = SearchProvider::start_search(&web_search::SearchParams {
         query: topic.to_string(),
         language: Some("lang_en".to_string()),
         safe_search: Some(types::SafeSearchLevel::Off),

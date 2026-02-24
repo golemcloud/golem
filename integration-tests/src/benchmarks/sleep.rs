@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{delete_workers, invoke_and_await};
+use crate::benchmarks::delete_workers;
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::WorkerId;
+use golem_common::base_model::agent::AgentId;
+use golem_common::model::component::ComponentId;
+use golem_common::model::WorkerId;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::IntoValueAndType;
 use indoc::indoc;
 use tracing::{info, Level};
 
@@ -35,7 +37,8 @@ pub struct SleepBenchmarkContext {
 
 pub struct SleepIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    worker_ids: Vec<WorkerId>,
+    component_id: ComponentId,
+    agent_ids: Vec<AgentId>,
 }
 
 #[async_trait]
@@ -90,25 +93,25 @@ impl Benchmark for Sleep {
         let user = benchmark_context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
-        let mut worker_ids = vec![];
-
         info!("Registering component");
         let component = user
-            .component(&env.id, "benchmark_direct_rust")
-            .name("benchmark:direct-rust")
+            .component(&env.id, "benchmark_agent_rust_release")
+            .name("benchmark:agent-rust")
             .store()
             .await
             .unwrap();
 
+        let mut agent_ids = vec![];
         for n in 0..self.config.size {
-            let worker_id = WorkerId {
-                component_id: component.id,
-                worker_name: format!("benchmark-agent(\"test-{n}\")"),
-            };
-            worker_ids.push(worker_id);
+            let agent_id = agent_id!("rust-benchmark-agent", format!("test-{n}"));
+            agent_ids.push(agent_id);
         }
 
-        SleepIterationContext { user, worker_ids }
+        SleepIterationContext {
+            user,
+            component_id: component.id,
+            agent_ids,
+        }
     }
 
     async fn warmup(
@@ -116,26 +119,27 @@ impl Benchmark for Sleep {
         _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
-        info!("Warming up {} workers...", context.worker_ids.len());
+        info!("Warming up {} workers...", context.agent_ids.len());
 
         let result_futures = context
-            .worker_ids
+            .agent_ids
             .iter()
-            .map(move |worker_id| async move {
+            .map(move |agent_id| async move {
                 let user_clone = context.user.clone();
 
-                invoke_and_await(
+                crate::benchmarks::invoke_and_await_agent(
                     &user_clone,
-                    worker_id,
-                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{sleep}",
-                    vec![10u64.into_value_and_type()],
+                    &context.component_id,
+                    agent_id,
+                    "sleep",
+                    data_value!(10u64),
                 )
                 .await
             })
             .collect::<Vec<_>>();
         let _ = result_futures.join().await;
 
-        info!("Warmed up {} workers", context.worker_ids.len());
+        info!("Warmed up {} workers", context.agent_ids.len());
     }
 
     async fn run(
@@ -146,16 +150,17 @@ impl Benchmark for Sleep {
     ) {
         let length = self.config.length as u64;
         let result_futures = context
-            .worker_ids
+            .agent_ids
             .iter()
-            .map(move |worker_id| async move {
+            .map(move |agent_id| async move {
                 let user_clone = context.user.clone();
 
-                invoke_and_await(
+                crate::benchmarks::invoke_and_await_agent(
                     &user_clone,
-                    worker_id,
-                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{sleep}",
-                    vec![length.into_value_and_type()],
+                    &context.component_id,
+                    agent_id,
+                    "sleep",
+                    data_value!(length),
                 )
                 .await
             })
@@ -171,6 +176,11 @@ impl Benchmark for Sleep {
         _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        delete_workers(&context.user, &context.worker_ids).await
+        let worker_ids: Vec<WorkerId> = context
+            .agent_ids
+            .iter()
+            .filter_map(|agent_id| WorkerId::from_agent_id(context.component_id, agent_id).ok())
+            .collect();
+        delete_workers(&context.user, &worker_ids).await
     }
 }

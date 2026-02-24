@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{HasWasiConfigVars, LogEventEmitBehaviour};
+use super::{HasConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
@@ -38,9 +38,8 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -71,8 +70,8 @@ use std::future::Future;
 use std::sync::{Arc, Weak};
 use tracing::debug;
 use uuid::Uuid;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime::component::{Instance, Resource, ResourceAny};
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -485,20 +484,6 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
 }
 
 #[async_trait]
-impl DynamicLinking<Context> for Context {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<Context>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()> {
-        self.durable_ctx
-            .link(engine, linker, component, component_metadata)
-    }
-}
-
-#[async_trait]
 impl InvocationContextManagement for Context {
     async fn start_span(
         &mut self,
@@ -550,9 +535,9 @@ impl InvocationContextManagement for Context {
     }
 }
 
-impl HasWasiConfigVars for Context {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.wasi_config_vars()
+impl HasConfigVars for Context {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.config_vars()
     }
 }
 

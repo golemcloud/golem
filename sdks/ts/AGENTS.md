@@ -80,6 +80,8 @@ Rebuild the template:
 npx pnpm run build-agent-template
 ```
 
+**Important:** You must also run `build-agent-template` whenever you modify SDK runtime code (e.g., `baseAgent.ts`, `index.ts`, `resolvedAgent.ts`). Running `pnpm run build` alone only updates the JS bundle, but TS components use a pre-compiled `agent_guest.wasm` that embeds the SDK. Without rebuilding the template, TS components will bundle stale SDK code.
+
 **Testing local wasm-rquickjs changes:** If modifying wasm-rquickjs locally (in a separate checkout), install it from the local path:
 
 ```shell

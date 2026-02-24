@@ -17,10 +17,10 @@ use crate::get_oplog_entry;
 use crate::model::WorkerConfig;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::rpc::{RpcDemand, RpcError};
+use crate::services::rpc::{enrich_function_name, RpcDemand, RpcError};
 use crate::services::HasWorker;
 use crate::workerctx::{
-    HasWasiConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
+    HasConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -76,11 +76,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
 
         let remote_worker_id: WorkerId = worker_id.into();
 
-        construct_wasm_rpc_resource(self, remote_worker_id, &env, wasi_config_vars).await
+        construct_wasm_rpc_resource(self, remote_worker_id, &env, config_vars).await
     }
 
     async fn invoke_and_await(
@@ -92,7 +92,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -163,7 +163,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     created_by,
                     &worker_id,
                     &env,
-                    wasi_config_vars,
+                    config_vars,
                     stack,
                 ),
                 interrupt_signal,
@@ -224,7 +224,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -284,7 +284,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self.created_by(),
                     self.worker_id(),
                     &env,
-                    wasi_config_vars,
+                    config_vars,
                     stack,
                 )
                 .await;
@@ -319,7 +319,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
-        let wasi_config_vars = self.wasi_config_vars();
+        let config_vars = self.config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
         let begin_index = self
@@ -384,7 +384,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             created_by,
                             &worker_id,
                             &env,
-                            wasi_config_vars,
+                            config_vars,
                             stack,
                         )
                         .await)
@@ -408,7 +408,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self_worker_id: worker_id,
                     self_created_by: created_by,
                     env,
-                    wasi_config_vars,
+                    config_vars,
                     function_name,
                     function_params,
                     idempotency_key,
@@ -459,6 +459,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let remote_worker_id = payload.remote_worker_id().clone();
 
             Self::add_self_parameter_if_needed(&mut function_params, payload);
+
+            // Enrich the function name with the target component's root package,
+            // the same way invoke/invoke_and_await do via DirectWorkerInvocationRpc.
+            let function_name = enrich_function_name(
+                &self.state.component_service,
+                &remote_worker_id,
+                function_name,
+            )
+            .await;
 
             let current_idempotency_key = self
                 .state
@@ -600,7 +609,7 @@ enum FutureInvokeResultState {
         self_worker_id: WorkerId,
         self_created_by: AccountId,
         env: Vec<(String, String)>,
-        wasi_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         function_name: String,
         function_params: Vec<WitValue>,
         idempotency_key: IdempotencyKey,
@@ -803,7 +812,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                 self_worker_id,
                                 self_created_by,
                                 env,
-                                wasi_config_vars,
+                                config_vars,
                                 function_name,
                                 function_params,
                                 idempotency_key,
@@ -823,7 +832,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                     self_created_by,
                                     &self_worker_id,
                                     &env,
-                                    wasi_config_vars,
+                                    config_vars,
                                     stack,
                                 )
                                 .await)

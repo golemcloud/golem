@@ -43,7 +43,7 @@ use golem_registry_service::repo::model::http_api_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_service_base::repo::blob::Blob;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::default::Default;
 use strum::IntoEnumIterator;
 // Common test cases -------------------------------------------------------------------------------
@@ -592,13 +592,14 @@ pub async fn test_component_stage(deps: &Deps) {
         metadata: Blob::new(ComponentMetadata::from_parts(
             vec![],
             vec![],
-            HashMap::new(),
             Some("test".to_string()),
             Some("1.0".to_string()),
             vec![],
         )),
         original_env: BTreeMap::from([("X1".to_string(), "value1".to_string())]).into(),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
+        original_config_vars: BTreeMap::from([("WC1".to_string(), "value1".to_string())]).into(),
+        config_vars: BTreeMap::from([("WC".to_string(), "value".to_string())]).into(),
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
         transformed_object_store_key: "xys-transformed".to_string(),
@@ -1108,13 +1109,14 @@ pub async fn test_account_usage(deps: &Deps) {
                     metadata: Blob::new(ComponentMetadata::from_parts(
                         vec![],
                         vec![],
-                        HashMap::new(),
                         None,
                         None,
                         vec![],
                     )),
                     env: Default::default(),
                     original_env: Default::default(),
+                    config_vars: Default::default(),
+                    original_config_vars: Default::default(),
                     object_store_key: "".to_string(),
                     transformed_object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),

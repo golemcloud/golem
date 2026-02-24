@@ -13,13 +13,11 @@
 // limitations under the License.
 
 use crate::Tracing;
-use assert2::let_assert;
-use assert2::{assert, check};
-use golem_common::model::oplog::WorkerError;
+
 use golem_common::model::WorkerId;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::{IntoValueAndType, Value};
+use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
@@ -42,28 +40,23 @@ async fn agent_self_rpc_is_not_allowed(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_agent_self_rpc")
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
+        .name("golem-it:agent-rpc")
         .store()
         .await?;
-    let worker_id = executor
-        .start_worker(&component.id, "self-rpc-agent(\"worker-name\")")
+    let agent_id = agent_id!("self-rpc-agent", "worker-name");
+    let _worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:agent-self-rpc/self-rpc-agent.{self-rpc}",
-            vec![],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "selfRpc", data_value!())
+        .await;
 
-    let_assert!(
-        Err(WorkerExecutorError::InvocationFailed {
-            error: WorkerError::Unknown(error_details),
-            ..
-        }) = result
-    );
-    assert!(error_details.contains("RPC calls to the same agent are not supported"));
+    let err = result.expect_err("Expected an error");
+    assert!(err
+        .to_string()
+        .contains("RPC calls to the same agent are not supported"));
 
     Ok(())
 }
@@ -85,21 +78,18 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let unique_id = context.redis_prefix();
+    let agent_id = agent_id!("test-agent", unique_id);
     let worker_id = executor
-        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+        .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:agent-rpc/test-agent.{run}",
-            vec![20f64.into_value_and_type()],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!(20f64))
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(result.is_ok());
+    assert!(result.is_ok());
     Ok(())
 }
 
@@ -123,29 +113,21 @@ async fn agent_env_inheritance(
         .store()
         .await?;
     let unique_id = context.redis_prefix();
+    let agent_id = agent_id!("test-agent", unique_id);
 
     let mut env = HashMap::new();
     env.insert("ENV2".to_string(), "22".to_string());
     env.insert("ENV3".to_string(), "33".to_string());
 
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            &format!("test-agent(\"{unique_id}\")"),
-            env,
-            vec![],
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:agent-rpc/test-agent.{env-var-test}",
-            vec![],
-        )
-        .await?;
+        .invoke_and_await_agent(&component.id, &agent_id, "envVarTest", data_value!())
+        .await;
 
     let child_worker_id = WorkerId {
         component_id: worker_id.component_id,
@@ -160,8 +142,8 @@ async fn agent_env_inheritance(
     let mut parent_env_vars = BTreeMap::new();
     let mut child_env_vars = BTreeMap::new();
 
-    if let Ok(results) = result {
-        if let Some(Value::Record(fields)) = results.first() {
+    if let Ok(data_value) = result {
+        if let Some(Value::Record(fields)) = data_value.into_return_value().as_ref() {
             let parent = &fields[0];
             let child = &fields[1];
 
@@ -273,53 +255,47 @@ async fn ephemeral_agent_works(
         .store()
         .await?;
 
+    let agent_id1 = agent_id!("ephemeral-echo-agent", "param1");
     let worker_id1 = executor
-        .start_worker(&component.id, "ephemeral-echo-agent(\"param1\")")
+        .start_agent(&component.id, agent_id1.clone())
         .await?;
 
+    let agent_id2 = agent_id!("ephemeral-echo-agent", "param2");
     let worker_id2 = executor
-        .start_worker(&component.id, "ephemeral-echo-agent(\"param2\")")
+        .start_agent(&component.id, agent_id2.clone())
         .await?;
 
     executor.log_output(&worker_id1).await?;
     executor.log_output(&worker_id2).await?;
 
     let result1 = executor
-        .invoke_and_await(
-            &worker_id1,
-            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id1, "changeAndGet", data_value!())
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result2 = executor
-        .invoke_and_await(
-            &worker_id1,
-            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id1, "changeAndGet", data_value!())
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result3 = executor
-        .invoke_and_await(
-            &worker_id2,
-            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id2, "changeAndGet", data_value!())
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
     let result4 = executor
-        .invoke_and_await(
-            &worker_id2,
-            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
-            vec![],
-        )
-        .await??;
+        .invoke_and_await_agent(&component.id, &agent_id2, "changeAndGet", data_value!())
+        .await?
+        .into_return_value()
+        .expect("Expected a return value");
 
-    // As the agent is ephemeral, no matter how many times we call change-and-get it always starts from scratch (no additional '!' suffix)
-    assert_eq!(result1, vec![Value::String("param1!".to_string())]);
-    assert_eq!(result2, vec![Value::String("param1!".to_string())]);
-    assert_eq!(result3, vec![Value::String("param2!".to_string())]);
-    assert_eq!(result4, vec![Value::String("param2!".to_string())]);
+    // As the agent is ephemeral, no matter how many times we call changeAndGet it always starts from scratch (no additional '!' suffix)
+    assert_eq!(result1, Value::String("param1!".to_string()));
+    assert_eq!(result2, Value::String("param1!".to_string()));
+    assert_eq!(result3, Value::String("param2!".to_string()));
+    assert_eq!(result4, Value::String("param2!".to_string()));
     Ok(())
 }

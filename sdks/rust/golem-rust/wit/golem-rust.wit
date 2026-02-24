@@ -17,6 +17,7 @@ world golem-rust {
   import wasi:keyvalue/eventual-batch@0.1.0;
   import wasi:keyvalue/eventual@0.1.0;
   import wasi:logging/logging;
+  import wasi:config/store@0.2.0-draft;
 }
 
 world golem-rust-load-snapshot {
@@ -38,31 +39,4 @@ world golem-rust-oplog-processor {
 world golem-agentic {
    include golem-rust;
    export golem:agent/guest;
-}
-
-world golem-ai {
-   include golem-rust;
-
-   import golem:embed/embed@1.0.0;
-   import golem:exec/executor@1.0.0;
-   import golem:exec/types@1.0.0;
-   import golem:graph/connection@1.0.0;
-   import golem:graph/errors@1.0.0;
-   import golem:graph/schema@1.0.0;
-   import golem:graph/transactions@1.0.0;
-   import golem:graph/traversal@1.0.0;
-   import golem:graph/types@1.0.0;
-   import golem:graph/query@1.0.0;
-   import golem:llm/llm@1.0.0;
-   import golem:search/core@1.0.0;
-   import golem:search/types@1.0.0;
-   import golem:stt/languages@1.0.0;
-   import golem:stt/transcription@1.0.0;
-   import golem:stt/types@1.0.0;
-   import golem:video-generation/advanced@1.0.0;
-   import golem:video-generation/lip-sync@1.0.0;
-   import golem:video-generation/types@1.0.0;
-   import golem:video-generation/video-generation@1.0.0;
-   import golem:web-search/types@1.0.0;
-   import golem:web-search/web-search@1.0.0;
 }

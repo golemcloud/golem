@@ -24,15 +24,10 @@ use golem_common::model::plugin_registration::{
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::model::plugin_registration::{
-    AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
-};
-use golem_service_base::replayable_stream::ReplayableStream;
+use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 use golem_service_base::repo::RepoError;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm::analysis::AnalysedExport;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 
 const OPLOG_PROCESSOR_INTERFACE: &str = "golem:api/oplog-processor";
 const OPLOG_PROCESSOR_VERSION_PREFIX: &str = "1.";
@@ -41,8 +36,6 @@ const OPLOG_PROCESSOR_VERSION_PREFIX: &str = "1.";
 pub enum PluginRegistrationError {
     #[error("Registered plugin not found for id {0}")]
     PluginRegistrationNotFound(PluginRegistrationId),
-    #[error("Required wasm file missing")]
-    RequiredWasmFileMissing,
     #[error("Target component for oplog processor does not exist")]
     OplogProcessorComponentDoesNotExist,
     #[error("Plugin with this name and version already exists")]
@@ -59,7 +52,6 @@ impl SafeDisplay for PluginRegistrationError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::PluginRegistrationNotFound(_) => self.to_string(),
-            Self::RequiredWasmFileMissing => self.to_string(),
             Self::OplogProcessorComponentDoesNotExist => self.to_string(),
             Self::PluginNameAndVersionAlreadyExists => self.to_string(),
             Self::ParentAccountNotFound(_) => self.to_string(),
@@ -80,7 +72,6 @@ pub struct PluginRegistrationService {
     plugin_repo: Arc<dyn PluginRepo>,
     account_service: Arc<AccountService>,
     component_service: Arc<ComponentService>,
-    plugin_wasm_file_service: Arc<PluginWasmFilesService>,
 }
 
 impl PluginRegistrationService {
@@ -88,13 +79,11 @@ impl PluginRegistrationService {
         plugin_repo: Arc<dyn PluginRepo>,
         account_service: Arc<AccountService>,
         component_service: Arc<ComponentService>,
-        plugin_wasm_file_service: Arc<PluginWasmFilesService>,
     ) -> Self {
         Self {
             plugin_repo,
             account_service,
             component_service,
-            plugin_wasm_file_service,
         }
     }
 
@@ -102,7 +91,6 @@ impl PluginRegistrationService {
         &self,
         account_id: AccountId,
         data: PluginRegistrationCreation,
-        wasm_file: Option<NamedTempFile>,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         self.account_service
@@ -118,38 +106,9 @@ impl PluginRegistrationService {
         auth.authorize_account_action(account_id, AccountAction::RegisterPlugin)?;
 
         let spec = match data.spec {
-            PluginSpecDto::ComponentTransformer(inner) => PluginSpec::ComponentTransformer(inner),
             PluginSpecDto::OplogProcessor(inner) => {
                 self.validate_oplog_processor_plugin(&inner, auth).await?;
                 PluginSpec::OplogProcessor(inner)
-            }
-            PluginSpecDto::App(_) => {
-                let wasm_file =
-                    wasm_file.ok_or(PluginRegistrationError::RequiredWasmFileMissing)?;
-                let wasm_file = Arc::new(wasm_file);
-
-                let blob_storage_key = self
-                    .plugin_wasm_file_service
-                    .put_if_not_exists(account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
-                    .await?;
-
-                PluginSpec::App(AppPluginSpec {
-                    wasm_content_hash: blob_storage_key,
-                })
-            }
-            PluginSpecDto::Library(_) => {
-                let wasm_file =
-                    wasm_file.ok_or(PluginRegistrationError::RequiredWasmFileMissing)?;
-                let wasm_file = Arc::new(wasm_file);
-
-                let blob_storage_key = self
-                    .plugin_wasm_file_service
-                    .put_if_not_exists(account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
-                    .await?;
-
-                PluginSpec::Library(LibraryPluginSpec {
-                    wasm_content_hash: blob_storage_key,
-                })
             }
         };
 

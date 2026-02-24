@@ -15,7 +15,6 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
-use crate::model::diff;
 use crate::{virtual_exports, SafeDisplay};
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
@@ -24,12 +23,14 @@ use golem_wasm::analysis::{
     AnalysedType, TypeHandle,
 };
 use golem_wasm::metadata::Producers as WasmAstProducers;
-use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
+pub use super::parsed_function_name::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
+};
 pub use crate::base_model::component_metadata::*;
 
 /// Describes an exported function that can be invoked on a worker
@@ -43,12 +44,11 @@ pub struct InvokableFunction {
 impl ComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         agent_types: Vec<AgentType>,
     ) -> Result<Self, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(Self {
-            data: Arc::new(raw.into_metadata(dynamic_linking, agent_types)),
+            data: Arc::new(raw.into_metadata(agent_types)),
             cache: Arc::default(),
         })
     }
@@ -56,7 +56,6 @@ impl ComponentMetadata {
     pub fn from_parts(
         exports: Vec<AnalysedExport>,
         memories: Vec<LinearMemory>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         root_package_name: Option<String>,
         root_package_version: Option<String>,
         agent_types: Vec<AgentType>,
@@ -69,7 +68,6 @@ impl ComponentMetadata {
                 binary_wit: Base64(vec![]),
                 root_package_name,
                 root_package_version,
-                dynamic_linking,
                 agent_types,
             }),
             cache: Arc::default(),
@@ -98,10 +96,6 @@ impl ComponentMetadata {
 
     pub fn root_package_version(&self) -> &Option<String> {
         &self.data.root_package_version
-    }
-
-    pub fn dynamic_linking(&self) -> &HashMap<String, DynamicLinkedInstance> {
-        &self.data.dynamic_linking
     }
 
     pub fn agent_types(&self) -> &[AgentType] {
@@ -623,18 +617,6 @@ impl ComponentMetadataInnerCache {
     }
 }
 
-impl WasmRpcTarget {
-    pub fn site(&self) -> Result<ParsedFunctionSite, String> {
-        ParsedFunctionSite::parse(&self.interface_name)
-    }
-}
-
-impl Display for WasmRpcTarget {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.interface_name, self.component_name)
-    }
-}
-
 impl From<wasmparser::MemoryType> for LinearMemory {
     fn from(value: wasmparser::MemoryType) -> Self {
         Self {
@@ -698,11 +680,7 @@ impl RawComponentMetadata {
         })
     }
 
-    pub fn into_metadata(
-        self,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-        agent_types: Vec<AgentType>,
-    ) -> ComponentMetadataInnerData {
+    pub fn into_metadata(self, agent_types: Vec<AgentType>) -> ComponentMetadataInnerData {
         let producers = self
             .producers
             .into_iter()
@@ -717,7 +695,6 @@ impl RawComponentMetadata {
             exports,
             producers,
             memories,
-            dynamic_linking,
             binary_wit: Base64(self.binary_wit),
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
@@ -932,10 +909,9 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component_metadata::{
-        ComponentMetadata, ComponentMetadataInnerData, DynamicLinkedInstance, DynamicLinkedWasmRpc,
-        LinearMemory, ProducerField, Producers, VersionedName, WasmRpcTarget,
+        ComponentMetadata, ComponentMetadataInnerData, LinearMemory, ProducerField, Producers,
+        VersionedName,
     };
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
@@ -1049,11 +1025,6 @@ mod protobuf {
                 binary_wit: Base64(value.binary_wit),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
-                dynamic_linking: value
-                    .dynamic_linking
-                    .into_iter()
-                    .map(|(k, v)| v.try_into().map(|v| (k, v)))
-                    .collect::<Result<_, _>>()?,
                 agent_types: value
                     .agent_types
                     .into_iter()
@@ -1089,12 +1060,6 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
-                dynamic_linking: HashMap::from_iter(
-                    value
-                        .dynamic_linking
-                        .into_iter()
-                        .map(|(k, v)| (k, v.into())),
-                ),
                 binary_wit: value.binary_wit.0,
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
@@ -1102,112 +1067,4 @@ mod protobuf {
             }
         }
     }
-
-    impl From<DynamicLinkedInstance>
-        for golem_api_grpc::proto::golem::component::DynamicLinkedInstance
-    {
-        fn from(value: DynamicLinkedInstance) -> Self {
-            match value {
-                DynamicLinkedInstance::WasmRpc(dynamic_linked_wasm_rpc) => Self {
-                    dynamic_linked_instance: Some(
-                        golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(
-                            dynamic_linked_wasm_rpc.into())),
-                },
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::DynamicLinkedInstance>
-        for DynamicLinkedInstance
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::DynamicLinkedInstance,
-        ) -> Result<Self, Self::Error> {
-            match value.dynamic_linked_instance {
-                Some(golem_api_grpc::proto::golem::component::dynamic_linked_instance::DynamicLinkedInstance::WasmRpc(dynamic_linked_wasm_rpc)) => Ok(Self::WasmRpc(dynamic_linked_wasm_rpc.try_into()?)),
-                None => Err("Missing dynamic_linked_instance".to_string()),
-            }
-        }
-    }
-
-    impl From<DynamicLinkedWasmRpc> for golem_api_grpc::proto::golem::component::DynamicLinkedWasmRpc {
-        fn from(value: DynamicLinkedWasmRpc) -> Self {
-            Self {
-                targets: value
-                    .targets
-                    .into_iter()
-                    .map(|(key, target)| (key, target.into()))
-                    .collect(),
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::DynamicLinkedWasmRpc>
-        for DynamicLinkedWasmRpc
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::DynamicLinkedWasmRpc,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                targets: value
-                    .targets
-                    .into_iter()
-                    .map(|(key, target)| target.try_into().map(|target| (key, target)))
-                    .collect::<Result<HashMap<_, _>, _>>()?,
-            })
-        }
-    }
-
-    impl From<WasmRpcTarget> for golem_api_grpc::proto::golem::component::WasmRpcTarget {
-        fn from(value: WasmRpcTarget) -> Self {
-            Self {
-                interface_name: value.interface_name,
-                component_name: value.component_name,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::WasmRpcTarget> for WasmRpcTarget {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::WasmRpcTarget,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                interface_name: value.interface_name,
-                component_name: value.component_name,
-            })
-        }
-    }
-}
-
-pub fn dynamic_linking_to_diffable(
-    dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
-) -> BTreeMap<String, BTreeMap<String, diff::ComponentWasmRpcTarget>> {
-    dynamic_linking
-        .iter()
-        .map(|(link_name, link)| {
-            (
-                link_name.clone(),
-                match link {
-                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => targets
-                        .iter()
-                        .map(|(target_name, target)| {
-                            (
-                                target_name.clone(),
-                                diff::ComponentWasmRpcTarget {
-                                    interface_name: target.interface_name.clone(),
-                                    component_name: target.component_name.clone(),
-                                },
-                            )
-                        })
-                        .collect(),
-                },
-            )
-        })
-        .collect()
 }

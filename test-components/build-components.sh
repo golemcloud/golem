@@ -2,23 +2,25 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
-"option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
-"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests" "update-test-env-var")
-rust_test_apps=("auction-example" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters" "rpc" "agent-updates-v1" "agent-updates-v2" "agent-http-routes-rust" "agent-invocation-context")
-c_test_components=("large-initial-memory" "large-dynamic-memory")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc" "agent-routes-ts")
+rust_test_components=("oplog-processor")
+rust_test_apps=("host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-http-routes-rust" "agent-invocation-context" "agent-rpc")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-http-routes-ts")
 benchmark_apps=("benchmarks")
 
 # Optional arguments:
+# - clean: clean all projects without building
 # - rebuild: clean all projects before building them
 # - rust / c / ts / benchmarks: build only the specified group
 
+clean_only=false
 rebuild=false
 single_group=false
 group=""
 for arg in "$@"; do
   case $arg in
+    clean)
+      clean_only=true
+      ;;
     rebuild)
       rebuild=true
       ;;
@@ -45,104 +47,114 @@ for arg in "$@"; do
   esac
 done
 
+should_clean() {
+  [ "$clean_only" = true ] || [ "$rebuild" = true ]
+}
+
 if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
-  echo "Building the Rust test components"
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning the Rust test components"
+  else
+    echo "Building the Rust test components"
+  fi
   for subdir in "${rust_test_components[@]}"; do
-    echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$rebuild" = true ]; then
+    if should_clean; then
+      echo "Cleaning $subdir..."
       cargo clean
     fi
-    cargo component build --release
 
-    echo "Turning the module into a WebAssembly Component..."
-    target="../$subdir.wasm"
-    target_wat="../$subdir.wat"
-    cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
-    wasm-tools print "$target" >"$target_wat"
+    if [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      cargo-component build --release
+
+      echo "Turning the module into a WebAssembly Component..."
+      target="../$subdir.wasm"
+      target_wat="../$subdir.wat"
+      cp -v $(find target/wasm32-wasip1/release -name '*.wasm' -maxdepth 1) "$target"
+      wasm-tools print "$target" >"$target_wat"
+    fi
 
     popd || exit
   done
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
-  echo "Building the Rust test apps"
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning the Rust test apps"
+  else
+    echo "Building the Rust test apps"
+  fi
   TEST_COMP_DIR="$(pwd)"
   export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
   for subdir in "${rust_test_apps[@]}"; do
-    echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$rebuild" = true ]; then
+    if should_clean; then
+      echo "Cleaning $subdir..."
       golem-cli clean
       cargo clean
     fi
 
-    golem-cli --preset release  build
-    golem-cli --preset release exec copy
-
-    popd || exit
-  done
-fi
-
-if [ "$single_group" = "false" ] || [ "$group" = "c" ]; then
-  echo "Building the C test components"
-  for subdir in "${c_test_components[@]}"; do
-    echo "Building $subdir..."
-    pushd "$subdir" || exit
-
-    if [ "$rebuild" = true ]; then
-      rm *.wasm
+    if [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      golem-cli --preset release  build
+      golem-cli --preset release exec copy
     fi
-    wit-bindgen c --autodrop-borrows yes ./wit
-    # last built with wasi-sdk-0.25.0
-    $WASI_SDK_PATH/bin/clang --sysroot $WASI_SDK_PATH/share/wasi-sysroot main.c c_api1.c c_api1_component_type.o -o main.wasm
-
-    echo "Turning the module into a WebAssembly Component..."
-    target="../$subdir.wasm"
-    target_wat="../$subdir.wat"
-    wasm-tools component new main.wasm -o "$target" --adapt ../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
-    wasm-tools print "$target" >"$target_wat"
 
     popd || exit
   done
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
-  echo "Building the TS test apps"
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning the TS test apps"
+  else
+    echo "Building the TS test apps"
+  fi
   for subdir in "${ts_test_apps[@]}"; do
-    echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$rebuild" = true ]; then
+    if should_clean; then
+      echo "Cleaning $subdir..."
       rm -rf node_modules
-      npm install
       golem-cli clean
     fi
 
-    golem-cli build
-    golem-cli exec copy
+    if [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      npm install
+      golem-cli build
+      golem-cli exec copy
+    fi
 
     popd || exit
   done
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
-  echo "Building benchmark apps"
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning benchmark apps"
+  else
+    echo "Building benchmark apps"
+  fi
   for subdir in "${benchmark_apps[@]}"; do
-    echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$rebuild" = true ]; then
+    if should_clean; then
+      echo "Cleaning $subdir..."
       rm -rf node_modules
-      npm install
       golem-cli clean
       cargo clean
     fi
 
-    golem-cli build
-    golem-cli exec copy
+    if [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      npm install
+      golem-cli build
+      golem-cli exec copy
+    fi
 
     popd || exit
   done

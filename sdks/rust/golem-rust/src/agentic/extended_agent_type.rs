@@ -15,7 +15,7 @@
 use crate::agentic::AutoInjectedParamType;
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, DataSchema,
-    ElementSchema, HttpEndpointDetails, HttpMountDetails,
+    ElementSchema, HttpEndpointDetails, HttpMountDetails, Snapshotting,
 };
 use std::collections::HashSet;
 
@@ -32,6 +32,7 @@ pub struct ExtendedAgentType {
     pub dependencies: Vec<AgentDependency>,
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
+    pub snapshotting: Snapshotting,
 }
 
 impl ExtendedAgentType {
@@ -59,6 +60,7 @@ impl ExtendedAgentType {
             dependencies: self.dependencies.clone(),
             mode: self.mode,
             http_mount: self.http_mount.clone(),
+            snapshotting: self.snapshotting.clone(),
         }
     }
 }

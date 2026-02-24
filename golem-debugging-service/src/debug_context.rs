@@ -61,7 +61,7 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
@@ -69,8 +69,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
-use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
+use wasmtime::component::{Instance, Resource, ResourceAny};
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -432,20 +432,6 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
 }
 
 #[async_trait]
-impl DynamicLinking<Self> for DebugContext {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<Self>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()> {
-        self.durable_ctx
-            .link(engine, linker, component, component_metadata)
-    }
-}
-
-#[async_trait]
 impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
@@ -497,9 +483,9 @@ impl InvocationContextManagement for DebugContext {
     }
 }
 
-impl HasWasiConfigVars for DebugContext {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.wasi_config_vars()
+impl HasConfigVars for DebugContext {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.config_vars()
     }
 }
 

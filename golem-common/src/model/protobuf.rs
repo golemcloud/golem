@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{diff, WorkerResourceDescription, WorkerWasiConfigVarsFilter};
+use super::{diff, WorkerConfigVarsFilter, WorkerResourceDescription};
 use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
 use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
@@ -229,8 +229,8 @@ impl TryFrom<golem::worker::WorkerFilter> for WorkerFilter {
                     filter.comparator.try_into()?,
                     filter.value,
                 )),
-                golem::worker::worker_filter::Filter::WasiConfigVars(filter) => {
-                    Ok(WorkerFilter::new_wasi_config_vars(
+                golem::worker::worker_filter::Filter::ConfigVars(filter) => {
+                    Ok(WorkerFilter::new_config_vars(
                         filter.name,
                         filter.comparator.try_into()?,
                         filter.value,
@@ -294,12 +294,12 @@ impl From<WorkerFilter> for golem::worker::WorkerFilter {
                 comparator: comparator.into(),
                 value,
             }),
-            WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+            WorkerFilter::ConfigVars(WorkerConfigVarsFilter {
                 name,
                 comparator,
                 value,
-            }) => golem::worker::worker_filter::Filter::WasiConfigVars(
-                golem::worker::WorkerWasiConfigVarsFilter {
+            }) => golem::worker::worker_filter::Filter::ConfigVars(
+                golem::worker::WorkerConfigVarsFilter {
                     name,
                     comparator: comparator.into(),
                     value,

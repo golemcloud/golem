@@ -14,9 +14,9 @@
 
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::GuestLanguage;
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
-use golem_templates::model::GuestLanguage;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -27,7 +27,6 @@ use strum_macros::EnumIter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter)]
 pub enum ReplLanguage {
-    Rib,
     Rust,
     TypeScript,
 }
@@ -35,28 +34,21 @@ pub enum ReplLanguage {
 impl ReplLanguage {
     pub fn from_string(s: impl AsRef<str>) -> Option<ReplLanguage> {
         match s.as_ref().to_lowercase().as_str() {
-            "rib" => Some(ReplLanguage::Rib),
             "rust" => Some(ReplLanguage::Rust),
             "ts" | "typescript" => Some(ReplLanguage::TypeScript),
             _ => None,
         }
     }
 
-    pub fn is_rib(&self) -> bool {
-        matches!(self, ReplLanguage::Rib)
-    }
-
-    pub fn to_guest_language(&self) -> Option<GuestLanguage> {
+    pub fn to_guest_language(&self) -> GuestLanguage {
         match self {
-            ReplLanguage::Rib => None,
-            ReplLanguage::Rust => Some(GuestLanguage::Rust),
-            ReplLanguage::TypeScript => Some(GuestLanguage::TypeScript),
+            ReplLanguage::Rust => GuestLanguage::Rust,
+            ReplLanguage::TypeScript => GuestLanguage::TypeScript,
         }
     }
 
     pub fn id(&self) -> &'static str {
         match self {
-            ReplLanguage::Rib => "rib",
             ReplLanguage::Rust => "rust",
             ReplLanguage::TypeScript => "ts",
         }
@@ -66,7 +58,6 @@ impl ReplLanguage {
 impl Display for ReplLanguage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReplLanguage::Rib => write!(f, "Rib"),
             ReplLanguage::Rust => write!(f, "Rust"),
             ReplLanguage::TypeScript => write!(f, "TypeScript"),
         }
@@ -106,6 +97,7 @@ pub struct BridgeReplArgs {
     pub app_main_dir: PathBuf,
     pub repl_root_dir: PathBuf,
     pub repl_root_bridge_sdk_dir: PathBuf,
+    pub repl_metadata_json_path: PathBuf,
     pub repl_cli_commands_metadata_json_path: PathBuf,
     pub repl_bridge_sdk_target: CustomBridgeSdkTarget,
     pub repl_history_file_path: PathBuf,

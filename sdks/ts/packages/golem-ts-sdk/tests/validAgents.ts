@@ -293,7 +293,7 @@ export class FooAgent extends BaseAgent {
   }
 
   // With override keyword
-  override async saveSnapshot(): Promise<Uint8Array> {
+  override async saveSnapshot(): Promise<Uint8Array | { data: Uint8Array; mimeType: string }> {
     return super.saveSnapshot();
   }
 
@@ -573,6 +573,50 @@ class WebhookAgent extends BaseAgent {
     console.log(webhook.getUrl());
     const result = await webhook;
     return Promise.resolve(result.json<string>());
+  }
+}
+
+@agent({ snapshotting: 'disabled' })
+class SnapshottingDisabledAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({ snapshotting: 'enabled' })
+class SnapshottingEnabledAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({ snapshotting: { periodic: '5s' } })
+class SnapshottingPeriodicAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
+
+@agent({ snapshotting: { every: 10 } })
+class SnapshottingEveryNAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
   }
 }
 

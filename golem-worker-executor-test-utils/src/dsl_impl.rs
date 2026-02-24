@@ -28,11 +28,12 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
     ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
 };
+use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
+use golem_common::model::agent::AgentError;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
     InitialComponentFile, PluginInstallation,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::RevertWorkerTarget;
@@ -47,16 +48,68 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{rename_component_if_needed, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tonic::Streaming;
+use tracing::debug;
 use uuid::Uuid;
+
+impl TestWorkerExecutor {
+    // TODO: Old invocation implementation, to be removed
+    async fn invoke_and_await_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
+        let latest_version = self
+            .get_latest_component_revision(&worker_id.component_id)
+            .await?;
+
+        let result = self
+            .client
+            .clone()
+            .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                name: function_name.to_string(),
+                input: params.into_iter().map(|param| param.into()).collect(),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                context: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await;
+
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor invoke call"
+            )),
+            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Success(result)) => {
+                Ok(Ok(result
+                    .output
+                    .into_iter()
+                    .map(|v| v.try_into())
+                    .collect::<Result<Vec<Value>, String>>()
+                    .map_err(|err| {
+                        anyhow!("Invocation result had unexpected format: {err}")
+                    })?))
+            }
+            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(error)) => {
+                Ok(Err(error
+                    .try_into()
+                    .map_err(|e| anyhow!("Failed converting error: {e}"))?))
+            }
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
-    type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
-
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis.clone()
     }
@@ -69,8 +122,8 @@ impl TestDsl for TestWorkerExecutor {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         if !plugins.is_empty() {
@@ -83,17 +136,14 @@ impl TestDsl for TestWorkerExecutor {
 
         let source_path = component_directory.join(format!("{wasm_name}.wasm"));
 
+        let original_source_hash = blake3::hash(&std::fs::read(&source_path)?);
+
         let component_name = if unique {
             let uuid = Uuid::new_v4();
             ComponentName(format!("{name}-{uuid}"))
         } else {
             ComponentName(name.to_string())
         };
-        let dynamic_linking = HashMap::from_iter(
-            dynamic_linking
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
 
         let source_path = if !unverified {
             rename_component_if_needed(
@@ -134,13 +184,14 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         converted_files,
-                        dynamic_linking,
                         unverified,
                         env,
+                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
                         HashSet::new(),
+                        Some(original_source_hash),
                     )
                     .await
                     .expect("Failed to add component")
@@ -151,13 +202,14 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         converted_files,
-                        dynamic_linking,
                         unverified,
                         env,
+                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
                         HashSet::new(),
+                        Some(original_source_hash),
                     )
                     .await
             }
@@ -176,6 +228,17 @@ impl TestDsl for TestWorkerExecutor {
             .await
     }
 
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
+        self.deps
+            .component_writer
+            .get_component_metadata_at_revision(component_id, revision)
+            .await
+    }
+
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
@@ -183,8 +246,8 @@ impl TestDsl for TestWorkerExecutor {
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let latest_revision = self
             .deps
@@ -201,16 +264,17 @@ impl TestDsl for TestWorkerExecutor {
 
         let component_dir = &self.deps.component_directory;
 
-        let source_path = if let Some(wasm_name) = wasm_name {
+        let (source_path, original_source_hash) = if let Some(wasm_name) = wasm_name {
             let source_path = component_dir.join(format!("{wasm_name}.wasm"));
+            let original_hash = blake3::hash(&std::fs::read(&source_path)?);
             let source_path = rename_component_if_needed(
                 self.deps.component_temp_directory.path(),
                 &source_path,
                 &latest_revision.component_name.0,
             )?;
-            Some(source_path)
+            (Some(source_path), Some(original_hash))
         } else {
-            None
+            (None, None)
         };
 
         let mut converted_new_files = Vec::new();
@@ -241,26 +305,27 @@ impl TestDsl for TestWorkerExecutor {
                 source_path.as_deref(),
                 converted_new_files,
                 removed_files,
-                dynamic_linking,
                 env,
+                config_vars,
+                original_source_hash,
             )
             .await?;
 
         Ok(component)
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        config_vars: HashMap<String, String>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
         let worker_id = WorkerId {
             component_id: *component_id,
-            worker_name: name.to_string(),
+            worker_name: id.to_string(),
         };
 
         let response = self
@@ -271,7 +336,7 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
+                config_vars,
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -288,26 +353,17 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn start_worker_with(
+    async fn invoke_agent_with_key(
         &self,
         component_id: &ComponentId,
-        name: &str,
-        env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
-        let result = self
-            .try_start_worker_with(component_id, name, env, wasi_config_vars)
-            .await??;
-        Ok(result)
-    }
-
-    async fn invoke_with_key(
-        &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<(), WorkerExecutorError>> {
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()> {
+        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
+            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+
         let latest_version = self
             .get_latest_component_revision(&worker_id.component_id)
             .await?;
@@ -319,12 +375,15 @@ impl TestDsl for TestWorkerExecutor {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 idempotency_key: Some(idempotency_key.clone().into()),
-                name: function_name.to_string(),
-                input: params
-                    .clone()
-                    .into_iter()
-                    .map(|param| param.value.into())
-                    .collect(),
+                name: "golem:agent/guest.{invoke}".to_string(),
+                input: vec![
+                    method_name.into_value_and_type(),
+                    params.into_value_and_type(),
+                    golem_common::model::agent::Principal::anonymous().into_value_and_type(),
+                ]
+                .into_iter()
+                .map(|param| param.value.into())
+                .collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),
@@ -337,178 +396,85 @@ impl TestDsl for TestWorkerExecutor {
             None => Err(anyhow!(
                 "No response from golem-worker-executor invoke call"
             )),
-            Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)) => Ok(Ok(())),
+            Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)) => Ok(()),
             Some(workerexecutor::v1::invoke_worker_response::Result::Failure(error)) => {
-                Ok(Err(error
-                    .try_into()
-                    .map_err(|e| anyhow!("Failed converting error: {e}"))?))
+                Err(anyhow!("Failed converting error: {error:?}"))
             }
         }
     }
 
-    async fn invoke_and_await_with_key(
+    async fn invoke_and_await_agent_impl(
         &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
-        let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: Option<&IdempotencyKey>,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        // TODO: temporarily going through the dynamic invocation route, will be migrated to the new invocation API
+        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
+            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        let key = idempotency_key
+            .cloned()
+            .unwrap_or_else(IdempotencyKey::fresh);
+        let invoke_result = self
+            .invoke_and_await_with_key(
+                &worker_id,
+                &key,
+                "golem:agent/guest.{invoke}",
+                vec![
+                    method_name.into_value(),
+                    params.into_value(),
+                    golem_common::model::agent::Principal::anonymous().into_value(),
+                ],
+            )
             .await?;
+        match invoke_result {
+            Ok(mut values) if values.len() == 1 => {
+                let worker_metadata = self.get_worker_metadata(&worker_id).await?;
+                let component = self
+                    .get_component_at_revision(component_id, worker_metadata.component_revision)
+                    .await?;
+                let agent_type = component
+                    .metadata
+                    .find_agent_type_by_wrapper_name(&agent_id.agent_type)
+                    .map_err(|err| anyhow!("Agent type not found: {err}"))?
+                    .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
+                let agent_method = agent_type
+                    .methods
+                    .iter()
+                    .find(|method| method.name == method_name)
+                    .ok_or_else(|| {
+                        debug!("Agent method not found: {}", method_name);
+                        debug!("In agent type: {:#?}", agent_type);
+                        debug!(
+                            "Got for worker-id: {worker_id} with component revision {}",
+                            worker_metadata.component_revision
+                        );
 
-        let result = self
-            .client
-            .clone()
-            .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                name: function_name.to_string(),
-                input: params
-                    .clone()
-                    .into_iter()
-                    .map(|param| param.value.into())
-                    .collect(),
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                context: None,
-                auth_ctx: Some(self.auth_ctx().into()),
-            })
-            .await;
+                        anyhow!("Agent method not found: {}", method_name)
+                    })?;
 
-        let result = result?.into_inner();
-
-        match result.result {
-            None => Err(anyhow!(
-                "No response from golem-worker-executor invoke call"
-            )),
-            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Success(result)) => {
-                Ok(Ok(result
-                    .output
-                    .into_iter()
-                    .map(|v| v.try_into())
-                    .collect::<Result<Vec<Value>, String>>()
-                    .map_err(|err| {
-                        anyhow!("Invocation result had unexpected format: {err}")
-                    })?))
+                let result = match values.remove(0) {
+                    Value::Result(Ok(Some(data_value_value))) => {
+                        let untyped_data_value = UntypedDataValue::from_value(*data_value_value)
+                            .map_err(|err| anyhow!("Unexpected DataValue value: {err}"))?;
+                        Ok(DataValue::try_from_untyped(
+                            untyped_data_value,
+                            agent_method.output_schema.clone(),
+                        )
+                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))?)
+                    }
+                    Value::Result(Err(Some(agent_error_value))) => {
+                        Err(AgentError::from_value(*agent_error_value)
+                            .map_err(|err| anyhow!("Unexpected AgentError value: {err}"))?)
+                    }
+                    _ => Err(anyhow!("Unexpected return value from agent invocation",))?,
+                };
+                Ok(result.map_err(|err| anyhow!("Agent invocation error: {err}"))?)
             }
-            Some(workerexecutor::v1::invoke_and_await_worker_response::Result::Failure(error)) => {
-                Ok(Err(error
-                    .try_into()
-                    .map_err(|e| anyhow!("Failed converting error: {e}"))?))
-            }
-        }
-    }
-
-    async fn invoke_and_await_typed_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
-        let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
-            .await?;
-
-        let result = self
-            .client
-            .clone()
-            .invoke_and_await_worker_typed(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                name: function_name.to_string(),
-                input: params
-                    .clone()
-                    .into_iter()
-                    .map(|param| param.value.into())
-                    .collect(),
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                context: None,
-                auth_ctx: Some(self.auth_ctx().into()),
-            })
-            .await;
-
-        let result = result?.into_inner();
-
-        match result.result {
-            None => Err(anyhow!(
-                "No response from golem-worker-executor invoke call"
-            )),
-            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
-                result,
-            )) => match result.output {
-                None => Ok(Ok(None)),
-                Some(response) => {
-                    let response: ValueAndType = response
-                        .try_into()
-                        .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?;
-                    Ok(Ok(Some(response)))
-                }
-            },
-            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
-                error,
-            )) => Ok(Err(error
-                .try_into()
-                .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
-        }
-    }
-
-    async fn invoke_and_await_json_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
-        let latest_version = self
-            .get_latest_component_revision(&worker_id.component_id)
-            .await?;
-
-        let result = self
-            .client
-            .clone()
-            .invoke_and_await_worker_json(workerexecutor::v1::InvokeAndAwaitWorkerJsonRequest {
-                worker_id: Some(worker_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                idempotency_key: Some(idempotency_key.clone().into()),
-                name: function_name.to_string(),
-                input: params
-                    .clone()
-                    .into_iter()
-                    .map(|param| {
-                        serde_json::to_string(&param).expect("Failed serializing param to json")
-                    })
-                    .collect(),
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                context: None,
-                auth_ctx: Some(self.auth_ctx().into()),
-            })
-            .await;
-
-        let result = result?.into_inner();
-
-        match result.result {
-            None => Err(anyhow!(
-                "No response from golem-worker-executor invoke call"
-            )),
-            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
-                result,
-            )) => match result.output {
-                None => Ok(Ok(None)),
-                Some(response) => {
-                    let response: ValueAndType = response
-                        .try_into()
-                        .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?;
-                    Ok(Ok(Some(response)))
-                }
-            },
-            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
-                error,
-            )) => Ok(Err(error
-                .try_into()
-                .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
+            Ok(_) => Err(anyhow!("Unexpected return value from agent invocation")),
+            Err(err) => Err(anyhow!("Agent invocation failed: {err}")),
         }
     }
 

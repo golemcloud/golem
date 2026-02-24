@@ -1,3 +1,6 @@
+mod snapshot_test;
+pub mod repository;
+
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
 #[agent_definition]
@@ -108,5 +111,36 @@ impl HostFunctionTests for HostFunctionTestsImpl {
         let key1 = generate_idempotency_key();
         let key2 = generate_idempotency_key();
         (key1.to_string(), key2.to_string())
+    }
+}
+
+#[agent_definition]
+trait FailingCounter {
+    fn new(id: String) -> Self;
+    fn add(&mut self, value: u64);
+    fn get(&self) -> u64;
+}
+
+struct FailingCounterImpl {
+    total: u64,
+    _id: String,
+}
+
+#[agent_implementation]
+impl FailingCounter for FailingCounterImpl {
+    fn new(id: String) -> Self {
+        Self { total: 0, _id: id }
+    }
+
+    fn add(&mut self, value: u64) {
+        eprintln!("error log message");
+        if value > 10 {
+            panic!("value is too large");
+        }
+        self.total += value;
+    }
+
+    fn get(&self) -> u64 {
+        self.total
     }
 }

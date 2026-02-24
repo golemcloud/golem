@@ -14,7 +14,15 @@
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { describe, expect } from 'vitest';
-import { BarAgentClassName, FooAgentClassName, EphemeralAgentClassName } from './testUtils';
+import {
+  BarAgentClassName,
+  FooAgentClassName,
+  EphemeralAgentClassName,
+  SnapshottingDisabledAgentClassName,
+  SnapshottingEnabledAgentClassName,
+  SnapshottingPeriodicAgentClassName,
+  SnapshottingEveryNAgentClassName,
+} from './testUtils';
 import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 import { FooAgent } from './validAgents';
@@ -732,6 +740,42 @@ describe('Agent decorator should register the agent class and its methods into A
     }
 
     expect(ephemeralAgent.mode).toEqual('ephemeral');
+  });
+
+  it('should set snapshotting to disabled by default when not specified', () => {
+    const fooAgent = AgentTypeRegistry.get(FooAgentClassName);
+    if (!fooAgent) throw new Error('FooAgent not found');
+    expect(fooAgent.snapshotting).toEqual({ tag: 'disabled' });
+  });
+
+  it('should set snapshotting to disabled when explicitly set', () => {
+    const agent = AgentTypeRegistry.get(SnapshottingDisabledAgentClassName);
+    if (!agent) throw new Error('SnapshottingDisabledAgent not found');
+    expect(agent.snapshotting).toEqual({ tag: 'disabled' });
+  });
+
+  it('should set snapshotting to enabled with default config', () => {
+    const agent = AgentTypeRegistry.get(SnapshottingEnabledAgentClassName);
+    if (!agent) throw new Error('SnapshottingEnabledAgent not found');
+    expect(agent.snapshotting).toEqual({ tag: 'enabled', val: { tag: 'default' } });
+  });
+
+  it('should set snapshotting to periodic', () => {
+    const agent = AgentTypeRegistry.get(SnapshottingPeriodicAgentClassName);
+    if (!agent) throw new Error('SnapshottingPeriodicAgent not found');
+    expect(agent.snapshotting).toEqual({
+      tag: 'enabled',
+      val: { tag: 'periodic', val: 5000000000n },
+    });
+  });
+
+  it('should set snapshotting to every-n-invocation', () => {
+    const agent = AgentTypeRegistry.get(SnapshottingEveryNAgentClassName);
+    if (!agent) throw new Error('SnapshottingEveryNAgent not found');
+    expect(agent.snapshotting).toEqual({
+      tag: 'enabled',
+      val: { tag: 'every-n-invocation', val: 10 },
+    });
   });
 });
 

@@ -12,10 +12,10 @@ use crate::log::log_error;
 use crate::log::{log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent};
 use crate::model::app::{BridgeSdkTarget, CustomBridgeSdkTarget};
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
+use crate::model::GuestLanguage;
 use anyhow::bail;
 use camino::Utf8PathBuf;
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_templates::model::GuestLanguage;
 use itertools::Itertools;
 use std::collections::BTreeMap;
 
@@ -82,13 +82,8 @@ async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<
         }
 
         let is_matching_all = matchers.remove("*");
-        let wit = ctx.wit().await;
 
         for component_name in ctx.application_context().selected_component_names() {
-            if !wit.is_agent(component_name) {
-                continue;
-            }
-
             let is_matching_component = matchers.remove(component_name.as_str());
 
             let mut agent_types = extract_and_store_agent_types(ctx, component_name).await?;
@@ -144,12 +139,7 @@ async fn collect_custom_targets(
 
     let should_filter_by_agent_type_name = !custom_target.agent_type_names.is_empty();
     let mut agent_type_names = custom_target.agent_type_names.clone();
-    let wit = ctx.wit().await;
     for component_name in ctx.application_context().selected_component_names() {
-        if !wit.is_agent(component_name) {
-            continue;
-        }
-
         let component = ctx.application().component(component_name);
         let target_language = custom_target
             .target_language
@@ -210,7 +200,7 @@ async fn gen_bridge_sdk_target(
     target: BridgeSdkTarget,
 ) -> anyhow::Result<()> {
     let component = ctx.application().component(&target.component_name);
-    let final_linked_wasm = component.final_linked_wasm();
+    let final_wasm = component.final_wasm();
     let agent_type_name = target.agent_type.type_name.clone();
     let output_dir = Utf8PathBuf::try_from(target.output_dir)?;
 
@@ -220,7 +210,7 @@ async fn gen_bridge_sdk_target(
             agent_type_name: &target.agent_type.type_name,
             language: &target.target_language,
         })?
-        .with_sources(|| vec![&final_linked_wasm])
+        .with_sources(|| vec![&final_wasm])
         .with_targets(|| vec![&output_dir])
         .run_async_or_skip(
             || async {

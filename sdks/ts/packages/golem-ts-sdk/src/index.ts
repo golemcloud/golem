@@ -25,7 +25,7 @@ import { setAgentId } from './internal/registry/agentId';
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
 export { description } from './decorators/description';
-export { agent, AgentDecoratorOptions } from './decorators/agent';
+export { agent, AgentDecoratorOptions, SnapshottingOption } from './decorators/agent';
 export { prompt } from './decorators/prompt';
 export { endpoint, EndpointDecoratorOptions } from './decorators/httpEndpoint';
 
@@ -120,34 +120,76 @@ async function getDefinition(): Promise<AgentType> {
   return resolvedAgent.getAgentType();
 }
 
-async function save(): Promise<Uint8Array> {
+async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
   if (!resolvedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const agentSnapshot = await resolvedAgent.saveSnapshot();
+  const { data: agentSnapshot, mimeType } = await resolvedAgent.saveSnapshot();
+  const principal = initializationPrincipal ?? { tag: 'anonymous' };
 
-  const totalLength = 1 + agentSnapshot.length;
-  const fullSnapshot = new Uint8Array(totalLength);
-  const view = new DataView(fullSnapshot.buffer);
-  view.setUint8(0, 1); // version
-  fullSnapshot.set(agentSnapshot, 1);
+  if (mimeType === 'application/json') {
+    // JSON snapshot: wrap in envelope { version, principal, state }
+    const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
+    const envelope = { version: 1, principal, state };
+    return {
+      data: new TextEncoder().encode(JSON.stringify(envelope)),
+      mimeType: 'application/json',
+    };
+  } else {
+    // Binary snapshot: version-2 binary envelope with principal
+    const principalJson = JSON.stringify(principal);
+    const principalBytes = new TextEncoder().encode(principalJson);
 
-  return fullSnapshot;
+    const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
+    const fullSnapshot = new Uint8Array(totalLength);
+    const view = new DataView(fullSnapshot.buffer);
+    view.setUint8(0, 2); // version
+    view.setUint32(1, principalBytes.length, false); // big-endian
+    fullSnapshot.set(principalBytes, 5);
+    fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
+
+    return { data: fullSnapshot, mimeType: 'application/octet-stream' };
+  }
 }
 
-async function load(bytes: Uint8Array): Promise<void> {
+async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
+  const bytes = snapshot.data;
+
   if (resolvedAgent) {
     throw `Agent is already initialized in this container`;
   }
 
-  const view = new DataView(bytes.buffer);
-  const version = view.getUint8(0);
-  if (version !== 1) {
-    throw `Unsupported snapshot version ${version}`;
+  let agentSnapshot: Uint8Array;
+  let principal: Principal;
+
+  if (snapshot.mimeType === 'application/json') {
+    // JSON snapshot: unwrap envelope { version, principal, state }
+    const envelope = JSON.parse(new TextDecoder().decode(bytes));
+    principal = envelope.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
+    if (envelope.state === undefined) {
+      throw `JSON snapshot missing 'state' field`;
+    }
+    agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
+  } else {
+    // Custom binary snapshot with version envelope
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const version = view.getUint8(0);
+
+    if (version === 1) {
+      agentSnapshot = bytes.slice(1);
+      principal = initializationPrincipal ?? { tag: 'anonymous' };
+    } else if (version === 2) {
+      const principalLen = view.getUint32(1, false); // big-endian
+      const principalBytes = bytes.slice(5, 5 + principalLen);
+      principal = JSON.parse(new TextDecoder().decode(principalBytes)) as Principal;
+      agentSnapshot = bytes.slice(5 + principalLen);
+    } else {
+      throw `Unsupported snapshot version ${version}`;
+    }
   }
 
-  const agentSnapshot = bytes.slice(1);
+  initializationPrincipal = principal;
 
   const [agentTypeName, agentParameters, _phantomId] = getRawSelfAgentId().parsed();
 
@@ -157,11 +199,7 @@ async function load(bytes: Uint8Array): Promise<void> {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  if (!initializationPrincipal) {
-    throw `Failed to get agent definition: initializationPrincipal is not initialized`;
-  }
-
-  const initiateResult = initiator.initiate(agentParameters, initializationPrincipal);
+  const initiateResult = initiator.initiate(agentParameters, principal);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

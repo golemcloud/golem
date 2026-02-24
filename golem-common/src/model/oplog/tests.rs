@@ -56,7 +56,7 @@ fn create_serialization_poem_serde_equivalence() {
             .into_iter()
             .collect(),
         created_by: AccountId::new(),
-        wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
+        config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
         environment_id: EnvironmentId::new(),
         parent: Some(WorkerId {
             component_id: ComponentId(
@@ -324,6 +324,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
         target_revision: ComponentRevision::new(1).unwrap(),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
+            mime_type: "application/octet-stream".to_string(),
         }),
     });
     let serialized = entry.to_json_string();

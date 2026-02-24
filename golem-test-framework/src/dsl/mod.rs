@@ -28,6 +28,7 @@ use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOu
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{PromiseId, WorkerId};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentId, DataValue};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -37,7 +38,7 @@ use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     PluginInstallation,
 };
-use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
+use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{
@@ -51,7 +52,6 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{IdempotencyKey, OplogIndex, ScanCursor, WorkerFilter, WorkerStatus};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,11 +70,21 @@ pub struct EnvironmentOptions {
     pub security_overrides: bool,
 }
 
+pub type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
+
+pub trait WorkerInvocationResultOps<T> {
+    fn collapse(self) -> anyhow::Result<T>;
+}
+
+impl<T> WorkerInvocationResultOps<T> for WorkerInvocationResult<T> {
+    fn collapse(self) -> anyhow::Result<T> {
+        self?.map_err(|err| err.into())
+    }
+}
+
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
-    type WorkerInvocationResult<T>;
-
     fn redis(&self) -> Arc<dyn Redis>;
 
     fn component(
@@ -93,14 +103,20 @@ pub trait TestDsl {
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
-        dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
+    ) -> anyhow::Result<ComponentDto>;
+
+    async fn get_component_at_revision(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn update_component(
@@ -153,8 +169,8 @@ pub trait TestDsl {
             Some(name),
             Vec::new(),
             Vec::new(),
-            None,
             Some(BTreeMap::from_iter(env.to_vec())),
+            None,
         )
         .await
     }
@@ -166,125 +182,112 @@ pub trait TestDsl {
         wasm_name: Option<&str>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
-        dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
-    async fn try_start_worker(
+    async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        name: &str,
-    ) -> Self::WorkerInvocationResult<WorkerId> {
-        self.try_start_worker_with(component_id, name, HashMap::new(), vec![])
+        id: AgentId,
+    ) -> WorkerInvocationResult<WorkerId> {
+        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
 
-    async fn try_start_worker_with(
+    async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> Self::WorkerInvocationResult<WorkerId>;
+        config_vars: HashMap<String, String>,
+    ) -> WorkerInvocationResult<WorkerId>;
 
-    async fn start_worker(
+    async fn start_agent(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
     ) -> anyhow::Result<WorkerId> {
-        self.start_worker_with(component_id, name, HashMap::new(), vec![])
+        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
 
-    async fn start_worker_with(
+    async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        name: &str,
+        id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId>;
-
-    async fn invoke(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<()> {
-        self.invoke_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
-            .await
+        config_vars: HashMap<String, String>,
+    ) -> anyhow::Result<WorkerId> {
+        let result = self
+            .try_start_agent_with(component_id, id, env, config_vars)
+            .await?;
+        Ok(result?)
     }
 
-    async fn invoke_with_key(
+    async fn invoke_agent(
         &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<()>;
-
-    async fn invoke_and_await(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Vec<Value>> {
-        self.invoke_and_await_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
-            .await
-    }
-
-    async fn invoke_and_await_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Vec<Value>>;
-
-    async fn invoke_and_await_typed(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>> {
-        self.invoke_and_await_typed_with_key(
-            worker_id,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()> {
+        self.invoke_agent_with_key(
+            component_id,
+            agent_id,
             &IdempotencyKey::fresh(),
-            function_name,
+            method_name,
             params,
         )
         .await
     }
 
-    async fn invoke_and_await_typed_with_key(
+    async fn invoke_agent_with_key(
         &self,
-        worker_id: &WorkerId,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>>;
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<()>;
 
-    async fn invoke_and_await_json(
+    async fn invoke_and_await_agent(
         &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>> {
-        self.invoke_and_await_json_with_key(
-            worker_id,
-            &IdempotencyKey::fresh(),
-            function_name,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(component_id, agent_id, None, method_name, params)
+            .await
+    }
+
+    async fn invoke_and_await_agent_with_key(
+        &self,
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: &IdempotencyKey,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(
+            component_id,
+            agent_id,
+            Some(idempotency_key),
+            method_name,
             params,
         )
         .await
     }
 
-    async fn invoke_and_await_json_with_key(
+    async fn invoke_and_await_agent_impl(
         &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<serde_json::Value>,
-    ) -> Self::WorkerInvocationResult<Option<ValueAndType>>;
+        component_id: &ComponentId,
+        agent_id: &AgentId,
+        idempotency_key: Option<&IdempotencyKey>,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue>;
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
@@ -304,7 +307,11 @@ pub trait TestDsl {
         let entries = self.get_oplog(worker_id, OplogIndex::INITIAL).await?;
 
         for entry in entries {
-            debug_render_oplog_entry(&entry.entry);
+            debug!(
+                "#{}:\n{}",
+                entry.oplog_index,
+                debug_render_oplog_entry(&entry.entry)
+            );
         }
 
         Ok(())
@@ -662,8 +669,8 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     unique: bool,
     unverified: bool,
     files: Vec<IFSEntry>,
-    dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     env: BTreeMap<String, String>,
+    config_vars: BTreeMap<String, String>,
     plugins: Vec<PluginInstallation>,
 }
 
@@ -677,8 +684,8 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             unique: false,
             unverified: false,
             files: Vec::new(),
-            dynamic_linking: HashMap::new(),
             env: BTreeMap::new(),
+            config_vars: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }
@@ -690,6 +697,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     }
 
     /// Always create as a new component - otherwise, if the same component was already uploaded, it will be reused
+    // TODO: CHECK IF WE CAN GET RID OF THIS FEATURE COMPLETELY IN THE FIRST CLASS AGENTS EPIC
     pub fn unique(mut self) -> Self {
         self.unique = true;
         self
@@ -746,27 +754,15 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self.add_file(target, source, ComponentFilePermissions::ReadWrite)
     }
 
-    /// Set the dynamic linking for the component
-    pub fn with_dynamic_linking(
-        mut self,
-        dynamic_linking: &[(&str, DynamicLinkedInstance)],
-    ) -> Self {
-        self.dynamic_linking = dynamic_linking
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
-        self
-    }
-
-    /// Adds a dynamic linked instance to the component
-    pub fn add_dynamic_linking(mut self, name: &str, instance: DynamicLinkedInstance) -> Self {
-        self.dynamic_linking.insert(name.to_string(), instance);
-        self
-    }
-
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
         let map = env.into_iter().collect::<BTreeMap<_, _>>();
         self.env = map;
+        self
+    }
+
+    pub fn with_config_vars(mut self, config_vars: Vec<(String, String)>) -> Self {
+        let map = config_vars.into_iter().collect::<BTreeMap<_, _>>();
+        self.config_vars = map;
         self
     }
 
@@ -803,8 +799,8 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.unique,
                 self.unverified,
                 self.files,
-                self.dynamic_linking,
                 self.env,
+                self.config_vars,
                 self.plugins,
             )
             .await

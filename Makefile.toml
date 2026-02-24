@@ -71,7 +71,6 @@ run_task = [
         "wit-golem-common",
         "wit-golem-cli",
         "wit-test-components",
-        "wit-golem-templates",
         "wit-sdks",
     ] },
 ]
@@ -99,15 +98,6 @@ cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-rpc golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
-"""
-
-[tasks.wit-golem-templates]
-private = true
-script_runner = "@duckscript"
-script = """
-rm -r cli/golem-templates/wit/deps
-mkdir cli/golem-templates/wit/deps
-glob_cp wit/deps/**/* cli/golem-templates/wit/deps
 """
 
 [tasks.wit-sdks]
@@ -148,35 +138,8 @@ array_push ${components} agent-invocation-context/.wit
 array_push ${components} agent-updates-v1/.wit
 array_push ${components} agent-updates-v2/.wit
 array_push ${components} benchmarks
-array_push ${components} blob-store-service
-array_push ${components} component-resolve
-array_push ${components} component-transformer-example1/adapter
-array_push ${components} custom-durability
-array_push ${components} file-service
-array_push ${components} high-volume-logging
-array_push ${components} http-client
-array_push ${components} ifs-update
-array_push ${components} ifs-update-inside-exported-function
-array_push ${components} invocation-context
-array_push ${components} key-value-service
-array_push ${components} networking
+array_push ${components} initial-file-system/.wit
 array_push ${components} oplog-processor
-array_push ${components} promise
-array_push ${components} rdbms-service
-array_push ${components} rpc
-array_push ${components} runtime-service
-array_push ${components} rust-service/rpc
-array_push ${components} scheduled-invocation
-array_push ${components} shopping-cart
-array_push ${components} update-test-env-var
-array_push ${components} update-test-v2-11
-array_push ${components} update-test-v3-11
-array_push ${components} update-test-v3-sdk
-array_push ${components} update-test-v4
-array_push ${components} wasi-config
-array_push ${components} wasi-http-incoming-request-handler
-array_push ${components} wasi-http-incoming-request-handler-echo
-array_push ${components} wasi-http-incoming-request-handler-state
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"

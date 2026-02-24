@@ -34,7 +34,6 @@ sequential_suite!(agents);
 inherit_test_dep!(Tracing);
 
 use crate::{crate_path, workspace_path, Tracing};
-use assert2::assert;
 use colored::Colorize;
 use golem_cli::fs::{read_to_string, write_str};
 use golem_client::api::HealthCheckClient;
@@ -78,7 +77,6 @@ mod cmd {
 
 mod flag {
     pub static AGENT_TYPE_NAME: &str = "--agent-type-name";
-    pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static FORMAT: &str = "--format";
     pub static LANGUAGE: &str = "--language";
@@ -381,7 +379,6 @@ impl TestContext {
             let mut all_args = vec![
                 "--config-dir".to_string(),
                 self.config_dir.path().to_str().unwrap().to_string(),
-                flag::DEV_MODE.to_string(),
             ];
             if let Some(template_group) = &self.template_group {
                 all_args.push(flag::TEMPLATE_GROUP.to_string());

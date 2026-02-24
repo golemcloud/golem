@@ -22,8 +22,9 @@ mod tests {
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
-    use golem_rust::golem_ai::golem::llm::llm::Config;
+    use golem_rust::golem_agentic::golem::agent::common::{
+        AgentMode, AgentType, Snapshotting, SnapshottingConfig,
+    };
     use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
@@ -31,6 +32,11 @@ mod tests {
     use std::fmt::Debug;
 
     use test_r::test;
+
+    #[derive(Clone, Debug, Schema)]
+    struct Config {
+        model: String,
+    }
 
     #[agent_definition]
     trait SampleAgent: BaseAgent {
@@ -939,5 +945,317 @@ mod tests {
 
             request.json().unwrap()
         }
+    }
+
+    #[agent_definition]
+    trait AgentSnapshottingDefault {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingDefaultImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingDefault for AgentSnapshottingDefaultImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "disabled")]
+    trait AgentSnapshottingDisabled {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingDisabledImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingDisabled for AgentSnapshottingDisabledImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "enabled")]
+    trait AgentSnapshottingEnabled {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingEnabledImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingEnabled for AgentSnapshottingEnabledImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "periodic(5s)")]
+    trait AgentSnapshottingPeriodic {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingPeriodicImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingPeriodic for AgentSnapshottingPeriodicImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[agent_definition(snapshotting = "every(10)")]
+    trait AgentSnapshottingEveryN {
+        fn new(init: String) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct AgentSnapshottingEveryNImpl {
+        _id: String,
+    }
+
+    #[agent_implementation]
+    impl AgentSnapshottingEveryN for AgentSnapshottingEveryNImpl {
+        fn new(id: String) -> Self {
+            Self { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message
+        }
+    }
+
+    #[test]
+    fn test_agent_snapshotting() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        let find_agent = |name: &str| -> Option<AgentType> {
+            agent_types.iter().find(|a| a.type_name == name).cloned()
+        };
+
+        if let Some(agent) = find_agent("AgentSnapshottingDefault") {
+            assert!(
+                matches!(agent.snapshotting, Snapshotting::Disabled),
+                "Default should be Disabled"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingDisabled") {
+            assert!(
+                matches!(agent.snapshotting, Snapshotting::Disabled),
+                "Explicit disabled should be Disabled"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingEnabled") {
+            assert!(
+                matches!(
+                    agent.snapshotting,
+                    Snapshotting::Enabled(SnapshottingConfig::Default)
+                ),
+                "Enabled should use Default config"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingPeriodic") {
+            assert!(
+                matches!(
+                    agent.snapshotting,
+                    Snapshotting::Enabled(SnapshottingConfig::Periodic(5000000000))
+                ),
+                "Periodic should have correct duration"
+            );
+        }
+
+        if let Some(agent) = find_agent("AgentSnapshottingEveryN") {
+            assert!(
+                matches!(
+                    agent.snapshotting,
+                    Snapshotting::Enabled(SnapshottingConfig::EveryNInvocation(10))
+                ),
+                "EveryNInvocation should have correct count"
+            );
+        }
+    }
+
+    // -- Snapshot auto-serialization tests --
+
+    // Agent with serde derives but no custom snapshot methods:
+    // should auto-serialize/deserialize via JSON
+    #[agent_definition]
+    trait SerializableAgent {
+        fn new(name: String) -> Self;
+        fn get_name(&self) -> String;
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct SerializableAgentImpl {
+        name: String,
+    }
+
+    #[agent_implementation]
+    impl SerializableAgent for SerializableAgentImpl {
+        fn new(name: String) -> Self {
+            Self { name }
+        }
+        fn get_name(&self) -> String {
+            self.name.clone()
+        }
+    }
+
+    // Agent without serde derives and no custom snapshot methods:
+    // should return a runtime error when snapshot is attempted
+    #[agent_definition]
+    trait NonSerializableAgent {
+        fn new(value: u32) -> Self;
+        fn get_value(&self) -> u32;
+    }
+
+    struct NonSerializableAgentImpl {
+        value: u32,
+    }
+
+    #[agent_implementation]
+    impl NonSerializableAgent for NonSerializableAgentImpl {
+        fn new(value: u32) -> Self {
+            Self { value }
+        }
+        fn get_value(&self) -> u32 {
+            self.value
+        }
+    }
+
+    // Agent with custom snapshot methods:
+    // should use the custom implementation
+    #[agent_definition]
+    trait CustomSnapshotAgent {
+        fn new(data: String) -> Self;
+        fn get_data(&self) -> String;
+    }
+
+    struct CustomSnapshotAgentImpl {
+        data: String,
+    }
+
+    #[agent_implementation]
+    impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
+        fn new(data: String) -> Self {
+            Self { data }
+        }
+        fn get_data(&self) -> String {
+            self.data.clone()
+        }
+
+        async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+            self.data = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Ok(self.data.as_bytes().to_vec())
+        }
+    }
+
+    #[test]
+    fn test_serializable_agent_auto_json_snapshot() {
+        use golem_rust::agentic::snapshot_auto::LoadHelper;
+        use golem_rust::agentic::snapshot_auto::SaveHelper;
+
+        let agent = SerializableAgentImpl {
+            name: "test-agent".to_string(),
+        };
+
+        // Save: should use JSON serialization (inherent method path)
+        let helper = SaveHelper(&agent);
+        let result = helper.snapshot_save();
+        assert!(result.is_ok(), "Save should succeed for serializable agent");
+        let snapshot = result.unwrap();
+        assert_eq!(snapshot.mime_type, "application/json");
+        let json_value: serde_json::Value = serde_json::from_slice(&snapshot.data).unwrap();
+        assert_eq!(json_value["name"], "test-agent");
+
+        // Load: should deserialize from JSON
+        let mut agent2 = SerializableAgentImpl {
+            name: "old".to_string(),
+        };
+        let mut load_helper = LoadHelper(&mut agent2);
+        let load_result = load_helper.snapshot_load(&snapshot.data);
+        assert!(
+            load_result.is_ok(),
+            "Load should succeed for serializable agent"
+        );
+        assert_eq!(agent2.name, "test-agent");
+    }
+
+    #[test]
+    fn test_non_serializable_agent_snapshot_returns_error() {
+        use golem_rust::agentic::snapshot_auto::{LoadHelper, SnapshotLoadFallback};
+        use golem_rust::agentic::snapshot_auto::{SaveHelper, SnapshotSaveFallback};
+
+        let agent = NonSerializableAgentImpl { value: 42 };
+
+        // Save: should return error (fallback trait path)
+        let helper = SaveHelper(&agent);
+        let result = helper.snapshot_save();
+        assert!(
+            result.is_err(),
+            "Save should fail for non-serializable agent"
+        );
+        assert!(result.unwrap_err().contains("not implemented"));
+
+        // Load: should return error
+        let mut agent2 = NonSerializableAgentImpl { value: 0 };
+        let mut load_helper = LoadHelper(&mut agent2);
+        let load_result = load_helper.snapshot_load(b"{}");
+        assert!(
+            load_result.is_err(),
+            "Load should fail for non-serializable agent"
+        );
+        assert!(load_result.unwrap_err().contains("not implemented"));
+    }
+
+    #[test]
+    fn test_custom_snapshot_agent_uses_custom_methods() {
+        use golem_rust::agentic::BaseAgent;
+
+        let mut agent = CustomSnapshotAgentImpl {
+            data: "hello-world".to_string(),
+        };
+
+        // save_snapshot_base should use the custom method and return octet-stream
+        let save_result = wstd::runtime::block_on(agent.save_snapshot_base());
+        assert!(save_result.is_ok());
+        let snapshot = save_result.unwrap();
+        assert_eq!(snapshot.mime_type, "application/octet-stream");
+        assert_eq!(snapshot.data, b"hello-world");
+
+        // load_snapshot_base should use the custom method
+        let load_result = wstd::runtime::block_on(agent.load_snapshot_base(b"new-data".to_vec()));
+        assert!(load_result.is_ok());
+        assert_eq!(agent.data, "new-data");
     }
 }

@@ -87,7 +87,7 @@ use golem_worker_executor::services::golem_config::{
     AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
     EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -115,7 +115,7 @@ use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
     InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
     StatusManagement, UpdateManagement, WorkerCtx,
 };
@@ -135,7 +135,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use uuid::Uuid;
-use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
+use wasmtime::component::{Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
@@ -152,6 +152,7 @@ pub struct WorkerExecutorTestDependencies {
     pub component_directory: PathBuf,
     pub component_temp_directory: Arc<TempDir>,
     pub component_service_directory: PathBuf,
+    data_dir: Arc<TempDir>,
 }
 
 impl Debug for WorkerExecutorTestDependencies {
@@ -161,6 +162,10 @@ impl Debug for WorkerExecutorTestDependencies {
 }
 
 impl WorkerExecutorTestDependencies {
+    pub fn blob_storage_root(&self) -> PathBuf {
+        self.data_dir.path().join("blobs")
+    }
+
     pub async fn new() -> Self {
         let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
             6379,
@@ -174,8 +179,12 @@ impl WorkerExecutorTestDependencies {
             Level::ERROR,
         ));
 
+        let data_dir = TempDir::new().unwrap();
+        let blob_storage_root = data_dir.path().join("blobs");
+        let component_service_directory = data_dir.path().join("components");
+
         let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(Path::new("data/blobs"))
+            FileSystemBlobStorage::new(&blob_storage_root)
                 .await
                 .unwrap(),
         );
@@ -184,19 +193,19 @@ impl WorkerExecutorTestDependencies {
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service_directory = Path::new("data/components");
 
         let component_writer: Arc<FileSystemComponentWriter> =
-            Arc::new(FileSystemComponentWriter::new(component_service_directory).await);
+            Arc::new(FileSystemComponentWriter::new(&component_service_directory).await);
 
         Self {
             redis,
             redis_monitor,
             component_directory,
-            component_service_directory: component_service_directory.to_path_buf(),
+            component_service_directory,
             component_writer,
             initial_component_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
+            data_dir: Arc::new(data_dir),
         }
     }
 }
@@ -328,7 +337,15 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None).await
+    start_customized(deps, context, None, None, None).await
+}
+
+pub async fn start_with_snapshot_policy(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    snapshot_policy: SnapshotPolicy,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, Some(snapshot_policy)).await
 }
 
 pub async fn start_customized(
@@ -336,6 +353,7 @@ pub async fn start_customized(
     context: &TestContext,
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
+    snapshot_policy_override: Option<SnapshotPolicy>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
@@ -353,7 +371,7 @@ pub async fn start_customized(
         }),
         indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-            root: Path::new("data/blobs").to_path_buf(),
+            root: deps.data_dir.path().join("blobs"),
         }),
         http_port: 0,
         grpc: GrpcApiConfig {
@@ -378,6 +396,9 @@ pub async fn start_customized(
     };
     if let Some(retry) = retry_override {
         config.retry = retry;
+    }
+    if let Some(snapshot_policy) = snapshot_policy_override {
+        config.oplog.default_snapshotting = snapshot_policy;
     }
 
     let handle = Handle::current();
@@ -442,9 +463,9 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
-impl HasWasiConfigVars for TestWorkerCtx {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.wasi_config_vars()
+impl HasConfigVars for TestWorkerCtx {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.config_vars()
     }
 }
 
@@ -935,20 +956,6 @@ impl HostFutureInvokeResult for TestWorkerCtx {
 
     async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
-    }
-}
-
-#[async_trait]
-impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
-    fn link(
-        &mut self,
-        engine: &Engine,
-        linker: &mut Linker<TestWorkerCtx>,
-        component: &Component,
-        component_metadata: &ComponentDto,
-    ) -> anyhow::Result<()> {
-        self.durable_ctx
-            .link(engine, linker, component, component_metadata)
     }
 }
 
