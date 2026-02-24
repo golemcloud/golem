@@ -1,6 +1,5 @@
 mod protobuf;
 
-
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::deployment::DeploymentRevision;
 use golem_common::base_model::domain_registration::Domain;
@@ -10,7 +9,6 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use std::collections::HashMap;
 
 pub type AgentTypeImplementers = HashMap<AgentTypeName, (ComponentId, ComponentRevision)>;
-
 
 pub struct CompiledMcp {
     pub account_id: AccountId,
@@ -27,4 +25,3 @@ impl CompiledMcp {
         self.agent_type_implementers.keys().cloned().collect()
     }
 }
-

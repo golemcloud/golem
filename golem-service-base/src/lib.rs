@@ -21,6 +21,7 @@ pub mod db;
 pub mod error;
 pub mod grpc;
 pub mod headers;
+pub mod mcp;
 pub mod metrics;
 pub mod migration;
 pub mod model;
@@ -31,7 +32,6 @@ pub mod repo;
 pub mod service;
 pub mod storage;
 pub mod stream;
-pub mod mcp;
 
 #[cfg(test)]
 test_r::enable!();

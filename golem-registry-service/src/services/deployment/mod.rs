@@ -14,15 +14,15 @@
 
 mod deployment_context;
 mod http_parameter_conversion;
+mod mcp;
 mod read;
 mod route_compilation;
 mod routes;
 mod write;
-mod mcp;
 
+pub use self::mcp::{DeployedMcpError, DeployedMcpService};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
-pub use self::mcp::{DeployedMcpError, DeployedMcpService};
 pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 
 macro_rules! ok_or_continue {

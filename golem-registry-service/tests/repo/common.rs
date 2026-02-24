@@ -1291,7 +1291,11 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
 
     let _created_other_deployment = deps
         .mcp_deployment_repo
-        .create(env.revision.environment_id, other_domain, other_revision_0.clone())
+        .create(
+            env.revision.environment_id,
+            other_domain,
+            other_revision_0.clone(),
+        )
         .await
         .unwrap();
 

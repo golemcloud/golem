@@ -1482,12 +1482,13 @@ impl AppCommandHandler {
 
         // TODO: remove this temporary test from CLI
         {
-            use golem_client::api::{McpDeploymentClient, ApiDomainClient};
+            use golem_client::api::{ApiDomainClient, McpDeploymentClient};
             use golem_client::model::DomainRegistrationCreation;
-            
-            let hardcoded_mcp_domain = Domain("solomon-socket-compute-pattern.trycloudflare.com".to_string());
+
+            let hardcoded_mcp_domain =
+                Domain("solomon-socket-compute-pattern.trycloudflare.com".to_string());
             let clients = self.ctx.golem_clients().await?;
-            
+
             if let Err(e) = clients
                 .api_domain
                 .create_domain_registration(
@@ -1500,12 +1501,12 @@ impl AppCommandHandler {
             {
                 tracing::warn!("Failed to register domain for smoke test: {:?}", e);
             }
-            
+
             // Then create the MCP deployment
             let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
                 domain: hardcoded_mcp_domain,
             };
-            
+
             if let Ok(_) = clients
                 .mcp_deployment
                 .create_mcp_deployment(&deploy_diff.environment.environment_id.0, &mcp_creation)

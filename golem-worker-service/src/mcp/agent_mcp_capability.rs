@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
-use std::sync::Arc;
-use rmcp::model::Tool;
-use golem_common::base_model::agent::{AgentMethod, DataSchema};
 use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::mcp_schema::{McpToolSchema, McpToolGetSchema};
+use crate::mcp::mcp_schema::{McpToolGetSchema, McpToolSchema};
+use golem_common::base_model::agent::{AgentMethod, DataSchema};
+use rmcp::model::Tool;
+use std::borrow::Cow;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum McpAgentCapability {
@@ -31,12 +31,17 @@ impl McpAgentCapability {
         match &method.input_schema {
             DataSchema::Tuple(schemas) => {
                 if schemas.elements.len() > 0 {
-                    let McpToolSchema {input_schema, output_schema} = method.get_schema();
-                    
+                    let McpToolSchema {
+                        input_schema,
+                        output_schema,
+                    } = method.get_schema();
+
                     let tool = Tool {
                         name: Cow::from(method.name.clone()),
                         title: None,
-                        description: Some("An increment method that takes a number and increment it".into()),
+                        description: Some(
+                            "An increment method that takes a number and increment it".into(),
+                        ),
                         input_schema: Arc::new(input_schema),
                         output_schema: output_schema.map(Arc::new),
                         annotations: None,
@@ -44,9 +49,11 @@ impl McpAgentCapability {
                         icons: None,
                         meta: None,
                     };
-                    
-                    Self::Tool(AgentMcpTool { raw_method: method, raw_tool: tool })
-                    
+
+                    Self::Tool(AgentMcpTool {
+                        raw_method: method,
+                        raw_tool: tool,
+                    })
                 } else {
                     Self::Resource(AgentMcpResource { resource: method })
                 }

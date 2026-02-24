@@ -44,7 +44,9 @@ use crate::services::component::{ComponentService, ComponentWriteService};
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
-use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService, DeploymentWriteService};
+use crate::services::deployment::{
+    DeployedMcpService, DeployedRoutesService, DeploymentService, DeploymentWriteService,
+};
 use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
@@ -282,9 +284,8 @@ impl Services {
 
         let deployed_routes_service =
             Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
-        
-        let deployed_mcp_service = 
-            Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
+
+        let deployed_mcp_service = Arc::new(DeployedMcpService::new(repos.deployment_repo.clone()));
 
         Ok(Self {
             account_service,
@@ -347,8 +348,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
-            let mcp_deployment_repo =
-                Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -399,8 +399,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
-            let mcp_deployment_repo =
-                Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
+            let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,

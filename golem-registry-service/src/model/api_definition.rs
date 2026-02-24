@@ -86,7 +86,6 @@ pub struct MaybeDisabledCompiledRoute {
     pub cors: CorsOptions,
 }
 
-
 // impl golem_service_base::custom_api::openapi::HttpApiRoute for MaybeDisabledCompiledRoute {
 //     fn security_scheme_missing(&self) -> bool {
 //         self.security_scheme_missing

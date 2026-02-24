@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::future::BoxFuture;
+use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
+use futures::future::BoxFuture;
+use golem_common::base_model::agent::AgentMethod;
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
 use rmcp::model::{CallToolResult, JsonObject, Tool};
 use serde_json::json;
-use golem_common::base_model::agent::{AgentMethod};
-use crate::mcp::GolemAgentMcpServer;
 
 #[derive(Clone)]
 pub struct AgentMcpTool {
     pub raw_method: AgentMethod,
-    pub raw_tool: Tool
+    pub raw_tool: Tool,
 }
 
 impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
@@ -37,10 +37,10 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
 
         async move {
             Ok(CallToolResult::structured(
-                json!({"result": "example output"})
+                json!({"result": "example output"}),
             ))
         }
-            .boxed()
+        .boxed()
     }
 }
 

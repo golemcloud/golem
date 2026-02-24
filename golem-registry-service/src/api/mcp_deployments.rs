@@ -15,12 +15,12 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use golem_common::model::Page;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentCreation};
 use golem_common::model::poem::NoContentResponse;
-use golem_common::model::Page;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme};
@@ -437,5 +437,4 @@ impl McpDeploymentsApi {
 
         Ok(Json(Page { values }))
     }
-
 }

@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use super::model::BindFields;
-use super::model::deployment::{CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord, DeploymentMcpCapabilityRecord, DeploymentRevisionCreationRecord};
+use super::model::deployment::{
+    CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
+    DeploymentMcpCapabilityRecord, DeploymentRevisionCreationRecord,
+};
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
@@ -723,9 +726,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn get_active_mcp_for_domain(
         &self,
-        domain: &str
+        domain: &str,
     ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
-
         self.with_ro("get_active_mcp_for_domain")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -766,7 +768,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             .await
     }
-
 
     async fn list_active_compiled_routes_for_domain(
         &self,

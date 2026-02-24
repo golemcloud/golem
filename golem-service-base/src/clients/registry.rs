@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::{CompiledRoutes};
+use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
+use crate::mcp::CompiledMcp;
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
 use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
 use async_trait::async_trait;
@@ -21,18 +22,19 @@ use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetActiveRoutesForDomainRequest, GetActiveMcpForDomainRequest, GetAgentDeploymentsRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
+    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentDeploymentsRequest,
+    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
     GetDeployedComponentMetadataRequest, GetResourceLimitsRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, download_component_response,
-    get_active_routes_for_domain_response, get_active_mcp_for_domain_response, get_agent_deployments_response, get_agent_type_response,
-    get_all_agent_types_response, get_all_deployed_component_revisions_response,
-    get_auth_details_for_environment_response, get_component_metadata_response,
-    get_deployed_component_metadata_response, get_resource_limits_response,
-    resolve_component_response, resolve_latest_agent_type_by_names_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
+    get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response,
+    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
+    get_component_metadata_response, get_deployed_component_metadata_response,
+    get_resource_limits_response, resolve_component_response,
+    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
@@ -52,7 +54,6 @@ use std::fmt::Write;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use crate::mcp::CompiledMcp;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -713,7 +714,10 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_active_mcp_capabilities_for_domain(&self, domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
+    async fn get_active_mcp_capabilities_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<CompiledMcp, RegistryServiceError> {
         let response = self
             .client
             .call("get_active_mcp_for_domain", move |client| {

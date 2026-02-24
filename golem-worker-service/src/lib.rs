@@ -17,17 +17,19 @@ pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
 pub mod grpcapi;
+pub mod mcp;
 pub mod metrics;
 pub mod model;
 pub mod path;
 pub mod service;
-pub mod mcp;
 
 use crate::bootstrap::Services;
 use crate::config::WorkerServiceConfig;
+use crate::mcp::GolemAgentMcpServer;
 use anyhow::{Context, anyhow};
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
+use poem::endpoint::TowerCompatExt;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
@@ -38,8 +40,6 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
-use poem::endpoint::TowerCompatExt;
-use crate::mcp::GolemAgentMcpServer;
 
 #[cfg(test)]
 test_r::enable!();
@@ -86,7 +86,9 @@ impl WorkerService {
     ) -> anyhow::Result<RunDetails> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set, tracer.clone()).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set, tracer.clone()).await?;
+        let custom_request_port = self
+            .start_api_gateway_server(join_set, tracer.clone())
+            .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
 
         info!(
@@ -109,7 +111,9 @@ impl WorkerService {
         tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set, tracer.clone()).await?;
+        let custom_request_port = self
+            .start_api_gateway_server(join_set, tracer.clone())
+            .await?;
         let mcp_port = self.start_mcp_server(join_set, tracer).await?;
         let api_endpoint = api::make_open_api_service(&self.services).boxed();
 
@@ -213,13 +217,12 @@ impl WorkerService {
         Ok(port)
     }
 
-    async fn start_mcp_server(&self, join_set: &mut JoinSet<anyhow::Result<()>>,         tracer: Option<SdkTracer>,
+    async fn start_mcp_server(
+        &self,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+        tracer: Option<SdkTracer>,
     ) -> anyhow::Result<u16> {
-
-        let poem_listener = poem::listener::TcpListener::bind(format!(
-            "0.0.0.0:{}",
-            8000
-        ));
+        let poem_listener = poem::listener::TcpListener::bind(format!("0.0.0.0:{}", 8000));
 
         let acceptor = poem_listener.into_acceptor().await?;
 
@@ -250,7 +253,7 @@ impl WorkerService {
                     .await
                     .map_err(|err| anyhow!(err).context("MCP server gateway failed"))
             }
-                .in_current_span(),
+            .in_current_span(),
         );
 
         Ok(port)

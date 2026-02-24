@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
-use golem_common::{error_forwarding, SafeDisplay};
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::mcp::CompiledMcp;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait McpCapabilityLookup {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
-    
+
     async fn resolve_agent_type(
         &self,
         domain: &Domain,
         agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError>;
 }
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpCapabilitiesLookupError {
@@ -56,7 +55,6 @@ pub struct RegistryServiceMcpCapabilityLookup {
     registry_service_client: Arc<dyn RegistryService>,
 }
 
-
 impl RegistryServiceMcpCapabilityLookup {
     pub fn new(registry_service_client: Arc<dyn RegistryService>) -> Self {
         Self {
@@ -80,7 +78,7 @@ impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
         agent_type_name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError> {
         let compiled_mcp = self.get(domain).await?;
-        
+
         // Get component ID and revision for this agent type
         let (component_id, component_revision) = compiled_mcp
             .agent_type_implementers
@@ -93,7 +91,7 @@ impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
                     domain.0
                 ))
             })?;
-        
+
         self.registry_service_client
             .get_agent_type(
                 compiled_mcp.environment_id,

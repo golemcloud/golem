@@ -17,8 +17,8 @@ use crate::repo::model::mcp_deployment::{
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};

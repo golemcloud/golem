@@ -21,7 +21,6 @@ use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use futures::TryFutureExt;
-use golem_service_base::mcp::CompiledMcp;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
@@ -34,6 +33,7 @@ use golem_common::model::{
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::PathSegment;
+use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
@@ -267,7 +267,12 @@ impl DeploymentWriteService {
                 .map_err(DeploymentWriteError::from),
         )?;
 
-        tracing::info!("Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}", components.len(), http_api_deployments.len(), mcp_deployments.len());
+        tracing::info!(
+            "Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}",
+            components.len(),
+            http_api_deployments.len(),
+            mcp_deployments.len()
+        );
 
         let deployment_context =
             DeploymentContext::new(environment, components, http_api_deployments);
@@ -329,9 +334,10 @@ impl DeploymentWriteService {
                 account_id: auth.account_id(),
                 environment_id,
                 deployment_revision: next_deployment_revision,
-                domain: golem_common::model::domain_registration::Domain(
-                    format!("mcp-{}", environment_id.0),
-                ),
+                domain: golem_common::model::domain_registration::Domain(format!(
+                    "mcp-{}",
+                    environment_id.0
+                )),
                 agent_type_implementers: Default::default(),
             }
         };

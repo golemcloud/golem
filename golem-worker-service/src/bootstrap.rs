@@ -23,6 +23,7 @@ use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, Sq
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhoooks::WebhookCallbackHandler;
+use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
@@ -37,7 +38,6 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
-use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 
 #[derive(Clone)]
 pub struct Services {
@@ -170,7 +170,7 @@ impl Services {
             worker_service,
             request_handler,
             agents_service,
-            mcp_capability_lookup
+            mcp_capability_lookup,
         })
     }
 }

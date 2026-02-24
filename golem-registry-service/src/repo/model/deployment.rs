@@ -19,6 +19,8 @@ use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
 use anyhow::anyhow;
+use golem_common::base_model::agent::AgentTypeName;
+use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -32,14 +34,12 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;
 use std::str::FromStr;
 use uuid::Uuid;
-use golem_common::base_model::agent::AgentTypeName;
-use golem_common::base_model::domain_registration::Domain;
-use golem_service_base::mcp::CompiledMcp;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeployRepoError {
@@ -398,9 +398,7 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
-            compiled_mcp: DeploymentMcpCapabilityRecord::from_model(
-                compiled_mcp,
-            ),
+            compiled_mcp: DeploymentMcpCapabilityRecord::from_model(compiled_mcp),
             registered_agent_types: registered_agent_types
                 .into_iter()
                 .map(|r| {
@@ -425,9 +423,7 @@ pub struct DeploymentMcpCapabilityRecord {
 }
 
 impl DeploymentMcpCapabilityRecord {
-    pub fn from_model(
-        compiled_mcp: CompiledMcp,
-    ) -> Self {
+    pub fn from_model(compiled_mcp: CompiledMcp) -> Self {
         // Serialize the implementers map directly as JSON using serde
         Self {
             account_id: compiled_mcp.account_id.0,
@@ -446,9 +442,13 @@ impl TryFrom<DeploymentMcpCapabilityRecord> for CompiledMcp {
     fn try_from(value: DeploymentMcpCapabilityRecord) -> Result<Self, Self::Error> {
         // Deserialize the implementers map directly from JSON using serde
         let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
-            serde_json::from_str(&value.agent_type_implementers)
-                .map_err(|e| DeployRepoError::InternalError(anyhow::anyhow!("Failed to parse agent_type_implementers: {}", e)))?;
-        
+            serde_json::from_str(&value.agent_type_implementers).map_err(|e| {
+                DeployRepoError::InternalError(anyhow::anyhow!(
+                    "Failed to parse agent_type_implementers: {}",
+                    e
+                ))
+            })?;
+
         Ok(Self {
             account_id: AccountId(value.account_id),
             environment_id: EnvironmentId(value.environment_id),

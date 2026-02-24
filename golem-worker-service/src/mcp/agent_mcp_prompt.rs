@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::future::BoxFuture;
+use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
+use futures::future::BoxFuture;
+use golem_common::base_model::agent::AgentMethod;
 use rmcp::ErrorData;
 use rmcp::handler::server::prompt::{GetPromptHandler, PromptContext};
 use rmcp::handler::server::router::prompt::{IntoPromptRoute, PromptRoute};
-use rmcp::model::{GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole};
-use golem_common::base_model::agent::AgentMethod;
-use crate::mcp::GolemAgentMcpServer;
+use rmcp::model::{
+    GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole,
+};
 
 #[derive(Clone)]
 pub struct AgentMcpPrompt {
@@ -28,27 +30,37 @@ pub struct AgentMcpPrompt {
 }
 
 impl GetPromptHandler<GolemAgentMcpServer, ()> for AgentMcpPrompt {
-    fn handle(self, context: PromptContext<'_, GolemAgentMcpServer>) -> BoxFuture<'_, Result<GetPromptResult, ErrorData>> {
+    fn handle(
+        self,
+        context: PromptContext<'_, GolemAgentMcpServer>,
+    ) -> BoxFuture<'_, Result<GetPromptResult, ErrorData>> {
         async move {
-
-            let parameters = 
-                context.arguments.map(|x| x.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join(", ")).unwrap_or_else(|| "no parameters".to_string());
+            let parameters = context
+                .arguments
+                .map(|x| {
+                    x.iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_else(|| "no parameters".to_string());
 
             let result = GetPromptResult {
                 description: None,
-                messages: vec![
-                    PromptMessage {
-                        role: PromptMessageRole::User,
-                        content: PromptMessageContent::Text {
-                            text: format!("{}, call {} with the following parameters: {}",  "developer-given prompt" , self.agent_method.name, parameters)
-                        } ,
-                    }
-                ]
+                messages: vec![PromptMessage {
+                    role: PromptMessageRole::User,
+                    content: PromptMessageContent::Text {
+                        text: format!(
+                            "{}, call {} with the following parameters: {}",
+                            "developer-given prompt", self.agent_method.name, parameters
+                        ),
+                    },
+                }],
             };
 
             Ok(result)
         }
-            .boxed()
+        .boxed()
     }
 }
 

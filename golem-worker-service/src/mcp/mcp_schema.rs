@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::agent::{
+    AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+};
+use golem_wasm::analysis::AnalysedType;
 use rmcp::model::JsonObject;
 use serde_json::json;
-use golem_common::base_model::agent::{AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema};
-use golem_wasm::analysis::AnalysedType;
 
 pub trait McpToolGetSchema {
     fn get_schema(&self) -> McpToolSchema;
@@ -30,7 +32,6 @@ impl McpToolGetSchema for AgentMethod {
     fn get_schema(&self) -> McpToolSchema {
         let input_schema: JsonObject = get_mcp_tool_schema(&self.input_schema);
         let output_schema: JsonObject = get_mcp_tool_schema(&self.output_schema);
-
 
         McpToolSchema {
             input_schema,
@@ -48,13 +49,16 @@ fn get_mcp_tool_schema(data_schema: &DataSchema) -> JsonObject {
                 // For simplicity, we treat schema as a string describing the type
                 // In a real implementation, this would be more complex and handle nested structures
                 let json_schema = match schema {
-                    ElementSchema::ComponentModel(ComponentModelElementSchema {element_type}) =>
+                    ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
                         match element_type {
                             AnalysedType::Str(_) => json!({"type": "string"}),
                             AnalysedType::U32(_) => json!({"type": "integer"}),
                             AnalysedType::Bool(_) => json!({"type": "boolean"}),
-                            _ => todo!("Unsupported component model element type in schema mapping"),
+                            _ => {
+                                todo!("Unsupported component model element type in schema mapping")
+                            }
                         }
+                    }
                     _ => todo!("Unsupported component model element type in schema mapping"),
                 };
                 properties.insert(name.clone(), json_schema);
@@ -64,11 +68,10 @@ fn get_mcp_tool_schema(data_schema: &DataSchema) -> JsonObject {
     }
 
     json!({
-            "type": "object",
-            "properties": properties,
-        })
-        .as_object()
-        .unwrap()
-        .clone()
-
+        "type": "object",
+        "properties": properties,
+    })
+    .as_object()
+    .unwrap()
+    .clone()
 }

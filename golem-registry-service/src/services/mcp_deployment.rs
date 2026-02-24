@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentCreation, McpDeploymentId, McpDeploymentUpdate};
+use golem_common::model::mcp_deployment::{
+    McpDeployment, McpDeploymentCreation, McpDeploymentId, McpDeploymentUpdate,
+};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
-use super::environment::{EnvironmentError, EnvironmentService};
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpDeploymentError {
@@ -103,7 +105,8 @@ impl McpDeploymentService {
         )?;
 
         let id = McpDeploymentId::new();
-        let record = McpDeploymentRevisionRecord::creation(id, data.domain.clone(), auth.account_id());
+        let record =
+            McpDeploymentRevisionRecord::creation(id, data.domain.clone(), auth.account_id());
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
@@ -169,9 +172,7 @@ impl McpDeploymentService {
             mcp_deployment.domain = domain;
         };
 
-        let record = McpDeploymentRevisionRecord::from_model(
-            mcp_deployment,
-        );
+        let record = McpDeploymentRevisionRecord::from_model(mcp_deployment);
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
@@ -348,7 +349,9 @@ impl McpDeploymentService {
             .mcp_deployment_repo
             .get_staged_by_domain(environment_id.0, &domain.0)
             .await?
-            .ok_or(McpDeploymentError::McpDeploymentByDomainNotFound(domain.clone()))?
+            .ok_or(McpDeploymentError::McpDeploymentByDomainNotFound(
+                domain.clone(),
+            ))?
             .try_into()?;
 
         Ok(mcp_deployment)
@@ -401,7 +404,8 @@ impl McpDeploymentService {
     ) -> Result<McpDeployment, McpDeploymentError> {
         // For now, MCP deployments don't have deployment-scoped versions
         // Just return the staged version by domain
-        self.get_staged_by_domain(environment_id, domain, auth).await
+        self.get_staged_by_domain(environment_id, domain, auth)
+            .await
     }
 
     pub async fn list_in_deployment(
