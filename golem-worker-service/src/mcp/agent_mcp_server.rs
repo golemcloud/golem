@@ -30,13 +30,12 @@ use golem_wasm::analysis::analysed_type::u32;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_prompt::AgentMcpPrompt;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::mcp_schema::{McpToolGetSchema};
 use crate::mcp::McpCapabilityLookup;
 
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
-    pub tool_router: ToolRouter<GolemAgentMcpServer>,
     pub processor: Arc<Mutex<OperationProcessor>>,
+    pub tool_router: Arc<Mutex<Option<ToolRouter<GolemAgentMcpServer>>>>,
     pub domain: Arc<Mutex<Option<Domain>>>,
     agent_id: Option<AgentId>,
 }
@@ -44,15 +43,15 @@ pub struct GolemAgentMcpServer {
 impl GolemAgentMcpServer {
     pub fn new(agent_id: Option<AgentId>) -> Self {
         Self {
-            tool_router: Self::tool_router(agent_id.clone()),
+            tool_router: Arc::new(Mutex::new(None)),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(Mutex::new(None)),
             agent_id,
         }
     }
 
-    fn tool_router(agent_id: Option<AgentId>) -> ToolRouter<GolemAgentMcpServer> {
-        let tool_handlers = get_agent_tool_and_handlers(agent_id);
+    fn tool_router(&self, domain: &Domain) -> ToolRouter<GolemAgentMcpServer> {
+        let tool_handlers = get_agent_tool_and_handlers(&self.agent_id, domain);
 
         let mut router = ToolRouter::<Self>::new();
 
@@ -82,7 +81,7 @@ pub fn get_agent_prompt_and_handlers(agent_id: Option<AgentId>) -> Vec<AgentMcpP
     vec![]
 }
 
-pub fn get_agent_tool_and_handlers(agent_id: Option<AgentId>) -> Vec<AgentMcpTool> {
+pub fn get_agent_tool_and_handlers(agent_id: &Option<AgentId>, domain: &Domain) -> Vec<AgentMcpTool> {
 
     match agent_id {
         Some(agent) => {
@@ -166,7 +165,6 @@ pub fn get_agent_methods(_agent_id: &AgentTypeName) -> Vec<AgentMethod> {
     ]
 }
 
-#[tool_handler(meta = Meta(rmcp::object!({"tool_meta_key": "tool_meta_value"})))]
 #[task_handler]
 impl ServerHandler for GolemAgentMcpServer {
     fn get_info(&self) -> ServerInfo {
@@ -179,6 +177,45 @@ impl ServerHandler for GolemAgentMcpServer {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some("This server provides  tools related to agent in golem and prompts. Tools: increment, decrement, get_value, say_hello, echo, sum. Prompts: example_prompt (takes a message), counter_analysis (analyzes counter state with a goal).".to_string()),
+        }
+    }
+
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        let tool_router = self.tool_router.blocking_lock();
+        if let Some(tool_router) = tool_router.as_ref() {
+            tool_router.get(name).cloned()
+        } else {
+            None
+        }
+    }
+
+    async fn list_tools(&self, _request: Option<rmcp::model::PaginatedRequestParams>, _context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let tool_router = self.tool_router.lock().await;
+
+        if let Some(tool_router) = tool_router.as_ref() {
+                tracing::info!("Listing tools: {:?}", tool_router.list_all());
+            Ok(ListToolsResult {
+                tools: tool_router.list_all(),
+                meta: Some(Meta(::rmcp::model::object(::serde_json::Value::Object({
+                    let mut object = ::serde_json::Map::new();
+                    let _ = object.insert(("tool_meta_key").into(), ::serde_json::to_value(&"tool_meta_value").unwrap());
+                    object
+                })))),
+                next_cursor: None,
+            })
+        } else {
+            Err(McpError::invalid_params("tool router not initialized", None))
+        }
+
+    }
+
+    async fn call_tool(&self, request: rmcp::model::CallToolRequestParams, context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        let tool_router = self.tool_router.lock().await;
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        if let Some(tool_router) = tool_router.as_ref() {
+            tool_router.call(tcc).await
+        } else {
+            Err(McpError::invalid_params("tool router not initialized", None))
         }
     }
 
@@ -223,7 +260,7 @@ impl ServerHandler for GolemAgentMcpServer {
 
     async fn initialize(
         &self,
-        request: InitializeRequestParams,
+        _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         // Extract http::request::Parts (injected by rmcp's StreamableHttpService)
@@ -235,6 +272,15 @@ impl ServerHandler for GolemAgentMcpServer {
                 headers = ?parts.headers,
                 "initialize from http server"
             );
+
+            // Setting the domain from the Host header depending on the incoming request
+            if let Some(host) = parts.headers.get("host") {
+                let domain = Domain(host.to_str().unwrap().to_string());
+                *self.domain.lock().await = Some(Domain(host.to_str().unwrap().to_string()));
+                let tool_router = self.tool_router(&domain);
+                *self.tool_router.lock().await = Some(tool_router);
+            }
+
         }
 
         Ok(self.get_info())
