@@ -698,6 +698,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         .await?;
                 }
 
+                Self::create_deployment_mcp(tx, &deployment_creation.compiled_mcp).await?;
+
                 let revision = Self::set_current_deployment_internal(
                     tx,
                     user_account_id,

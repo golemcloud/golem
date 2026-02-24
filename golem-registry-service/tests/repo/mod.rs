@@ -19,6 +19,7 @@ use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
+use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
 };
@@ -54,6 +55,7 @@ pub struct Deps {
     pub plan_repo: Box<dyn PlanRepo>,
     pub component_repo: Box<dyn ComponentRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
+    pub mcp_deployment_repo: Box<dyn McpDeploymentRepo>,
     pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
 }

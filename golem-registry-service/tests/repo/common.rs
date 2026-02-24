@@ -40,6 +40,9 @@ use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
+use golem_registry_service::repo::model::mcp_deployment::{
+    McpDeploymentRepoError, McpDeploymentRevisionRecord,
+};
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_service_base::repo::blob::Blob;
@@ -1149,4 +1152,161 @@ fn compare_created_to_requested_account(
     assert!(created.revision.name == requested.name);
     assert!(created.revision.email == requested.email);
     assert!(created.revision.roles == requested.roles)
+}
+
+pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
+    let user = deps.create_account().await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let deployment_id = new_repo_uuid();
+    let domain = "test-mcp.com";
+    let revision_0 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 0,
+        domain: domain.to_string(),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _created_deployment = deps
+        .mcp_deployment_repo
+        .create(env.revision.environment_id, domain, revision_0.clone())
+        .await
+        .unwrap();
+
+    let fetched_deployment = deps
+        .mcp_deployment_repo
+        .get_staged_by_id(deployment_id)
+        .await
+        .unwrap();
+    let_assert!(Some(fetched_deployment) = fetched_deployment);
+    assert!(fetched_deployment.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.domain == revision_0.domain);
+
+    let fetched_by_domain = deps
+        .mcp_deployment_repo
+        .get_staged_by_domain(env.revision.environment_id, domain)
+        .await
+        .unwrap();
+    let_assert!(Some(fetched_by_domain) = fetched_by_domain);
+    assert!(fetched_by_domain.revision_id == revision_0.revision_id);
+    assert!(fetched_by_domain.domain == revision_0.domain);
+
+    // Update the deployment
+    let new_domain = "updated-mcp.com";
+    let revision_1 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 1,
+        domain: new_domain.to_string(),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let updated_deployment = deps
+        .mcp_deployment_repo
+        .update(revision_1.clone())
+        .await
+        .unwrap();
+
+    assert!(updated_deployment.revision_id == revision_1.revision_id);
+    assert!(updated_deployment.domain == revision_1.domain);
+
+    // Old domain should no longer be found
+    let old_domain_query = deps
+        .mcp_deployment_repo
+        .get_staged_by_domain(env.revision.environment_id, domain)
+        .await
+        .unwrap();
+    assert!(old_domain_query.is_none());
+
+    // New domain should be found
+    let new_domain_query = deps
+        .mcp_deployment_repo
+        .get_staged_by_domain(env.revision.environment_id, new_domain)
+        .await
+        .unwrap();
+    let_assert!(Some(new_domain_query) = new_domain_query);
+    assert!(new_domain_query.revision_id == revision_1.revision_id);
+    assert!(new_domain_query.domain == revision_1.domain);
+}
+
+pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
+    let user = deps.create_account().await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let deployment_id = new_repo_uuid();
+    let domain = "test-mcp-1.com";
+    let revision_0 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 0,
+        domain: domain.to_string(),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _created_deployment = deps
+        .mcp_deployment_repo
+        .create(env.revision.environment_id, domain, revision_0.clone())
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
+    assert!(deployments[0].revision_id == revision_0.revision_id);
+    assert!(deployments[0].domain == revision_0.domain);
+
+    // Create another deployment
+    let other_deployment_id = new_repo_uuid();
+    let other_domain = "test-mcp-2.com";
+    let other_revision_0 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: other_deployment_id,
+        revision_id: 0,
+        domain: other_domain.to_string(),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _created_other_deployment = deps
+        .mcp_deployment_repo
+        .create(env.revision.environment_id, other_domain, other_revision_0.clone())
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 2);
+    assert!(deployments[0].revision_id == revision_0.revision_id);
+    assert!(deployments[0].domain == revision_0.domain);
+    assert!(deployments[1].revision_id == other_revision_0.revision_id);
+    assert!(deployments[1].domain == other_revision_0.domain);
+
+    // Delete first deployment
+    let delete_with_old_revision = deps
+        .mcp_deployment_repo
+        .delete(user.revision.account_id, deployment_id, 0)
+        .await;
+
+    let_assert!(Err(McpDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
+
+    deps.mcp_deployment_repo
+        .delete(user.revision.account_id, deployment_id, 1)
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
+    assert!(deployments[0].revision_id == other_revision_0.revision_id);
+    assert!(deployments[0].domain == other_revision_0.domain);
 }

@@ -19,7 +19,9 @@ use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::route_compilation::render_http_method;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
+use crate::services::mcp_deployment::{McpDeploymentError, McpDeploymentService};
 use futures::TryFutureExt;
+use golem_service_base::mcp::CompiledMcp;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, HttpMethod};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
@@ -89,7 +91,8 @@ error_forwarding!(
     EnvironmentError,
     DeployRepoError,
     ComponentError,
-    HttpApiDeploymentError
+    HttpApiDeploymentError,
+    McpDeploymentError
 );
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
@@ -179,6 +182,7 @@ pub struct DeploymentWriteService {
     deployment_repo: Arc<dyn DeploymentRepo>,
     component_service: Arc<ComponentService>,
     http_api_deployment_service: Arc<HttpApiDeploymentService>,
+    mcp_deployment_service: Arc<McpDeploymentService>,
 }
 
 impl DeploymentWriteService {
@@ -187,12 +191,14 @@ impl DeploymentWriteService {
         deployment_repo: Arc<dyn DeploymentRepo>,
         component_service: Arc<ComponentService>,
         http_api_deployment_service: Arc<HttpApiDeploymentService>,
+        mcp_deployment_service: Arc<McpDeploymentService>,
     ) -> DeploymentWriteService {
         Self {
             environment_service,
             deployment_repo,
             component_service,
             http_api_deployment_service,
+            mcp_deployment_service,
         }
     }
 
@@ -249,11 +255,14 @@ impl DeploymentWriteService {
 
         tracing::info!("Creating deployment for environment: {environment_id}");
 
-        let (components, http_api_deployments) = tokio::try_join!(
+        let (components, http_api_deployments, mcp_deployments) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
             self.http_api_deployment_service
+                .list_staged_for_environment(&environment, auth)
+                .map_err(DeploymentWriteError::from),
+            self.mcp_deployment_service
                 .list_staged_for_environment(&environment, auth)
                 .map_err(DeploymentWriteError::from),
         )?;
@@ -275,6 +284,33 @@ impl DeploymentWriteService {
         let compiled_routes =
             deployment_context.compile_http_api_routes(&registered_agent_types)?;
 
+        // Compile MCP from staged deployment and agent types
+        let compiled_mcp = if let Some(mcp_deployment) = mcp_deployments.first() {
+            let agent_type_names: Vec<AgentTypeName> = registered_agent_types
+                .keys()
+                .cloned()
+                .collect();
+
+            CompiledMcp {
+                account_id: auth.account_id(),
+                environment_id,
+                deployment_revision: next_deployment_revision,
+                domain: mcp_deployment.domain.clone(),
+                agent_types: agent_type_names,
+            }
+        } else {
+            // If no MCP deployment is staged, create one with empty agent types
+            CompiledMcp {
+                account_id: auth.account_id(),
+                environment_id,
+                deployment_revision: next_deployment_revision,
+                domain: golem_common::model::domain_registration::Domain(
+                    format!("mcp-{}", environment_id.0),
+                ),
+                agent_types: Vec::new(),
+            }
+        };
+
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
             next_deployment_revision,
@@ -286,7 +322,7 @@ impl DeploymentWriteService {
                 .into_values()
                 .collect(),
             compiled_routes,
-
+            compiled_mcp,
             registered_agent_types
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)
