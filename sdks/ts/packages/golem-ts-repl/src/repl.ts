@@ -419,8 +419,7 @@ function tryHandleColonCommand(
     return true;
   }
   const whitespaceIndex = commandLine.search(/\s/);
-  const commandName =
-    whitespaceIndex === -1 ? commandLine : commandLine.slice(0, whitespaceIndex);
+  const commandName = whitespaceIndex === -1 ? commandLine : commandLine.slice(0, whitespaceIndex);
   const rawArgs = whitespaceIndex === -1 ? '' : commandLine.slice(whitespaceIndex + 1);
   const command = (replServer as any).commands?.[commandName];
   if (command?.action) {
