@@ -115,11 +115,22 @@ name = "demo"
 
 [dependencies]
 serde = "1.0"
+foo = { version = "1.0", features = ["a"] }
+workspace_dep = { workspace = true }
+
+[workspace.dependencies]
+workspace_shared = "2.0"
 "#;
 
     let updated = cargo_toml::merge_dependencies(
         source,
-        &[("serde".to_string(), "1.0.200".to_string())],
+        &[
+            ("serde".to_string(), "1.0.200".to_string()),
+            ("foo".to_string(), "1.2+bar,baz".to_string()),
+            ("workspace_dep".to_string(), "3.0".to_string()),
+            ("new_with_features".to_string(), "0.3+feat1".to_string()),
+            ("skip_me".to_string(), "workspace".to_string()),
+        ],
         &[("anyhow".to_string(), "1.0".to_string())],
     )
     .unwrap();
@@ -128,8 +139,57 @@ serde = "1.0"
     assert!(updated.contains("[dev-dependencies]"));
     assert!(updated.contains("anyhow = \"1.0\""));
 
-    let missing = cargo_toml::check_required_deps(&updated, &["serde", "tokio"]).unwrap();
+    let doc: toml_edit::DocumentMut = updated.parse().unwrap();
+    let deps = doc.get("dependencies").and_then(|item| item.as_table()).unwrap();
+    let foo_item = deps.get("foo").unwrap();
+    let foo = table_like(foo_item);
+    let features = foo
+        .get("features")
+        .and_then(|item| item.as_array())
+        .unwrap()
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(foo.get("version").and_then(|item| item.as_str()), Some("1.2"));
+    assert_eq!(features, vec!["a", "bar", "baz"]);
+    let new_with_features_item = deps.get("new_with_features").unwrap();
+    let new_with_features = table_like(new_with_features_item);
+    assert_eq!(
+        new_with_features.get("version").and_then(|item| item.as_str()),
+        Some("0.3")
+    );
+    let new_features = new_with_features
+        .get("features")
+        .and_then(|item| item.as_array())
+        .unwrap()
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(new_features, vec!["feat1"]);
+    assert!(deps
+        .get("workspace_dep")
+        .map(table_like)
+        .and_then(|table| table.get("workspace"))
+        .and_then(|item| item.as_bool())
+        .unwrap_or(false));
+    assert!(deps.get("skip_me").is_none());
+
+    let missing = cargo_toml::check_required_deps(
+        &updated,
+        &["serde", "tokio", "workspace_shared"],
+    )
+    .unwrap();
     assert_eq!(missing, vec!["tokio".to_string()]);
+}
+
+fn table_like(item: &toml_edit::Item) -> &dyn toml_edit::TableLike {
+    if let Some(table) = item.as_table() {
+        return table;
+    }
+    if let Some(table) = item.as_inline_table() {
+        return table;
+    }
+    panic!("Expected table-like item");
 }
 
 #[test]
