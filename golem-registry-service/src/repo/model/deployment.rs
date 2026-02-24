@@ -428,26 +428,13 @@ impl DeploymentMcpCapabilityRecord {
     pub fn from_model(
         compiled_mcp: CompiledMcp,
     ) -> Self {
-        use serde_json;
-        
-        // Serialize the implementers map as JSON
-        let implementers_map: std::collections::HashMap<String, (String, i64)> = compiled_mcp
-            .agent_type_implementers
-            .iter()
-            .map(|(name, (comp_id, rev))| {
-                let rev_value = unsafe {
-                    std::mem::transmute::<golem_common::model::component::ComponentRevision, u64>(*rev) as i64
-                };
-                (name.0.clone(), (comp_id.0.to_string(), rev_value))
-            })
-            .collect();
-        
+        // Serialize the implementers map directly as JSON using serde
         Self {
             account_id: compiled_mcp.account_id.0,
             environment_id: compiled_mcp.environment_id.0,
             deployment_revision_id: compiled_mcp.deployment_revision.into(),
             domain: compiled_mcp.domain.0.clone(),
-            agent_type_implementers: serde_json::to_string(&implementers_map)
+            agent_type_implementers: serde_json::to_string(&compiled_mcp.agent_type_implementers)
                 .unwrap_or_else(|_| "{}".to_string()),
         }
     }
@@ -457,26 +444,10 @@ impl TryFrom<DeploymentMcpCapabilityRecord> for CompiledMcp {
     type Error = DeployRepoError;
 
     fn try_from(value: DeploymentMcpCapabilityRecord) -> Result<Self, Self::Error> {
-        use golem_common::model::component::ComponentId;
-        use serde_json;
-        use uuid::Uuid;
-        
-        let implementers_map: std::collections::HashMap<String, (String, i64)> = 
+        // Deserialize the implementers map directly from JSON using serde
+        let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
             serde_json::from_str(&value.agent_type_implementers)
                 .map_err(|e| DeployRepoError::InternalError(anyhow::anyhow!("Failed to parse agent_type_implementers: {}", e)))?;
-        
-        let mut agent_type_implementers = golem_service_base::mcp::AgentTypeImplementers::new();
-        for (name, (comp_id_str, rev)) in implementers_map {
-            let agent_type_name = AgentTypeName(name);
-            let component_id = ComponentId(
-                Uuid::parse_str(&comp_id_str)
-                    .map_err(|e| DeployRepoError::InternalError(anyhow::anyhow!("Invalid component_id: {}", e)))?
-            );
-            let component_revision = unsafe {
-                std::mem::transmute::<u64, golem_common::model::component::ComponentRevision>(rev as u64)
-            };
-            agent_type_implementers.insert(agent_type_name, (component_id, component_revision));
-        }
         
         Ok(Self {
             account_id: AccountId(value.account_id),
