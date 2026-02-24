@@ -14,7 +14,7 @@
 
 import { Symbol } from './symbol';
 
-export type ConfigProperty = { path: string[], secret: boolean, type: Type };
+export type ConfigProperty = { path: string[]; secret: boolean; type: Type };
 
 export type Type =
   | { kind: 'boolean'; name?: string; optional: boolean }
@@ -55,7 +55,7 @@ export type Type =
   | { kind: 'alias'; name?: string; aliasSymbol: Symbol; optional: boolean }
   | { kind: 'void'; name?: string; optional: boolean }
   | { kind: 'others'; name?: string; optional: boolean; recursive: boolean }
-  | { kind: 'config', name?: string, optional: boolean, properties: ConfigProperty[] }
+  | { kind: 'config'; name?: string; optional: boolean; properties: ConfigProperty[] }
   | {
       kind: 'unresolved-type';
       name?: string;

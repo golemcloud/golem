@@ -397,7 +397,7 @@ function getSdkConfigTypeFromTsMorph(
   aliasName: string | undefined,
   isOptional: boolean,
 ): Type.Type | undefined {
-  if (rawName !== "Config") return undefined;
+  if (rawName !== 'Config') return undefined;
   if (type.getTypeArguments().length !== 1) return undefined;
 
   const rawInner = type.getTypeArguments()[0];
@@ -410,7 +410,7 @@ function getSdkConfigTypeFromTsMorph(
   if (!properties) return undefined;
 
   return {
-    kind: "config",
+    kind: 'config',
     name: aliasName,
     optional: isOptional,
     properties,
@@ -418,22 +418,18 @@ function getSdkConfigTypeFromTsMorph(
 }
 
 // TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types
-function resolveStrictTypeLiteralNode(
-  type: TsMorphType
-): TypeLiteralNode | undefined {
+function resolveStrictTypeLiteralNode(type: TsMorphType): TypeLiteralNode | undefined {
   const symbol = type.getSymbol();
   if (!symbol) return undefined;
 
-  const typeLiteralDecl = symbol
-    .getDeclarations()
-    .find(TsMorphNode.isTypeLiteral);
+  const typeLiteralDecl = symbol.getDeclarations().find(TsMorphNode.isTypeLiteral);
 
   return typeLiteralDecl;
 }
 
 function extractConfigPropertiesFromTypeLiteral(
   node: TypeLiteralNode,
-  path: string[]
+  path: string[],
 ): Type.ConfigProperty[] | undefined {
   const members = node.getMembers();
 
@@ -451,11 +447,11 @@ function extractConfigPropertiesFromTypeLiteral(
 
     // 1. secret wrapper
     // TODO: switch to nominal matching using symbols instead of string
-    if (propType.getSymbol()?.getName() === "Secret" && propType.getTypeArguments().length === 1) {
+    if (propType.getSymbol()?.getName() === 'Secret' && propType.getTypeArguments().length === 1) {
       results.push({
         path: nextPath,
         secret: true,
-        type: getTypeFromTsMorph(propType.getTypeArguments()[0], member.hasQuestionToken())
+        type: getTypeFromTsMorph(propType.getTypeArguments()[0], member.hasQuestionToken()),
       });
       continue;
     }
@@ -475,10 +471,7 @@ function extractConfigPropertiesFromTypeLiteral(
     results.push({
       path: nextPath,
       secret: false,
-      type: getTypeFromTsMorph(
-        propType,
-        member.hasQuestionToken()
-      )
+      type: getTypeFromTsMorph(propType, member.hasQuestionToken()),
     });
   }
 

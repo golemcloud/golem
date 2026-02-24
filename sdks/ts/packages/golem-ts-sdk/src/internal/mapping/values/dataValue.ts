@@ -306,11 +306,9 @@ export function deserializeDataValue(
   }
 }
 
-function constructConfigType(
-  typeInfoInternal: TypeInfoInternal & { tag: 'config' }
-): Config<any> {
+function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<any> {
   // safe as the parent node is config
-  const properties = (typeInfoInternal.tsType as (Type.Type & { kind: 'config' })).properties;
+  const properties = (typeInfoInternal.tsType as Type.Type & { kind: 'config' }).properties;
 
   const root: Record<string, any> = {};
 
@@ -329,7 +327,7 @@ function constructConfigType(
     const leafKey = path[path.length - 1];
     let leafValue;
     if (prop.secret) {
-      leafValue = new Secret(path, typeInfoInternal)
+      leafValue = new Secret(path, typeInfoInternal);
     } else {
       leafValue = loadConfigKey(path, typeInfoInternal);
     }
@@ -340,10 +338,7 @@ function constructConfigType(
   return new Config(root);
 }
 
-export function loadConfigKey(
-  path: string[],
-  typeInfoInternal: TypeInfoInternal
-): any {
+export function loadConfigKey(path: string[], typeInfoInternal: TypeInfoInternal): any {
   const witValue = getConfigValue(path);
 
   const dataValue = createSingleElementTupleDataValue({
@@ -357,13 +352,13 @@ export function loadConfigKey(
       [
         {
           name: 'config-type',
-          type: typeInfoInternal
-        }
+          type: typeInfoInternal,
+        },
       ],
       { tag: 'anonymous' },
     ),
     (err) => new Error(`Failed to deserialize config: ${err}`),
-  )
+  );
 }
 
 // Used to serialize the return type of a method back to DataValue

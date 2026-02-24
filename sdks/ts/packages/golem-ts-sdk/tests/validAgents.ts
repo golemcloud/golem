@@ -24,7 +24,7 @@ import {
   Principal,
   createWebhook,
   Config,
-  Secret
+  Secret,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -644,26 +644,24 @@ class SingletonAgent extends BaseAgent {
 }
 
 type AliasedNestedConfig = {
-  c: number
+  c: number;
 };
 
 type AgentConfig = {
-  foo: number,
-  bar: string,
-  secret: Secret<boolean>
+  foo: number;
+  bar: string;
+  secret: Secret<boolean>;
   nested: {
-    nestedSecret: Secret<number>,
-    a: boolean,
-    b: number[]
-  },
-  aliasedNested: AliasedNestedConfig
+    nestedSecret: Secret<number>;
+    a: boolean;
+    b: number[];
+  };
+  aliasedNested: AliasedNestedConfig;
 };
 
 @agent()
 export class ConfigAgent extends BaseAgent {
-  constructor(
-    readonly config: Config<AgentConfig>,
-  ) {
+  constructor(readonly config: Config<AgentConfig>) {
     super();
   }
 }

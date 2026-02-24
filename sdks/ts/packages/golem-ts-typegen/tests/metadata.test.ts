@@ -167,17 +167,25 @@ describe('golem-ts-typegen can work correctly read types from .metadata director
     expect(param.type.optional).toBe(false);
     expect(param.type.kind).toBe('config');
     assert(param.type.kind === 'config');
-    expect(param.type.properties).toHaveLength(7)
+    expect(param.type.properties).toHaveLength(7);
     expect(param.type.properties).toEqual(
       expect.arrayContaining([
         { path: ['foo'], secret: false, type: { kind: 'number', optional: false } },
         { path: ['bar'], secret: false, type: { kind: 'string', optional: false } },
         { path: ['secret'], secret: true, type: { kind: 'boolean', optional: false } },
-        { path: ['nested', 'nestedSecret'], secret: true, type: { kind: 'number', optional: false } },
+        {
+          path: ['nested', 'nestedSecret'],
+          secret: true,
+          type: { kind: 'number', optional: false },
+        },
         { path: ['nested', 'a'], secret: false, type: { kind: 'boolean', optional: false } },
-        { path: ['nested', 'b'], secret: false, type: { kind: 'array', element: { 'kind': 'number', optional: false }, optional: false } },
-        { path: ['aliasedNested', 'c'], secret: false, type: { kind: 'number', optional: false } }
-      ])
+        {
+          path: ['nested', 'b'],
+          secret: false,
+          type: { kind: 'array', element: { kind: 'number', optional: false }, optional: false },
+        },
+        { path: ['aliasedNested', 'c'], secret: false, type: { kind: 'number', optional: false } },
+      ]),
     );
   });
-})
+});

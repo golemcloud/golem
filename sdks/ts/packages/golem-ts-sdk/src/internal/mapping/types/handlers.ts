@@ -67,7 +67,7 @@ const handlers: { [K in TsType['kind']]: Handler<K> } = {
   others: handleOthers,
   'unresolved-type': handleUnresolved,
   array: handleArray,
-  'config': unsupported('Config')
+  config: unsupported('Config'),
 };
 
 function unsupported(kind: string): Handler<any> {

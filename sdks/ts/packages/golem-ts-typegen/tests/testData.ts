@@ -178,26 +178,26 @@ class MyAgent {
   }
 }
 
-export class Secret<T> { }
+export class Secret<T> {}
 
-export class Config<T> { }
+export class Config<T> {}
 
 type AliasedNested = {
-  c: number
+  c: number;
 };
 
 type AgentConfig = {
-  foo: number,
-  bar: string,
-  secret: Secret<boolean>
+  foo: number;
+  bar: string;
+  secret: Secret<boolean>;
   nested: {
-    nestedSecret: Secret<number>,
-    a: boolean,
-    b: number[]
-  },
-  aliasedNested: AliasedNested
+    nestedSecret: Secret<number>;
+    a: boolean;
+    b: number[];
+  };
+  aliasedNested: AliasedNested;
 };
 
 export class ConfigAgent {
-  constructor(config: Config<AgentConfig>) { }
+  constructor(config: Config<AgentConfig>) {}
 }

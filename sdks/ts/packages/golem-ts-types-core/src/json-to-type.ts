@@ -192,7 +192,11 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
       };
 
     case 'config': {
-      const properties = json.properties.map(({ path, secret, type }) => ({ path, secret, type: buildTypeFromJSON(type) }));
+      const properties = json.properties.map(({ path, secret, type }) => ({
+        path,
+        secret,
+        type: buildTypeFromJSON(type),
+      }));
       return {
         kind: 'config',
         name: json.name,

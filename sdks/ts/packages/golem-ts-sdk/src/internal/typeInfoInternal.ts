@@ -55,7 +55,9 @@ export function isPrincipal(typeInfoInternal: TypeInfoInternal): boolean {
   return typeInfoInternal.tag === 'principal';
 }
 
-export function isConfig(typeInfoInternal: TypeInfoInternal): typeInfoInternal is (TypeInfoInternal & { tag: 'config'}) {
+export function isConfig(
+  typeInfoInternal: TypeInfoInternal,
+): typeInfoInternal is TypeInfoInternal & { tag: 'config' } {
   return typeInfoInternal.tag === 'config';
 }
 

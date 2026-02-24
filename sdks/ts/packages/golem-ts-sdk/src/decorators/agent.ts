@@ -287,7 +287,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
     const agentConfigEntries = Either.getOrThrowWith(
       getAgentConfigEntries(classMetadata.constructorArgs),
-      err => new Error(`Failed to describe agent config: ${err}`),
+      (err) => new Error(`Failed to describe agent config: ${err}`),
     );
 
     const agentType: AgentType = {
@@ -380,22 +380,26 @@ export function agent(options?: AgentDecoratorOptions) {
   };
 }
 
-function getAgentConfigEntries(constructorParameters: ConstructorArg[]): Either.Either<ConfigKeyValueType[], string> {
+function getAgentConfigEntries(
+  constructorParameters: ConstructorArg[],
+): Either.Either<ConfigKeyValueType[], string> {
   const entries: ConfigKeyValueType[] = [];
 
   for (const param of constructorParameters) {
     if (param.type.kind !== 'config') continue;
 
     for (const prop of param.type.properties) {
-
-      const witTypeEither = fromTsType(prop.type, TypeScope.object(param.name, prop.path[-1], prop.type.optional));
+      const witTypeEither = fromTsType(
+        prop.type,
+        TypeScope.object(param.name, prop.path[-1], prop.type.optional),
+      );
       if (Either.isLeft(witTypeEither)) return witTypeEither;
 
       let configValueType: ConfigValueType;
       if (prop.secret) {
-        configValueType = { tag: 'shared', val: witTypeEither.val[0] }
+        configValueType = { tag: 'shared', val: witTypeEither.val[0] };
       } else {
-        configValueType = { tag: 'local', val: witTypeEither.val[0] }
+        configValueType = { tag: 'local', val: witTypeEither.val[0] };
       }
 
       entries.push({
@@ -405,5 +409,5 @@ function getAgentConfigEntries(constructorParameters: ConstructorArg[]): Either.
     }
   }
 
-    return Either.right(entries);
+  return Either.right(entries);
 }
