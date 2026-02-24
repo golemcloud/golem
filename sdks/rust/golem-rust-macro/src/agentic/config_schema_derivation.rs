@@ -59,15 +59,13 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
             }
         );
 
-        load_entries.push(
-            quote! {
-                #field_ident: {
-                    let mut field_path = path.to_vec();
-                    field_path.push(#field_name.to_string());
-                    <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::load(&field_path)?
-                }
+        load_entries.push(quote! {
+            #field_ident: {
+                let mut field_path = path.to_vec();
+                field_path.push(#field_name.to_string());
+                <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::load(&field_path)?
             }
-        );
+        });
     }
 
     let config_schema_impl = quote! {
@@ -94,7 +92,10 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
     .into()
 }
 
-fn derive_nested_config_field(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> proc_macro2::TokenStream {
+fn derive_nested_config_field(
+    ast: &DeriveInput,
+    golem_rust_crate_ident: &Ident,
+) -> proc_macro2::TokenStream {
     let ident = &ast.ident;
     let generics = &ast.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();

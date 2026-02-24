@@ -17,7 +17,7 @@ use crate::value;
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::quote;
-use syn::{Data, DeriveInput, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput};
 
 pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
@@ -49,7 +49,10 @@ pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> Toke
     .into()
 }
 
-fn derive_component_model_config_leaf(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> proc_macro2::TokenStream {
+fn derive_component_model_config_leaf(
+    ast: &DeriveInput,
+    golem_rust_crate_ident: &Ident,
+) -> proc_macro2::TokenStream {
     let ident = &ast.ident;
     let generics = &ast.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
@@ -57,12 +60,11 @@ fn derive_component_model_config_leaf(ast: &DeriveInput, golem_rust_crate_ident:
     match &ast.data {
         // ConfigFields impls for structs are handled by ConfigSchema derivation
         Data::Struct(_) => quote! {},
-        _ =>
-            quote! {
-                impl #impl_generics #golem_rust_crate_ident::agentic::ComponentModelConfigLeaf
-                    for #ident #ty_generics
-                    #where_clause
-                { }
-            }
+        _ => quote! {
+            impl #impl_generics #golem_rust_crate_ident::agentic::ComponentModelConfigLeaf
+                for #ident #ty_generics
+                #where_clause
+            { }
+        },
     }
 }

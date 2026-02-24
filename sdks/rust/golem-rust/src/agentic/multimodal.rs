@@ -167,8 +167,6 @@ impl<T: MultimodalSchema> MultimodalAdvanced<T> {
 }
 
 impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
-    const IS_COMPONENT_MODEL_SCHEMA: bool = false;
-
     fn get_type() -> StructuredSchema {
         StructuredSchema::Multimodal(T::get_multimodal_schema())
     }
@@ -260,8 +258,6 @@ impl Multimodal {
 }
 
 impl Schema for Multimodal {
-    const IS_COMPONENT_MODEL_SCHEMA: bool = false;
-
     fn get_type() -> StructuredSchema {
         MultimodalAdvanced::<BasicModality>::get_type()
     }
@@ -473,8 +469,6 @@ impl<T: Schema> MultimodalCustom<T> {
 }
 
 impl<T: Schema> Schema for MultimodalCustom<T> {
-    const IS_COMPONENT_MODEL_SCHEMA: bool = false;
-
     fn get_type() -> StructuredSchema {
         MultimodalAdvanced::<CustomModality<T>>::get_type()
     }

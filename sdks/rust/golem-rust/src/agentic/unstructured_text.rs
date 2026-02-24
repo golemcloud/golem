@@ -18,8 +18,6 @@ use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText}
 use golem_wasm::golem_core_1_5_x::types::{TextReference, TextSource, TextType};
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
-    const IS_COMPONENT_MODEL_SCHEMA: bool = false;
-
     fn get_type() -> StructuredSchema {
         let restrictions = if T::all().is_empty() {
             None

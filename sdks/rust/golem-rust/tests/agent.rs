@@ -17,7 +17,6 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::ConfigSchema;
     use golem_rust::agentic::{create_webhook, Principal, Secret};
     use golem_rust::agentic::{
         AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
@@ -575,7 +574,7 @@ mod tests {
     struct ConfigAgentConfigNested {
         foo: String,
         bar: i32,
-        nested_secret: Secret<bool>
+        nested_secret: Secret<bool>,
     }
 
     #[derive(ConfigSchema)]
@@ -587,16 +586,16 @@ mod tests {
         api_key: Secret<String>,
     }
 
-    #[agent_definition(config = "ConfigAgentConfig")]
+    #[agent_definition]
     trait ConfigAgent: BaseAgent {
-        fn new() -> Self;
+        fn new(#[autoinject] config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self;
     }
 
     struct ConfigAgentImpl;
 
     #[agent_implementation]
     impl ConfigAgent for ConfigAgentImpl {
-        fn new() -> Self {
+        fn new(#[autoinject] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
             Self
         }
     }
@@ -1330,26 +1329,17 @@ mod tests {
                     "WitTypeNode::PrimU32Type".to_string()
                 ),
                 (
-                    vec![
-                        "nested".to_string(),
-                        "foo".to_string(),
-                    ],
+                    vec!["nested".to_string(), "foo".to_string(),],
                     false,
                     "WitTypeNode::PrimStringType".to_string()
                 ),
                 (
-                    vec![
-                        "nested".to_string(),
-                        "bar".to_string(),
-                    ],
+                    vec!["nested".to_string(), "bar".to_string(),],
                     false,
                     "WitTypeNode::PrimS32Type".to_string()
                 ),
                 (
-                    vec![
-                        "nested".to_string(),
-                        "nested_secret".to_string(),
-                    ],
+                    vec!["nested".to_string(), "nested_secret".to_string(),],
                     true,
                     "WitTypeNode::PrimBoolType".to_string()
                 ),

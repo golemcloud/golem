@@ -14,18 +14,22 @@
 
 use crate::golem_agentic::golem::agent::common::{ConfigKeyValueType, ConfigValueType};
 use crate::golem_agentic::golem::agent::host::get_config_value;
-use golem_wasm::{WitType};
-use std::marker::PhantomData;
 use crate::value_and_type::{FromValueAndType, IntoValue};
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::WitType;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::Hash;
+use std::marker::PhantomData;
+use std::net::IpAddr;
+use std::num::{
+    NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8,
+};
 use std::ops::{Bound, Range};
-use std::num::{NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64};
-use std::time::Duration;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::net::IpAddr;
+use std::time::Duration;
+
+pub struct Config<T>(pub T);
 
 pub trait ConfigSchema: Sized {
     fn describe_config() -> Vec<ConfigEntry>;
@@ -50,7 +54,10 @@ impl<T> Secret<T> {
         T: FromValueAndType + IntoValue,
     {
         let value = get_config_value(&self.path);
-        T::from_value_and_type(ValueAndType { value, typ: T::get_type() })
+        T::from_value_and_type(ValueAndType {
+            value,
+            typ: T::get_type(),
+        })
     }
 }
 
@@ -77,12 +84,10 @@ impl From<ConfigEntry> for ConfigKeyValueType {
     }
 }
 
-#[diagnostic::on_unimplemented(
-    message = "\
+#[diagnostic::on_unimplemented(message = "\
         `ConfigField` is not implemented for `{Self}`. Only types that implement `ConfigField` can be\n\
         used as part of an agent's config. If you tried to use a struct as part of the config, make sure\n\
-        it derives ConfigSchema.",
-)]
+        it derives ConfigSchema.")]
 pub trait ConfigField: Sized {
     const IS_SHARED: bool;
 
@@ -97,7 +102,7 @@ impl<T: IntoValue> ConfigField for Secret<T> {
         vec![ConfigEntry {
             key: path_prefix.to_vec(),
             shared: true,
-            schema: T::get_type()
+            schema: T::get_type(),
         }]
     }
 
@@ -122,12 +127,10 @@ impl<T: ComponentModelConfigLeaf> ConfigField for T {
 
     fn load(path: &[String]) -> Result<Self, String> {
         let value = get_config_value(path);
-        <Self as FromValueAndType>::from_value_and_type(
-            ValueAndType {
-                value,
-                typ: <Self as IntoValue>::get_type(),
-            }
-        )
+        <Self as FromValueAndType>::from_value_and_type(ValueAndType {
+            value,
+            typ: <Self as IntoValue>::get_type(),
+        })
     }
 }
 
@@ -228,25 +231,34 @@ macro_rules! impl_component_model_config_leaf_for_tuples {
 
 impl_component_model_config_leaf_for_tuples!(A, B, C, D, E, F, G, H, I, J, K, L);
 
-impl<S: IntoValue + FromValueAndType, E: IntoValue + FromValueAndType> ComponentModelConfigLeaf for Result<S, E> {}
+impl<S: IntoValue + FromValueAndType, E: IntoValue + FromValueAndType> ComponentModelConfigLeaf
+    for Result<S, E>
+{
+}
 impl<E: IntoValue + FromValueAndType> ComponentModelConfigLeaf for Result<(), E> {}
 impl<S: IntoValue + FromValueAndType> ComponentModelConfigLeaf for Result<S, ()> {}
-impl  ComponentModelConfigLeaf for Result<(), ()> {}
+impl ComponentModelConfigLeaf for Result<(), ()> {}
 
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Option<T> {}
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Bound<T> {}
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Range<T> {}
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Vec<T> {}
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for VecDeque<T> {}
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for LinkedList<T> {}
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Box<T> {}
-impl <T: FromValueAndType + IntoValue + Clone> ComponentModelConfigLeaf for Rc<T> {}
-impl <T: FromValueAndType + IntoValue + Clone> ComponentModelConfigLeaf for Arc<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Option<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Bound<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Range<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Vec<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for VecDeque<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for LinkedList<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for Box<T> {}
+impl<T: FromValueAndType + IntoValue + Clone> ComponentModelConfigLeaf for Rc<T> {}
+impl<T: FromValueAndType + IntoValue + Clone> ComponentModelConfigLeaf for Arc<T> {}
 
-impl <T: FromValueAndType + IntoValue + Hash + Eq> ComponentModelConfigLeaf for HashSet<T> {}
-impl <T: FromValueAndType + IntoValue + Ord> ComponentModelConfigLeaf for BTreeSet<T> {}
+impl<T: FromValueAndType + IntoValue + Hash + Eq> ComponentModelConfigLeaf for HashSet<T> {}
+impl<T: FromValueAndType + IntoValue + Ord> ComponentModelConfigLeaf for BTreeSet<T> {}
 
-impl <K: FromValueAndType + IntoValue + Hash + Eq, V: FromValueAndType + IntoValue> ComponentModelConfigLeaf for HashMap<K, V> {}
-impl <K: FromValueAndType + IntoValue + Ord, V: FromValueAndType + IntoValue> ComponentModelConfigLeaf for BTreeMap<K, V> {}
+impl<K: FromValueAndType + IntoValue + Hash + Eq, V: FromValueAndType + IntoValue>
+    ComponentModelConfigLeaf for HashMap<K, V>
+{
+}
+impl<K: FromValueAndType + IntoValue + Ord, V: FromValueAndType + IntoValue>
+    ComponentModelConfigLeaf for BTreeMap<K, V>
+{
+}
 
-impl <T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for nonempty_collections::NEVec<T> {}
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for nonempty_collections::NEVec<T> {}
