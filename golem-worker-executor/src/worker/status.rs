@@ -7,12 +7,14 @@ use golem_common::model::oplog::{
     OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
+use golem_common::model::AgentInvocationPayload;
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentInvocation, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig,
     SuccessfulUpdateRecord, TimestampedAgentInvocation, WorkerResourceDescription, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// Like calculate_last_known_status, but assumes that the oplog exists and has at least a Create entry in it.
@@ -60,7 +62,7 @@ where
             .await;
 
         let final_status =
-            update_status_with_new_entries(last_known, new_entries, &this.config().retry);
+            update_status_with_new_entries(this, owned_worker_id, last_known, new_entries, &this.config().retry).await;
 
         if let Some(final_status) = final_status {
             Some(final_status)
@@ -71,7 +73,9 @@ where
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
-pub fn update_status_with_new_entries(
+pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
+    this: &T,
+    owned_worker_id: &OwnedWorkerId,
     last_known: WorkerStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
@@ -131,7 +135,7 @@ pub fn update_status_with_new_entries(
     );
 
     let pending_invocations =
-        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
+        calculate_pending_invocations(this, owned_worker_id, last_known.pending_invocations, &new_entries).await;
     let (
         pending_updates,
         failed_updates,
@@ -426,7 +430,9 @@ fn calculate_skipped_regions(
     new_skipped
 }
 
-fn calculate_pending_invocations(
+async fn calculate_pending_invocations<T: HasOplogService + Sync>(
+    this: &T,
+    owned_worker_id: &OwnedWorkerId,
     initial: Vec<TimestampedAgentInvocation>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedAgentInvocation> {
@@ -450,25 +456,69 @@ fn calculate_pending_invocations(
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
-                payload: OplogPayload::Inline(agent_payload),
+                payload,
                 trace_id,
                 trace_states,
                 invocation_context,
             } => {
-                let invocation_context_stack = InvocationContextStack::from_oplog_data(
-                    trace_id.clone(),
-                    trace_states.clone(),
-                    invocation_context.clone(),
-                );
-                let invocation = AgentInvocation::from_parts(
-                    idempotency_key.clone(),
-                    *agent_payload.clone(),
-                    invocation_context_stack,
-                );
-                result.push(TimestampedAgentInvocation {
-                    timestamp: *timestamp,
-                    invocation,
-                });
+                let agent_payload: Option<AgentInvocationPayload> = match payload {
+                    OplogPayload::Inline(p) => Some(*p.clone()),
+                    OplogPayload::SerializedInline(bytes) => {
+                        deserialize::<AgentInvocationPayload>(bytes)
+                            .map_err(|e| {
+                                tracing::warn!(
+                                    "Failed to deserialize pending agent invocation payload: {e}"
+                                );
+                                e
+                            })
+                            .ok()
+                    }
+                    OplogPayload::External {
+                        payload_id,
+                        md5_hash,
+                    } => {
+                        match this
+                            .oplog_service()
+                            .download_raw_payload(
+                                owned_worker_id,
+                                payload_id.clone(),
+                                md5_hash.clone(),
+                            )
+                            .await
+                        {
+                            Ok(bytes) => deserialize::<AgentInvocationPayload>(&bytes)
+                                .map_err(|e| {
+                                    tracing::warn!(
+                                        "Failed to deserialize external pending agent invocation payload: {e}"
+                                    );
+                                    e
+                                })
+                                .ok(),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to download external pending agent invocation payload: {e}"
+                                );
+                                None
+                            }
+                        }
+                    }
+                };
+                if let Some(agent_payload) = agent_payload {
+                    let invocation_context_stack = InvocationContextStack::from_oplog_data(
+                        trace_id.clone(),
+                        trace_states.clone(),
+                        invocation_context.clone(),
+                    );
+                    let invocation = AgentInvocation::from_parts(
+                        idempotency_key.clone(),
+                        agent_payload,
+                        invocation_context_stack,
+                    );
+                    result.push(TimestampedAgentInvocation {
+                        timestamp: *timestamp,
+                        invocation,
+                    });
+                }
             }
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..

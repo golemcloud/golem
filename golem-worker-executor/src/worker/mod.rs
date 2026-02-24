@@ -275,7 +275,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }),
         )));
 
-        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
+        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded {
+            startup_failure: None,
+        }));
 
         let worker = Worker {
             owned_worker_id,
@@ -349,7 +351,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut instance_guard = this.lock_non_stopping_worker().await;
         match &*instance_guard {
-            WorkerInstance::Unloaded => {
+            WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
@@ -407,7 +409,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::WaitingForPermit(_) => None,
             WorkerInstance::Stopping(_) => None,
-            WorkerInstance::Unloaded => None,
+            WorkerInstance::Unloaded { .. } => None,
             WorkerInstance::Deleting => None,
         };
 
@@ -427,7 +429,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         let mut instance_guard = self.lock_stopped_worker(Some(error.clone())).await;
         match &*instance_guard {
-            WorkerInstance::Unloaded => {
+            WorkerInstance::Unloaded { .. } => {
                 *instance_guard = WorkerInstance::Deleting;
                 // More invocations might have been enqueued since the worker has stopped
                 self.fail_pending_invocations(error).await;
@@ -541,7 +543,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 Ok(())
             }
-            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
+            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
                 Err(WorkerExecutorError::invalid_request(
                     "Explicit resume is not supported for uninitialized workers",
                 ))
@@ -752,7 +754,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 false
             }
-            WorkerInstance::Unloaded => {
+            WorkerInstance::Unloaded { .. } => {
                 debug!(
                     "Worker {} is unloaded, cannot be used to free up memory",
                     self.owned_worker_id
@@ -796,7 +798,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::Stopping(_) => Ok(()),
             WorkerInstance::WaitingForPermit(_) => Ok(()),
-            WorkerInstance::Unloaded => Ok(()),
+            WorkerInstance::Unloaded { .. } => Ok(()),
             WorkerInstance::Deleting => Ok(()),
         }
     }
@@ -813,6 +815,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Cannot enqueue invocation to a deleting worker",
             ));
         };
+
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
 
         let (idempotency_key, invocation_payload, invocation_context) =
             invocation.clone().into_parts();
@@ -868,6 +874,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
         let (sender, receiver) = oneshot::channel();
 
         self.queue
@@ -900,6 +910,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
         let (sender, receiver) = oneshot::channel();
 
         self.queue
@@ -924,6 +938,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Cannot await readiness of a deleting worker",
             ));
         };
+
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
 
         let (sender, receiver) = oneshot::channel();
 
@@ -1131,7 +1149,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let instance_guard = self.lock_stopped_worker(None).await;
         match &*instance_guard {
-            WorkerInstance::Unloaded => {}
+            WorkerInstance::Unloaded { .. } => {}
             WorkerInstance::Deleting => {
                 return Err(WorkerExecutorError::invalid_request(
                     "Cannot revert a deleting worker",
@@ -1298,11 +1316,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> StopResult {
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
-        let previous_instance_state =
-            std::mem::replace(&mut **instance_guard, WorkerInstance::Unloaded);
+        let previous_instance_state = std::mem::replace(
+            &mut **instance_guard,
+            WorkerInstance::Unloaded {
+                startup_failure: None,
+            },
+        );
 
         match previous_instance_state {
-            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => StopResult::Stopped,
+            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
+                StopResult::Stopped
+            }
             WorkerInstance::Deleting => {
                 **instance_guard = previous_instance_state;
                 // Should we return an error here?
@@ -1323,8 +1347,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // TODO: fail pending invocations should be factored out of here and be guaranteed to run
                 // even if there are multiple concurrent stop attempts.
-                if let Some(error) = fail_pending_invocations {
-                    self.fail_pending_invocations(error).await;
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
+                };
+
+                // Store the startup failure so that subsequent enqueue attempts
+                // on this Unloaded worker fail fast instead of hanging forever.
+                **instance_guard = WorkerInstance::Unloaded {
+                    startup_failure: fail_pending_invocations,
                 };
 
                 // Make sure the oplog is committed
@@ -1362,7 +1392,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let mut instance_guard = self.instance.lock().await;
                 assert!(matches!(*instance_guard, WorkerInstance::Stopping(_)));
-                *instance_guard = WorkerInstance::Unloaded;
+                *instance_guard = WorkerInstance::Unloaded {
+                    startup_failure: None,
+                };
                 drop(instance_guard);
 
                 notify.set();
@@ -1431,7 +1463,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             let instance_guard = self.instance.lock().await;
 
-            if let WorkerInstance::Deleting | WorkerInstance::Unloaded = &*instance_guard {
+            if let WorkerInstance::Deleting | WorkerInstance::Unloaded { .. } = &*instance_guard {
                 return instance_guard;
             }
         }
@@ -1696,10 +1728,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let old_status = self.last_known_status.read().await.clone();
 
             let updated_status = update_status_with_new_entries(
+                self,
+                &self.owned_worker_id,
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
-            );
+            )
+            .await;
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
@@ -1785,7 +1820,9 @@ pub fn merge_worker_env_with_component_env(
 
 #[derive(Debug)]
 enum WorkerInstance {
-    Unloaded,
+    Unloaded {
+        startup_failure: Option<WorkerExecutorError>,
+    },
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
@@ -1795,6 +1832,15 @@ enum WorkerInstance {
 impl WorkerInstance {
     fn is_deleting(&self) -> bool {
         matches!(self, Self::Deleting)
+    }
+
+    fn startup_failure(&self) -> Option<&WorkerExecutorError> {
+        match self {
+            Self::Unloaded {
+                startup_failure: Some(err),
+            } => Some(err),
+            _ => None,
+        }
     }
 }
 
