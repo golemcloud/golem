@@ -21,13 +21,13 @@ use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetActiveRoutesForDomainRequest, GetAgentDeploymentsRequest, GetAgentTypeRequest,
+    GetActiveRoutesForDomainRequest, GetActiveMcpForDomainRequest, GetAgentDeploymentsRequest, GetAgentTypeRequest,
     GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
     GetDeployedComponentMetadataRequest, GetResourceLimitsRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, download_component_response,
-    get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response,
+    get_active_routes_for_domain_response, get_active_mcp_for_domain_response, get_agent_deployments_response, get_agent_type_response,
     get_all_agent_types_response, get_all_deployed_component_revisions_response,
     get_auth_details_for_environment_response, get_component_metadata_response,
     get_deployed_component_metadata_response, get_resource_limits_response,
@@ -713,8 +713,29 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_active_mcp_capabilities_for_domain(&self, _domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
-        todo!()
+    async fn get_active_mcp_capabilities_for_domain(&self, domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_active_mcp_for_domain", move |client| {
+                let request = GetActiveMcpForDomainRequest {
+                    domain: domain.0.clone(),
+                };
+                Box::pin(client.get_active_mcp_for_domain(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_active_mcp_for_domain_response::Result::Success(payload)) => {
+                let converted = payload
+                    .compiled_mcp
+                    .ok_or("missing compiled_mcp field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(get_active_mcp_for_domain_response::Result::Error(error)) => Err(error.into()),
+        }
     }
 
     async fn get_agent_deployments(
