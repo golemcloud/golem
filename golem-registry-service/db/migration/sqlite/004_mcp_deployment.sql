@@ -35,3 +35,18 @@ CREATE TABLE mcp_deployment_revisions
 
 CREATE INDEX mcp_deployment_revisions_latest_revision_by_id_idx
     ON mcp_deployment_revisions (mcp_deployment_id, revision_id DESC);
+
+CREATE TABLE deployment_compiled_mcp
+(
+    account_id                TEXT    NOT NULL,
+    environment_id            TEXT    NOT NULL,
+    deployment_revision_id    INTEGER NOT NULL,
+    domain                    TEXT    NOT NULL,
+    agent_type_implementers   TEXT    NOT NULL DEFAULT '{}',
+
+    PRIMARY KEY (environment_id, deployment_revision_id, domain),
+    FOREIGN KEY (environment_id, deployment_revision_id) REFERENCES deployment_revisions
+);
+
+CREATE INDEX deployment_compiled_mcp_domain_idx
+    ON deployment_compiled_mcp (domain);
