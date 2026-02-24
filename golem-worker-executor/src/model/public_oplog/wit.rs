@@ -35,6 +35,7 @@ use golem_common::model::oplog::{
     SnapshotBasedUpdateParameters,
 };
 use golem_common::model::{Empty, Timestamp};
+use std::time::Duration;
 
 impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
@@ -600,6 +601,448 @@ impl From<Timestamp> for oplog::Timestamp {
     fn from(value: Timestamp) -> Self {
         oplog::Timestamp {
             timestamp: value.into(),
+        }
+    }
+}
+
+fn timestamp_from_datetime(
+    dt: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime,
+) -> Timestamp {
+    Timestamp::from(dt.seconds * 1000 + (dt.nanoseconds / 1_000_000) as u64)
+}
+
+fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq>(
+    payload: oplog::OplogPayload,
+) -> golem_common::model::oplog::payload::OplogPayload<T> {
+    match payload {
+        oplog::OplogPayload::Inline(bytes) => {
+            golem_common::model::oplog::payload::OplogPayload::SerializedInline(bytes)
+        }
+        oplog::OplogPayload::External(ext) => {
+            golem_common::model::oplog::payload::OplogPayload::External {
+                payload_id: golem_common::model::oplog::PayloadId(
+                    uuid::Uuid::from_u64_pair(ext.payload_id.high_bits, ext.payload_id.low_bits),
+                ),
+                md5_hash: ext.md5_hash,
+            }
+        }
+    }
+}
+
+impl From<oplog::WorkerError> for golem_common::model::oplog::WorkerError {
+    fn from(err: oplog::WorkerError) -> Self {
+        match err {
+            oplog::WorkerError::Unknown(msg) => Self::Unknown(msg),
+            oplog::WorkerError::InvalidRequest(msg) => Self::InvalidRequest(msg),
+            oplog::WorkerError::StackOverflow => Self::StackOverflow,
+            oplog::WorkerError::OutOfMemory => Self::OutOfMemory,
+            oplog::WorkerError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
+            oplog::WorkerError::AgentError(msg) => Self::AgentError(msg),
+        }
+    }
+}
+
+// Note: From<oplog::WrappedFunctionType> for DurableFunctionType is provided by golem_common's derive macros
+
+impl From<oplog::LogLevel> for golem_common::model::oplog::LogLevel {
+    fn from(level: oplog::LogLevel) -> Self {
+        match level {
+            oplog::LogLevel::Trace => Self::Trace,
+            oplog::LogLevel::Debug => Self::Debug,
+            oplog::LogLevel::Info => Self::Info,
+            oplog::LogLevel::Warn => Self::Warn,
+            oplog::LogLevel::Error => Self::Error,
+            oplog::LogLevel::Critical => Self::Critical,
+            oplog::LogLevel::Stdout => Self::Stdout,
+            oplog::LogLevel::Stderr => Self::Stderr,
+        }
+    }
+}
+
+impl TryFrom<oplog::RawUpdateDescription> for golem_common::model::oplog::UpdateDescription {
+    type Error = String;
+
+    fn try_from(desc: oplog::RawUpdateDescription) -> Result<Self, String> {
+        match desc {
+            oplog::RawUpdateDescription::Automatic(target_revision) => {
+                Ok(Self::Automatic {
+                    target_revision:
+                        golem_common::model::component::ComponentRevision::try_from(
+                            target_revision,
+                        )
+                        .map_err(|e| e.to_string())?,
+                })
+            }
+            oplog::RawUpdateDescription::SnapshotBased(sbu) => {
+                Ok(Self::SnapshotBased {
+                    target_revision:
+                        golem_common::model::component::ComponentRevision::try_from(
+                            sbu.target_revision,
+                        )
+                        .map_err(|e| e.to_string())?,
+                    payload: oplog_payload_from_wit(sbu.payload),
+                    mime_type: sbu.mime_type,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<oplog::SpanData> for golem_common::model::oplog::SpanData {
+    type Error = String;
+
+    fn try_from(span: oplog::SpanData) -> Result<Self, String> {
+        match span {
+            oplog::SpanData::LocalSpan(local) => {
+                let span_id =
+                    golem_common::model::invocation_context::SpanId::from_string(&local.span_id)?;
+                let start = timestamp_from_datetime(local.start);
+                let parent_id = local
+                    .parent
+                    .map(|p| golem_common::model::invocation_context::SpanId::from_string(&p))
+                    .transpose()?;
+                let attributes = local
+                    .attributes
+                    .into_iter()
+                    .map(|attr| (attr.key, attr.value.into()))
+                    .collect();
+                Ok(Self::LocalSpan {
+                    span_id,
+                    start,
+                    parent_id,
+                    linked_context: None,
+                    attributes,
+                    inherited: local.inherited,
+                })
+            }
+            oplog::SpanData::ExternalSpan(ext) => {
+                let span_id =
+                    golem_common::model::invocation_context::SpanId::from_string(&ext.span_id)?;
+                Ok(Self::ExternalSpan { span_id })
+            }
+        }
+    }
+}
+
+// Note: From<oplog::AttributeValue> for AttributeValue is provided in invocation_context_api.rs
+// Note: From<oplog::PersistenceLevel> for PersistenceLevel is provided in model/mod.rs
+
+impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
+    type Error = String;
+
+    fn try_from(value: oplog::OplogEntry) -> Result<Self, String> {
+        match value {
+            oplog::OplogEntry::Create(params) => Ok(Self::Create {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                worker_id: golem_common::model::WorkerId::from(params.worker_id),
+                component_revision:
+                    golem_common::model::component::ComponentRevision::try_from(
+                        params.component_revision,
+                    )
+                    .map_err(|e| e.to_string())?,
+                env: params.env,
+                environment_id: EnvironmentId::from(uuid::Uuid::from_u64_pair(
+                    params.environment_id.uuid.high_bits,
+                    params.environment_id.uuid.low_bits,
+                )),
+                created_by: golem_common::model::account::AccountId::from(
+                    uuid::Uuid::from_u64_pair(
+                        params.created_by.uuid.high_bits,
+                        params.created_by.uuid.low_bits,
+                    ),
+                ),
+                parent: params.parent.map(golem_common::model::WorkerId::from),
+                component_size: params.component_size,
+                initial_total_linear_memory_size: params.initial_total_linear_memory_size,
+                initial_active_plugins: params
+                    .initial_active_plugins
+                    .into_iter()
+                    .map(golem_common::model::component::PluginPriority)
+                    .collect(),
+                wasi_config_vars: params.wasi_config_vars.into_iter().collect(),
+                original_phantom_id: params.original_phantom_id.map(|uuid| {
+                    uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)
+                }),
+            }),
+            oplog::OplogEntry::HostCall(params) => Ok(Self::HostCall {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                function_name:
+                    golem_common::model::oplog::payload::host_functions::HostFunctionName::from(
+                        params.function_name.as_str(),
+                    ),
+                request: oplog_payload_from_wit(params.request),
+                response: oplog_payload_from_wit(params.response),
+                durable_function_type: params.durable_function_type.into(),
+            }),
+            oplog::OplogEntry::AgentInvocationStarted(params) => {
+                let trace_id = golem_common::model::invocation_context::TraceId::from_string(
+                    &params.trace_id,
+                )?;
+                let invocation_context = params
+                    .invocation_context
+                    .into_iter()
+                    .map(golem_common::model::oplog::SpanData::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self::AgentInvocationStarted {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    idempotency_key: golem_common::model::IdempotencyKey::new(
+                        params.idempotency_key,
+                    ),
+                    payload: oplog_payload_from_wit(params.payload),
+                    trace_id,
+                    trace_states: params.trace_states,
+                    invocation_context,
+                })
+            }
+            oplog::OplogEntry::AgentInvocationFinished(params) => {
+                Ok(Self::AgentInvocationFinished {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    result: oplog_payload_from_wit(params.result),
+                    consumed_fuel: params.consumed_fuel,
+                })
+            }
+            oplog::OplogEntry::Suspend(ts) => Ok(Self::Suspend {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::Error(params) => Ok(Self::Error {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                error: params.error.into(),
+                retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
+            }),
+            oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::Jump(params) => Ok(Self::Jump {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                jump: golem_common::model::regions::OplogRegion {
+                    start: golem_common::model::OplogIndex::from_u64(params.jump.start),
+                    end: golem_common::model::OplogIndex::from_u64(params.jump.end),
+                },
+            }),
+            oplog::OplogEntry::Interrupted(ts) => Ok(Self::Interrupted {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::Exited(ts) => Ok(Self::Exited {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::ChangeRetryPolicy(params) => Ok(Self::ChangeRetryPolicy {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                new_policy: golem_common::model::RetryConfig {
+                    max_attempts: params.new_policy.max_attempts,
+                    min_delay: Duration::from_nanos(params.new_policy.min_delay),
+                    max_delay: Duration::from_nanos(params.new_policy.max_delay),
+                    multiplier: params.new_policy.multiplier,
+                    max_jitter_factor: params.new_policy.max_jitter_factor,
+                },
+            }),
+            oplog::OplogEntry::BeginAtomicRegion(ts) => Ok(Self::BeginAtomicRegion {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::EndAtomicRegion(params) => Ok(Self::EndAtomicRegion {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
+            }),
+            oplog::OplogEntry::BeginRemoteWrite(ts) => Ok(Self::BeginRemoteWrite {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::EndRemoteWrite(params) => Ok(Self::EndRemoteWrite {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
+            }),
+            oplog::OplogEntry::PendingAgentInvocation(params) => {
+                Ok(Self::PendingAgentInvocation {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    idempotency_key: golem_common::model::IdempotencyKey::new(
+                        params.idempotency_key,
+                    ),
+                    payload: oplog_payload_from_wit(params.payload),
+                })
+            }
+            oplog::OplogEntry::PendingUpdate(params) => Ok(Self::PendingUpdate {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                description: params.description.try_into()?,
+            }),
+            oplog::OplogEntry::SuccessfulUpdate(params) => Ok(Self::SuccessfulUpdate {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                target_revision: golem_common::model::component::ComponentRevision::try_from(
+                    params.target_revision,
+                )
+                .map_err(|e| e.to_string())?,
+                new_component_size: params.new_component_size,
+                new_active_plugins: params
+                    .new_active_plugins
+                    .into_iter()
+                    .map(golem_common::model::component::PluginPriority)
+                    .collect(),
+            }),
+            oplog::OplogEntry::FailedUpdate(params) => Ok(Self::FailedUpdate {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                target_revision: golem_common::model::component::ComponentRevision::try_from(
+                    params.target_revision,
+                )
+                .map_err(|e| e.to_string())?,
+                details: params.details,
+            }),
+            oplog::OplogEntry::GrowMemory(params) => Ok(Self::GrowMemory {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                delta: params.delta,
+            }),
+            oplog::OplogEntry::CreateResource(params) => Ok(Self::CreateResource {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                id: golem_common::model::oplog::WorkerResourceId(params.id),
+                resource_type_id: golem_wasm::wasmtime::ResourceTypeId {
+                    name: params.resource_type_id.name,
+                    owner: params.resource_type_id.owner,
+                },
+            }),
+            oplog::OplogEntry::DropResource(params) => Ok(Self::DropResource {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                id: golem_common::model::oplog::WorkerResourceId(params.id),
+                resource_type_id: golem_wasm::wasmtime::ResourceTypeId {
+                    name: params.resource_type_id.name,
+                    owner: params.resource_type_id.owner,
+                },
+            }),
+            oplog::OplogEntry::Log(params) => Ok(Self::Log {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                level: params.level.into(),
+                context: params.context,
+                message: params.message,
+            }),
+            oplog::OplogEntry::Restart(ts) => Ok(Self::Restart {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::ActivatePlugin(params) => Ok(Self::ActivatePlugin {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                plugin_priority: golem_common::model::component::PluginPriority(
+                    params.plugin_priority,
+                ),
+            }),
+            oplog::OplogEntry::DeactivatePlugin(params) => Ok(Self::DeactivatePlugin {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                plugin_priority: golem_common::model::component::PluginPriority(
+                    params.plugin_priority,
+                ),
+            }),
+            oplog::OplogEntry::Revert(params) => Ok(Self::Revert {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                dropped_region: golem_common::model::regions::OplogRegion {
+                    start: golem_common::model::OplogIndex::from_u64(
+                        params.dropped_region.start,
+                    ),
+                    end: golem_common::model::OplogIndex::from_u64(params.dropped_region.end),
+                },
+            }),
+            oplog::OplogEntry::CancelPendingInvocation(params) => {
+                Ok(Self::CancelPendingInvocation {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    idempotency_key: golem_common::model::IdempotencyKey::new(
+                        params.idempotency_key,
+                    ),
+                })
+            }
+            oplog::OplogEntry::StartSpan(params) => {
+                let span_id =
+                    golem_common::model::invocation_context::SpanId::from_string(
+                        &params.span_id,
+                    )?;
+                let parent = params
+                    .parent
+                    .map(|p| {
+                        golem_common::model::invocation_context::SpanId::from_string(&p)
+                    })
+                    .transpose()?;
+                let linked_context_id = params
+                    .linked_context_id
+                    .map(|p| {
+                        golem_common::model::invocation_context::SpanId::from_string(&p)
+                    })
+                    .transpose()?;
+                let attributes: std::collections::HashMap<
+                    String,
+                    golem_common::model::invocation_context::AttributeValue,
+                > = params
+                    .attributes
+                    .into_iter()
+                    .map(|attr| (attr.key, attr.value.into()))
+                    .collect();
+                Ok(Self::StartSpan {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    span_id,
+                    parent,
+                    linked_context_id,
+                    attributes: golem_common::model::oplog::AttributeMap(attributes),
+                })
+            }
+            oplog::OplogEntry::FinishSpan(params) => {
+                let span_id =
+                    golem_common::model::invocation_context::SpanId::from_string(
+                        &params.span_id,
+                    )?;
+                Ok(Self::FinishSpan {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    span_id,
+                })
+            }
+            oplog::OplogEntry::SetSpanAttribute(params) => {
+                let span_id =
+                    golem_common::model::invocation_context::SpanId::from_string(
+                        &params.span_id,
+                    )?;
+                let value = params.value.into();
+                Ok(Self::SetSpanAttribute {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    span_id,
+                    key: params.key,
+                    value,
+                })
+            }
+            oplog::OplogEntry::ChangePersistenceLevel(params) => {
+                Ok(Self::ChangePersistenceLevel {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    persistence_level: params.persistence_level.into(),
+                })
+            }
+            oplog::OplogEntry::BeginRemoteTransaction(params) => {
+                Ok(Self::BeginRemoteTransaction {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    transaction_id: golem_common::model::TransactionId::from(
+                        params.transaction_id,
+                    ),
+                    original_begin_index: params
+                        .original_begin_index
+                        .map(golem_common::model::OplogIndex::from_u64),
+                })
+            }
+            oplog::OplogEntry::PreCommitRemoteTransaction(params) => {
+                Ok(Self::PreCommitRemoteTransaction {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
+                })
+            }
+            oplog::OplogEntry::PreRollbackRemoteTransaction(params) => {
+                Ok(Self::PreRollbackRemoteTransaction {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
+                })
+            }
+            oplog::OplogEntry::CommittedRemoteTransaction(params) => {
+                Ok(Self::CommittedRemoteTransaction {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
+                })
+            }
+            oplog::OplogEntry::RolledBackRemoteTransaction(params) => {
+                Ok(Self::RolledBackRemoteTransaction {
+                    timestamp: timestamp_from_datetime(params.timestamp),
+                    begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
+                })
+            }
+            oplog::OplogEntry::Snapshot(params) => Ok(Self::Snapshot {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                data: oplog_payload_from_wit(params.data),
+                mime_type: params.mime_type,
+            }),
         }
     }
 }

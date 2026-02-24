@@ -16,6 +16,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
+    PublicOplogEntryOps,
 };
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
@@ -48,7 +49,7 @@ use golem_common::model::oplog::{
     HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
     HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
     HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
-    HostResponseGolemApiUnit, OplogEntry,
+    HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
@@ -1216,7 +1217,62 @@ impl SearchOplogEntry {
     }
 }
 
-impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
+impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
+    async fn enrich_oplog_entries(
+        &mut self,
+        environment_id: golem_api_1_x::host::EnvironmentId,
+        agent_id: golem_api_1_x::oplog::AgentId,
+        entries: Vec<(u64, golem_api_1_x::oplog::OplogEntry)>,
+        component_revision: u64,
+    ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
+        self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
+
+        let component_service = self.state.component_service.clone();
+        let oplog_service = self.state.oplog_service();
+        let environment_id = golem_common::model::environment::EnvironmentId::from(
+            Uuid::from_u64_pair(environment_id.uuid.high_bits, environment_id.uuid.low_bits),
+        );
+        let worker_id: WorkerId = agent_id.into();
+        let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
+
+        let mut current_revision = match ComponentRevision::try_from(component_revision) {
+            Ok(rev) => rev,
+            Err(e) => return Ok(Err(e.to_string())),
+        };
+
+        let mut result = Vec::with_capacity(entries.len());
+        for (index, wit_entry) in entries {
+            let entry = match OplogEntry::try_from(wit_entry) {
+                Ok(e) => e,
+                Err(e) => return Ok(Err(e)),
+            };
+
+            if let Some(rev) = entry.specifies_component_revision() {
+                current_revision = rev;
+            }
+
+            let oplog_index = OplogIndex::from_u64(index);
+            match PublicOplogEntry::from_oplog_entry(
+                oplog_index,
+                entry,
+                oplog_service.clone(),
+                component_service.clone(),
+                &owned_worker_id,
+                current_revision,
+            )
+            .await
+            {
+                Ok(public_entry) => {
+                    let wit_entry: golem_api_1_x::oplog::PublicOplogEntry = public_entry.into();
+                    result.push(wit_entry);
+                }
+                Err(e) => return Ok(Err(e)),
+            }
+        }
+
+        Ok(Ok(result))
+    }
+}
 
 impl From<golem_api_1_x::host::RevertAgentTarget>
     for golem_common::model::worker::RevertWorkerTarget
