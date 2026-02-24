@@ -713,7 +713,7 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_active_mcp_capabilities_for_domain(&self, domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
+    async fn get_active_mcp_capabilities_for_domain(&self, _domain: &Domain) -> Result<CompiledMcp, RegistryServiceError> {
         todo!()
     }
 

@@ -286,17 +286,33 @@ impl DeploymentWriteService {
 
         // Compile MCP from staged deployment and agent types
         let compiled_mcp = if let Some(mcp_deployment) = mcp_deployments.first() {
-            let agent_type_names: Vec<AgentTypeName> = registered_agent_types
-                .keys()
-                .cloned()
-                .collect();
+            // Build a map of agent type names to their component implementations
+            let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
+                registered_agent_types
+                    .iter()
+                    .map(|(name, in_progress_agent_type)| {
+                        (
+                            name.clone(),
+                            (
+                                in_progress_agent_type.implemented_by.component_id,
+                                in_progress_agent_type.implemented_by.component_revision,
+                            ),
+                        )
+                    })
+                    .collect();
+
+            if agent_type_implementers.is_empty() {
+                return Err(DeploymentWriteError::InternalError(anyhow::anyhow!(
+                    "MCP deployment has no agent types"
+                )));
+            }
 
             CompiledMcp {
                 account_id: auth.account_id(),
                 environment_id,
                 deployment_revision: next_deployment_revision,
                 domain: mcp_deployment.domain.clone(),
-                agent_types: agent_type_names,
+                agent_type_implementers,
             }
         } else {
             // If no MCP deployment is staged, create one with empty agent types
@@ -307,7 +323,7 @@ impl DeploymentWriteService {
                 domain: golem_common::model::domain_registration::Domain(
                     format!("mcp-{}", environment_id.0),
                 ),
-                agent_types: Vec::new(),
+                agent_type_implementers: Default::default(),
             }
         };
 

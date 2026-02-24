@@ -726,26 +726,26 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         domain: &str
     ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
 
-        self.with_ro("list_active_mcp_for_domain")
+        self.with_ro("get_active_mcp_for_domain")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        ac.account_id,
-                        e.environment_id,
-                        cd.current_revision_id as deployment_revision_id,
-                        dr.domain,
-                        array_agg(DISTINCT r.agent_type_name) AS agent_types
+                        cm.account_id,
+                        cm.environment_id,
+                        cm.deployment_revision_id,
+                        cm.domain,
+                        cm.agent_type_implementers
 
                     FROM deployment_compiled_mcp cm
 
                     -- active deployment
                     JOIN current_deployments cd
-                      ON cd.environment_id = r.environment_id
-                      AND cd.current_revision_id = r.deployment_revision_id
+                      ON cd.environment_id = cm.environment_id
+                      AND cd.current_revision_id = cm.deployment_revision_id
 
                     -- parent objects not deleted
                     JOIN environments e
-                      ON e.environment_id = r.environment_id
+                      ON e.environment_id = cm.environment_id
                       AND e.deleted_at IS NULL
                     JOIN applications a
                       ON a.application_id = e.application_id
@@ -756,11 +756,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                     -- registered domains
                     JOIN domain_registrations dr
-                      ON dr.environment_id = r.environment_id
-                      AND dr.domain = r.domain
+                      ON dr.environment_id = cm.environment_id
+                      AND dr.domain = cm.domain
                       AND dr.deleted_at IS NULL
 
-                    WHERE r.domain = $1
+                    WHERE cm.domain = $1
                 "#})
                 .bind(domain),
             )
@@ -1315,14 +1315,14 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_compiled_mcp
-                    (account_id, environment_id, deployment_revision_id, domain, agent_types)
+                    (account_id, environment_id, deployment_revision_id, domain, agent_type_implementers)
                 VALUES ($1, $2, $3, $4, $5)
             "#})
                 .bind(mcp.account_id)
                 .bind(mcp.environment_id)
                 .bind(mcp.deployment_revision_id)
                 .bind(&mcp.domain)
-                .bind(&mcp.agent_type_names)
+                .bind(&mcp.agent_type_implementers)
         )
             .await?;
 

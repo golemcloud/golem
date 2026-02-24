@@ -6,13 +6,23 @@ use golem_common::base_model::deployment::DeploymentRevision;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use std::collections::HashMap;
+
+/// Maps agent type names to their implementing component versions
+pub type AgentTypeImplementers = HashMap<AgentTypeName, (ComponentId, ComponentRevision)>;
 
 pub struct CompiledMcp {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
-    // for now we are not storing pre-computed prompts and tools, but we can add it later if needed (to reduce storage)
-    pub agent_types: Vec<AgentTypeName> 
+    pub agent_type_implementers: AgentTypeImplementers,
+}
+
+impl CompiledMcp {
+    pub fn agent_types(&self) -> Vec<AgentTypeName> {
+        self.agent_type_implementers.keys().cloned().collect()
+    }
 }
 
