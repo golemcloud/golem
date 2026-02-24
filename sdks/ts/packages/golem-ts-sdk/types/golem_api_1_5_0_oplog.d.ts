@@ -238,6 +238,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     invocationResult: AgentInvocationResult;
     consumedFuel: bigint;
+    componentRevision: bigint;
   };
   export type PendingAgentInvocationParameters = {
     timestamp: Datetime;
@@ -420,6 +421,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     result: OplogPayload;
     consumedFuel: bigint;
+    componentRevision: bigint;
   };
   export type RawErrorParameters = {
     timestamp: Datetime;
