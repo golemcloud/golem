@@ -23,7 +23,7 @@ pub fn split_documents(
     split_map_keys: &[&str],
 ) -> anyhow::Result<Vec<String>> {
     let tree = parse_yaml(source)?;
-    let root = root_mapping(&tree)?;
+    let root = root_mapping(&tree, source)?;
     let root_pairs = mapping_pairs(root, source)?;
 
     let split_root: BTreeSet<&str> = split_root_keys.iter().copied().collect();
@@ -41,11 +41,12 @@ pub fn split_documents(
         if split_map.contains(key.as_str()) {
             let header_end = line_end_at(source, pair_node.start_byte());
             let header = source[pair_node.start_byte()..header_end].to_string();
-            if value_node.kind() != "block_mapping" {
+            let mapping_node = as_block_mapping(value_node).unwrap_or(value_node);
+            if mapping_node.kind() != "block_mapping" {
                 docs.push(source[pair_node.start_byte()..pair_node.end_byte()].to_string());
                 continue;
             }
-            for (_, child_pair, _) in mapping_pairs(value_node, source)? {
+            for (_, child_pair, _) in mapping_pairs(mapping_node, source)? {
                 let mut doc = String::new();
                 doc.push_str(&header);
                 if !header.ends_with('\n') {
@@ -77,7 +78,7 @@ pub fn add_map_entry(
     value_literal: &str,
 ) -> anyhow::Result<String> {
     let tree = parse_yaml(source)?;
-    let root = root_mapping(&tree)?;
+    let root = root_mapping(&tree, source)?;
     let mapping =
         find_mapping_by_path(source, root, path)?.ok_or_else(|| anyhow!("Missing map at path"))?;
 
@@ -100,7 +101,7 @@ pub fn add_map_entry(
 
 pub fn remove_map_entry(source: &str, path: &[&str], key: &str) -> anyhow::Result<String> {
     let tree = parse_yaml(source)?;
-    let root = root_mapping(&tree)?;
+    let root = root_mapping(&tree, source)?;
     let mapping =
         find_mapping_by_path(source, root, path)?.ok_or_else(|| anyhow!("Missing map at path"))?;
     for (pair_key, pair_node, _) in mapping_pairs(mapping, source)? {
@@ -117,9 +118,16 @@ pub fn remove_map_entry(source: &str, path: &[&str], key: &str) -> anyhow::Resul
 
 pub fn set_scalar(source: &str, path: &[&str], value_literal: &str) -> anyhow::Result<String> {
     let tree = parse_yaml(source)?;
-    let root = root_mapping(&tree)?;
-    let (pair_node, value_node) =
-        find_pair_by_path(source, root, path)?.ok_or_else(|| anyhow!("Missing entry"))?;
+    let root = root_mapping(&tree, source)?;
+    let pair = find_pair_by_path(source, root, path)?;
+    let (pair_node, value_node) = if let Some(pair) = pair {
+        pair
+    } else if path.len() == 1 {
+        find_pair_anywhere(source, tree.root_node(), path[0])?
+            .ok_or_else(|| anyhow!("Missing entry"))?
+    } else {
+        return Err(anyhow!("Missing entry"));
+    };
     let replacement_range = value_node.start_byte()..value_node.end_byte();
     let mut edits = Vec::new();
     edits.push(TextEdit::new(
@@ -143,17 +151,49 @@ fn parse_yaml(source: &str) -> anyhow::Result<Tree> {
         .ok_or_else(|| anyhow!("Failed to parse YAML"))
 }
 
-fn root_mapping<'a>(tree: &'a Tree) -> anyhow::Result<Node<'a>> {
+fn root_mapping<'a>(tree: &'a Tree, source: &str) -> anyhow::Result<Node<'a>> {
     let root = tree.root_node();
     let mut cursor = root.walk();
-    for child in root.named_children(&mut cursor) {
-        if child.kind() == "document" || child.kind() == "stream" {
-            if let Some(mapping) = find_first_kind(child, "block_mapping") {
-                return Ok(mapping);
+    let mut stack = vec![root];
+    let mut candidates = Vec::new();
+    while let Some(node) = stack.pop() {
+        if node.kind() == "block_mapping" {
+            candidates.push(node);
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+
+    let Some(first_non_ws) = tree
+        .root_node()
+        .utf8_text(source.as_bytes())
+        .ok()
+        .and_then(|text| text.find(|c: char| !c.is_whitespace()))
+    else {
+        return Err(anyhow!("Empty YAML"));
+    };
+
+    let mut last_non_ws = None;
+    if let Ok(text) = tree.root_node().utf8_text(source.as_bytes()) {
+        for (idx, ch) in text.char_indices() {
+            if !ch.is_whitespace() {
+                last_non_ws = Some(idx);
             }
         }
     }
-    find_first_kind(root, "block_mapping").ok_or_else(|| anyhow!("Missing root mapping"))
+    let last_non_ws = last_non_ws.unwrap_or(first_non_ws);
+
+    for candidate in candidates.iter().rev() {
+        if candidate.start_byte() <= first_non_ws && candidate.end_byte() >= last_non_ws {
+            return Ok(*candidate);
+        }
+    }
+
+    candidates
+        .into_iter()
+        .max_by_key(|node| node.end_byte().saturating_sub(node.start_byte()))
+        .ok_or_else(|| anyhow!("Missing root mapping"))
 }
 
 fn find_first_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
@@ -168,6 +208,13 @@ fn find_first_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
         }
     }
     None
+}
+
+fn as_block_mapping<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    if node.kind() == "block_mapping" {
+        return Some(node);
+    }
+    find_first_kind(node, "block_mapping")
 }
 
 fn mapping_pairs<'a>(
@@ -212,10 +259,11 @@ fn find_mapping_by_path<'a>(
         let Some(value_node) = found else {
             return Ok(None);
         };
-        if value_node.kind() != "block_mapping" {
+        let mapping_node = as_block_mapping(value_node).unwrap_or(value_node);
+        if mapping_node.kind() != "block_mapping" {
             return Ok(None);
         }
-        mapping = value_node;
+        mapping = mapping_node;
     }
     Ok(Some(mapping))
 }
@@ -242,6 +290,48 @@ fn find_pair_by_path<'a>(
         }
     }
     Ok(None)
+}
+
+fn find_pair_anywhere<'a>(
+    source: &str,
+    root: Node<'a>,
+    key: &str,
+) -> anyhow::Result<Option<(Node<'a>, Node<'a>)>> {
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    let mut best: Option<(usize, Node<'a>, Node<'a>)> = None;
+    while let Some(node) = stack.pop() {
+        if node.kind() == "block_mapping_pair" {
+            let key_node = node
+                .child_by_field_name("key")
+                .ok_or_else(|| anyhow!("Missing key in YAML pair"))?;
+            let value_node = node
+                .child_by_field_name("value")
+                .ok_or_else(|| anyhow!("Missing value in YAML pair"))?;
+            let key_text = source[key_node.start_byte()..key_node.end_byte()]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if key_text == key {
+                let mut depth = 0usize;
+                let mut current = node;
+                while let Some(parent) = current.parent() {
+                    if parent.kind() == "block_mapping_pair" {
+                        depth += 1;
+                    }
+                    current = parent;
+                }
+                match best {
+                    Some((best_depth, _, _)) if best_depth <= depth => {}
+                    _ => best = Some((depth, node, value_node)),
+                }
+            }
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    Ok(best.map(|(_, pair, value)| (pair, value)))
 }
 
 fn child_indent(source: &str, mapping: Node<'_>) -> anyhow::Result<usize> {

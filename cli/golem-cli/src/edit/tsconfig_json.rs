@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::edit::jsonc::{collect_value_text_by_path, merge_object_from_source};
+use crate::edit::json::{collect_value_text_by_path, merge_object_from_source};
 
 #[derive(Debug, Clone)]
 pub struct RequiredSetting {
