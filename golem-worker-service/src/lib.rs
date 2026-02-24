@@ -228,8 +228,10 @@ impl WorkerService {
             .expect("socket address")
             .port();
 
+        let lookup = self.services.mcp_capability_lookup.clone();
+
         let service = StreamableHttpService::new(
-            move || Ok(GolemAgentMcpServer::new(None)),
+            move || Ok(GolemAgentMcpServer::new(None, lookup.clone())),
             LocalSessionManager::default().into(),
             StreamableHttpServerConfig::default(),
         );

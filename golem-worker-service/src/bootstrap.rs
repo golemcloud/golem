@@ -37,7 +37,7 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
-use crate::mcp::RegistryServiceMcpCapabilityLookup;
+use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 
 #[derive(Clone)]
 pub struct Services {
@@ -47,6 +47,7 @@ pub struct Services {
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
     pub agents_service: Arc<AgentsService>,
+    pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
 }
 
 impl Services {
@@ -103,7 +104,7 @@ impl Services {
             api_definition_lookup_service.clone(),
         ));
 
-        let mcp_capabilities_lookup_service = Arc::new(RegistryServiceMcpCapabilityLookup::new(
+        let mcp_capability_lookup = Arc::new(RegistryServiceMcpCapabilityLookup::new(
             registry_service_client.clone(),
         ));
 
@@ -169,6 +170,7 @@ impl Services {
             worker_service,
             request_handler,
             agents_service,
+            mcp_capability_lookup
         })
     }
 }

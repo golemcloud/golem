@@ -29,6 +29,7 @@ use golem_wasm::analysis::analysed_type::u32;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_prompt::AgentMcpPrompt;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
+use crate::mcp::McpCapabilityLookup;
 
 // Every client will get an instance of this
 #[derive(Clone)]
@@ -37,20 +38,23 @@ pub struct GolemAgentMcpServer {
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
     domain: Arc<RwLock<Option<Domain>>>,
     agent_id: Option<AgentId>,
+    mcp_definitions_lookup: Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,
 }
 
 impl GolemAgentMcpServer {
-    pub fn new(agent_id: Option<AgentId>) -> Self {
+    pub fn new(agent_id: Option<AgentId>, mcp_definitions_lookup: Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,) -> Self {
         Self {
             tool_router: Arc::new(RwLock::new(None)),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
             agent_id,
+            mcp_definitions_lookup
         }
     }
 
-    fn tool_router(&self, domain: &Domain) -> ToolRouter<GolemAgentMcpServer> {
-        let tool_handlers = get_agent_tool_and_handlers(&self.agent_id, domain);
+    async fn tool_router(&self, domain: &Domain) -> ToolRouter<GolemAgentMcpServer> {
+        let tool_handlers =
+            get_agent_tool_and_handlers(&self.agent_id, domain, &self.mcp_definitions_lookup).await;
 
         let mut router = ToolRouter::<Self>::new();
 
@@ -80,48 +84,48 @@ pub fn get_agent_prompt_and_handlers(agent_id: Option<AgentId>) -> Vec<AgentMcpP
     vec![]
 }
 
-pub fn get_agent_tool_and_handlers(agent_id: &Option<AgentId>, domain: &Domain) -> Vec<AgentMcpTool> {
-
-    match agent_id {
-        Some(agent) => {
-            // just dummy,
-            let agent_method = get_agent_methods(&agent.agent_type);
-
-            let mut tools = vec![];
-
-            for method in agent_method.into_iter() {
-                let agent_method_mcp = McpAgentCapability::from(method);
-
-                match agent_method_mcp {
-                    McpAgentCapability::Tool(agent_mcp_tool) => {
-                        tools.push((agent_mcp_tool));
+pub async fn get_agent_tool_and_handlers(
+    _agent_id: &Option<AgentId>,
+    domain: &Domain,
+    mcp_definition_lookup: &Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,
+) -> Vec<AgentMcpTool> {
+    let compiled_mcp = match mcp_definition_lookup.get(domain).await {
+        Ok(mcp) => mcp,
+        Err(e) => {
+            tracing::error!("Failed to get compiled MCP for domain {}: {}", domain.0, e);
+            return vec![];
+        }
+    };
+    
+    let mut tools = vec![];
+    
+    for agent_type_name in compiled_mcp.agent_types() {
+        match mcp_definition_lookup.resolve_agent_type(domain, &agent_type_name).await {
+            Ok(registered_agent_type) => {
+                let agent_type = &registered_agent_type.agent_type;
+                for method in &agent_type.methods {
+                    let agent_method_mcp = McpAgentCapability::from(method.clone());
+                    
+                    match agent_method_mcp {
+                        McpAgentCapability::Tool(agent_mcp_tool) => {
+                            tools.push(agent_mcp_tool);
+                        }
+                        McpAgentCapability::Resource(_) => {}
                     }
-                    McpAgentCapability::Resource(_) => {}
                 }
             }
-
-            tools
-        },
-        None => {
-            let agent_method = get_agent_methods(&AgentTypeName("dummy_agent".into()));
-
-            let mut tools = vec![];
-
-            for method in agent_method.into_iter() {
-                let agent_method_mcp = McpAgentCapability::from(method);
-
-                match agent_method_mcp {
-                    McpAgentCapability::Tool(agent_mcp_tool) => {
-                        tools.push((agent_mcp_tool));
-                    }
-                    McpAgentCapability::Resource(_) => {}
-                }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to resolve agent type {} for domain {}: {}",
+                    agent_type_name.0,
+                    domain.0,
+                    e
+                );
             }
-
-            tools
         }
     }
-
+    
+    tools
 }
 
 
@@ -282,7 +286,7 @@ impl ServerHandler for GolemAgentMcpServer {
             // Setting the domain from the Host header depending on the incoming request
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                let tool_router = self.tool_router(&domain);
+                let tool_router = self.tool_router(&domain).await;
                 *self.domain.write().await = Some(domain);
                 *self.tool_router.write().await = Some(tool_router);
             }
