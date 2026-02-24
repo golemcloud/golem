@@ -90,7 +90,7 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
-    
+
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str,
@@ -297,7 +297,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .instrument(Self::span_domain(domain))
             .await
     }
-    
+
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str,
@@ -718,12 +718,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         })
         .await
     }
-    
+
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str
     ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
-        
+
         self.with_ro("list_active_mcp_for_domain")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -735,7 +735,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         array_agg(DISTINCT r.agent_type_name) AS agent_types
 
                     FROM deployment_compiled_mcp cm
-                    
+
                     -- active deployment
                     JOIN current_deployments cd
                       ON cd.environment_id = r.environment_id
@@ -764,7 +764,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             .await
     }
-    
+
 
     async fn list_active_compiled_routes_for_domain(
         &self,
@@ -1148,6 +1148,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
         compiled_route: &DeploymentCompiledRouteRecord,
     ) -> RepoResult<()>;
 
+    async fn create_deployment_mcp(
+        tx: &mut Self::Tx,
+        mcp: &DeploymentMcpCapabilityRecord,
+    ) -> RepoResult<()>;
+
     async fn create_deployment_registered_agent_type(
         tx: &mut Self::Tx,
         registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
@@ -1295,6 +1300,27 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(http_api_deployment.deployment_revision_id)
                 .bind(http_api_deployment.http_api_deployment_id)
                 .bind(http_api_deployment.http_api_deployment_revision_id)
+        )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_mcp(
+        tx: &mut Self::Tx,
+        mcp: &DeploymentMcpCapabilityRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_compiled_mcp
+                    (account_id, environment_id, deployment_revision_id, domain, agent_types)
+                VALUES ($1, $2, $3, $4, $5)
+            "#})
+                .bind(mcp.account_id)
+                .bind(mcp.environment_id)
+                .bind(mcp.deployment_revision_id)
+                .bind(&mcp.domain)
+                .bind(&mcp.agent_type_names)
         )
             .await?;
 

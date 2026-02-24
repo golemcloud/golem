@@ -347,6 +347,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub components: Vec<DeploymentComponentRevisionRecord>,
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
+    pub compiled_mcp: DeploymentMcpCapabilityRecord,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
 }
 
@@ -359,6 +360,7 @@ impl DeploymentRevisionCreationRecord {
         components: Vec<Component>,
         http_api_deployments: Vec<HttpApiDeployment>,
         compiled_routes: Vec<UnboundCompiledRoute>,
+        compiled_mcp: CompiledMcp,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
     ) -> Self {
         Self {
@@ -396,6 +398,9 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
+            compiled_mcp: DeploymentMcpCapabilityRecord::from_model(
+                compiled_mcp,
+            ),
             registered_agent_types: registered_agent_types
                 .into_iter()
                 .map(|r| {
@@ -417,6 +422,20 @@ pub struct DeploymentMcpCapabilityRecord {
     pub deployment_revision_id: i64,
     pub domain: String,
     pub agent_type_names: String, // this can get extended 
+}
+
+impl DeploymentMcpCapabilityRecord {
+    pub fn from_model(
+        compiled_mcp: CompiledMcp,
+    ) -> Self {
+        Self {
+            account_id: compiled_mcp.account_id.0,
+            environment_id: compiled_mcp.environment_id.0,
+            deployment_revision_id: compiled_mcp.deployment_revision.into(),
+            domain: compiled_mcp.domain.0.clone(),
+            agent_type_names: compiled_mcp.agent_types.iter().map(|at| at.0.clone()).collect::<Vec<_>>().join(","), // simple serialization for now, can be extended
+        }
+    }
 }
 
 impl TryFrom<DeploymentMcpCapabilityRecord> for CompiledMcp {

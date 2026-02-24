@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 use poem::http;
 use rmcp::{
     handler::server::router::tool::ToolRouter, model::*, service::RequestContext, task_handler,
-    task_manager::OperationProcessor, tool_handler, ErrorData as McpError, RoleServer,
+    task_manager::OperationProcessor, ErrorData as McpError, RoleServer,
     ServerHandler,
 };
 use rmcp::handler::server::router::prompt::PromptRouter;
@@ -30,7 +29,6 @@ use golem_wasm::analysis::analysed_type::u32;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_prompt::AgentMcpPrompt;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::McpCapabilityLookup;
 
 // Every client will get an instance of this
 #[derive(Clone)]
@@ -181,7 +179,7 @@ impl ServerHandler for GolemAgentMcpServer {
         }
     }
 
-    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+    fn get_tool(&self, name: &str) -> Option<Tool> {
         let tool_router = self.tool_router.blocking_read();
         if let Some(tool_router) = tool_router.as_ref() {
             tool_router.get(name).cloned()
@@ -190,14 +188,14 @@ impl ServerHandler for GolemAgentMcpServer {
         }
     }
 
-    async fn list_tools(&self, _request: Option<rmcp::model::PaginatedRequestParams>, _context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+    async fn list_tools(&self, _request: Option<PaginatedRequestParams>, _context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<ListToolsResult, rmcp::ErrorData> {
         let tool_router = self.tool_router.read().await;
 
         if let Some(tool_router) = tool_router.as_ref() {
                 tracing::info!("Listing tools: {:?}", tool_router.list_all());
             Ok(ListToolsResult {
                 tools: tool_router.list_all(),
-                meta: Some(Meta(::rmcp::model::object(::serde_json::Value::Object({
+                meta: Some(Meta(object(::serde_json::Value::Object({
                     let mut object = ::serde_json::Map::new();
                     let _ = object.insert(("tool_meta_key").into(), ::serde_json::to_value(&"tool_meta_value").unwrap());
                     object
@@ -210,7 +208,7 @@ impl ServerHandler for GolemAgentMcpServer {
 
     }
 
-    async fn call_tool(&self, request: rmcp::model::CallToolRequestParams, context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+    async fn call_tool(&self, request: CallToolRequestParams, context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<CallToolResult, rmcp::ErrorData> {
         let tool_router = self.tool_router.read().await;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         if let Some(tool_router) = tool_router.as_ref() {
@@ -259,6 +257,8 @@ impl ServerHandler for GolemAgentMcpServer {
         })
     }
 
+    // Initialize can happen in one place and list_tools can happen in some other place,
+    // this implies any tool list and domain should be part of a distributed session store with session-id
     async fn initialize(
         &self,
         _request: InitializeRequestParams,
@@ -282,11 +282,10 @@ impl ServerHandler for GolemAgentMcpServer {
             // Setting the domain from the Host header depending on the incoming request
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                *self.domain.write().await = Some(Domain(host.to_str().unwrap().to_string()));
                 let tool_router = self.tool_router(&domain);
+                *self.domain.write().await = Some(domain);
                 *self.tool_router.write().await = Some(tool_router);
             }
-
         }
 
         Ok(self.get_info())

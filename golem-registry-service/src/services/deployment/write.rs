@@ -286,6 +286,7 @@ impl DeploymentWriteService {
                 .into_values()
                 .collect(),
             compiled_routes,
+
             registered_agent_types
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)
