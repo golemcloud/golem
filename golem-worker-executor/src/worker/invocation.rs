@@ -60,11 +60,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
 
-    debug!("Beginning invocation {lowered:?}");
-
     let result = invoke_observed(lowered, &mut store, instance, component_metadata, mode).await;
-
-    debug!("Invocation resulted in {:?}", result);
 
     match &result {
         Err(_) => {
