@@ -188,14 +188,17 @@ impl ReplayState {
         if entry.is_hint() {
             // Keeping the last replayed index as-is, so the next attempt will read the next one
             Some(self.last_replayed_index())
-        } else if let OplogEntry::ChangePersistenceLevel { persistence_level, .. } = &entry {
+        } else if let OplogEntry::ChangePersistenceLevel {
+            persistence_level, ..
+        } = &entry
+        {
             if persistence_level == &PersistenceLevel::PersistNothing {
                 let begin_index = self.last_replayed_index();
                 let end_index = self
                     .lookup_oplog_entry(begin_index, |entry, _idx| match entry {
-                        OplogEntry::ChangePersistenceLevel { persistence_level, .. } => {
-                            persistence_level != &PersistenceLevel::PersistNothing
-                        }
+                        OplogEntry::ChangePersistenceLevel {
+                            persistence_level, ..
+                        } => persistence_level != &PersistenceLevel::PersistNothing,
                         OplogEntry::AgentInvocationFinished { .. } => true,
                         _ => false,
                     })

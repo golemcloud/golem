@@ -186,7 +186,10 @@ impl Parse for WitCaseAttrs {
                 input.parse::<syn::Token![=]>()?;
                 rename = Some(input.parse()?);
             } else {
-                return Err(syn::Error::new(ident.span(), "unexpected wit_case attribute"));
+                return Err(syn::Error::new(
+                    ident.span(),
+                    "unexpected wit_case attribute",
+                ));
             }
             if !input.is_empty() {
                 input.parse::<syn::Token![,]>()?;
@@ -206,10 +209,7 @@ fn variant_case_name(variant: &Variant) -> String {
 }
 
 /// Generates `.named("...").owned("...")` suffix tokens based on wit type attrs and a default name.
-fn apply_naming(
-    wit: &WitTypeAttrs,
-    default_name: &LitStr,
-) -> proc_macro2::TokenStream {
+fn apply_naming(wit: &WitTypeAttrs, default_name: &LitStr) -> proc_macro2::TokenStream {
     let name = wit.name.as_ref().unwrap_or(default_name);
     match &wit.owner {
         Some(owner) => quote::quote! { .named(#name).owned(#owner) },

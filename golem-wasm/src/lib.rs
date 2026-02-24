@@ -179,6 +179,13 @@ impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
 }
 
 #[cfg(feature = "host")]
+impl wasmtime_wasi::DynamicPollable for FutureInvokeResultEntry {
+    fn override_index(&self) -> Option<u32> {
+        None
+    }
+}
+
+#[cfg(feature = "host")]
 pub struct CancellationTokenEntry {
     pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
 }

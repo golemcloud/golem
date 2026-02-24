@@ -7,8 +7,8 @@ use golem_common::model::oplog::{
     OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription, WorkerError,
     WorkerResourceId,
 };
-use golem_common::model::AgentInvocationPayload;
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{
     AgentInvocation, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig,
     SuccessfulUpdateRecord, TimestampedAgentInvocation, WorkerResourceDescription, WorkerStatus,
@@ -61,8 +61,14 @@ where
             )
             .await;
 
-        let final_status =
-            update_status_with_new_entries(this, owned_worker_id, last_known, new_entries, &this.config().retry).await;
+        let final_status = update_status_with_new_entries(
+            this,
+            owned_worker_id,
+            last_known,
+            new_entries,
+            &this.config().retry,
+        )
+        .await;
 
         if let Some(final_status) = final_status {
             Some(final_status)
@@ -134,8 +140,13 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         &new_entries,
     );
 
-    let pending_invocations =
-        calculate_pending_invocations(this, owned_worker_id, last_known.pending_invocations, &new_entries).await;
+    let pending_invocations = calculate_pending_invocations(
+        this,
+        owned_worker_id,
+        last_known.pending_invocations,
+        &new_entries,
+    )
+    .await;
     let (
         pending_updates,
         failed_updates,

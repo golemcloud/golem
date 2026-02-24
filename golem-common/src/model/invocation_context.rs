@@ -177,9 +177,7 @@ impl golem_wasm::FromValue for AttributeValue {
                 case_idx: 0,
                 case_value,
             } => {
-                let s = String::from_value(
-                    *case_value.ok_or("Expected case_value for string")?,
-                )?;
+                let s = String::from_value(*case_value.ok_or("Expected case_value for string")?)?;
                 Ok(AttributeValue::String(s))
             }
             golem_wasm::Value::Variant { case_idx, .. } => {

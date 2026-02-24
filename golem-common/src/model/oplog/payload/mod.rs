@@ -17,8 +17,9 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType};
+use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType, UntypedDataValue};
 use crate::model::component::ComponentRevision;
+use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
@@ -30,7 +31,6 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
-use crate::model::oplog::PayloadId;
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
 use crate::oplog_payload;
@@ -120,8 +120,8 @@ oplog_payload! {
         GolemRpcInvoke {
             remote_worker_id: WorkerId,
             idempotency_key: IdempotencyKey,
-            function_name: String,
-            function_params: Vec<ValueAndType>,
+            method_name: String,
+            input: UntypedDataValue,
             #[from_value(skip)]
             #[transient(None::<AgentTypeName>)]
             remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry
@@ -132,8 +132,8 @@ oplog_payload! {
         GolemRpcScheduledInvocation {
             remote_worker_id: WorkerId,
             idempotency_key: IdempotencyKey,
-            function_name: String,
-            function_params: Vec<ValueAndType>,
+            method_name: String,
+            input: UntypedDataValue,
             datetime: SerializableDateTime,
             #[from_value(skip)]
             #[transient(None::<AgentTypeName>)]
@@ -270,7 +270,7 @@ oplog_payload! {
             request: Result<SerializableRdbmsRequest, SerializableRdbmsError>
         },
         GolemRpcInvokeAndAwait {
-            result: Result<Option<ValueAndType>, SerializableRpcError>
+            result: Result<UntypedDataValue, SerializableRpcError>
         },
         GolemRpcInvokeGet {
             result: SerializableInvokeResult
@@ -640,12 +640,9 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::IntoValue for Oplog
 
     fn get_type() -> golem_wasm::analysis::AnalysedType {
         use golem_wasm::analysis::analysed_type::*;
-        let uuid_type = record(vec![
-            field("high-bits", u64()),
-            field("low-bits", u64()),
-        ])
-        .named("uuid")
-        .owned("golem:core@1.5.0/types");
+        let uuid_type = record(vec![field("high-bits", u64()), field("low-bits", u64())])
+            .named("uuid")
+            .owned("golem:core@1.5.0/types");
         variant(vec![
             case("inline", list(u8())),
             case(
@@ -684,8 +681,7 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::FromValue for Oplog
                     match record_value {
                         golem_wasm::Value::Record(fields) if fields.len() == 2 => {
                             let mut iter = fields.into_iter();
-                            let payload_id =
-                                PayloadId(Uuid::from_value(iter.next().unwrap())?);
+                            let payload_id = PayloadId(Uuid::from_value(iter.next().unwrap())?);
                             let md5_hash = Vec::<u8>::from_value(iter.next().unwrap())?;
                             Ok(OplogPayload::External {
                                 payload_id,

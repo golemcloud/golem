@@ -424,7 +424,9 @@ pub enum LogLevel {
     Critical,
 }
 
-#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(
+    Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize, IntoValue, FromValue,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[wit(name = "persistence-level", owner = "golem:api@1.5.0/host", as_variant)]
 pub enum PersistenceLevel {

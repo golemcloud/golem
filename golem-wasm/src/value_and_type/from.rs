@@ -393,10 +393,10 @@ impl FromValue for uuid::Uuid {
                 let lo = u64::from_value(iter.next().unwrap())?;
                 Ok(uuid::Uuid::from_u64_pair(hi, lo))
             }
-            Value::String(s) => {
-                uuid::Uuid::parse_str(&s).map_err(|e| format!("Invalid UUID: {e}"))
-            }
-            _ => Err(format!("Expected Record with 2 fields for UUID, got {value:?}")),
+            Value::String(s) => uuid::Uuid::parse_str(&s).map_err(|e| format!("Invalid UUID: {e}")),
+            _ => Err(format!(
+                "Expected Record with 2 fields for UUID, got {value:?}"
+            )),
         }
     }
 }

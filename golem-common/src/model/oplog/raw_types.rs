@@ -305,7 +305,15 @@ pub struct TimestampedUpdateDescription {
     pub description: UpdateDescription,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, golem_wasm_derive::IntoValue, golem_wasm_derive::FromValue)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_wasm_derive::IntoValue,
+    golem_wasm_derive::FromValue,
+)]
 #[desert(evolution())]
 #[wit(name = "wrapped-function-type", owner = "golem:api@1.5.0/oplog")]
 pub enum DurableFunctionType {

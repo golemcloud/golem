@@ -623,9 +623,10 @@ fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone 
         }
         oplog::OplogPayload::External(ext) => {
             golem_common::model::oplog::payload::OplogPayload::External {
-                payload_id: golem_common::model::oplog::PayloadId(
-                    uuid::Uuid::from_u64_pair(ext.payload_id.high_bits, ext.payload_id.low_bits),
-                ),
+                payload_id: golem_common::model::oplog::PayloadId(uuid::Uuid::from_u64_pair(
+                    ext.payload_id.high_bits,
+                    ext.payload_id.low_bits,
+                )),
                 md5_hash: ext.md5_hash,
                 cached: None,
             }
@@ -668,26 +669,20 @@ impl TryFrom<oplog::RawUpdateDescription> for golem_common::model::oplog::Update
 
     fn try_from(desc: oplog::RawUpdateDescription) -> Result<Self, String> {
         match desc {
-            oplog::RawUpdateDescription::Automatic(target_revision) => {
-                Ok(Self::Automatic {
-                    target_revision:
-                        golem_common::model::component::ComponentRevision::try_from(
-                            target_revision,
-                        )
-                        .map_err(|e| e.to_string())?,
-                })
-            }
-            oplog::RawUpdateDescription::SnapshotBased(sbu) => {
-                Ok(Self::SnapshotBased {
-                    target_revision:
-                        golem_common::model::component::ComponentRevision::try_from(
-                            sbu.target_revision,
-                        )
-                        .map_err(|e| e.to_string())?,
-                    payload: oplog_payload_from_wit(sbu.payload),
-                    mime_type: sbu.mime_type,
-                })
-            }
+            oplog::RawUpdateDescription::Automatic(target_revision) => Ok(Self::Automatic {
+                target_revision: golem_common::model::component::ComponentRevision::try_from(
+                    target_revision,
+                )
+                .map_err(|e| e.to_string())?,
+            }),
+            oplog::RawUpdateDescription::SnapshotBased(sbu) => Ok(Self::SnapshotBased {
+                target_revision: golem_common::model::component::ComponentRevision::try_from(
+                    sbu.target_revision,
+                )
+                .map_err(|e| e.to_string())?,
+                payload: oplog_payload_from_wit(sbu.payload),
+                mime_type: sbu.mime_type,
+            }),
         }
     }
 }
@@ -739,11 +734,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::Create(params) => Ok(Self::Create {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 worker_id: golem_common::model::WorkerId::from(params.worker_id),
-                component_revision:
-                    golem_common::model::component::ComponentRevision::try_from(
-                        params.component_revision,
-                    )
-                    .map_err(|e| e.to_string())?,
+                component_revision: golem_common::model::component::ComponentRevision::try_from(
+                    params.component_revision,
+                )
+                .map_err(|e| e.to_string())?,
                 env: params.env,
                 environment_id: EnvironmentId::from(uuid::Uuid::from_u64_pair(
                     params.environment_id.uuid.high_bits,
@@ -764,9 +758,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .map(golem_common::model::component::PluginPriority)
                     .collect(),
                 wasi_config_vars: params.wasi_config_vars.into_iter().collect(),
-                original_phantom_id: params.original_phantom_id.map(|uuid| {
-                    uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)
-                }),
+                original_phantom_id: params
+                    .original_phantom_id
+                    .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
             }),
             oplog::OplogEntry::HostCall(params) => Ok(Self::HostCall {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -942,9 +936,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::Revert(params) => Ok(Self::Revert {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 dropped_region: golem_common::model::regions::OplogRegion {
-                    start: golem_common::model::OplogIndex::from_u64(
-                        params.dropped_region.start,
-                    ),
+                    start: golem_common::model::OplogIndex::from_u64(params.dropped_region.start),
                     end: golem_common::model::OplogIndex::from_u64(params.dropped_region.end),
                 },
             }),
@@ -958,20 +950,14 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }
             oplog::OplogEntry::StartSpan(params) => {
                 let span_id =
-                    golem_common::model::invocation_context::SpanId::from_string(
-                        &params.span_id,
-                    )?;
+                    golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
                 let parent = params
                     .parent
-                    .map(|p| {
-                        golem_common::model::invocation_context::SpanId::from_string(&p)
-                    })
+                    .map(|p| golem_common::model::invocation_context::SpanId::from_string(&p))
                     .transpose()?;
                 let linked_context_id = params
                     .linked_context_id
-                    .map(|p| {
-                        golem_common::model::invocation_context::SpanId::from_string(&p)
-                    })
+                    .map(|p| golem_common::model::invocation_context::SpanId::from_string(&p))
                     .transpose()?;
                 let attributes: std::collections::HashMap<
                     String,
@@ -991,9 +977,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }
             oplog::OplogEntry::FinishSpan(params) => {
                 let span_id =
-                    golem_common::model::invocation_context::SpanId::from_string(
-                        &params.span_id,
-                    )?;
+                    golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
                 Ok(Self::FinishSpan {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     span_id,
@@ -1001,9 +985,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }
             oplog::OplogEntry::SetSpanAttribute(params) => {
                 let span_id =
-                    golem_common::model::invocation_context::SpanId::from_string(
-                        &params.span_id,
-                    )?;
+                    golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
                 let value = params.value.into();
                 Ok(Self::SetSpanAttribute {
                     timestamp: timestamp_from_datetime(params.timestamp),
@@ -1012,23 +994,17 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     value,
                 })
             }
-            oplog::OplogEntry::ChangePersistenceLevel(params) => {
-                Ok(Self::ChangePersistenceLevel {
-                    timestamp: timestamp_from_datetime(params.timestamp),
-                    persistence_level: params.persistence_level.into(),
-                })
-            }
-            oplog::OplogEntry::BeginRemoteTransaction(params) => {
-                Ok(Self::BeginRemoteTransaction {
-                    timestamp: timestamp_from_datetime(params.timestamp),
-                    transaction_id: golem_common::model::TransactionId::from(
-                        params.transaction_id,
-                    ),
-                    original_begin_index: params
-                        .original_begin_index
-                        .map(golem_common::model::OplogIndex::from_u64),
-                })
-            }
+            oplog::OplogEntry::ChangePersistenceLevel(params) => Ok(Self::ChangePersistenceLevel {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                persistence_level: params.persistence_level.into(),
+            }),
+            oplog::OplogEntry::BeginRemoteTransaction(params) => Ok(Self::BeginRemoteTransaction {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                transaction_id: golem_common::model::TransactionId::from(params.transaction_id),
+                original_begin_index: params
+                    .original_begin_index
+                    .map(golem_common::model::OplogIndex::from_u64),
+            }),
             oplog::OplogEntry::PreCommitRemoteTransaction(params) => {
                 Ok(Self::PreCommitRemoteTransaction {
                     timestamp: timestamp_from_datetime(params.timestamp),

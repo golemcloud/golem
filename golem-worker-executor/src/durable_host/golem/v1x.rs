@@ -15,8 +15,7 @@
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
-    find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
-    PublicOplogEntryOps,
+    find_component_revision_at, get_public_oplog_chunk, search_public_oplog, PublicOplogEntryOps,
 };
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
