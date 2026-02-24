@@ -104,6 +104,7 @@ pub trait TestDsl {
         unverified: bool,
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -131,6 +132,7 @@ pub trait TestDsl {
             Vec::new(),
             Vec::new(),
             None,
+            None,
         )
         .await
     }
@@ -148,6 +150,7 @@ pub trait TestDsl {
             Some(name),
             files,
             latest_revision.files.into_iter().map(|f| f.path).collect(),
+            None,
             None,
         )
         .await
@@ -167,6 +170,7 @@ pub trait TestDsl {
             Vec::new(),
             Vec::new(),
             Some(BTreeMap::from_iter(env.to_vec())),
+            None,
         )
         .await
     }
@@ -179,6 +183,7 @@ pub trait TestDsl {
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn try_start_agent(
@@ -186,7 +191,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
     ) -> WorkerInvocationResult<WorkerId> {
-        self.try_start_agent_with(component_id, id, HashMap::new(), vec![])
+        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
 
@@ -195,7 +200,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        config_vars: HashMap<String, String>,
     ) -> WorkerInvocationResult<WorkerId>;
 
     async fn start_agent(
@@ -203,7 +208,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
     ) -> anyhow::Result<WorkerId> {
-        self.start_agent_with(component_id, id, HashMap::new(), vec![])
+        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
 
@@ -212,10 +217,10 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        config_vars: HashMap<String, String>,
     ) -> anyhow::Result<WorkerId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, wasi_config_vars)
+            .try_start_agent_with(component_id, id, env, config_vars)
             .await?;
         Ok(result?)
     }
@@ -665,6 +670,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     unverified: bool,
     files: Vec<IFSEntry>,
     env: BTreeMap<String, String>,
+    config_vars: BTreeMap<String, String>,
     plugins: Vec<PluginInstallation>,
 }
 
@@ -679,6 +685,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             unverified: false,
             files: Vec::new(),
             env: BTreeMap::new(),
+            config_vars: BTreeMap::new(),
             plugins: Vec::new(),
         }
     }
@@ -753,6 +760,12 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
+    pub fn with_config_vars(mut self, config_vars: Vec<(String, String)>) -> Self {
+        let map = config_vars.into_iter().collect::<BTreeMap<_, _>>();
+        self.config_vars = map;
+        self
+    }
+
     pub fn with_plugin(
         self,
         environment_plugin_id: &EnvironmentPluginGrantId,
@@ -787,6 +800,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.unverified,
                 self.files,
                 self.env,
+                self.config_vars,
                 self.plugins,
             )
             .await

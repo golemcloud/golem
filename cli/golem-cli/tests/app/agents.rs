@@ -10,7 +10,7 @@ use anyhow::Context;
 
 use goldenfile::Mint;
 use golem_cli::fs;
-use golem_templates::model::GuestLanguage;
+use golem_cli::model::GuestLanguage;
 use indoc::indoc;
 use std::io::Write;
 use std::path::Path;

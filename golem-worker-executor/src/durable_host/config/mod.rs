@@ -21,7 +21,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get(&mut self, key: String) -> wasmtime::Result<Result<Option<String>, Error>> {
         Ok(Ok(self
             .state
-            .wasi_config_vars
+            .config_vars
             .read()
             .unwrap()
             .get(&key)
@@ -31,7 +31,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all(&mut self) -> wasmtime::Result<Result<Vec<(String, String)>, Error>> {
         Ok(Ok(self
             .state
-            .wasi_config_vars
+            .config_vars
             .read()
             .unwrap()
             .clone()

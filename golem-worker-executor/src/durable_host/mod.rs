@@ -64,7 +64,7 @@ use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{interpret_function_result, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
+    ExternalOperations, FileSystemReading, HasConfigVars, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
@@ -206,10 +206,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        // TODO: pass config vars from component metadata
-        let wasi_config_vars = effective_wasi_config_vars(
-            worker_config.initial_wasi_config_vars.clone(),
-            BTreeMap::new(),
+        let config_vars = effective_config_vars(
+            worker_config.initial_config_vars.clone(),
+            component_metadata.config_vars.clone(),
         );
 
         let stdin = ManagedStdIn::disabled();
@@ -265,8 +264,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
-                worker_config.initial_wasi_config_vars,
-                wasi_config_vars,
+                worker_config.initial_config_vars,
+                config_vars,
                 shard_service,
                 pending_update,
                 original_phantom_id,
@@ -949,9 +948,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasWasiConfigVars for DurableWorkerCtx<Ctx> {
-    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
-        self.state.wasi_config_vars.read().unwrap().clone()
+impl<Ctx: WorkerCtx> HasConfigVars for DurableWorkerCtx<Ctx> {
+    fn config_vars(&self) -> BTreeMap<String, String> {
+        self.state.config_vars.read().unwrap().clone()
     }
 }
 
@@ -1423,11 +1422,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        // TODO: take config vars from component metadata
-        let mut wasi_config_vars = self.state.wasi_config_vars.write().unwrap();
-        *wasi_config_vars = effective_wasi_config_vars(
-            self.state.initial_wasi_config_vars.clone(),
-            BTreeMap::new(),
+        let mut config_vars = self.state.config_vars.write().unwrap();
+        *config_vars = effective_config_vars(
+            self.state.initial_config_vars.clone(),
+            new_metadata.config_vars.clone(),
         );
 
         self.state.component_metadata = new_metadata;
@@ -2887,9 +2885,9 @@ struct PrivateDurableWorkerState {
     shard_service: Arc<dyn ShardService>,
 
     /// The initial config vars that the worker was configured with
-    initial_wasi_config_vars: BTreeMap<String, String>,
+    initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    wasi_config_vars: RwLock<BTreeMap<String, String>>,
+    config_vars: RwLock<BTreeMap<String, String>>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
@@ -2945,8 +2943,8 @@ impl PrivateDurableWorkerState {
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
-        initial_wasi_config_vars: BTreeMap<String, String>,
-        wasi_config_vars: BTreeMap<String, String>,
+        initial_config_vars: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -3007,8 +3005,8 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
-            initial_wasi_config_vars,
-            wasi_config_vars: RwLock::new(wasi_config_vars),
+            initial_config_vars,
+            config_vars: RwLock::new(config_vars),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
@@ -3480,17 +3478,17 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
     HashSet::from_iter(ro_paths)
 }
 
-fn effective_wasi_config_vars(
-    worker_wasi_config_vars: BTreeMap<String, String>,
-    component_wasi_config_vars: BTreeMap<String, String>,
+fn effective_config_vars(
+    worker_config_vars: BTreeMap<String, String>,
+    component_config_vars: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
 
-    for (k, v) in component_wasi_config_vars {
+    for (k, v) in component_config_vars {
         result.insert(k, v);
     }
 
-    for (k, v) in worker_wasi_config_vars {
+    for (k, v) in worker_config_vars {
         result.insert(k, v);
     }
 

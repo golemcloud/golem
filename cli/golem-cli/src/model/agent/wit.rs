@@ -762,6 +762,7 @@ mod tests {
         single_agent_wrapper_types,
     };
 
+    use crate::model::GuestLanguage;
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
         ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
@@ -769,7 +770,6 @@ mod tests {
     };
     use golem_common::model::component::ComponentName;
     use golem_common::model::Empty;
-    use golem_templates::model::GuestLanguage;
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };

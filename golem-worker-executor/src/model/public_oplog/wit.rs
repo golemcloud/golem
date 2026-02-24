@@ -51,7 +51,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                wasi_config_vars,
+                config_vars,
                 original_phantom_id: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
@@ -68,11 +68,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                     .into_iter()
                     .map(|pr| pr.into())
                     .collect(),
-                config_vars: wasi_config_vars
-                    .0
-                    .into_iter()
-                    .map(|entry| (entry.key, entry.value))
-                    .collect(),
+                config_vars: config_vars.into_iter().collect(),
             }),
             PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
                 timestamp,

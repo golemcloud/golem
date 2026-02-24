@@ -123,6 +123,7 @@ impl TestDsl for TestWorkerExecutor {
         unverified: bool,
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         if !plugins.is_empty() {
@@ -185,6 +186,7 @@ impl TestDsl for TestWorkerExecutor {
                         converted_files,
                         unverified,
                         env,
+                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -202,6 +204,7 @@ impl TestDsl for TestWorkerExecutor {
                         converted_files,
                         unverified,
                         env,
+                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -244,6 +247,7 @@ impl TestDsl for TestWorkerExecutor {
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
+        config_vars: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto> {
         let latest_revision = self
             .deps
@@ -302,6 +306,7 @@ impl TestDsl for TestWorkerExecutor {
                 converted_new_files,
                 removed_files,
                 env,
+                config_vars,
                 original_source_hash,
             )
             .await?;
@@ -314,7 +319,7 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: AgentId,
         env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
+        config_vars: HashMap<String, String>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -331,7 +336,7 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
+                config_vars,
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
             })

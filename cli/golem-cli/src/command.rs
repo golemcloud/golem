@@ -34,6 +34,7 @@ use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, WorkerName};
+use crate::model::GuestLanguage;
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
@@ -46,7 +47,6 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_templates::model::GuestLanguage;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -804,10 +804,10 @@ pub enum GolemCliSubcommand {
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
     use crate::model::worker::{AgentUpdateMode, WorkerName};
+    use crate::model::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
-    use golem_templates::model::GuestLanguage;
 
     pub type ComponentTemplateName = String;
     pub type NewWorkerArgument = String;
@@ -1096,6 +1096,9 @@ pub mod worker {
             /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
+            /// wasi:config entries visible for the agent
+            #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
+            config_vars: Vec<(String, String)>,
         },
         // TODO: json args
         /// Invoke (or enqueue invocation for) agent
