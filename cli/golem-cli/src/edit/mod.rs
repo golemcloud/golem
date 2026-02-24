@@ -14,7 +14,7 @@
 
 pub mod cargo_toml;
 pub mod golem_yaml;
-pub mod jsonc;
+pub mod json;
 pub mod main_rs;
 pub mod main_ts;
 pub mod package_json;

@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use tree_sitter::{Node, Parser, Tree};
 
 pub fn collect_value_text_by_path(source: &str, path: &[&str]) -> anyhow::Result<Option<String>> {
-    let tree = parse_jsonc(source)?;
+    let tree = parse_json(source)?;
     let root = root_object(&tree, source)?;
     let Some(value) = find_value_by_path(source, root, path)? else {
         return Ok(None);
@@ -27,8 +27,8 @@ pub fn collect_value_text_by_path(source: &str, path: &[&str]) -> anyhow::Result
 }
 
 pub fn merge_object_from_source(base_source: &str, update_source: &str) -> anyhow::Result<String> {
-    let base_tree = parse_jsonc(base_source)?;
-    let update_tree = parse_jsonc(update_source)?;
+    let base_tree = parse_json(base_source)?;
+    let update_tree = parse_json(update_source)?;
     let base_root = root_object(&base_tree, base_source)?;
     let update_root = root_object(&update_tree, update_source)?;
 
@@ -48,7 +48,7 @@ pub fn update_object_entries(
     object_key: &str,
     entries: &[(String, String)],
 ) -> anyhow::Result<String> {
-    let tree = parse_jsonc(source)?;
+    let tree = parse_json(source)?;
     let root = root_object(&tree, source)?;
 
     let mut edits = Vec::new();
@@ -59,12 +59,12 @@ pub fn update_object_entries(
         edits.extend(merge_entries_into_object(source, value, entries)?);
     } else {
         let object_literal = format_new_object_literal(source, entries)?;
-        let insertion = format_object_pair_insertion(source, root, object_key, &object_literal)?;
-        edits.push(TextEdit::new(
-            root.end_byte() - 1,
-            root.end_byte() - 1,
-            insertion,
-        ));
+        edits.push(insert_object_pair_edit(
+            source,
+            root,
+            object_key,
+            &object_literal,
+        )?);
     }
     apply_edits(source, edits)
 }
@@ -74,7 +74,7 @@ pub fn collect_object_entries(
     object_key: &str,
     names: &[&str],
 ) -> anyhow::Result<BTreeMap<String, Option<String>>> {
-    let tree = parse_jsonc(source)?;
+    let tree = parse_json(source)?;
     let root = root_object(&tree, source)?;
     let mut result = BTreeMap::new();
     for name in names {
@@ -97,13 +97,13 @@ pub fn collect_object_entries(
     Ok(result)
 }
 
-fn parse_jsonc(source: &str) -> anyhow::Result<Tree> {
+fn parse_json(source: &str) -> anyhow::Result<Tree> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_json::LANGUAGE.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-json"))?;
     parser
-        .parse(source, None)
+        .parse(&sanitize_json(source), None)
         .ok_or_else(|| anyhow!("Failed to parse JSONC"))
 }
 
@@ -153,23 +153,10 @@ fn object_pairs<'a>(
     object: Node<'a>,
     source: &str,
 ) -> anyhow::Result<Vec<(String, Node<'a>)>> {
-    let mut cursor = object.walk();
-    let mut pairs = Vec::new();
-    for child in object.named_children(&mut cursor) {
-        if child.kind() != "pair" {
-            continue;
-        }
-        let key_node = child
-            .child_by_field_name("key")
-            .ok_or_else(|| anyhow!("Missing key in JSONC pair"))?;
-        let value_node = child
-            .child_by_field_name("value")
-            .ok_or_else(|| anyhow!("Missing value in JSONC pair"))?;
-        let key_text = source[key_node.start_byte()..key_node.end_byte()].trim();
-        let key = unquote_json_string(key_text)?;
-        pairs.push((key, value_node));
-    }
-    Ok(pairs)
+    Ok(object_pair_nodes(object, source)?
+        .into_iter()
+        .map(|(key, _pair, value)| (key, value))
+        .collect())
 }
 
 fn merge_object_nodes(
@@ -208,12 +195,12 @@ fn merge_object_nodes(
         } else {
             let update_text =
                 update_source[update_value.start_byte()..update_value.end_byte()].to_string();
-            let insertion = format_object_pair_insertion(base_source, base_object, &key, &update_text)?;
-            edits.push(TextEdit::new(
-                base_object.end_byte() - 1,
-                base_object.end_byte() - 1,
-                insertion,
-            ));
+            edits.push(insert_object_pair_edit(
+                base_source,
+                base_object,
+                &key,
+                &update_text,
+            )?);
         }
     }
     Ok(())
@@ -240,17 +227,12 @@ fn merge_entries_into_object(
                 format!("\"{}\"", escape_json_string(value)),
             ));
         } else {
-            let insertion = format_object_pair_insertion(
+            edits.push(insert_object_pair_edit(
                 source,
                 object,
                 key,
                 &format!("\"{}\"", escape_json_string(value)),
-            )?;
-            edits.push(TextEdit::new(
-                object.end_byte() - 1,
-                object.end_byte() - 1,
-                insertion,
-            ));
+            )?);
         }
     }
     Ok(edits)
@@ -276,31 +258,42 @@ fn format_new_object_literal(
     Ok(format!("{{\n{}\n}}", parts.join(",\n")))
 }
 
-fn format_object_pair_insertion(
+fn insert_object_pair_edit(
     source: &str,
     object: Node<'_>,
     key: &str,
     value_literal: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<TextEdit> {
     let (indent, multiline) = detect_object_indent(source, object)?;
-    let needs_comma = object_needs_trailing_comma(source, object);
-    let prefix = if needs_comma { "," } else { "" };
-    if multiline {
-        Ok(format!(
-            "{}\n{}\"{}\": {}",
-            prefix,
-            indent,
-            escape_json_string(key),
-            value_literal
-        ))
-    } else {
-        Ok(format!(
-            "{} \"{}\": {}",
-            prefix,
-            escape_json_string(key),
-            value_literal
-        ))
+    let pairs = object_pair_nodes(object, source)?;
+    if pairs.is_empty() {
+        let insert_pos = object.end_byte() - 1;
+        let insertion = if multiline {
+            format!("\n{}\"{}\": {}", indent, escape_json_string(key), value_literal)
+        } else {
+            format!(" \"{}\": {}", escape_json_string(key), value_literal)
+        };
+        return Ok(TextEdit::new(insert_pos, insert_pos, insertion));
     }
+
+    let last_pair_end = pairs.last().unwrap().1.end_byte();
+    if let Some(comma_pos) = find_trailing_comma(source, last_pair_end, object.end_byte()) {
+        let insert_pos = comma_pos + 1;
+        let insertion = if multiline {
+            format!("\n{}\"{}\": {}", indent, escape_json_string(key), value_literal)
+        } else {
+            format!(" \"{}\": {}", escape_json_string(key), value_literal)
+        };
+        return Ok(TextEdit::new(insert_pos, insert_pos, insertion));
+    }
+
+    let insert_pos = last_pair_end;
+    let insertion = if multiline {
+        format!(",\n{}\"{}\": {}", indent, escape_json_string(key), value_literal)
+    } else {
+        format!(", \"{}\": {}", escape_json_string(key), value_literal)
+    };
+    Ok(TextEdit::new(insert_pos, insert_pos, insertion))
 }
 
 fn detect_object_indent(source: &str, object: Node<'_>) -> anyhow::Result<(String, bool)> {
@@ -322,18 +315,67 @@ fn detect_object_indent(source: &str, object: Node<'_>) -> anyhow::Result<(Strin
     Ok((format!("{}  ", base_indent), source[object.start_byte()..object.end_byte()].contains('\n')))
 }
 
-fn object_needs_trailing_comma(source: &str, object: Node<'_>) -> bool {
-    let mut idx = object.end_byte().saturating_sub(2);
-    let bytes = source.as_bytes();
-    while idx > object.start_byte() {
-        let ch = bytes[idx] as char;
-        if ch.is_whitespace() {
-            idx = idx.saturating_sub(1);
+fn object_pair_nodes<'a>(
+    object: Node<'a>,
+    source: &str,
+) -> anyhow::Result<Vec<(String, Node<'a>, Node<'a>)>> {
+    let mut cursor = object.walk();
+    let mut pairs = Vec::new();
+    for child in object.named_children(&mut cursor) {
+        if child.kind() != "pair" {
             continue;
         }
-        return ch != '{' && ch != ',' && ch != '\n';
+        let key_node = child
+            .child_by_field_name("key")
+            .ok_or_else(|| anyhow!("Missing key in JSONC pair"))?;
+        let value_node = child
+            .child_by_field_name("value")
+            .ok_or_else(|| anyhow!("Missing value in JSONC pair"))?;
+        let key_text = source[key_node.start_byte()..key_node.end_byte()].trim();
+        let key = unquote_json_string(key_text)?;
+        pairs.push((key, child, value_node));
     }
-    false
+    Ok(pairs)
+}
+
+fn find_trailing_comma(source: &str, start: usize, end: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut idx = start;
+    while idx < end {
+        let ch = bytes[idx] as char;
+        if ch.is_whitespace() {
+            idx += 1;
+            continue;
+        }
+        if ch == '/' && idx + 1 < end {
+            let next = bytes[idx + 1] as char;
+            if next == '/' {
+                idx += 2;
+                while idx < end && bytes[idx] as char != '\n' {
+                    idx += 1;
+                }
+                continue;
+            }
+            if next == '*' {
+                idx += 2;
+                while idx + 1 < end {
+                    let c = bytes[idx] as char;
+                    let c_next = bytes[idx + 1] as char;
+                    if c == '*' && c_next == '/' {
+                        idx += 2;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+        }
+        if ch == ',' {
+            return Some(idx);
+        }
+        break;
+    }
+    None
 }
 
 fn line_start_at(source: &str, pos: usize) -> usize {
@@ -360,4 +402,120 @@ fn unquote_json_string(value: &str) -> anyhow::Result<String> {
 
 fn escape_json_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn sanitize_json(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut i = 0usize;
+    let mut in_string = false;
+    let mut escape = false;
+
+    while i < bytes.len() {
+        let ch = bytes[i] as char;
+        if in_string {
+            if escape {
+                escape = false;
+                i += 1;
+                continue;
+            }
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+
+        if ch == '/' && i + 1 < bytes.len() {
+            let next = bytes[i + 1] as char;
+            if next == '/' {
+                out[i] = b' ';
+                out[i + 1] = b' ';
+                i += 2;
+                while i < bytes.len() {
+                    let c = bytes[i] as char;
+                    if c == '\n' {
+                        break;
+                    }
+                    out[i] = b' ';
+                    i += 1;
+                }
+                continue;
+            }
+            if next == '*' {
+                out[i] = b' ';
+                out[i + 1] = b' ';
+                i += 2;
+                while i + 1 < bytes.len() {
+                    let c = bytes[i] as char;
+                    let c_next = bytes[i + 1] as char;
+                    if c == '*' && c_next == '/' {
+                        out[i] = b' ';
+                        out[i + 1] = b' ';
+                        i += 2;
+                        break;
+                    }
+                    if c != '\n' {
+                        out[i] = b' ';
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+        }
+
+        if ch == ',' {
+            if let Some(next) = next_significant(bytes, i + 1) {
+                if next == '}' || next == ']' {
+                    out[i] = b' ';
+                }
+            }
+        }
+        i += 1;
+    }
+
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn next_significant(bytes: &[u8], mut idx: usize) -> Option<char> {
+    while idx < bytes.len() {
+        let ch = bytes[idx] as char;
+        if ch.is_whitespace() {
+            idx += 1;
+            continue;
+        }
+        if ch == '/' && idx + 1 < bytes.len() {
+            let next = bytes[idx + 1] as char;
+            if next == '/' {
+                idx += 2;
+                while idx < bytes.len() && bytes[idx] as char != '\n' {
+                    idx += 1;
+                }
+                continue;
+            }
+            if next == '*' {
+                idx += 2;
+                while idx + 1 < bytes.len() {
+                    let c = bytes[idx] as char;
+                    let c_next = bytes[idx + 1] as char;
+                    if c == '*' && c_next == '/' {
+                        idx += 2;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+        }
+        return Some(ch);
+    }
+    None
 }
