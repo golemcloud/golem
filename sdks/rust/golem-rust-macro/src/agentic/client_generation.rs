@@ -370,7 +370,7 @@ fn generate_method_code(
             rpc_result.expect(format!("rpc call to trigger {} failed", #remote_token).as_str());
         }
 
-        pub fn #schedule_name(#(#input_defs),*, scheduled_time: wstd::wasi::clocks::wall_clock::Datetime) {
+        pub fn #schedule_name(#(#input_defs),*, scheduled_time: golem_rust::wstd::wasi::clocks::wall_clock::Datetime) {
             #encode_input
 
             self.wasm_rpc.schedule_invocation(
@@ -380,7 +380,7 @@ fn generate_method_code(
             );
         }
 
-        pub fn #schedule_cancelable_name(#(#input_defs),*, scheduled_time: wstd::wasi::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::CancellationToken {
+        pub fn #schedule_cancelable_name(#(#input_defs),*, scheduled_time: golem_rust::wstd::wasi::clocks::wall_clock::Datetime) -> golem_rust::golem_agentic::golem::agent::host::CancellationToken {
             #encode_input
 
             self.wasm_rpc.schedule_cancelable_invocation(

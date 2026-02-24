@@ -1,6 +1,9 @@
 #[allow(static_mut_refs)]
 mod bindings;
 
+use crate::bindings::golem::api::oplog::{
+    self, enrich_oplog_entries, OplogIndex, PublicOplogEntry,
+};
 use bindings::{
     exports::golem::api::oplog_processor,
     golem::api::oplog::{AgentInvocation, AgentInvocationStartedParameters, OplogEntry},
@@ -41,17 +44,29 @@ impl oplog_processor::Guest for Component {
         _config: Vec<(String, String)>,
         component_id: oplog_processor::ComponentId,
         worker_id: oplog_processor::AgentId,
-        _metadata: oplog_processor::AgentMetadata,
-        _first_entry_index: oplog_processor::OplogIndex,
-        entries: Vec<oplog_processor::OplogEntry>,
+        metadata: oplog_processor::AgentMetadata,
+        first_entry_index: oplog_processor::OplogIndex,
+        entries: Vec<oplog::OplogEntry>,
     ) -> Result<(), String> {
         STATE.with_borrow_mut(|state| {
-            for entry in entries {
-                if let OplogEntry::AgentInvocationStarted(params) = &entry {
+            let indexed_entries: Vec<(OplogIndex, OplogEntry)> = entries
+                .into_iter()
+                .enumerate()
+                .map(|(idx, entry)| ((first_entry_index + (idx as u64)), entry))
+                .collect();
+            let enriched_entries = enrich_oplog_entries(
+                metadata.environment_id.clone(),
+                &metadata.agent_id.clone(),
+                &indexed_entries,
+                metadata.component_revision,
+            )
+            .unwrap();
+            for entry in enriched_entries {
+                if let PublicOplogEntry::AgentInvocationStarted(params) = &entry {
                     state
                         .current_invocations
                         .insert(format!("{worker_id:?}"), params.clone());
-                } else if let OplogEntry::AgentInvocationFinished(_params) = &entry {
+                } else if let PublicOplogEntry::AgentInvocationFinished(_params) = &entry {
                     if let Some(invocation) =
                         state.current_invocations.get(&format!("{worker_id:?}"))
                     {
@@ -66,25 +81,28 @@ impl oplog_processor::Guest for Component {
                         );
 
                         let function_name = match &invocation.invocation {
-                            AgentInvocation::AgentInitialization(_) => "agent-initialization".to_string(),
-                            AgentInvocation::AgentMethodInvocation(method_params) => method_params.method_name.clone(),
+                            AgentInvocation::AgentInitialization(_) => {
+                                "agent-initialization".to_string()
+                            }
+                            AgentInvocation::AgentMethodInvocation(method_params) => {
+                                method_params.method_name.clone()
+                            }
                             AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
                             AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
-                            AgentInvocation::ProcessOplogEntries(_) => "process-oplog-entries".to_string(),
+                            AgentInvocation::ProcessOplogEntries(_) => {
+                                "process-oplog-entries".to_string()
+                            }
                             AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
                         };
 
                         state.invocations.push(format!(
                             "{}/{}/{}/{}",
-                            account_id,
-                            component_id,
-                            worker_id.agent_id,
-                            function_name
+                            account_id, component_id, worker_id.agent_id, function_name
                         ));
                     } else {
                         println!(
-                        "AgentInvocationFinished without corresponding AgentInvocationStarted"
-                    )
+                            "AgentInvocationFinished without corresponding AgentInvocationStarted"
+                        )
                     }
                 }
             }

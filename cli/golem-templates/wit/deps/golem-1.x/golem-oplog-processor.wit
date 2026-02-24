@@ -5,7 +5,7 @@ interface oplog-processor {
     use golem:core/types@1.5.0.{wit-value, account-id, component-id, agent-id};
 
     use host.{oplog-index, agent-metadata};
-    use oplog.{public-oplog-entry};
+    use oplog.{oplog-entry};
 
     record account-info {
         account-id: account-id
@@ -23,5 +23,5 @@ interface oplog-processor {
     /// The `metadata` parameter contains the latest metadata of the agent.
     /// The `first-entry-index` parameter contains the index of the first entry in the list of `entries`.
     /// The `entries` parameter always contains at least one element.
-    process: func(account-info: account-info, config: list<tuple<string, string>>, component-id: component-id, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<public-oplog-entry>) -> result<_, string>;
+    process: func(account-info: account-info, config: list<tuple<string, string>>, component-id: component-id, agent-id: agent-id, metadata: agent-metadata, first-entry-index: oplog-index, entries: list<oplog-entry>) -> result<_, string>;
 }

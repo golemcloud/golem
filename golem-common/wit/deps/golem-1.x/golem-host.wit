@@ -158,7 +158,9 @@ interface host {
         /// The component version the agent is running with
         component-revision: u64,
         /// The agent's current retry count
-        retry-count: u64
+        retry-count: u64,
+        /// The environment the agent belongs to
+        environment-id: environment-id
     }
 
     /// Creates an agent enumeration

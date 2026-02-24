@@ -316,6 +316,8 @@ declare module 'golem:api/host@1.5.0' {
     componentRevision: bigint;
     /** The agent's current retry count */
     retryCount: bigint;
+    /** The environment the agent belongs to */
+    environmentId: EnvironmentId;
   };
   /**
    * Target parameter for the `revert-agent` operation

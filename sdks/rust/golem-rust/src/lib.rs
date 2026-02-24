@@ -16,6 +16,7 @@
 test_r::enable!();
 
 pub use uuid::Uuid;
+pub use wstd;
 
 pub mod bindings {
     use wit_bindgen::generate;

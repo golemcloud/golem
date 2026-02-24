@@ -1489,6 +1489,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             status: value.status.into(),
             component_revision: value.component_revision.into(),
             retry_count: 0,
+            environment_id: value.environment_id.into(),
         }
     }
 }

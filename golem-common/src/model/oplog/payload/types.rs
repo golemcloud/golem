@@ -1096,6 +1096,7 @@ pub struct AgentMetadataForGuests {
     pub status: WorkerStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
+    pub environment_id: EnvironmentId,
 }
 
 impl From<WorkerMetadata> for AgentMetadataForGuests {
@@ -1114,6 +1115,7 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
                 .max_by_key(|(idx, _)| **idx)
                 .map(|(_, value)| *value)
                 .unwrap_or_default() as u64,
+            environment_id: value.environment_id,
         }
     }
 }
