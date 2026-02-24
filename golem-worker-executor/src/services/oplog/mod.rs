@@ -325,6 +325,7 @@ pub trait OplogOps: Oplog {
         &self,
         result: &AgentInvocationResult,
         consumed_fuel: u64,
+        component_revision: ComponentRevision,
     ) -> Result<OplogEntry, String> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
@@ -337,6 +338,7 @@ pub trait OplogOps: Oplog {
             timestamp: Timestamp::now_utc(),
             result: payload,
             consumed_fuel,
+            component_revision,
         };
         self.add(entry.clone()).await;
         Ok(entry)

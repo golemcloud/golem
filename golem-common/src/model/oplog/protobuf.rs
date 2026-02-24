@@ -284,6 +284,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .ok_or("Missing result field")?
                         .try_into()?,
                     consumed_fuel: agent_invocation_finished.consumed_fuel,
+                    component_revision: agent_invocation_finished.component_revision.try_into()?,
                 }),
             ),
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
@@ -653,6 +654,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(agent_invocation_finished.timestamp.into()),
                             result: Some(agent_invocation_finished.result.try_into()?),
                             consumed_fuel: agent_invocation_finished.consumed_fuel,
+                            component_revision: agent_invocation_finished.component_revision.get(),
                         },
                     )),
                 }

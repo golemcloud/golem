@@ -132,10 +132,12 @@ oplog_entry! {
         raw {
             result: payload::OplogPayload<AgentInvocationResult>,
             consumed_fuel: i64,
+            component_revision: ComponentRevision,
         }
         public {
             result: PublicAgentInvocationResult,
             consumed_fuel: i64,
+            component_revision: ComponentRevision,
         }
     },
     /// Worker suspended

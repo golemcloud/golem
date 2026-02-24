@@ -340,6 +340,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 result,
                 consumed_fuel,
+                component_revision: entry_component_revision,
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
                     .download_payload(owned_worker_id, result)
@@ -358,6 +359,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         timestamp,
                         result: public_result,
                         consumed_fuel,
+                        component_revision: entry_component_revision,
                     },
                 ))
             }

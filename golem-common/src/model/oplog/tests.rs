@@ -149,6 +149,8 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
 
 #[test]
 fn agent_invocation_finished_serialization_poem_serde_equivalence() {
+    use crate::model::component::ComponentRevision;
+
     let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
         result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
@@ -162,6 +164,7 @@ fn agent_invocation_finished_serialization_poem_serde_equivalence() {
             }),
         }),
         consumed_fuel: 100,
+        component_revision: ComponentRevision::INITIAL,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

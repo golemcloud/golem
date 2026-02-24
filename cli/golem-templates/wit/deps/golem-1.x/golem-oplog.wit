@@ -86,6 +86,7 @@ interface oplog {
         timestamp: datetime,
         invocation-result: agent-invocation-result,
         consumed-fuel: s64,
+        component-revision: u64,
     }
 
     record error-parameters {
@@ -375,6 +376,7 @@ interface oplog {
         timestamp: datetime,
         %result: oplog-payload,
         consumed-fuel: s64,
+        component-revision: u64,
     }
 
     record raw-error-parameters {

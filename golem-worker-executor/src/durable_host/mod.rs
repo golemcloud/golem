@@ -1675,10 +1675,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
+                let component_revision = output.component_revision
+                    .expect("component_revision must be set in AgentInvocationOutput");
                 self.public_state
                     .worker()
                     .oplog()
-                    .add_agent_invocation_finished(&output.result, consumed_fuel)
+                    .add_agent_invocation_finished(&output.result, consumed_fuel, component_revision)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")

@@ -2247,13 +2247,13 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::AgentInvocationFinished { result, consumed_fuel, .. } => {
+                OplogEntry::AgentInvocationFinished { result, consumed_fuel, component_revision, .. } => {
                     let invocation_result: AgentInvocationResult =
                         services.oplog().download_payload(result).await.expect("failed to deserialize function response payload");
                     Ok(AgentInvocationOutput {
                         result: invocation_result,
                         consumed_fuel: Some(consumed_fuel as u64),
-                        component_revision: None,
+                        component_revision: Some(component_revision),
                     })
                 }
                 OplogEntry::Error { error, retry_from, .. } => {

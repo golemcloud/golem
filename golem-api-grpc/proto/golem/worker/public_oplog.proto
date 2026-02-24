@@ -110,6 +110,7 @@ message AgentInvocationFinishedParameters {
   google.protobuf.Timestamp timestamp = 1;
   PublicAgentInvocationResult result = 2;
   int64 consumed_fuel = 3;
+  uint64 component_revision = 4;
 }
 
 message PublicAgentInvocation {

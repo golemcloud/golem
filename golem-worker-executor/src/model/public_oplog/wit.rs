@@ -98,10 +98,12 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 result,
                 consumed_fuel,
+                component_revision,
             }) => Self::AgentInvocationFinished(oplog::AgentInvocationFinishedParameters {
                 timestamp: timestamp.into(),
                 invocation_result: result.into(),
                 consumed_fuel,
+                component_revision: component_revision.get(),
             }),
             PublicOplogEntry::Suspend(SuspendParams { timestamp }) => {
                 Self::Suspend(timestamp.into())
@@ -797,6 +799,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     result: oplog_payload_from_wit(params.result),
                     consumed_fuel: params.consumed_fuel,
+                    component_revision: params.component_revision.try_into().map_err(|e: String| e)?,
                 })
             }
             oplog::OplogEntry::Suspend(ts) => Ok(Self::Suspend {

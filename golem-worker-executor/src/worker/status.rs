@@ -922,9 +922,9 @@ mod test {
             .agent_invocation_started("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -940,9 +940,9 @@ mod test {
             .grow_memory(10)
             .grow_memory(100)
             .jump(OplogIndex::from_u64(2))
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -957,9 +957,9 @@ mod test {
             .agent_invocation_started("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .revert(OplogIndex::from_u64(5))
             .build();
 
@@ -990,7 +990,7 @@ mod test {
             )
             .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -1026,7 +1026,7 @@ mod test {
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -1060,11 +1060,11 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .pending_update(&update1, |status| status.total_linear_memory_size = 200)
             .successful_update(update1, 2000, &HashSet::new())
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -1098,11 +1098,11 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -1132,7 +1132,7 @@ mod test {
             })
             .failed_update(update2)
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -1168,7 +1168,7 @@ mod test {
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .revert(OplogIndex::from_u64(3))
             .build();
 
@@ -1203,11 +1203,11 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .agent_invocation_started("c", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .revert(OplogIndex::from_u64(4))
             .build();
 
@@ -1247,14 +1247,14 @@ mod test {
                 HostResponse::Custom(1.into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .agent_invocation_started("c", vec![], k2.clone())
             .pending_invocation(AgentInvocation::ManualUpdate {
                 target_revision: ComponentRevision::new(2).unwrap(),
             })
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
             .revert(OplogIndex::from_u64(5))
@@ -1281,13 +1281,13 @@ mod test {
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
             })
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1.clone())
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1.clone(), ComponentRevision::INITIAL)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2.clone())
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2.clone(), ComponentRevision::INITIAL)
             .revert(OplogIndex::from_u64(5))
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .agent_invocation_started("b", vec![], k2.clone())
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k2, ComponentRevision::INITIAL)
             .revert(OplogIndex::from_u64(2))
             .build();
 
@@ -1332,7 +1332,7 @@ mod test {
             .snapshot()
             .grow_memory(100)
             .snapshot()
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .build();
 
         run_test_case(test_case).await;
@@ -1348,7 +1348,7 @@ mod test {
             .snapshot()
             .grow_memory(100)
             .snapshot()
-            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1)
+            .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1, ComponentRevision::INITIAL)
             .revert(OplogIndex::from_u64(3))
             .build();
 
@@ -1470,12 +1470,14 @@ mod test {
             self,
             result: AgentInvocationResult,
             idempotency_key: IdempotencyKey,
+            component_revision: ComponentRevision,
         ) -> Self {
             self.add(
                 OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
                     result: OplogPayload::Inline(Box::new(result)),
                     consumed_fuel: 0,
+                    component_revision,
                 },
                 move |mut status| {
                     status

@@ -357,6 +357,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 )]),
             },
             42,
+            ComponentRevision::INITIAL,
         )
         .await
         .unwrap()
@@ -539,6 +540,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 )]),
             },
             42,
+            ComponentRevision::INITIAL,
         )
         .await
         .unwrap()
