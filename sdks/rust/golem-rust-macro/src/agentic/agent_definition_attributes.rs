@@ -243,7 +243,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: mode, snapshotting, config, mount, auth, phantom-agent, cors, webhook-suffix",
+        "Unknown agent_definition parameter. Valid parameters are: mode, snapshotting, mount, auth, phantom-agent, cors, webhook-suffix",
     ))
 }
 
