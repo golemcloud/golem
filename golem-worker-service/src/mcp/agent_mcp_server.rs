@@ -273,6 +273,12 @@ impl ServerHandler for GolemAgentMcpServer {
                 "initialize from http server"
             );
 
+            if let Some(session_header) = parts.headers.get("mcp-session-id") {
+                tracing::info!("Session ID from header: {}", session_header.to_str().unwrap_or("invalid session id"));
+            } else {
+                tracing::info!("No session ID found in headers");
+            }
+
             // Setting the domain from the Host header depending on the incoming request
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
