@@ -16,6 +16,7 @@ use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::mcp_schema::{GetMcpToolSchema, GetMcpSchema, McpToolSchema};
 use golem_common::base_model::agent::{AgentMethod, AgentTypeName, DataSchema};
+use golem_common::base_model::component::ComponentId;
 use rmcp::model::Tool;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ pub enum McpAgentCapability {
 }
 
 impl McpAgentCapability {
-    pub fn from(agent_type_name: &AgentTypeName, method: &AgentMethod, constructor: &AgentConstructor) -> Self {
+    pub fn from(agent_type_name: &AgentTypeName, method: &AgentMethod, constructor: &AgentConstructor, component_id: ComponentId) -> Self {
         match &method.input_schema {
             DataSchema::Tuple(schemas) => {
                 if schemas.elements.len() > 0 {
@@ -58,6 +59,8 @@ impl McpAgentCapability {
                         constructor: constructor.clone(),
                         raw_method: method.clone(),
                         raw_tool: tool,
+                        component_id,
+                        agent_type_name: agent_type_name.clone(),
                     })
                 } else {
                     Self::Resource(AgentMcpResource { resource: method.clone() })

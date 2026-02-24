@@ -15,18 +15,20 @@
 use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::base_model::agent::{AgentConstructor, AgentMethod};
-use rmcp::ErrorData;
+use golem_common::base_model::agent::{AgentConstructor, AgentMethod, AgentTypeName};
+use golem_common::base_model::component::ComponentId;
+use rmcp::{ErrorData};
 use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
-use rmcp::model::{CallToolResult, JsonObject, Tool};
-use serde_json::json;
+use rmcp::model::{CallToolResult, Tool};
 
 #[derive(Clone)]
 pub struct AgentMcpTool {
     pub constructor: AgentConstructor,
     pub raw_method: AgentMethod,
     pub raw_tool: Tool,
+    pub component_id: ComponentId,
+    pub agent_type_name: AgentTypeName,
 }
 
 impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
@@ -34,12 +36,11 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
         self,
         context: ToolCallContext<'_, GolemAgentMcpServer>,
     ) -> BoxFuture<'_, Result<CallToolResult, ErrorData>> {
-        let _arguments: Option<JsonObject> = context.arguments;
-
         async move {
-            Ok(CallToolResult::structured(
-                json!({"result": "example output"}),
-            ))
+            context.service.invoke(
+                context.arguments.unwrap_or_default(),
+                &self
+            ).await
         }
         .boxed()
     }

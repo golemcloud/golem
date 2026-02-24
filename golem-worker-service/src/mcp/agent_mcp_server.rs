@@ -14,18 +14,16 @@
 
 use crate::mcp::McpCapabilityLookup;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
-use crate::mcp::agent_mcp_prompt::AgentMcpPrompt;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use dashmap::DashMap;
 use golem_common::base_model::agent::{
-    AgentId, AgentMethod, AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema,
-    NamedElementSchemas,
+    AgentId, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::NamedElementSchema;
-use golem_wasm::analysis::analysed_type::u32;
+use golem_common::model::WorkerId;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use poem::http;
-use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
     model::*, service::RequestContext, task_handler, task_manager::OperationProcessor,
@@ -33,6 +31,7 @@ use rmcp::{
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+use crate::service::worker::WorkerService;
 
 // Every client will get an instance of this
 #[derive(Clone)]
@@ -42,13 +41,15 @@ pub struct GolemAgentMcpServer {
     tools: Arc<DashMap<String, Tool>>,
     domain: Arc<RwLock<Option<Domain>>>,
     agent_id: Option<AgentId>,
-    mcp_definitions_lookup: Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,
+    mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
+    worker_service: Arc<WorkerService>
 }
 
 impl GolemAgentMcpServer {
     pub fn new(
         agent_id: Option<AgentId>,
-        mcp_definitions_lookup: Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,
+        mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
+        worker_service: Arc<WorkerService>
     ) -> Self {
         Self {
             tool_router: Arc::new(RwLock::new(None)),
@@ -57,6 +58,71 @@ impl GolemAgentMcpServer {
             domain: Arc::new(RwLock::new(None)),
             agent_id,
             mcp_definitions_lookup,
+            worker_service
+        }
+    }
+
+    pub async fn invoke(&self, args_map: JsonObject, mcp_tool: &AgentMcpTool) -> Result<CallToolResult, ErrorData> {
+        let constructor_params = extract_parameters_by_schema(
+            &args_map,
+            &mcp_tool.constructor.input_schema,
+        ).map_err(|e| {
+            tracing::error!("Failed to extract constructor parameters: {}", e);
+            ErrorData::invalid_params(format!("Failed to extract constructor parameters: {}", e), None)
+        })?;
+
+        let agent_id = AgentId::new(
+            mcp_tool.agent_type_name.clone(),
+            golem_common::model::agent::DataValue::Tuple(
+                golem_common::model::agent::ElementValues {
+                    elements: constructor_params.into_iter()
+                        .map(|vat| golem_common::model::agent::ElementValue::ComponentModel(vat))
+                        .collect(),
+                }
+            ),
+            None,
+        );
+        
+        let method_params = extract_parameters_by_schema(
+            &args_map,
+            &mcp_tool.raw_method.input_schema,
+        ).map_err(|e| {
+            tracing::error!("Failed to extract method parameters: {}", e);
+            ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
+        })?;
+
+        let worker_id = WorkerId {
+            component_id: mcp_tool.component_id,
+            worker_name: agent_id.to_string(),
+        };
+
+        let result = self.worker_service
+            .invoke_and_await_typed(
+                &worker_id,
+                None,
+                mcp_tool.raw_method.name.clone(),
+                method_params,
+                None,
+                golem_service_base::model::auth::AuthCtx::system(),
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to invoke worker: {:?}", e);
+                ErrorData::internal_error(format!("Failed to invoke worker: {:?}", e), None)
+            })?;
+
+        // Convert the result to JSON
+        match result {
+            Some(value_and_type) => {
+                match value_and_type.to_json_value() {
+                    Ok(json_value) => Ok(CallToolResult::structured(json_value)),
+                    Err(e) => {
+                        tracing::error!("Failed to convert result to JSON: {}", e);
+                        Err(ErrorData::internal_error(format!("Failed to convert result to JSON: {}", e), None))
+                    }
+                }
+            }
+            None => Ok(CallToolResult::structured(json!(null))),
         }
     }
 
@@ -64,7 +130,7 @@ impl GolemAgentMcpServer {
         let tool_handlers =
             get_agent_tool_and_handlers(&self.agent_id, domain, &self.mcp_definitions_lookup).await;
 
-        let mut router = ToolRouter::<Self>::new();
+        let mut router = ToolRouter::<GolemAgentMcpServer>::new();
 
         for tool in tool_handlers {
             router = router.with_route(tool);
@@ -72,30 +138,46 @@ impl GolemAgentMcpServer {
 
         router
     }
-
-    fn prompt_router(agent_id: Option<AgentId>) -> PromptRouter<GolemAgentMcpServer> {
-        let prompt_handlers = get_agent_prompt_and_handlers(agent_id);
-
-        let mut router = PromptRouter::<Self>::new();
-
-        for agent_mcp_prompt in prompt_handlers {
-            router = router.with_route(agent_mcp_prompt);
-        }
-
-        router
-    }
 }
 
-pub fn get_agent_prompt_and_handlers(agent_id: Option<AgentId>) -> Vec<AgentMcpPrompt> {
-    // similar to get_agent_tool_and_handlers, but for prompts
-    // prompt name is `get_${method_name}_prompt`
-    vec![]
+fn extract_parameters_by_schema(
+    args_map: &JsonObject,
+    schema: &DataSchema,
+) -> Result<Vec<golem_wasm::ValueAndType>, String> {
+    match schema {
+        DataSchema::Tuple(named_schemas) => {
+            let mut params = Vec::new();
+            
+            for NamedElementSchema { name, schema: elem_schema } in &named_schemas.elements {
+                match elem_schema {
+                    ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+                        let value = args_map
+                            .get(name)
+                            .ok_or_else(|| format!("Missing parameter: {}", name))?;
+                        
+                        let value_and_type = golem_wasm::ValueAndType::parse_with_type(value, element_type)
+                            .map_err(|errs| format!("Failed to parse parameter '{}': {}", name, errs.join(", ")))?;
+                        
+                        params.push(value_and_type);
+                    }
+                    _ => {
+                        return Err(format!("Unsupported element schema type for parameter '{}'", name));
+                    }
+                }
+            }
+            
+            Ok(params)
+        }
+        DataSchema::Multimodal(_) => {
+            Err("Multimodal schema is not yet supported".to_string())
+        }
+    }
 }
 
 pub async fn get_agent_tool_and_handlers(
     _agent_id: &Option<AgentId>,
     domain: &Domain,
-    mcp_definition_lookup: &Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,
+    mcp_definition_lookup: &Arc<dyn McpCapabilityLookup>,
 ) -> Vec<AgentMcpTool> {
     let compiled_mcp = match mcp_definition_lookup.get(domain).await {
         Ok(mcp) => mcp,
@@ -114,9 +196,10 @@ pub async fn get_agent_tool_and_handlers(
         {
             Ok(registered_agent_type) => {
                 let agent_type = &registered_agent_type.agent_type;
+                let component_id = registered_agent_type.implemented_by.component_id;
                 for method in &agent_type.methods {
                     let agent_method_mcp =
-                        McpAgentCapability::from(&agent_type.type_name, method, &agent_type.constructor);
+                        McpAgentCapability::from(&agent_type.type_name, method, &agent_type.constructor, component_id);
 
                     match agent_method_mcp {
                         McpAgentCapability::Tool(agent_mcp_tool) => {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{AgentConstructor, AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema};
+use golem_common::base_model::agent::{AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema};
 use golem_wasm::analysis::AnalysedType;
 use rmcp::model::JsonObject;
 use serde_json::{json, Map, Value};

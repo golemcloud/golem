@@ -21,7 +21,7 @@ use golem_service_base::mcp::CompiledMcp;
 use std::sync::Arc;
 
 #[async_trait]
-pub trait McpCapabilityLookup {
+pub trait McpCapabilityLookup: Send + Sync {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
 
     async fn resolve_agent_type(
@@ -79,7 +79,6 @@ impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
     ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError> {
         let compiled_mcp = self.get(domain).await?;
 
-        // Get component ID and revision for this agent type
         let (component_id, component_revision) = compiled_mcp
             .agent_type_implementers
             .get(agent_type_name)
