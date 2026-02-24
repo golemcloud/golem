@@ -413,11 +413,11 @@ impl IntoValue for Uuid {
 
 impl IntoValue for UuidRecord {
     fn into_value(self) -> Value {
-        Value::Record(vec![self.value.into_value()])
+        Value::Record(vec![Value::String(self.value.to_string())])
     }
 
     fn get_type() -> AnalysedType {
-        record(vec![field("value", Uuid::get_type())])
+        record(vec![field("value", analysed_type::str())])
     }
 }
 

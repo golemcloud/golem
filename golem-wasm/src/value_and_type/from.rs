@@ -404,10 +404,16 @@ impl FromValue for uuid::Uuid {
 impl FromValue for UuidRecord {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Record(mut fields) if fields.len() == 1 => {
-                let value = Uuid::from_value(fields.remove(0))?;
-                Ok(UuidRecord { value })
-            }
+            Value::Record(mut fields) if fields.len() == 1 => match fields.remove(0) {
+                Value::String(s) => {
+                    let value = Uuid::parse_str(&s)
+                        .map_err(|e| format!("Invalid UUID string in UuidRecord: {e}"))?;
+                    Ok(UuidRecord { value })
+                }
+                other => Err(format!(
+                    "Expected String value in UuidRecord, got {other:?}"
+                )),
+            },
             _ => Err(format!(
                 "Expected Record with value for UuidRecord, got {value:?}"
             )),
