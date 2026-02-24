@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 use golem_common::base_model::domain_registration::Domain;
+use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::mcp::CompiledMcp;
@@ -22,6 +23,12 @@ use golem_service_base::mcp::CompiledMcp;
 #[async_trait]
 pub trait McpCapabilityLookup {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
+    
+    async fn resolve_agent_type(
+        &self,
+        domain: &Domain,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError>;
 }
 
 
@@ -65,5 +72,36 @@ impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
             .get_active_mcp_capabilities_for_domain(domain)
             .await
             .map_err(|e| e.into())
-     }
+    }
+
+    async fn resolve_agent_type(
+        &self,
+        domain: &Domain,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, McpCapabilitiesLookupError> {
+        let compiled_mcp = self.get(domain).await?;
+        
+        // Get component ID and revision for this agent type
+        let (component_id, component_revision) = compiled_mcp
+            .agent_type_implementers
+            .get(agent_type_name)
+            .copied()
+            .ok_or_else(|| {
+                McpCapabilitiesLookupError::InternalError(anyhow::anyhow!(
+                    "Agent type {} not found in MCP for domain {}",
+                    agent_type_name.0,
+                    domain.0
+                ))
+            })?;
+        
+        self.registry_service_client
+            .get_agent_type(
+                compiled_mcp.environment_id,
+                component_id,
+                component_revision,
+                agent_type_name,
+            )
+            .await
+            .map_err(|e| e.into())
+    }
 }

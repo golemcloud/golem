@@ -42,7 +42,7 @@ CREATE TABLE deployment_compiled_mcp
     environment_id            TEXT    NOT NULL,
     deployment_revision_id    INTEGER NOT NULL,
     domain                    TEXT    NOT NULL,
-    agent_type_implementers   TEXT    NOT NULL DEFAULT '{}',
+    agent_type_implementers   TEXT    NOT NULL,
 
     PRIMARY KEY (environment_id, deployment_revision_id, domain),
     FOREIGN KEY (environment_id, deployment_revision_id) REFERENCES deployment_revisions
