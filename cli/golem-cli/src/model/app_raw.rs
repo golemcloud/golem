@@ -87,8 +87,6 @@ pub struct Application {
     pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temp_dir: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub component_templates: IndexMap<String, ComponentTemplate>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]

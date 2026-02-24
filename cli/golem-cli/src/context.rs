@@ -25,7 +25,7 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::RustDependencyOverride;
+use crate::model::app::{Application, RustDependencyOverride};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app::{
     ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
@@ -138,40 +138,36 @@ impl Context {
             bail!(NonSuccessfulExit);
         }
 
-        // TODO: FCL:
-        //   - move logic to app and app build module
-        //   - use cached meta
-        //   - review expects, to anyhow
-        //   - golem-temp: either make it non-configurable, or preload it?
-        {
-            /*if !preloaded_app.used_language_templates.is_empty() {
-                let templates = composable_app_templates(global_flags.dev_mode);
-                let default_group = ComposableAppGroupName::default();
-                for language in preloaded_app.used_language_templates {
-                    let common_template = templates
-                        .get(&language)
-                        .expect("missing builtin language template")
-                        .get(&default_group)
-                        .expect("missing builtin default language template group")
-                        .common
-                        .as_ref()
-                        .expect("missing builtin common language template");
+        let sdk_overrides = SdkOverrides {
+            golem_rust_path: global_flags
+                .golem_rust_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            golem_rust_version: global_flags.golem_rust_version.clone(),
+            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
+            ts_version: global_flags.golem_ts_version.clone(),
+        };
 
-                    for dir in common_template
-                        .on_demand_common_dir_paths
-                        .iter()
-                        .map(|path| {
-                            TEMPLATES_DIR
-                                .get_dir(path)
-                                .expect("missing on demand common template dir")
-                        })
-                    {
-                        for entry in dir.entries() {
-                            log_warn(format!("TODO: {}", entry.path().display()));
-                        }
-                    }
-                }
-            }*/
+        if !preloaded_app.used_language_templates.is_empty() {
+            let app_template_repo = AppTemplateRepo::get(global_flags.dev_mode)?;
+            let common_on_demand_templates = preloaded_app
+                .used_language_templates
+                .iter()
+                .map(|language| app_template_repo.common_on_demand_templates(*language))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flat_map(|templates| templates.values())
+                .collect::<Vec<_>>();
+
+            common_on_demand_templates
+                .into_iter()
+                .map(|template| {
+                    template.generate(
+                        &Application::on_demand_common_dir(template.0.language),
+                        &sdk_overrides,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         }
 
         let app_source_mode = preloaded_app.source_mode;
@@ -341,16 +337,6 @@ impl Context {
                 )
         };
 
-        let template_sdk_overrides = SdkOverrides {
-            golem_rust_path: global_flags
-                .golem_rust_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            golem_rust_version: global_flags.golem_rust_version.clone(),
-            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
-            ts_version: global_flags.golem_ts_version.clone(),
-        };
-
         Ok(Self {
             config_dir: global_flags.config_dir(),
             format,
@@ -369,7 +355,7 @@ impl Context {
             show_sensitive: global_flags.show_sensitive,
             server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
-            sdk_overrides: template_sdk_overrides,
+            sdk_overrides,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,

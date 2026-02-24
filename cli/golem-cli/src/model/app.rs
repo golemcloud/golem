@@ -51,7 +51,7 @@ use std::str::FromStr;
 use url::Url;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
-pub const DEFAULT_TEMP_DIR: &str = "golem-temp";
+pub const TEMP_DIR: &str = "golem-temp";
 pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug, Default)]
@@ -328,10 +328,6 @@ pub struct Application {
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
-    // TODO: atomic
-    #[allow(unused)]
-    temp_dir: Option<WithSource<String>>,
-    resolved_temp_dir: PathBuf,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
@@ -431,8 +427,12 @@ impl Application {
         custom_commands
     }
 
+    pub fn on_demand_common_dir(language: GuestLanguage) -> PathBuf {
+        Path::new(TEMP_DIR).join("common").join(language.id())
+    }
+
     pub fn temp_dir(&self) -> &Path {
-        &self.resolved_temp_dir
+        Path::new(TEMP_DIR)
     }
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
@@ -1471,7 +1471,6 @@ mod app_builder {
         Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerId,
         ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
         ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, WithSource,
-        DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1514,7 +1513,6 @@ mod app_builder {
     enum UniqueSourceCheckedEntityKey {
         App,
         Include,
-        TempDir,
         CustomCommand(String),
         Template(AppTemplateName),
         Component(ComponentName),
@@ -1528,7 +1526,6 @@ mod app_builder {
             match self {
                 UniqueSourceCheckedEntityKey::App => property,
                 UniqueSourceCheckedEntityKey::Include => property,
-                UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -1542,9 +1539,6 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::App => "app".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Include => {
                     "include".log_color_highlight().to_string()
-                }
-                UniqueSourceCheckedEntityKey::TempDir => {
-                    "tempDir".log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::CustomCommand(command_name) => {
                     command_name.log_color_highlight().to_string()
@@ -1572,7 +1566,6 @@ mod app_builder {
 
         // For app build
         include: Vec<String>,
-        temp_dir: Option<WithSource<String>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
 
@@ -1618,20 +1611,11 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
-            let resolved_temp_dir = {
-                match builder.temp_dir.as_ref() {
-                    Some(temp_dir) => temp_dir.source.join(&temp_dir.value),
-                    None => Path::new(DEFAULT_TEMP_DIR).to_path_buf(),
-                }
-            };
-
             validation.build(Application {
                 environments,
                 component_preset_selector: component_presets,
                 application_name,
                 all_sources: builder.all_sources,
-                temp_dir: builder.temp_dir,
-                resolved_temp_dir,
                 components: builder.components,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
@@ -1713,15 +1697,6 @@ mod app_builder {
                 |validation| {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
                     self.all_sources.insert(app.source.clone());
-
-                    if let Some(dir) = app.application.temp_dir {
-                        if self
-                            .add_entity_source(UniqueSourceCheckedEntityKey::TempDir, &app.source)
-                        {
-                            self.temp_dir =
-                                Some(WithSource::new(app_source_dir.to_path_buf(), dir));
-                        }
-                    }
 
                     if !app.application.includes.is_empty()
                         && self
