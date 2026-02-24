@@ -814,7 +814,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        let (idempotency_key, invocation_payload, _invocation_context) =
+        let (idempotency_key, invocation_payload, invocation_context) =
             invocation.clone().into_parts();
         let payload = self
             .oplog
@@ -825,7 +825,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Failed to upload invocation payload: {e}"
                 ))
             })?;
-        let entry = OplogEntry::pending_agent_invocation(idempotency_key, payload);
+        let invocation_context_spans = invocation_context.to_oplog_data();
+        let entry = OplogEntry::pending_agent_invocation(
+            idempotency_key,
+            payload,
+            invocation_context.trace_id,
+            invocation_context.trace_states,
+            invocation_context_spans,
+        );
         let timestamped_invocation = TimestampedAgentInvocation {
             timestamp: entry.timestamp(),
             invocation,

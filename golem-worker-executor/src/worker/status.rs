@@ -451,12 +451,19 @@ fn calculate_pending_invocations(
                 timestamp,
                 idempotency_key,
                 payload: OplogPayload::Inline(agent_payload),
-                ..
+                trace_id,
+                trace_states,
+                invocation_context,
             } => {
+                let invocation_context_stack = InvocationContextStack::from_oplog_data(
+                    trace_id.clone(),
+                    trace_states.clone(),
+                    invocation_context.clone(),
+                );
                 let invocation = AgentInvocation::from_parts(
                     idempotency_key.clone(),
                     *agent_payload.clone(),
-                    InvocationContextStack::fresh(),
+                    invocation_context_stack,
                 );
                 result.push(TimestampedAgentInvocation {
                     timestamp: *timestamp,
@@ -1515,11 +1522,14 @@ mod test {
         }
 
         pub fn pending_invocation(self, invocation: AgentInvocation) -> Self {
-            let (idempotency_key, invocation_payload, _invocation_context) =
+            let (idempotency_key, invocation_payload, invocation_context) =
                 invocation.clone().into_parts();
             let entry = OplogEntry::pending_agent_invocation(
                 idempotency_key,
                 OplogPayload::Inline(Box::new(invocation_payload)),
+                invocation_context.trace_id.clone(),
+                invocation_context.trace_states.clone(),
+                invocation_context.to_oplog_data(),
             )
             .rounded();
             self.add(entry.clone(), move |mut status| {

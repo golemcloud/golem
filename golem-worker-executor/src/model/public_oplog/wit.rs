@@ -850,12 +850,23 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
             }),
             oplog::OplogEntry::PendingAgentInvocation(params) => {
+                let trace_id = golem_common::model::invocation_context::TraceId::from_string(
+                    &params.trace_id,
+                )?;
+                let invocation_context = params
+                    .invocation_context
+                    .into_iter()
+                    .map(golem_common::model::oplog::SpanData::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Self::PendingAgentInvocation {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     idempotency_key: golem_common::model::IdempotencyKey::new(
                         params.idempotency_key,
                     ),
                     payload: oplog_payload_from_wit(params.payload),
+                    trace_id,
+                    trace_states: params.trace_states,
+                    invocation_context,
                 })
             }
             oplog::OplogEntry::PendingUpdate(params) => Ok(Self::PendingUpdate {

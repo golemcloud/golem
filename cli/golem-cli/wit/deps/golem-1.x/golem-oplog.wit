@@ -387,6 +387,9 @@ interface oplog {
         timestamp: datetime,
         idempotency-key: string,
         payload: oplog-payload,
+        trace-id: string,
+        trace-states: list<string>,
+        invocation-context: list<span-data>,
     }
 
     /// Raw update description used in oplog entries

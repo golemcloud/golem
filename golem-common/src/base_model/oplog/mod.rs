@@ -258,6 +258,9 @@ oplog_entry! {
         raw {
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
+            trace_id: TraceId,
+            trace_states: Vec<String>,
+            invocation_context: Vec<SpanData>,
         }
         public {
             invocation: PublicAgentInvocation

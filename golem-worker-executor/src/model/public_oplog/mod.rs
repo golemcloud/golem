@@ -420,15 +420,23 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 idempotency_key,
                 payload,
+                trace_id,
+                trace_states,
+                invocation_context,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
                     .download_payload(owned_worker_id, payload)
                     .await?;
 
+                let invocation_context_stack = InvocationContextStack::from_oplog_data(
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                );
                 let invocation = AgentInvocation::from_parts(
                     idempotency_key,
                     invocation_payload,
-                    InvocationContextStack::fresh(),
+                    invocation_context_stack,
                 );
                 let public_invocation = agent_invocation_to_public(
                     components.clone(),
