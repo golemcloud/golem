@@ -63,6 +63,8 @@ pub mod serde;
 #[cfg(feature = "host")]
 mod text;
 
+#[cfg(feature = "host")]
+mod validation;
 mod value_and_type;
 
 /// Conversion to/from wasmtime's value representation
@@ -193,6 +195,8 @@ pub struct CancellationTokenEntry {
 #[cfg(feature = "host")]
 pub use text::{parse_value_and_type, print_value_and_type};
 
+#[cfg(feature = "host")]
+pub use validation::validate_value_matches_type;
 pub use value_and_type::*;
 
 #[cfg(feature = "host")]

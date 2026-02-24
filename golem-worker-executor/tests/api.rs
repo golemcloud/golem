@@ -3288,8 +3288,7 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
         .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
         .await;
 
-    // TODO: the parameter type mismatch causes printing to fail due to a corrupted WasmValue.
-    // executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&_worker_id).await?;
     drop(executor);
 
     assert!(failure.is_err());

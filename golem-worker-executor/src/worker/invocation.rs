@@ -18,6 +18,9 @@ use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use golem_common::model::agent::AgentError;
 use golem_common::model::agent::AgentId;
 use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::agent::{
+    DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
+};
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::RawSnapshotData;
 use golem_common::model::oplog::WorkerError;
@@ -35,6 +38,7 @@ pub enum InvocationMode {
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }
+use golem_wasm::validate_value_matches_type;
 use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm::{FromValue, IntoValue, Value};
 use tracing::{debug, error};
@@ -622,11 +626,21 @@ pub fn lower_invocation(
                             agent_id.agent_type
                         ))
                     })?;
-                if !agent_type.methods.iter().any(|m| m.name == method_name) {
-                    return Err(WorkerExecutorError::invalid_request(format!(
-                        "Agent method '{method_name}' not found in agent type '{}'",
-                        agent_id.agent_type
-                    )));
+                let method = agent_type.methods.iter().find(|m| m.name == method_name);
+                match method {
+                    None => {
+                        return Err(WorkerExecutorError::invalid_request(format!(
+                            "Agent method '{method_name}' not found in agent type '{}'",
+                            agent_id.agent_type
+                        )));
+                    }
+                    Some(method) => {
+                        validate_input_against_schema(
+                            &input,
+                            &method.input_schema,
+                            &method_name,
+                        )?;
+                    }
                 }
             }
 
@@ -878,4 +892,84 @@ fn decode_result_error(
 enum FindFunctionResult {
     ExportedFunction(Func),
     ResourceDrop,
+}
+
+fn validate_input_against_schema(
+    input: &UntypedDataValue,
+    schema: &DataSchema,
+    method_name: &str,
+) -> Result<(), WorkerExecutorError> {
+    let (elements, schema_elements) = match (input, schema) {
+        (UntypedDataValue::Tuple(elems), DataSchema::Tuple(schema)) => {
+            let schema_elems: Vec<_> = elems
+                .iter()
+                .map(|e| (None, e))
+                .collect();
+            let schema_defs: Vec<_> = schema.elements.iter().collect();
+            (schema_elems, schema_defs)
+        }
+        (UntypedDataValue::Multimodal(elems), DataSchema::Multimodal(schema)) => {
+            let schema_elems: Vec<_> = elems
+                .iter()
+                .map(|e| (Some(e.name.as_str()), &e.value))
+                .collect();
+            let schema_defs: Vec<_> = schema.elements.iter().collect();
+            (schema_elems, schema_defs)
+        }
+        (UntypedDataValue::Tuple(_), DataSchema::Multimodal(_)) => {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Method '{method_name}': expected multimodal input, got tuple"
+            )));
+        }
+        (UntypedDataValue::Multimodal(_), DataSchema::Tuple(_)) => {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Method '{method_name}': expected tuple input, got multimodal"
+            )));
+        }
+    };
+
+    if elements.len() != schema_elements.len() {
+        return Err(WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}': expected {} parameters, got {}",
+            schema_elements.len(),
+            elements.len()
+        )));
+    }
+
+    for (i, ((name, elem), schema_elem)) in
+        elements.iter().zip(schema_elements.iter()).enumerate()
+    {
+        validate_element_against_schema(elem, schema_elem, method_name, i, *name)?;
+    }
+
+    Ok(())
+}
+
+fn validate_element_against_schema(
+    element: &UntypedElementValue,
+    schema: &NamedElementSchema,
+    method_name: &str,
+    index: usize,
+    name: Option<&str>,
+) -> Result<(), WorkerExecutorError> {
+    let param_desc = name
+        .map(|n| format!("'{n}' (index {index})"))
+        .unwrap_or_else(|| format!("{index}"));
+
+    match (element, &schema.schema) {
+        (UntypedElementValue::ComponentModel(value), ElementSchema::ComponentModel(cm_schema)) => {
+            validate_value_matches_type(value, &cm_schema.element_type).map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Method '{method_name}', parameter {param_desc}: {e}"
+                ))
+            })
+        }
+        (UntypedElementValue::UnstructuredText(_), ElementSchema::UnstructuredText(_)) => Ok(()),
+        (UntypedElementValue::UnstructuredBinary(_), ElementSchema::UnstructuredBinary(_)) => {
+            Ok(())
+        }
+        _ => Err(WorkerExecutorError::invalid_request(format!(
+            "Method '{method_name}', parameter {param_desc}: element type mismatch"
+        ))),
+    }
 }
