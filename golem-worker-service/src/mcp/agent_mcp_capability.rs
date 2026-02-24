@@ -14,34 +14,38 @@
 
 use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::mcp_schema::{McpToolGetSchema, McpToolSchema};
-use golem_common::base_model::agent::{AgentMethod, DataSchema};
+use crate::mcp::mcp_schema::{GetMcpToolSchema, GetMcpSchema, McpToolSchema};
+use golem_common::base_model::agent::{AgentMethod, AgentTypeName, DataSchema};
 use rmcp::model::Tool;
 use std::borrow::Cow;
 use std::sync::Arc;
+use golem_common::model::agent::AgentConstructor;
 
 #[derive(Clone)]
 pub enum McpAgentCapability {
     Tool(AgentMcpTool),
+    #[allow(unused)]
     Resource(AgentMcpResource),
 }
 
 impl McpAgentCapability {
-    pub fn from(method: AgentMethod) -> Self {
+    pub fn from(agent_type_name: &AgentTypeName, method: &AgentMethod, constructor: &AgentConstructor) -> Self {
         match &method.input_schema {
             DataSchema::Tuple(schemas) => {
                 if schemas.elements.len() > 0 {
+                    let constructor_schema = constructor.input_schema.get_mcp_schema();
+                    let mut tool_schema = method.get_mcp_tool_schema();
+                    tool_schema.merge_input_schema(constructor_schema);
+                    
                     let McpToolSchema {
                         input_schema,
                         output_schema,
-                    } = method.get_schema();
+                    } = method.get_mcp_tool_schema();
 
                     let tool = Tool {
-                        name: Cow::from(method.name.clone()),
+                        name: Cow::from(get_tool_name(agent_type_name, method)),
                         title: None,
-                        description: Some(
-                            "An increment method that takes a number and increment it".into(),
-                        ),
+                        description: Some(method.description.clone().into()),
                         input_schema: Arc::new(input_schema),
                         output_schema: output_schema.map(Arc::new),
                         annotations: None,
@@ -51,11 +55,12 @@ impl McpAgentCapability {
                     };
 
                     Self::Tool(AgentMcpTool {
-                        raw_method: method,
+                        constructor: constructor.clone(),
+                        raw_method: method.clone(),
                         raw_tool: tool,
                     })
                 } else {
-                    Self::Resource(AgentMcpResource { resource: method })
+                    Self::Resource(AgentMcpResource { resource: method.clone() })
                 }
             }
             DataSchema::Multimodal(_) => {
@@ -63,4 +68,8 @@ impl McpAgentCapability {
             }
         }
     }
+}
+
+fn get_tool_name(agent_type_name: &AgentTypeName, method: &AgentMethod) -> String {
+    format!("{}-{}", agent_type_name.0, method.name)
 }

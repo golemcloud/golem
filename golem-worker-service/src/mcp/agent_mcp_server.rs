@@ -115,7 +115,8 @@ pub async fn get_agent_tool_and_handlers(
             Ok(registered_agent_type) => {
                 let agent_type = &registered_agent_type.agent_type;
                 for method in &agent_type.methods {
-                    let agent_method_mcp = McpAgentCapability::from(method.clone());
+                    let agent_method_mcp =
+                        McpAgentCapability::from(&agent_type.type_name, method, &agent_type.constructor);
 
                     match agent_method_mcp {
                         McpAgentCapability::Tool(agent_mcp_tool) => {
@@ -137,31 +138,6 @@ pub async fn get_agent_tool_and_handlers(
     }
 
     tools
-}
-
-pub fn get_agent_methods(_agent_id: &AgentTypeName) -> Vec<AgentMethod> {
-    vec![AgentMethod {
-        name: "increment".into(),
-        description: "increment the number".to_string(),
-        prompt_hint: None,
-        input_schema: DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "number".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: u32(),
-                }),
-            }],
-        }),
-        output_schema: DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![NamedElementSchema {
-                name: "result".into(),
-                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                    element_type: u32(),
-                }),
-            }],
-        }),
-        http_endpoint: vec![],
-    }]
 }
 
 #[task_handler]
@@ -186,8 +162,8 @@ impl ServerHandler for GolemAgentMcpServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
         let tool_router = self.tool_router.read().await;
 
         if let Some(tool_router) = tool_router.as_ref() {
@@ -249,9 +225,7 @@ impl ServerHandler for GolemAgentMcpServer {
             meta: None,
         })
     }
-
-    // Initialize can happen in one place and list_tools can happen in some other place,
-    // this implies any tool list and domain should be part of a distributed session store with session-id
+    
     async fn initialize(
         &self,
         _request: InitializeRequestParams,
@@ -275,7 +249,6 @@ impl ServerHandler for GolemAgentMcpServer {
                 tracing::info!("No session ID found in headers");
             }
 
-            // Setting the domain from the Host header depending on the incoming request
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
                 let tool_router = self.tool_router(&domain).await;

@@ -15,7 +15,7 @@
 use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::base_model::agent::AgentMethod;
+use golem_common::base_model::agent::{AgentConstructor, AgentMethod};
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
@@ -24,6 +24,7 @@ use serde_json::json;
 
 #[derive(Clone)]
 pub struct AgentMcpTool {
+    pub constructor: AgentConstructor,
     pub raw_method: AgentMethod,
     pub raw_tool: Tool,
 }
