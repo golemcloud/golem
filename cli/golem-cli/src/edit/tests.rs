@@ -246,3 +246,94 @@ fn main() {}
     assert!(updated.contains("use crate::foo::Bar;"));
     assert!(updated.contains("pub use crate::foo::Baz;"));
 }
+
+#[test]
+fn main_ts_preserves_formatting() {
+    let source = "export  {a}  from \"./a\";\n\nexport{b}from \"./b\";\n";
+    let updated = main_ts::add_reexport(source, "export { c } from \"./c\";").unwrap();
+    let expected =
+        "export  {a}  from \"./a\";\n\nexport{b}from \"./b\";\nexport { c } from \"./c\";\n";
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn main_rs_preserves_formatting() {
+    let source = "use  std::fmt;\n\nuse crate::old::Thing;\n\nfn main() {}\n";
+    let updated = main_rs::add_import_and_export(
+        source,
+        "use crate::foo::Bar;",
+        "pub  use crate::foo::Baz;",
+    )
+    .unwrap();
+    let expected = "use  std::fmt;\n\nuse crate::old::Thing;\nuse crate::foo::Bar;\npub  use crate::foo::Baz;\n\nfn main() {}\n";
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn package_json_preserves_formatting() {
+    let source = r#"{  "name" :  "demo",
+
+  "dependencies"  : { "foo" : "1.0.0"  },
+  "devDependencies" :{ "bar" :"2.0.0"}
+}"#;
+
+    let updated = package_json::merge_dependencies(
+        source,
+        &[("foo".to_string(), "1.2.0".to_string())],
+        &[("bar".to_string(), "2.1.0".to_string())],
+    )
+    .unwrap();
+
+    let expected = r#"{  "name" :  "demo",
+
+  "dependencies"  : { "foo" : "1.2.0"  },
+  "devDependencies" :{ "bar" :"2.1.0"}
+}"#;
+
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn tsconfig_preserves_formatting() {
+    let source = r#"{ "compilerOptions" : { "target" : "ES2020" , "module" : "CommonJS" } }
+"#;
+    let update = r#"{ "compilerOptions" : { "module" : "ESNext" } }"#;
+
+    let updated = tsconfig_json::merge_with_newer(source, update).unwrap();
+    let expected = r#"{ "compilerOptions" : { "target" : "ES2020" , "module" : "ESNext" } }
+"#;
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn cargo_toml_preserves_untouched_formatting() {
+    let source = r#"[package]
+name = "demo"
+
+[dependencies]
+serde  =  "1.0"
+untouched  =  "0.1"
+
+foo={version="1.0", features=["a"]}
+"#;
+    let updated = cargo_toml::merge_dependencies(
+        source,
+        &[
+            ("serde".to_string(), "1.1.0".to_string()),
+            ("foo".to_string(), "1.2+bar".to_string()),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert!(updated.contains("untouched  =  \"0.1\""));
+    assert!(updated.contains("serde  = \"1.1.0\""));
+}
+
+#[test]
+fn golem_yaml_preserves_formatting() {
+    let source = "app :\n  name  :demo\n\nother :  1\n";
+    let updated = golem_yaml::set_scalar(source, &["other"], "2").unwrap();
+    let expected = "app :\n  name  :demo\n\nother :  2\n";
+    assert_eq!(updated, expected);
+}

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Parser, Tree};
 
 pub fn add_import_and_export(
     source: &str,
@@ -52,18 +52,21 @@ fn parse_rust(source: &str) -> anyhow::Result<Tree> {
 fn last_use_end(source: &str, tree: &Tree) -> usize {
     let root = tree.root_node();
     let mut cursor = root.walk();
-    let mut last: Option<Node<'_>> = None;
+    let mut last_end = None;
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if node.kind() == "use_declaration" {
-            last = Some(node);
+            let end = node.end_byte();
+            if last_end.map(|value| end > value).unwrap_or(true) {
+                last_end = Some(end);
+            }
         }
         for child in node.named_children(&mut cursor) {
             stack.push(child);
         }
     }
-    if let Some(node) = last {
-        return line_end_at(source, node.end_byte());
+    if let Some(end) = last_end {
+        return line_end_at(source, end);
     }
     0
 }
