@@ -74,6 +74,19 @@ const principalHandler: ConstructorParamHandler = {
   },
 };
 
+const configHandler: ConstructorParamHandler = {
+  canHandle: (param) => param.type.kind === 'config',
+
+  handle: (agentClassName, param, _, collection) => {
+    AgentConstructorParamRegistry.setType(agentClassName, param.name, {
+      tag: 'config',
+      tsType: param.type,
+    });
+
+    collection.addConfigParameter(param.name);
+  },
+};
+
 const unstructuredTextHandler: ConstructorParamHandler = {
   canHandle: (param) => param.type.name === 'UnstructuredText',
 
@@ -155,6 +168,7 @@ const analysedHandler: ConstructorParamHandler = {
 
 const HANDLERS: readonly ConstructorParamHandler[] = [
   principalHandler,
+  configHandler,
   unstructuredTextHandler,
   unstructuredBinaryHandler,
   analysedHandler,

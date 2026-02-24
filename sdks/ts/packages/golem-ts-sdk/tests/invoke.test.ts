@@ -943,6 +943,9 @@ function createInputDataValue(
       case 'principal':
         throw new Error('Test failure: principal types should never be part of method parameters');
 
+      case 'config':
+        throw new Error('Test failure: config types should never be part of method parameters');
+
       case 'multimodal':
         throw new Error('Test failure: multimodal types should not be part of other parameters');
     }

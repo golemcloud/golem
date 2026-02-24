@@ -430,6 +430,10 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
         throw new Error(
           'Internal error: Value of `Principal` should not be serialized at any point during RPC call',
         );
+      case 'config':
+        return Either.left(
+          'Internal error: Value of `Config` should not be serialized at any point during RPC call',
+        );
       case 'multimodal': {
         const dataValueEither = serializeToDataValue(fnArg, param.type);
         if (Either.isLeft(dataValueEither)) {
