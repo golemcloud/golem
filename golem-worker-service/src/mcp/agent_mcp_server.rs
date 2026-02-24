@@ -22,6 +22,7 @@ use rmcp::{
 use rmcp::handler::server::router::prompt::PromptRouter;
 use serde_json::{json};
 use tokio::sync::{Mutex, RwLock};
+use dashmap::DashMap;
 use golem_common::base_model::agent::{AgentId, AgentMethod, AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchemas};
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::NamedElementSchema;
@@ -36,6 +37,7 @@ use crate::mcp::McpCapabilityLookup;
 pub struct GolemAgentMcpServer {
     processor: Arc<Mutex<OperationProcessor>>,
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
+    tools: Arc<DashMap<String, Tool>>,
     domain: Arc<RwLock<Option<Domain>>>,
     agent_id: Option<AgentId>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,
@@ -45,6 +47,7 @@ impl GolemAgentMcpServer {
     pub fn new(agent_id: Option<AgentId>, mcp_definitions_lookup: Arc<dyn McpCapabilityLookup + Send + Sync + 'static>,) -> Self {
         Self {
             tool_router: Arc::new(RwLock::new(None)),
+            tools: Arc::new(DashMap::new()),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
             agent_id,
@@ -184,12 +187,7 @@ impl ServerHandler for GolemAgentMcpServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        let tool_router = self.tool_router.blocking_read();
-        if let Some(tool_router) = tool_router.as_ref() {
-            tool_router.get(name).cloned()
-        } else {
-            None
-        }
+        self.tools.get(name).map(|ref_multi| ref_multi.clone())
     }
 
     async fn list_tools(&self, _request: Option<PaginatedRequestParams>, _context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<ListToolsResult, rmcp::ErrorData> {
@@ -287,6 +285,9 @@ impl ServerHandler for GolemAgentMcpServer {
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
                 let tool_router = self.tool_router(&domain).await;
+                for tool in tool_router.list_all() {
+                    self.tools.insert(tool.name.to_string(), tool);
+                }
                 *self.domain.write().await = Some(domain);
                 *self.tool_router.write().await = Some(tool_router);
             }

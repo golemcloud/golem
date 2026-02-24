@@ -93,6 +93,7 @@ tracing-subscriber = { workspace = true, features = ["fmt", "std", "json"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
+dashmap = "7.0.0-rc2"
 
 [dev-dependencies]
 golem-test-framework.workspace = true
