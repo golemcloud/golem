@@ -28,7 +28,7 @@ use crate::model::template::Template;
 use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 
-use crate::app_template::model::TemplateName;
+use crate::app::template::AppTemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
@@ -348,6 +348,25 @@ impl Application {
         build_environments(apps)
     }
 
+    pub fn language_templates_from_raw_apps(
+        apps: &[app_raw::ApplicationWithSource],
+    ) -> HashSet<GuestLanguage> {
+        let mut languages = HashSet::new();
+        // TODO: FCL: this does not cover implicitly referenced templates, either:
+        //       - make required common dir name part of the template
+        //       - specialize language templates
+        for app in apps {
+            for component in app.application.components.values() {
+                for template in component.templates.clone().into_vec().into_iter() {
+                    if let Some(language) = GuestLanguage::from_string(template) {
+                        languages.insert(language);
+                    }
+                }
+            }
+        }
+        languages
+    }
+
     pub fn application_name(&self) -> &ApplicationName {
         &self.application_name.value
     }
@@ -548,9 +567,9 @@ impl PartitionedComponentPresets {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ComponentLayerId {
-    TemplateCommon(TemplateName),
-    TemplateEnvironmentPresets(TemplateName),
-    TemplateCustomPresets(TemplateName),
+    TemplateCommon(AppTemplateName),
+    TemplateEnvironmentPresets(AppTemplateName),
+    TemplateCustomPresets(AppTemplateName),
     ComponentCommon(ComponentName),
     ComponentEnvironmentPresets(ComponentName),
     ComponentCustomPresets(ComponentName),
@@ -615,7 +634,7 @@ impl ComponentLayerId {
         }
     }
 
-    pub fn template_name(&self) -> Option<&TemplateName> {
+    pub fn template_name(&self) -> Option<&AppTemplateName> {
         match self {
             ComponentLayerId::TemplateCommon(template_name)
             | ComponentLayerId::TemplateEnvironmentPresets(template_name)
@@ -1445,7 +1464,7 @@ impl PluginInstallation {
 }
 
 mod app_builder {
-    use crate::app_template::model::TemplateName;
+    use crate::app::template::AppTemplateName;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
@@ -1497,7 +1516,7 @@ mod app_builder {
         Include,
         TempDir,
         CustomCommand(String),
-        Template(TemplateName),
+        Template(AppTemplateName),
         Component(ComponentName),
         Environment(EnvironmentName),
         Bridge,
@@ -1712,7 +1731,7 @@ mod app_builder {
                     }
 
                     for (template_name, template) in app.application.component_templates {
-                        let template_name = TemplateName::from(template_name);
+                        let template_name = AppTemplateName::from(template_name);
                         if self.add_entity_source(
                             UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                             &app.source,
@@ -1908,7 +1927,7 @@ mod app_builder {
         fn add_component_template(
             &mut self,
             validation: &mut ValidationBuilder,
-            template_name: TemplateName,
+            template_name: AppTemplateName,
             template: app_raw::ComponentTemplate,
         ) {
             validation.with_context(

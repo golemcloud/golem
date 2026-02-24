@@ -95,7 +95,6 @@ impl GolemCliCommand {
                     "preset",
                     "profile",
                     "show_sensitive",
-                    "template_group",
                 ],
                 exclude_hidden: true,
             },
@@ -197,10 +196,6 @@ pub struct GolemCliGlobalFlags {
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]
     pub dev_mode: bool,
-
-    /// Switch to experimental or development-only template groups
-    #[arg(long, global = true, display_order = 113)]
-    pub template_group: Option<String>,
 
     #[command(flatten)]
     verbosity: Verbosity,

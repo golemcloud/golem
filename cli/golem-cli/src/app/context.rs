@@ -137,9 +137,9 @@ pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
     pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
+    pub used_language_templates: HashSet<GuestLanguage>,
 }
 
-// TODO: review pub fields?
 pub struct ApplicationContext {
     loaded_with_warnings: bool,
     config: ApplicationConfig,
@@ -151,12 +151,12 @@ pub struct ApplicationContext {
 }
 
 impl ApplicationContext {
-    pub fn preload_sources_and_get_environments(
+    pub fn preload_application(
         source_mode: ApplicationSourceMode,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match load_environments(source_mode) {
+        match preload_app(source_mode) {
             Some(environments) => to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
@@ -169,6 +169,7 @@ impl ApplicationContext {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
                 application_name_and_environments: None,
+                used_language_templates: HashSet::new(),
             }),
         }
     }
@@ -571,11 +572,12 @@ fn load_app(
     })
 }
 
-fn load_environments(
+fn preload_app(
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
+            let used_language_templates = Application::language_templates_from_raw_apps(&raw_apps);
             Application::environments_from_raw_apps(raw_apps.as_slice()).map(
                 |application_name_and_environments| ApplicationPreloadResult {
                     source_mode: ApplicationSourceMode::Preloaded {
@@ -584,6 +586,7 @@ fn load_environments(
                     },
                     loaded_with_warnings: false,
                     application_name_and_environments: Some(application_name_and_environments),
+                    used_language_templates,
                 },
             )
         })

@@ -10,15 +10,9 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tag(group2)]
-async fn build_and_deploy_all_templates_default() {
-    build_and_deploy_all_templates(None).await;
-}
-
-async fn build_and_deploy_all_templates(group: Option<&str>) {
+async fn build_and_deploy_all_templates() {
     let mut ctx = TestContext::new();
-    if let Some(group) = group {
-        ctx.use_template_group(group);
-    }
+
     let app_name = "all-templates-app";
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;

@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod agent_types;
-pub mod build;
-pub mod context;
-pub mod error;
-pub mod remote_components;
-pub mod template;
+mod generator;
+mod metadata;
+mod repo;
+mod snippet;
+mod template;
+
+pub use metadata::AppTemplateMetadata;
+pub use repo::AppTemplateRepo;
+pub use template::{
+    AppTemplate, AppTemplateCommon, AppTemplateCommonOnDemand, AppTemplateComponent,
+    AppTemplateName, AppTemplatesForLanguage,
+};

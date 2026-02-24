@@ -164,7 +164,7 @@ impl TypeScriptRepl {
           "workspaces": workspaces,
           "dependencies": dependencies,
           "devDependencies": {
-            "@golem/golem-ts-repl": self.ctx.template_sdk_overrides().ts_package_dep("golem-ts-repl"),
+            "@golem/golem-ts-repl": self.ctx.sdk_overrides().ts_package_dep("golem-ts-repl"),
             "tsx": "^4.7",
             "typescript": "^5.9"
           }
