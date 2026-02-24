@@ -616,7 +616,10 @@ fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone 
 ) -> golem_common::model::oplog::payload::OplogPayload<T> {
     match payload {
         oplog::OplogPayload::Inline(bytes) => {
-            golem_common::model::oplog::payload::OplogPayload::SerializedInline(bytes)
+            golem_common::model::oplog::payload::OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            }
         }
         oplog::OplogPayload::External(ext) => {
             golem_common::model::oplog::payload::OplogPayload::External {
@@ -624,6 +627,7 @@ fn oplog_payload_from_wit<T: desert_rust::BinaryCodec + std::fmt::Debug + Clone 
                     uuid::Uuid::from_u64_pair(ext.payload_id.high_bits, ext.payload_id.low_bits),
                 ),
                 md5_hash: ext.md5_hash,
+                cached: None,
             }
         }
     }

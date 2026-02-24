@@ -463,7 +463,10 @@ async fn calculate_pending_invocations<T: HasOplogService + Sync>(
             } => {
                 let agent_payload: Option<AgentInvocationPayload> = match payload {
                     OplogPayload::Inline(p) => Some(*p.clone()),
-                    OplogPayload::SerializedInline(bytes) => {
+                    OplogPayload::SerializedInline {
+                        cached: Some(v), ..
+                    } => Some((**v).clone()),
+                    OplogPayload::SerializedInline { bytes, .. } => {
                         deserialize::<AgentInvocationPayload>(bytes)
                             .map_err(|e| {
                                 tracing::warn!(
@@ -474,8 +477,12 @@ async fn calculate_pending_invocations<T: HasOplogService + Sync>(
                             .ok()
                     }
                     OplogPayload::External {
+                        cached: Some(v), ..
+                    } => Some((**v).clone()),
+                    OplogPayload::External {
                         payload_id,
                         md5_hash,
+                        ..
                     } => {
                         match this
                             .oplog_service()

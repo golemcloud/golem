@@ -27,7 +27,7 @@ use wasmtime_wasi::p2::{pipe, StdoutStream, WasiCtx, WasiView};
 use wasmtime_wasi::{IoCtx, IoView};
 use wit_parser::{PackageId, Resolve, WorldItem};
 
-const INTERFACE_NAME: &str = "golem:agent/guest";
+const INTERFACE_NAME: &str = "golem:agent/guest@1.5.0";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.

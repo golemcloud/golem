@@ -250,21 +250,29 @@ pub trait OplogOps: Oplog {
     ) -> Result<OplogPayload<T>, String> {
         let bytes = serialize(&data)?;
         let raw_payload = self.upload_raw_payload(bytes).await?;
-        let payload = raw_payload.into_payload()?;
+        let cached = Arc::new(data.clone());
+        let payload = raw_payload.into_payload_with_cache(cached)?;
         Ok(payload)
     }
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(
+    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
         &self,
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
         match payload {
             OplogPayload::Inline(value) => Ok(*value),
-            OplogPayload::SerializedInline(data) => deserialize(&data),
+            OplogPayload::SerializedInline {
+                cached: Some(v), ..
+            } => Ok((*v).clone()),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize(&bytes),
+            OplogPayload::External {
+                cached: Some(v), ..
+            } => Ok((*v).clone()),
             OplogPayload::External {
                 payload_id,
                 md5_hash,
+                ..
             } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
                 deserialize(&bytes)
@@ -377,22 +385,30 @@ pub trait OplogServiceOps: OplogService {
     ) -> Result<OplogPayload<T>, String> {
         let bytes = serialize(&data)?;
         let raw_payload = self.upload_raw_payload(owned_worker_id, bytes).await?;
-        let payload = raw_payload.into_payload()?;
+        let cached = Arc::new(data.clone());
+        let payload = raw_payload.into_payload_with_cache(cached)?;
         Ok(payload)
     }
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(
+    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
         &self,
         owned_worker_id: &OwnedWorkerId,
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
         match payload {
             OplogPayload::Inline(value) => Ok(*value),
-            OplogPayload::SerializedInline(data) => deserialize(&data),
+            OplogPayload::SerializedInline {
+                cached: Some(v), ..
+            } => Ok((*v).clone()),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize(&bytes),
+            OplogPayload::External {
+                cached: Some(v), ..
+            } => Ok((*v).clone()),
             OplogPayload::External {
                 payload_id,
                 md5_hash,
+                ..
             } => {
                 let bytes = self
                     .download_raw_payload(owned_worker_id, payload_id, md5_hash)

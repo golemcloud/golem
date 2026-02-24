@@ -321,6 +321,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await
                     .expect("Failed enqueuing initial agent invocations to worker");
             }
+        } else {
+            warn!("Unexpected non-agentic worker"); // TODO: change this once oplog-processors are finalized
         };
         Ok(worker)
     }
