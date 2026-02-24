@@ -246,7 +246,7 @@ impl WorkerService {
                 poem::Server::new_with_acceptor(acceptor)
                     .run(route)
                     .await
-                    .map_err(|err| anyhow!(err).context("API Gateway server failed"))
+                    .map_err(|err| anyhow!(err).context("MCP server gateway failed"))
             }
                 .in_current_span(),
         );
