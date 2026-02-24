@@ -39,7 +39,9 @@ use golem_common::model::agent::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
@@ -724,8 +726,40 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            // TODO: implement local direct invocation path for agent-based invocation, use Worker::get_or_create_running
-            unimplemented!()
+            debug!(target_worker_id = %owned_worker_id, "Local direct agent invoke_and_await");
+
+            let principal = caller_agent_principal(self_worker_id);
+            let worker = Worker::get_or_create_running(
+                self,
+                self_created_by,
+                owned_worker_id,
+                Some(self_env.to_vec()),
+                Some(self_config),
+                None,
+                Some(self_worker_id.clone()),
+                &self_stack,
+                principal.clone(),
+            )
+            .await?;
+
+            let invocation = AgentInvocation::AgentMethod {
+                idempotency_key: idempotency_key.unwrap_or(IdempotencyKey::fresh()),
+                method_name,
+                input: method_parameters,
+                invocation_context: self_stack,
+                principal,
+            };
+
+            let output = worker.invoke_and_await(invocation).await?;
+
+            match output.result {
+                AgentInvocationResult::AgentMethod { output } => Ok(output),
+                _ => Err(RpcError::RemoteInternalError {
+                    details:
+                        "Expected a result from agent invoke_and_await but got a non-method result"
+                            .to_string(),
+                }),
+            }
         } else {
             self.remote_rpc
                 .invoke_and_await(
@@ -760,8 +794,34 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            // TODO: implement local direct invocation path for agent-based invocation, use Worker::get_or_create_running
-            unimplemented!()
+            debug!(target_worker_id = %owned_worker_id, "Local direct agent invoke (fire-and-forget)");
+
+            let principal = caller_agent_principal(self_worker_id);
+            let worker = Worker::get_or_create_running(
+                self,
+                self_created_by,
+                owned_worker_id,
+                Some(self_env.to_vec()),
+                Some(self_config),
+                None,
+                Some(self_worker_id.clone()),
+                &self_stack,
+                principal.clone(),
+            )
+            .await?;
+
+            let invocation = AgentInvocation::AgentMethod {
+                idempotency_key: idempotency_key.unwrap_or(IdempotencyKey::fresh()),
+                method_name,
+                input: method_parameters,
+                invocation_context: self_stack,
+                principal,
+            };
+
+            match worker.invoke(invocation).await? {
+                crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
+                _ => Ok(()),
+            }
         } else {
             self.remote_rpc
                 .invoke(
