@@ -131,36 +131,7 @@ export class Repl {
     const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
-      const trimmed = code.trimStart();
-      if (trimmed.startsWith(':')) {
-        const commandLine = trimmed.slice(1).trimStart();
-        if (!commandLine) {
-          callback(null, undefined);
-          return;
-        }
-        const whitespaceIndex = commandLine.search(/\s/);
-        const commandName =
-          whitespaceIndex === -1 ? commandLine : commandLine.slice(0, whitespaceIndex);
-        const rawArgs = whitespaceIndex === -1 ? '' : commandLine.slice(whitespaceIndex + 1);
-        const command = (replServer as any).commands?.[commandName];
-        if (command?.action) {
-          try {
-            const result = command.action.call(replServer, rawArgs);
-            if (result && typeof (result as Promise<void>).then === 'function') {
-              Promise.resolve(result)
-                .then(() => callback(null, undefined))
-                .catch((err) => callback(err as Error, undefined));
-              return;
-            }
-          } catch (err) {
-            callback(err as Error, undefined);
-            return;
-          }
-          callback(null, undefined);
-          return;
-        }
-        writeln(`Unknown command: ${commandName}`);
-        callback(null, undefined);
+      if (tryHandleColonCommand(code, replServer, callback)) {
         return;
       }
 
@@ -431,6 +402,46 @@ export class Repl {
     const rendered = replServer.writer(evalResult.result);
     process.stdout.write(rendered + '\n');
   }
+}
+
+function tryHandleColonCommand(
+  line: string,
+  replServer: repl.REPLServer,
+  callback: (err: Error | null, result?: any) => void,
+): boolean {
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith(':')) {
+    return false;
+  }
+  const commandLine = trimmed.slice(1).trimStart();
+  if (!commandLine) {
+    callback(null, undefined);
+    return true;
+  }
+  const whitespaceIndex = commandLine.search(/\s/);
+  const commandName =
+    whitespaceIndex === -1 ? commandLine : commandLine.slice(0, whitespaceIndex);
+  const rawArgs = whitespaceIndex === -1 ? '' : commandLine.slice(whitespaceIndex + 1);
+  const command = (replServer as any).commands?.[commandName];
+  if (command?.action) {
+    try {
+      const result = command.action.call(replServer, rawArgs);
+      if (result && typeof (result as Promise<void>).then === 'function') {
+        Promise.resolve(result)
+          .then(() => callback(null, undefined))
+          .catch((err) => callback(err as Error, undefined));
+        return true;
+      }
+    } catch (err) {
+      callback(err as Error, undefined);
+      return true;
+    }
+    callback(null, undefined);
+    return true;
+  }
+  writeln(`Unknown command: ${commandName}`);
+  callback(null, undefined);
+  return true;
 }
 
 function tryJsonStringify(value: unknown): string | undefined {
