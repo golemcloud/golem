@@ -131,6 +131,39 @@ export class Repl {
     const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
+      const trimmed = code.trimStart();
+      if (trimmed.startsWith(':')) {
+        const commandLine = trimmed.slice(1).trimStart();
+        if (!commandLine) {
+          callback(null, undefined);
+          return;
+        }
+        const whitespaceIndex = commandLine.search(/\s/);
+        const commandName =
+          whitespaceIndex === -1 ? commandLine : commandLine.slice(0, whitespaceIndex);
+        const rawArgs = whitespaceIndex === -1 ? '' : commandLine.slice(whitespaceIndex + 1);
+        const command = (replServer as any).commands?.[commandName];
+        if (command?.action) {
+          try {
+            const result = command.action.call(replServer, rawArgs);
+            if (result && typeof (result as Promise<void>).then === 'function') {
+              Promise.resolve(result)
+                .then(() => callback(null, undefined))
+                .catch((err) => callback(err as Error, undefined));
+              return;
+            }
+          } catch (err) {
+            callback(err as Error, undefined);
+            return;
+          }
+          callback(null, undefined);
+          return;
+        }
+        writeln(`Unknown command: ${commandName}`);
+        callback(null, undefined);
+        return;
+      }
+
       const evalCode = (code: string) => {
         tsxEval.call(this, code, context, filename, (err, result) => {
           if (!err) {
@@ -189,7 +222,7 @@ export class Repl {
     const languageService = this.getLanguageService();
     const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
-      if (line.trimStart().startsWith('.')) {
+      if (line.trimStart().startsWith('.') || line.trimStart().startsWith(':')) {
         cli
           .complete(line)
           .then((result) => {
@@ -335,7 +368,7 @@ export class Repl {
     }
 
     if (!manual) {
-      lines.push(pc.dim('To see this message again, use the `.agentTypeInfo` command!'));
+      lines.push(pc.dim('To see this message again, use the `.agent-type-info` command!'));
       replServer.output.write('\n');
     }
     logSnippetInfo(lines);

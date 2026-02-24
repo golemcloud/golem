@@ -66,7 +66,8 @@ export class CliReplInterop {
 
   async complete(line: string): Promise<[string[], string] | undefined> {
     let startTrimmed = line.trimStart();
-    if (!startTrimmed.startsWith('.')) return;
+    const prefixChar = startTrimmed[0];
+    if (prefixChar !== '.' && prefixChar !== ':') return;
     startTrimmed = startTrimmed.slice(1);
 
     const endsWithSpace = /\s$/.test(line);
@@ -76,7 +77,7 @@ export class CliReplInterop {
       tokens.length === 1
         ? this.builtinCommands
             .filter((command) => command.startsWith(tokens[0]))
-            .map((command) => `.${command}`)
+            .map((command) => `${prefixChar}${command}`)
         : [];
 
     const lastToken = tokens.length > 0 ? tokens[tokens.length - 1] : '';
@@ -90,9 +91,9 @@ export class CliReplInterop {
     const consumedTokens = endsWithSeparator ? tokens : tokens.slice(0, -1);
 
     if (consumedTokens.length === 0) {
-      const prefix = `.${currentToken}`;
+      const prefix = `${prefixChar}${currentToken}`;
       const completions = filterByPrefix(
-        [...this.commandsByName.keys()].map((name) => `.${name}`),
+        [...this.commandsByName.keys()].map((name) => `${prefixChar}${name}`),
         prefix,
       );
       const allCompletions = [...builtinCompletions, ...completions];
@@ -597,13 +598,9 @@ function mergeUnique(left: string[], right: string[]): string[] {
 function commandPathToReplCommandName(segments: string[]): string {
   const parts = segments
     .flatMap((segment) => segment.split(/[-_]/g))
-    .filter((segment) => segment.length > 0);
-  return parts
-    .map((part, index) => {
-      if (index === 0) return part.toLowerCase();
-      return part[0].toUpperCase() + part.slice(1).toLowerCase();
-    })
-    .join('');
+    .filter((segment) => segment.length > 0)
+    .map((part) => part.toLowerCase());
+  return parts.join('-');
 }
 
 function parseRawArgs(rawArgs: string): string[] {
