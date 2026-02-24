@@ -19,8 +19,8 @@ use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiDeploymentClientLive,
     ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive, ComponentClientLive,
     DeploymentClientLive, EnvironmentClientLive, GrantClientLive, HealthCheckClientLive,
-    HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive, PluginClientLive,
-    TokenClientLive, WorkerClientLive,
+    HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive, McpDeploymentClientLive,
+    PluginClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
@@ -46,6 +46,7 @@ pub struct GolemClients {
     pub grant: GrantClientLive,
     pub limits: LimitsClientLive,
     pub login: LoginClientLive,
+    pub mcp_deployment: McpDeploymentClientLive,
     pub plugin: PluginClientLive,
     pub token: TokenClientLive,
     pub worker: WorkerClientLive,
@@ -154,6 +155,9 @@ impl GolemClients {
             },
             login: LoginClientLive {
                 context: login_context(),
+            },
+            mcp_deployment: McpDeploymentClientLive {
+                context: registry_context(),
             },
             plugin: PluginClientLive {
                 context: registry_context(),

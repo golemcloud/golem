@@ -6669,7 +6669,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - ApiDeployment
+      - McpDeployment
       - Environment
       summary: List MCP deployments in the environment
       operationId: list_mcp_deployments_in_environment
@@ -6738,7 +6738,7 @@ paths:
     post:
       tags:
       - RegistryService
-      - ApiDeployment
+      - McpDeployment
       - Environment
       summary: Create a new MCP deployment in the environment
       operationId: create_mcp_deployment
@@ -6814,7 +6814,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - ApiDeployment
+      - McpDeployment
       - Environment
       summary: Get MCP deployment by domain in the environment
       operationId: get_mcp_deployment_in_environment
@@ -13730,6 +13730,7 @@ tags:
   description: The limits API allows users to query their current resource limits.
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
+- name: McpDeployment
 - name: Plugin
 - name: Project
   description: |-

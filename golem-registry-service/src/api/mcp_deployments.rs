@@ -38,7 +38,7 @@ pub struct McpDeploymentsApi {
 #[OpenApi(
     prefix_path = "/v1",
     tag = ApiTags::RegistryService,
-    tag = ApiTags::ApiDeployment
+    tag = ApiTags::McpDeployment
 )]
 #[allow(unused_variables)]
 impl McpDeploymentsApi {
