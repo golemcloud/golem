@@ -143,20 +143,31 @@ macro_rules! impl_component_model_config_leaf {
 }
 
 impl_component_model_config_leaf![
-    bigdecimal::BigDecimal,
-    bit_vec::BitVec,
     bool,
-    bytes::Bytes,
     char,
-    chrono::DateTime<chrono::FixedOffset>,
-    chrono::DateTime<chrono::Local>,
-    chrono::DateTime<chrono::Utc>,
-    chrono::FixedOffset,
-    chrono::Month,
-    chrono::NaiveDate,
-    chrono::NaiveDateTime,
-    chrono::NaiveTime,
-    chrono::Weekday,
+    f32,
+    f64,
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    String,
+    Duration,
+    IpAddr,
+    NonZeroI8,
+    NonZeroI16,
+    NonZeroI32,
+    NonZeroI64,
+    NonZeroU8,
+    NonZeroU16,
+    NonZeroU32,
+    NonZeroU64,
+    uuid::Uuid,
     crate::bindings::golem::api::host::AgentAllFilter,
     crate::bindings::golem::api::host::AgentAnyFilter,
     crate::bindings::golem::api::host::AgentConfigVarsFilter,
@@ -173,46 +184,47 @@ impl_component_model_config_leaf![
     crate::bindings::golem::api::host::StringFilterComparator,
     crate::bindings::golem::api::host::UpdateMode,
     crate::bindings::wasi::logging::logging::Level,
-    Duration,
-    f32,
-    f64,
-    golem_wasm::AccountId,
-    golem_wasm::AgentId,
-    golem_wasm::ComponentId,
-    golem_wasm::ResourceMode,
-    golem_wasm::Uri,
-    golem_wasm::Uuid,
-    golem_wasm::WitNode,
-    golem_wasm::WitType,
-    golem_wasm::WitTypeNode,
-    golem_wasm::WitValue,
-    http::uri::Uri,
-    i16,
-    i32,
-    i64,
-    i8,
-    IpAddr,
-    mac_address::MacAddress,
-    NonZeroI16,
-    NonZeroI32,
-    NonZeroI64,
-    NonZeroI8,
-    NonZeroU16,
-    NonZeroU32,
-    NonZeroU64,
-    NonZeroU8,
-    num_bigint::BigInt,
-    rust_decimal::Decimal,
-    serde_json::Value,
-    String,
-    u16,
-    u32,
-    u64,
-    u8,
-    url::Url,
-    usize,
-    uuid::Uuid,
 ];
+
+#[cfg(feature = "bigdecimal")]
+impl_component_model_config_leaf![bigdecimal::BigDecimal,];
+
+#[cfg(feature = "bit_vec")]
+impl_component_model_config_leaf![bit_vec::BitVec,];
+
+#[cfg(feature = "bytes")]
+impl_component_model_config_leaf![bytes::Bytes,];
+
+#[cfg(feature = "chrono")]
+impl_component_model_config_leaf![
+    chrono::DateTime<chrono::FixedOffset>,
+    chrono::DateTime<chrono::Local>,
+    chrono::DateTime<chrono::Utc>,
+    chrono::FixedOffset,
+    chrono::Month,
+    chrono::NaiveDate,
+    chrono::NaiveDateTime,
+    chrono::NaiveTime,
+    chrono::Weekday,
+];
+
+#[cfg(feature = "mac_address")]
+impl_component_model_config_leaf![mac_address::MacAddress,];
+
+#[cfg(feature = "num_bigint")]
+impl_component_model_config_leaf![num_bigint::BigInt,];
+
+#[cfg(feature = "rust_decimal")]
+impl_component_model_config_leaf![rust_decimal::Decimal,];
+
+#[cfg(feature = "serde_json_types")]
+impl_component_model_config_leaf![serde_json::Value,];
+
+#[cfg(feature = "url")]
+impl_component_model_config_leaf![url::Url,];
+
+#[cfg(feature = "nonempty_collections")]
+impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for nonempty_collections::NEVec<T> {}
 
 macro_rules! impl_component_model_config_leaf_for_tuple {
     ($($T:ident),+) => {
@@ -260,5 +272,3 @@ impl<K: FromValueAndType + IntoValue + Ord, V: FromValueAndType + IntoValue>
     ComponentModelConfigLeaf for BTreeMap<K, V>
 {
 }
-
-impl<T: FromValueAndType + IntoValue> ComponentModelConfigLeaf for nonempty_collections::NEVec<T> {}
