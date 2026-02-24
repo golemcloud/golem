@@ -47,7 +47,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId,
+    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -283,7 +283,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        result: &AgentInvocationResult,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Gets the retry point that should be associated with a current error. Errors are grouped

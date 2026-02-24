@@ -32,7 +32,10 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
+use golem_common::model::{
+    AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, PromiseId,
+    WorkerId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
 use golem_service_base::model::auth::AuthCtx;
@@ -71,7 +74,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
-    ) -> Result<Option<UntypedDataValue>, WorkerProxyError>;
+    ) -> Result<AgentInvocationOutput, WorkerProxyError>;
 
     async fn update(
         &self,
@@ -294,7 +297,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
-    ) -> Result<Option<UntypedDataValue>, WorkerProxyError> {
+    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         debug!("Invoking remote agent method {method_name} on worker {worker_id}");
 
         let auth_ctx = self.get_auth_ctx(caller_account_id);
@@ -345,7 +348,28 @@ impl WorkerProxy for RemoteWorkerProxy {
                         })
                     })
                     .transpose()?;
-                Ok(result)
+                let component_revision = success
+                    .component_revision
+                    .map(ComponentRevision::new)
+                    .transpose()
+                    .map_err(|e| {
+                        WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                            "Failed to parse component revision: {e}"
+                        )))
+                    })?;
+                let output = match result {
+                    Some(output) => AgentInvocationOutput {
+                        result: AgentInvocationResult::AgentMethod { output },
+                        consumed_fuel: success.fuel_consumed,
+                        component_revision,
+                    },
+                    None => AgentInvocationOutput {
+                        result: AgentInvocationResult::AgentInitialization,
+                        consumed_fuel: success.fuel_consumed,
+                        component_revision,
+                    },
+                };
+                Ok(output)
             }
             Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(

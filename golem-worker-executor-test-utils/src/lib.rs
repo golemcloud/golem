@@ -43,7 +43,7 @@ use golem_common::model::oplog::{
 use golem_common::model::plan::PlanId;
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OplogIndex, OwnedWorkerId,
+    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex, OwnedWorkerId,
     RdbmsPoolKey, RetryConfig, TransactionId, WorkerFilter, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::clients::registry::RegistryService;
@@ -610,10 +610,10 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        result: &AgentInvocationResult,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_success(full_function_name, consumed_fuel, result)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
             .await
     }
 

@@ -97,8 +97,8 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, ScanCursor,
-    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
@@ -1669,7 +1669,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        result: &AgentInvocationResult,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
@@ -1678,7 +1678,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .oplog()
-                    .add_agent_invocation_finished(result, consumed_fuel)
+                    .add_agent_invocation_finished(&output.result, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1692,7 +1692,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
                         .worker()
-                        .store_invocation_success(&idempotency_key, result.clone())
+                        .store_invocation_success(&idempotency_key, output.clone())
                         .await;
 
                     self.public_state.event_service().emit_invocation_finished(
@@ -1709,10 +1709,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .get_oplog_entry_agent_invocation_finished()
                 .await?;
             if let Some(recorded_result) = response {
-                if !recorded_result.replay_equivalent(result) {
+                if !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!("{full_function_name} => {recorded_result:?}"),
-                        format!("{full_function_name} => {result:?}"),
+                        format!("{full_function_name} => {:?}", output.result),
                     ));
                 }
             }
@@ -2139,13 +2139,20 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 result: invocation_result,
                                 consumed_fuel,
                             }) => {
+                                let component_revision =
+                                    store.as_context().data().component_metadata().revision;
+                                let output = AgentInvocationOutput {
+                                    result: invocation_result,
+                                    consumed_fuel: Some(consumed_fuel),
+                                    component_revision: Some(component_revision),
+                                };
                                 if let Err(err) = store
                                     .as_context_mut()
                                     .data_mut()
                                     .on_agent_invocation_success(
                                         &full_function_name,
                                         consumed_fuel,
-                                        &invocation_result,
+                                        &output,
                                     )
                                     .await
                                 {

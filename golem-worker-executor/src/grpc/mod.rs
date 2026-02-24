@@ -57,9 +57,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, ScanCursor,
-    ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation, WorkerEvent, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerStatus,
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation, WorkerEvent,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -1618,7 +1618,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn invoke_agent_internal(
         &self,
         request: InvokeAgentRequest,
-    ) -> Result<Option<UntypedDataValue>, WorkerExecutorError> {
+    ) -> Result<Option<AgentInvocationOutput>, WorkerExecutorError> {
         let method_name = request.method_name.clone();
 
         let method_parameters: UntypedDataValue = request
@@ -1678,15 +1678,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match mode {
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
                 let worker = self.get_or_create(&request).await?;
-                let invocation_result = worker.invoke_and_await(invocation).await?;
-
-                match invocation_result {
-                    AgentInvocationResult::AgentMethod { output } => Ok(Some(output)),
-                    AgentInvocationResult::AgentInitialization => Ok(None),
-                    other => Err(WorkerExecutorError::unknown(format!(
-                        "Unexpected invocation result type: {other:?}"
-                    ))),
-                }
+                let invocation_output = worker.invoke_and_await(invocation).await?;
+                Ok(Some(invocation_output))
             }
             golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
                 match schedule_at {
@@ -2611,15 +2604,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(result) => record.succeed(Ok(Response::new(InvokeAgentResponse {
-                result: Some(
-                    golem::workerexecutor::v1::invoke_agent_response::Result::Success(
-                        golem::workerexecutor::v1::InvokeAgentSuccess {
-                            result: result.map(|v| v.into()),
-                        },
+            Ok(result) => {
+                let (result_value, fuel_consumed, component_revision) = match result {
+                    Some(output) => {
+                        let value = match output.result {
+                            AgentInvocationResult::AgentMethod { output } => Some(output.into()),
+                            _ => None,
+                        };
+                        (
+                            value,
+                            output.consumed_fuel,
+                            output.component_revision.map(|r| r.get()),
+                        )
+                    }
+                    None => (None, None, None),
+                };
+                record.succeed(Ok(Response::new(InvokeAgentResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::invoke_agent_response::Result::Success(
+                            golem::workerexecutor::v1::InvokeAgentSuccess {
+                                result: result_value,
+                                fuel_consumed,
+                                component_revision,
+                            },
+                        ),
                     ),
-                ),
-            }))),
+                })))
+            }
             Err(mut err) => record.fail(
                 Ok(Response::new(InvokeAgentResponse {
                     result: Some(

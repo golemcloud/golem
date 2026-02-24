@@ -835,6 +835,13 @@ pub enum AgentInvocationResult {
     ProcessOplogEntries { error: Option<String> },
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentInvocationOutput {
+    pub result: AgentInvocationResult,
+    pub consumed_fuel: Option<u64>,
+    pub component_revision: Option<ComponentRevision>,
+}
+
 fn value_replay_equivalent(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::F32(x), Value::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,

@@ -21,6 +21,7 @@ use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
+use golem_common::model::AgentInvocationOutput;
 use golem_common::model::agent::{
     AgentId, DataValue, GolemUserPrincipal, Principal, UntypedDataValue,
 };
@@ -711,7 +712,7 @@ impl WorkerService {
         invocation_context: Option<InvocationContext>,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
-    ) -> WorkerResult<Option<UntypedDataValue>> {
+    ) -> WorkerResult<AgentInvocationOutput> {
         let component = self
             .component_service
             .get_latest_by_id(worker_id.component_id)
@@ -847,7 +848,10 @@ impl WorkerService {
             })
             .into();
 
-        let result = self
+        let method_name = request.method_name.clone();
+        let agent_type_name = request.agent_type_name.clone();
+
+        let output = self
             .invoke_agent(
                 &worker_id,
                 request.method_name,
@@ -861,20 +865,51 @@ impl WorkerService {
             )
             .await?;
 
-        match result {
-            Some(untyped_data_value) => {
-                let typed_data_value =
-                    DataValue::try_from_untyped(untyped_data_value, method.output_schema.clone())
-                        .map_err(|err| {
-                        WorkerServiceError::TypeChecker(format!(
-                            "DataValue conversion error: {err}"
+        match output.result {
+            golem_common::model::AgentInvocationResult::AgentMethod {
+                output: untyped_data_value,
+            } => {
+                let decode_revision = output
+                    .component_revision
+                    .unwrap_or(registered_agent_type.implemented_by.component_revision);
+                let component_metadata_for_decode = self
+                    .component_service
+                    .get_revision(component_metadata.id, decode_revision)
+                    .await?;
+                let decode_agent_type = component_metadata_for_decode
+                    .metadata
+                    .find_agent_type_by_name(&agent_type_name)
+                    .map_err(|err| {
+                        WorkerServiceError::Internal(format!(
+                            "Cannot get agent type {agent_type_name} from component metadata at revision {decode_revision}: {err}",
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        WorkerServiceError::Internal(format!(
+                            "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",
                         ))
                     })?;
+                let decode_method = decode_agent_type
+                    .methods
+                    .iter()
+                    .find(|m| m.name == method_name)
+                    .ok_or_else(|| {
+                        WorkerServiceError::Internal(format!(
+                            "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
+                        ))
+                    })?;
+                let typed_data_value = DataValue::try_from_untyped(
+                    untyped_data_value,
+                    decode_method.output_schema.clone(),
+                )
+                .map_err(|err| {
+                    WorkerServiceError::TypeChecker(format!("DataValue conversion error: {err}"))
+                })?;
                 Ok(AgentInvocationResult {
                     result: Some(typed_data_value.into()),
                 })
             }
-            None => Ok(AgentInvocationResult { result: None }),
+            _ => Ok(AgentInvocationResult { result: None }),
         }
     }
 }

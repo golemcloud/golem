@@ -25,7 +25,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId,
+    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -218,10 +218,10 @@ impl InvocationHooks for DebugContext {
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
-        result: &AgentInvocationResult,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_success(full_function_name, consumed_fuel, result)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
             .await
     }
 

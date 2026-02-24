@@ -412,7 +412,7 @@ impl WorkerGrpcApi {
             .principal
             .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
 
-        let result = self
+        let output = self
             .worker_service
             .invoke_agent(
                 &worker_id,
@@ -427,8 +427,16 @@ impl WorkerGrpcApi {
             )
             .await?;
 
+        let result_value = match &output.result {
+            golem_common::model::AgentInvocationResult::AgentMethod { output } => {
+                Some(output.clone().into())
+            }
+            _ => None,
+        };
         Ok(InvokeAgentSuccess {
-            result: result.map(|v| v.into()),
+            result: result_value,
+            fuel_consumed: output.consumed_fuel,
+            component_revision: output.component_revision.map(|r| r.get()),
         })
     }
 }

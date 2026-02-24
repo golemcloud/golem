@@ -40,6 +40,7 @@ use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
+use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
 use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
@@ -231,7 +232,7 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
-    ) -> WorkerResult<Option<UntypedDataValue>>;
+    ) -> WorkerResult<AgentInvocationOutput>;
 }
 
 #[derive(Clone)]
@@ -1268,7 +1269,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
-    ) -> WorkerResult<Option<UntypedDataValue>> {
+    ) -> WorkerResult<AgentInvocationOutput> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
 
@@ -1297,14 +1298,30 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     workerexecutor::v1::InvokeAgentResponse {
                         result:
                             Some(workerexecutor::v1::invoke_agent_response::Result::Success(
-                                workerexecutor::v1::InvokeAgentSuccess { result },
+                                workerexecutor::v1::InvokeAgentSuccess {
+                                    result,
+                                    fuel_consumed,
+                                    component_revision,
+                                },
                             )),
-                    } => match result {
-                        Some(proto_val) => UntypedDataValue::try_from(proto_val)
-                            .map(Some)
-                            .map_err(|err| WorkerExecutorError::unknown(err).into()),
-                        None => Ok(None),
-                    },
+                    } => {
+                        let invocation_result = match result {
+                            Some(proto_val) => {
+                                let output = UntypedDataValue::try_from(proto_val)
+                                    .map_err(WorkerExecutorError::unknown)?;
+                                AgentInvocationResult::AgentMethod { output }
+                            }
+                            None => AgentInvocationResult::AgentInitialization,
+                        };
+                        Ok(AgentInvocationOutput {
+                            result: invocation_result,
+                            consumed_fuel: fuel_consumed,
+                            component_revision: component_revision
+                                .map(ComponentRevision::new)
+                                .transpose()
+                                .map_err(|err| WorkerExecutorError::unknown(err.to_string()))?,
+                        })
+                    }
                     workerexecutor::v1::InvokeAgentResponse {
                         result:
                             Some(workerexecutor::v1::invoke_agent_response::Result::Failure(err)),

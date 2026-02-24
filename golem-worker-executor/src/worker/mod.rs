@@ -49,8 +49,8 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp,
-    TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    Timestamp, TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -583,7 +583,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn invoke_and_await(
         &self,
         invocation: AgentInvocation,
-    ) -> Result<AgentInvocationResult, WorkerExecutorError> {
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let idempotency_key = invocation
             .idempotency_key()
             .ok_or_else(|| {
@@ -662,20 +662,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: AgentInvocationResult,
+        output: AgentInvocationOutput,
     ) {
         let mut map = self.invocation_results.write().await;
         map.insert(
             key.clone(),
             InvocationResult::Cached {
-                result: Ok(result.clone()),
+                result: Ok(output.clone()),
             },
         );
         debug!("Stored invocation success for {key}");
         self.events().publish(Event::InvocationCompleted {
             worker_id: self.owned_worker_id.worker_id(),
             idempotency_key: key.clone(),
-            result: Ok(result),
+            result: Ok(output),
         });
     }
 
@@ -2174,7 +2174,7 @@ struct FailedInvocationResult {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<AgentInvocationResult, FailedInvocationResult>,
+        result: Result<AgentInvocationOutput, FailedInvocationResult>,
     },
     Lazy {
         oplog_idx: OplogIndex,
@@ -2192,10 +2192,14 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::AgentInvocationFinished { result, .. } => {
+                OplogEntry::AgentInvocationFinished { result, consumed_fuel, .. } => {
                     let invocation_result: AgentInvocationResult =
                         services.oplog().download_payload(result).await.expect("failed to deserialize function response payload");
-                    Ok(invocation_result)
+                    Ok(AgentInvocationOutput {
+                        result: invocation_result,
+                        consumed_fuel: Some(consumed_fuel as u64),
+                        component_revision: None,
+                    })
                 }
                 OplogEntry::Error { error, retry_from, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
@@ -2319,7 +2323,7 @@ pub enum QueuedWorkerInvocation {
 }
 
 pub enum ResultOrSubscription {
-    Finished(Result<AgentInvocationResult, WorkerExecutorError>),
+    Finished(Result<AgentInvocationOutput, WorkerExecutorError>),
     Pending(EventsSubscription),
 }
 

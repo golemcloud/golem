@@ -97,8 +97,13 @@ impl CallAgentHandler {
 
         debug!("Received agent response: {agent_response:?}");
 
+        let agent_result = match agent_response.result {
+            golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
+            _ => None,
+        };
+
         let route_result =
-            interpret_agent_response(agent_response, &behaviour.expected_agent_response)?;
+            interpret_agent_response(agent_result, &behaviour.expected_agent_response)?;
 
         debug!("Returning call agent route result: {route_result:?}");
 

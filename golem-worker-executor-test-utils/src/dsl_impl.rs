@@ -381,12 +381,14 @@ impl TestDsl for TestWorkerExecutor {
                         let untyped_data_value = UntypedDataValue::try_from(proto_val)
                             .map_err(|err| anyhow!("UntypedDataValue conversion error: {err}"))?;
 
-                        let worker_metadata = self.get_worker_metadata(&worker_id).await?;
+                        let component_revision = success
+                            .component_revision
+                            .ok_or_else(|| {
+                                anyhow!("Missing component_revision in invoke_agent response")
+                            })
+                            .and_then(ComponentRevision::new)?;
                         let component_at_rev = self
-                            .get_component_at_revision(
-                                &component.id,
-                                worker_metadata.component_revision,
-                            )
+                            .get_component_at_revision(&component.id, component_revision)
                             .await?;
                         let agent_type = component_at_rev
                             .metadata
@@ -404,7 +406,7 @@ impl TestDsl for TestWorkerExecutor {
                                 debug!("In agent type: {:#?}", agent_type);
                                 debug!(
                                     "Got for worker-id: {worker_id} with component revision {}",
-                                    worker_metadata.component_revision
+                                    component_revision
                                 );
                                 anyhow!("Agent method not found: {}", method_name)
                             })?;

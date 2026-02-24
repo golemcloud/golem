@@ -35,8 +35,8 @@ use golem_common::model::{
     OplogIndex,
 };
 use golem_common::model::{
-    AgentInvocation, AgentInvocationKind, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
-    TimestampedAgentInvocation, WorkerId,
+    AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
+    IdempotencyKey, OwnedWorkerId, TimestampedAgentInvocation, WorkerId,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -646,10 +646,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         consumed_fuel: u64,
         kind: AgentInvocationKind,
     ) -> CommandOutcome {
+        let component_revision = self.store.data().component_metadata().revision;
+        let output = AgentInvocationOutput {
+            result: invocation_result,
+            consumed_fuel: Some(consumed_fuel),
+            component_revision: Some(component_revision),
+        };
         match self
             .store
             .data_mut()
-            .on_agent_invocation_success(&full_function_name, consumed_fuel, &invocation_result)
+            .on_agent_invocation_success(&full_function_name, consumed_fuel, &output)
             .await
         {
             Ok(()) => {

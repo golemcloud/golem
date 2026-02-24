@@ -25,7 +25,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentInvocationResult, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
+    AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -370,7 +370,7 @@ pub enum LookupResult {
     New,
     Pending,
     Interrupted,
-    Complete(Result<AgentInvocationResult, WorkerExecutorError>),
+    Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
 }
 
 pub enum ReadFileResult {

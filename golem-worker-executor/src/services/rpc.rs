@@ -292,7 +292,7 @@ impl Rpc for RemoteInvocationRpc {
     ) -> Result<UntypedDataValue, RpcError> {
         let principal = caller_agent_principal(self_worker_id);
 
-        let result = self
+        let output = self
             .worker_proxy
             .invoke_agent(
                 &owned_worker_id.worker_id(),
@@ -310,9 +310,14 @@ impl Rpc for RemoteInvocationRpc {
             )
             .await?;
 
-        result.ok_or_else(|| RpcError::RemoteInternalError {
-            details: "Expected a result from agent invoke_and_await but got None".to_string(),
-        })
+        match output.result {
+            golem_common::model::AgentInvocationResult::AgentMethod { output } => Ok(output),
+            _ => Err(RpcError::RemoteInternalError {
+                details:
+                    "Expected a result from agent invoke_and_await but got a non-method result"
+                        .to_string(),
+            }),
+        }
     }
 
     async fn invoke(
