@@ -14,6 +14,7 @@
 
 use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentCreation, McpDeploymentId, McpDeploymentUpdate};
@@ -351,5 +352,66 @@ impl McpDeploymentService {
             .try_into()?;
 
         Ok(mcp_deployment)
+    }
+
+    pub async fn get_revision(
+        &self,
+        mcp_deployment_id: McpDeploymentId,
+        revision: golem_common::model::mcp_deployment::McpDeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<McpDeployment, McpDeploymentError> {
+        let mcp_deployment: McpDeployment = self
+            .mcp_deployment_repo
+            .get_staged_by_id(mcp_deployment_id.0)
+            .await?
+            .ok_or(McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?
+            .try_into()?;
+
+        if mcp_deployment.revision != revision {
+            return Err(McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id));
+        }
+
+        let environment = self
+            .environment_service
+            .get(mcp_deployment.environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewHttpApiDeployment,
+        )
+        .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
+
+        Ok(mcp_deployment)
+    }
+
+    pub async fn get_in_deployment_by_domain(
+        &self,
+        environment_id: EnvironmentId,
+        _deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        domain: &Domain,
+        auth: &AuthCtx,
+    ) -> Result<McpDeployment, McpDeploymentError> {
+        // For now, MCP deployments don't have deployment-scoped versions
+        // Just return the staged version by domain
+        self.get_staged_by_domain(environment_id, domain, auth).await
+    }
+
+    pub async fn list_in_deployment(
+        &self,
+        environment_id: EnvironmentId,
+        _deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<McpDeployment>, McpDeploymentError> {
+        // For now, MCP deployments don't have deployment-scoped versions
+        // Just return all staged deployments
+        self.list_staged(environment_id, auth).await
     }
 }

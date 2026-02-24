@@ -21,7 +21,7 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
 use anyhow::{anyhow, bail};
-use golem_client::api::ApiDeploymentClient;
+use golem_client::api::{ApiDeploymentClient};
 use golem_common::cache::SimpleCache;
 use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
@@ -33,6 +33,7 @@ use golem_common::model::http_api_deployment::{
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use golem_common::base_model::mcp_deployment::{McpDeployment, McpDeploymentRevision};
 
 pub struct ApiDeploymentCommandHandler {
     ctx: Arc<Context>,

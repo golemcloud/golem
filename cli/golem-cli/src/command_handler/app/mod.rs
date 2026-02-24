@@ -1480,6 +1480,24 @@ impl AppCommandHandler {
             }
         }
 
+        // TODO: remove this temporary test from CLI
+        {
+            use golem_client::api::McpDeploymentClient;
+            let hardcoded_mcp_domain = Domain("awareness-cognitive-informational-density.trycloudflare.com".to_string());
+            let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
+                domain: hardcoded_mcp_domain,
+            };
+            
+            let clients = self.ctx.golem_clients().await?;
+            if let Ok(_) = clients
+                .mcp_deployment
+                .create_mcp_deployment(&deploy_diff.environment.environment_id.0, &mcp_creation)
+                .await
+            {
+                log_action("Created", "MCP deployment (smoke test)");
+            }
+        }
+
         Ok(())
     }
 
