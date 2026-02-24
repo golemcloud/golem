@@ -47,7 +47,6 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         Err(err) => return err.to_compile_error().into(),
     };
 
-
     let type_parameters = agent_definition_trait
         .generics
         .type_params()
