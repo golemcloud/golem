@@ -71,7 +71,6 @@ run_task = [
         "wit-golem-common",
         "wit-golem-cli",
         "wit-test-components",
-        "wit-golem-templates",
         "wit-sdks",
     ] },
 ]
@@ -99,15 +98,6 @@ cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
 cp wit/deps/golem-rpc golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
-"""
-
-[tasks.wit-golem-templates]
-private = true
-script_runner = "@duckscript"
-script = """
-rm -r cli/golem-templates/wit/deps
-mkdir cli/golem-templates/wit/deps
-glob_cp wit/deps/**/* cli/golem-templates/wit/deps
 """
 
 [tasks.wit-sdks]

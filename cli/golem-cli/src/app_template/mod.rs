@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ApplicationName, ComposableAppGroupName, DocDependency, DocDependencyEnvVar,
-    DocDependencyGroup, GuestLanguage, PackageName, SdkOverrides, TargetExistsResolveDecision,
-    TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata, TemplateName,
-    TemplateParameters, Transform,
+use crate::app_template::model::{
+    ComposableAppGroupName, DocDependency, DocDependencyEnvVar, DocDependencyGroup, SdkOverrides,
+    TargetExistsResolveDecision, TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata,
+    TemplateName, TemplateParameters, Transform,
 };
+use crate::model::GuestLanguage;
 use anyhow::Context;
+use golem_common::base_model::component::ComponentName;
+use golem_common::model::application::ApplicationName;
+use heck::{ToKebabCase, ToSnakeCase};
 use include_dir::{include_dir, Dir, DirEntry};
 use indoc::formatdoc;
 use itertools::Itertools;
@@ -43,7 +46,7 @@ static GOLEM_TS_VERSION: &str = "0.1.0-dev.1";
 static GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
 static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
 
-static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../golem-templates/templates");
 pub static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../schema.golem.cloud/app/golem/",
@@ -61,15 +64,8 @@ fn all_templates(dev_mode: bool) -> Vec<Template> {
                     if let Some(template_dir) = sub_entry.as_dir() {
                         let template_dir_name =
                             template_dir.path().file_name().unwrap().to_str().unwrap();
-                        if template_dir_name != "INSTRUCTIONS"
-                            && !template_dir_name.starts_with('.')
-                        {
-                            let template = parse_template(
-                                lang,
-                                lang_dir.path(),
-                                Path::new("INSTRUCTIONS"),
-                                template_dir.path(),
-                            );
+                        if !template_dir_name.starts_with('.') {
+                            let template = parse_template(lang, template_dir.path());
 
                             if dev_mode || !template.dev_only {
                                 result.push(template);
@@ -83,13 +79,6 @@ fn all_templates(dev_mode: bool) -> Vec<Template> {
         }
     }
     result
-}
-
-pub fn all_standalone_templates() -> Vec<Template> {
-    all_templates(true)
-        .into_iter()
-        .filter(|template| matches!(template.kind, TemplateKind::Standalone))
-        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -121,7 +110,6 @@ pub fn all_composable_app_templates(
 
     for template in all_templates(dev_mode) {
         match &template.kind {
-            TemplateKind::Standalone => continue,
             TemplateKind::ComposableAppCommon { group, .. } => {
                 let common = &mut app_templates(&mut templates, template.language, group).common;
                 if let Some(common) = common {
@@ -150,7 +138,7 @@ pub fn instantiate_template(
     template: &Template,
     parameters: &TemplateParameters,
     resolve_mode: TargetExistsResolveMode,
-) -> io::Result<String> {
+) -> io::Result<()> {
     instantiate_directory(
         &TEMPLATES,
         &template.template_path,
@@ -159,7 +147,7 @@ pub fn instantiate_template(
         parameters,
         resolve_mode,
     )?;
-    Ok(render_template_instructions(template, parameters))
+    Ok(())
 }
 
 pub fn add_component_by_template(
@@ -167,13 +155,12 @@ pub fn add_component_by_template(
     component_template: Option<&Template>,
     target_path: &Path,
     application_name: &ApplicationName,
-    package_name: &PackageName,
+    component_name: &ComponentName,
     sdk_overrides: Option<&SdkOverrides>,
 ) -> anyhow::Result<()> {
     let parameters = TemplateParameters {
         application_name: application_name.clone(),
-        component_name: package_name.to_string_with_colon().into(),
-        package_name: package_name.clone(),
+        component_name: component_name.clone(),
         target_path: target_path.into(),
         sdk_overrides: sdk_overrides.cloned().unwrap_or_default(),
     };
@@ -217,17 +204,6 @@ pub fn add_component_by_template(
     }
 
     Ok(())
-}
-
-pub fn render_template_instructions(
-    template: &Template,
-    parameters: &TemplateParameters,
-) -> String {
-    transform(
-        &template.instructions,
-        parameters,
-        &[Transform::PackageAndComponent],
-    )
 }
 
 fn instantiate_directory(
@@ -330,30 +306,16 @@ fn transform(
     transforms: &[Transform],
 ) -> String {
     let transform_pack_and_comp = |str: &str| -> String {
-        str.replace(
-            "componentnameapi",
-            &format!("{}api", parameters.component_name.parts().join("")),
-        )
-        .replace("componentname", parameters.component_name.as_str())
-        .replace("component-name", &parameters.component_name.to_kebab_case())
-        .replace("ComponentName", &parameters.component_name.to_pascal_case())
-        .replace("componentName", &parameters.component_name.to_camel_case())
-        .replace("component_name", &parameters.component_name.to_snake_case())
-        .replace(
-            "pack::name",
-            &parameters.package_name.to_string_with_double_colon(),
-        )
-        .replace("pa_ck::na_me", &parameters.package_name.to_rust_binding())
-        .replace("pack:name", &parameters.package_name.to_string_with_colon())
-        .replace("pack_name", &parameters.package_name.to_snake_case())
-        .replace("pack-name", &parameters.package_name.to_kebab_case())
-        .replace("pack/name", &parameters.package_name.to_string_with_slash())
-        .replace("PackName", &parameters.package_name.to_pascal_case())
-        .replace("pack-ns", &parameters.package_name.namespace())
-        .replace("PackNs", &parameters.package_name.namespace_title_case())
-        .replace("__pack__", &parameters.package_name.namespace_snake_case())
-        .replace("__name__", &parameters.package_name.name_snake_case())
-        .replace("__cn__", "componentName")
+        str.replace("componentname", parameters.component_name.as_str())
+            .replace(
+                "component-name",
+                &parameters.component_name.0.to_kebab_case(),
+            )
+            .replace(
+                "component_name",
+                &parameters.component_name.0.to_snake_case(),
+            )
+            .replace("__cn__", "componentName")
     };
 
     let transform_manifest_hints = |str: &str| -> String {
@@ -376,7 +338,7 @@ fn transform(
     };
 
     let transform_app_name =
-        |str: &str| -> String { str.replace("app-name", parameters.application_name.as_str()) };
+        |str: &str| -> String { str.replace("app-name", &parameters.application_name.0) };
 
     let transform_rust_sdk = |str: &str| -> String {
         str.replace(
@@ -514,12 +476,7 @@ fn get_resolved_contents<'a>(
     }
 }
 
-fn parse_template(
-    lang: GuestLanguage,
-    lang_path: &Path,
-    default_instructions_file_name: &Path,
-    template_root: &Path,
-) -> Template {
+fn parse_template(lang: GuestLanguage, template_root: &Path) -> Template {
     let raw_metadata = TEMPLATES
         .get_file(template_root.join("metadata.json"))
         .expect("Failed to read metadata JSON")
@@ -528,7 +485,6 @@ fn parse_template(
         .expect("Failed to parse metadata JSON");
 
     let kind = match (metadata.app_common_group, metadata.app_component_group) {
-        (None, None) => TemplateKind::Standalone,
         (Some(group), None) => TemplateKind::ComposableAppCommon {
             group: group.into(),
             skip_if_exists: metadata.app_common_skip_if_exists.map(PathBuf::from),
@@ -536,28 +492,10 @@ fn parse_template(
         (None, Some(group)) => TemplateKind::ComposableAppComponent {
             group: group.into(),
         },
-        (Some(_), Some(_)) => panic!(
-            "Only one of appCommonGroup and appComponentGroup can be specified, template root: {}",
+        _ => panic!(
+            "Exactly one of appCommonGroup and appComponentGroup must be specified, template root: {}",
             template_root.display()
         ),
-    };
-
-    let instructions = match &kind {
-        TemplateKind::Standalone => {
-            let instructions_path = match metadata.instructions {
-                Some(instructions_file_name) => lang_path.join(instructions_file_name),
-                None => lang_path.join(default_instructions_file_name),
-            };
-
-            let raw_instructions = TEMPLATES
-                .get_file(instructions_path)
-                .expect("Failed to read instructions")
-                .contents();
-
-            String::from_utf8(raw_instructions.to_vec()).expect("Failed to decode instructions")
-        }
-        TemplateKind::ComposableAppCommon { .. } => "".to_string(),
-        TemplateKind::ComposableAppComponent { .. } => "".to_string(),
     };
 
     let name: TemplateName = {
@@ -586,7 +524,6 @@ fn parse_template(
         language: lang,
         description: metadata.description,
         template_path: template_root.to_path_buf(),
-        instructions,
         dev_only: metadata.dev_only.unwrap_or(false),
     }
 }

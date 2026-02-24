@@ -15,16 +15,15 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app_raw;
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
+use crate::model::{app_raw, GuestLanguage};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_templates::model::GuestLanguage;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use wit_parser::PackageName;

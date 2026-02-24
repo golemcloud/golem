@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::app::context::ApplicationContext;
+use crate::app_template::model::{ComposableAppGroupName, SdkOverrides};
+use crate::app_template::{all_composable_app_templates, ComposableAppTemplate};
 use crate::client::{new_reqwest_client, GolemClients};
 use crate::command::shared_args::PostDeployArgs;
 use crate::command::GolemCliGlobalFlags;
@@ -37,6 +39,7 @@ use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
+use crate::model::GuestLanguage;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;
@@ -49,8 +52,6 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
 };
-use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
-use golem_templates::ComposableAppTemplate;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -568,7 +569,7 @@ impl Context {
         dev_mode: bool,
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
-            .get_or_init(|| golem_templates::all_composable_app_templates(dev_mode))
+            .get_or_init(|| all_composable_app_templates(dev_mode))
     }
 
     pub fn template_sdk_overrides(&self) -> &SdkOverrides {

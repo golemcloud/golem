@@ -14,9 +14,9 @@
 
 use crate::diagnose::VersionRequirement::{ExactByNameVersion, ExactVersion, MinimumVersion};
 use crate::log::logln;
+use crate::model::GuestLanguage;
 use anyhow::{anyhow, Context};
 use colored::Colorize;
-use golem_templates::model::GuestLanguage;
 use indoc::indoc;
 use regex::Regex;
 use std::cmp::max;
