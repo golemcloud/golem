@@ -3886,6 +3886,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum-jrpc",
+ "chrono",
  "futures",
  "gethostname",
  "golem-api-grpc",

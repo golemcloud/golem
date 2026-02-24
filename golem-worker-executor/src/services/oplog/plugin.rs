@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
@@ -32,7 +31,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPl
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload,
+    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
@@ -220,16 +219,17 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         let idempotency_key = IdempotencyKey::fresh();
 
+        let account_id = worker_metadata.created_by;
         worker
             .invoke(AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
-                account_id: worker_metadata.created_by.clone(),
+                account_id,
                 config: running_plugin
                     .configuration
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                metadata: worker_metadata,
+                metadata: worker_metadata.into(),
                 first_entry_index: initial_oplog_index,
                 entries,
             })
@@ -370,7 +370,6 @@ impl OplogConstructor for CreateOplogConstructor {
         Arc::new(ForwardingOplog::new(
             inner,
             self.oplog_plugins,
-            self.inner,
             self.components,
             self.initial_worker_metadata,
             self.last_known_status,
@@ -530,7 +529,6 @@ impl ForwardingOplog {
     pub fn new(
         inner: Arc<dyn Oplog>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
-        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
@@ -545,7 +543,6 @@ impl ForwardingOplog {
             initial_worker_metadata,
             last_known_status,
             last_oplog_idx,
-            oplog_service,
             components,
         }));
 
@@ -661,7 +658,6 @@ struct ForwardingOplogState {
     initial_worker_metadata: WorkerMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
     last_oplog_idx: OplogIndex,
-    oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
 }
 

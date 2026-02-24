@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Timestamp;
 use crate::model::oplog::SpanData;
+use crate::model::Timestamp;
 use desert_rust::adt::{AdtDeserializer, AdtMetadata, AdtSerializer};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -1047,10 +1047,10 @@ mod protobuf {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::Timestamp;
     use crate::model::invocation_context::{
         AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
     };
+    use crate::model::Timestamp;
     use crate::serialization::{deserialize, serialize};
     use std::collections::HashSet;
     use test_r::test;

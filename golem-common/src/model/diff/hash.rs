@@ -13,8 +13,8 @@
 // limitations under the License.
 
 pub use crate::base_model::diff::hash::*;
+use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
-use crate::model::diff::ser::{SerializeMode, ToSerializableWithMode, to_json_with_mode};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::sync::OnceLock;

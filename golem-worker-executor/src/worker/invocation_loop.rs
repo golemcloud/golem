@@ -18,7 +18,7 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
 use crate::worker::{QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
@@ -31,12 +31,12 @@ use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::{OplogEntry, WorkerError};
 use golem_common::model::{
-    AgentInvocation, AgentInvocationKind, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
-    TimestampedAgentInvocation, WorkerId,
+    invocation_context::{AttributeValue, InvocationContextStack},
+    OplogIndex,
 };
 use golem_common::model::{
-    OplogIndex,
-    invocation_context::{AttributeValue, InvocationContextStack},
+    AgentInvocation, AgentInvocationKind, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    TimestampedAgentInvocation, WorkerId,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -44,11 +44,11 @@ use golem_service_base::model::GetFileSystemNodeResult;
 
 use std::collections::VecDeque;
 use std::ops::DerefMut;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::RwLock;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{Instrument, Level, Span, debug, span, warn};
+use tokio::sync::RwLock;
+use tracing::{debug, span, warn, Instrument, Level, Span};
 use wasmtime::component::Instance;
 use wasmtime::Store;
 
@@ -559,18 +559,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: invocation_result,
                 consumed_fuel,
             }) => {
-                self.agent_invocation_finished(
-                    display_name,
-                    invocation_result,
-                    consumed_fuel,
-                    kind,
-                )
-                .await
-            }
-            _ => {
-                self.agent_invocation_failed(&display_name, result)
+                self.agent_invocation_finished(display_name, invocation_result, consumed_fuel, kind)
                     .await
             }
+            _ => self.agent_invocation_failed(&display_name, result).await,
         }
     }
 

@@ -18,12 +18,12 @@ use anyhow::anyhow;
 use chrono::{Duration, Utc};
 use futures::future::Either;
 use futures::pin_mut;
-use golem_common::model::Timestamp;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
 };
+use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;

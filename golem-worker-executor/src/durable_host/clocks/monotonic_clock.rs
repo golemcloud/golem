@@ -15,12 +15,12 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestNoInput,
-    HostResponseMonotonicClockTimestamp, host_functions,
+    host_functions, DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestNoInput,
+    HostResponseMonotonicClockTimestamp,
 };
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 

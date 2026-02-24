@@ -16,8 +16,8 @@ pub use crate::base_model::auth::*;
 use base64::Engine;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, ToJSON, Type};
-use rand::TryRngCore;
 use rand::rngs::OsRng;
+use rand::TryRngCore;
 use std::borrow::Cow;
 use std::str::FromStr;
 

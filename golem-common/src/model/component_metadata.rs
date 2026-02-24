@@ -15,7 +15,7 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
-use crate::{SafeDisplay, virtual_exports};
+use crate::{virtual_exports, SafeDisplay};
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{

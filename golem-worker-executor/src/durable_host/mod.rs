@@ -40,7 +40,6 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
-use crate::services::HasOplogService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -58,10 +57,11 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration};
+use crate::services::HasOplogService;
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host;
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
+    invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{RetryDecision, Worker};
@@ -75,11 +75,9 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 pub use durability::*;
+use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
-use futures::future::try_join_all;
-use golem_common::model::RetryConfig;
-use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode, Principal};
 use golem_common::model::component::{
@@ -96,9 +94,11 @@ use golem_common::model::oplog::{
     WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::RetryConfig;
+use golem_common::model::TransactionId;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
-    ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, ScanCursor,
+    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
@@ -119,7 +119,7 @@ use std::vec;
 use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use tracing::{Instrument, Level, debug, info, span, warn};
+use tracing::{debug, info, span, warn, Instrument, Level};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
@@ -129,7 +129,7 @@ use wasmtime_wasi::p2::{FsResult, Stderr, Stdout, WasiCtx, WasiImpl, WasiView};
 use wasmtime_wasi::{I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    HostFutureIncomingResponse, OutgoingRequestConfig, default_send_request,
+    default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
@@ -2096,7 +2096,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             "Replay state: {:?}",
                             store.as_context().data().durable_ctx().state.replay_state
                         );
-                        let span = span!(Level::INFO, "replaying", function = full_function_name.as_str());
+                        let span = span!(
+                            Level::INFO,
+                            "replaying",
+                            function = full_function_name.as_str()
+                        );
                         store
                             .as_context_mut()
                             .data_mut()

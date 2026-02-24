@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -7,13 +8,13 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use golem_wasm::{ValueAndType, WitValue};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor_test_utils::component_writer::FileSystemComponentWriter;
 use golem_worker_executor_test_utils::TestContext;
@@ -64,9 +65,12 @@ impl WorkerProxy for TestWorkerProxy {
     async fn start(
         &self,
         _owned_worker_id: &OwnedWorkerId,
+        _caller_worker_id: &WorkerId,
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
+        _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
+        _principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
@@ -75,40 +79,24 @@ impl WorkerProxy for TestWorkerProxy {
         ))
     }
 
-    async fn invoke_and_await(
+    async fn invoke_agent(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _worker_id: &WorkerId,
+        _method_name: String,
+        _method_parameters: UntypedDataValue,
+        _mode: AgentInvocationMode,
+        _schedule_at: Option<DateTime<Utc>>,
         _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _function_params: Vec<WitValue>,
         _caller_worker_id: WorkerId,
         _caller_env: HashMap<String, String>,
         _caller_wasi_config_vars: BTreeMap<String, String>,
-        _invocation_context_stack: InvocationContextStack,
+        _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
-    ) -> Result<Option<ValueAndType>, WorkerProxyError> {
+        _principal: Principal,
+    ) -> Result<Option<UntypedDataValue>, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
-                "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
-            )
-        ))
-    }
-
-    async fn invoke(
-        &self,
-        _owned_worker_id: &OwnedWorkerId,
-        _idempotency_key: Option<IdempotencyKey>,
-        _function_name: String,
-        _function_params: Vec<WitValue>,
-        _caller_worker_id: WorkerId,
-        _caller_env: HashMap<String, String>,
-        _caller_wasi_config_vars: BTreeMap<String, String>,
-        _invocation_context_stack: InvocationContextStack,
-        _caller_account_id: AccountId,
-    ) -> Result<(), WorkerProxyError> {
-        Err(WorkerProxyError::InternalError(
-            WorkerExecutorError::unknown(
-                "Not implemented in tests as debug service is not expected to call invoke and await through proxy",
+                "Not implemented in tests as debug service is not expected to call invoke_agent through proxy",
             )
         ))
     }
@@ -159,6 +147,7 @@ impl WorkerProxy for TestWorkerProxy {
                     environment_id: Some(component.environment_id.into()),
                     force: Some(force),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    principal: None,
                 })
                 .await;
 
@@ -214,6 +203,7 @@ impl WorkerProxy for TestWorkerProxy {
                 target_worker_id: Some(target_worker_id.clone().into()),
                 oplog_index_cutoff: (*oplog_index_cutoff).into(),
                 auth_ctx: Some(auth_ctx.into()),
+                principal: None,
             })
             .await?
             .into_inner()
@@ -258,6 +248,7 @@ impl WorkerProxy for TestWorkerProxy {
                 environment_id: Some(component.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(auth_ctx.into()),
+                principal: None,
             })
             .await?
             .into_inner()

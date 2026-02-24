@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use crate::base_model::OplogIndex;
-use crate::model::Timestamp;
 use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::OplogPayload;
+use crate::model::Timestamp;
 use desert_rust::BinaryCodec;
 use nonempty_collections::NEVec;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct OplogIndexRange {
@@ -340,18 +340,23 @@ impl golem_wasm::FromValue for WorkerError {
                 case_value,
             } => match case_idx {
                 0 => {
-                    let s = String::from_value(*case_value.ok_or("Expected case_value for unknown")?)?;
+                    let s =
+                        String::from_value(*case_value.ok_or("Expected case_value for unknown")?)?;
                     Ok(WorkerError::Unknown(s))
                 }
                 1 => {
-                    let s = String::from_value(*case_value.ok_or("Expected case_value for invalid-request")?)?;
+                    let s = String::from_value(
+                        *case_value.ok_or("Expected case_value for invalid-request")?,
+                    )?;
                     Ok(WorkerError::InvalidRequest(s))
                 }
                 2 => Ok(WorkerError::StackOverflow),
                 3 => Ok(WorkerError::OutOfMemory),
                 4 => Ok(WorkerError::ExceededMemoryLimit),
                 5 => {
-                    let s = String::from_value(*case_value.ok_or("Expected case_value for agent-error")?)?;
+                    let s = String::from_value(
+                        *case_value.ok_or("Expected case_value for agent-error")?,
+                    )?;
                     Ok(WorkerError::AgentError(s))
                 }
                 _ => Err(format!("Invalid case_idx for WorkerError: {case_idx}")),
@@ -557,7 +562,7 @@ impl golem_wasm::IntoValue for SpanData {
             SpanData::ExternalSpan { span_id } => golem_wasm::Value::Variant {
                 case_idx: 1,
                 case_value: Some(Box::new(golem_wasm::Value::Record(vec![
-                    span_id.into_value(),
+                    span_id.into_value()
                 ]))),
             },
         }
@@ -597,16 +602,13 @@ impl golem_wasm::FromValue for SpanData {
                 case_value,
             } => match case_idx {
                 0 => {
-                    let record_value =
-                        *case_value.ok_or("Expected case_value for local-span")?;
+                    let record_value = *case_value.ok_or("Expected case_value for local-span")?;
                     match record_value {
                         golem_wasm::Value::Record(fields) if fields.len() == 6 => {
                             let mut iter = fields.into_iter();
                             let span_id = SpanId::from_value(iter.next().unwrap())?;
-                            let start =
-                                crate::model::Timestamp::from_value(iter.next().unwrap())?;
-                            let parent_id =
-                                Option::<SpanId>::from_value(iter.next().unwrap())?;
+                            let start = crate::model::Timestamp::from_value(iter.next().unwrap())?;
+                            let parent_id = Option::<SpanId>::from_value(iter.next().unwrap())?;
                             let _linked_context_idx =
                                 Option::<u64>::from_value(iter.next().unwrap())?;
                             let attrs_list = match iter.next().unwrap() {

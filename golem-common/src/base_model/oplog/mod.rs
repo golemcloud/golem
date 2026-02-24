@@ -36,11 +36,9 @@ mod raw_imports {
     pub use crate::model::invocation_context::AttributeValue;
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::*;
-    pub use crate::model::{
-        AgentInvocation, AgentInvocationPayload, AgentInvocationResult, RetryConfig,
-    };
+    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult, RetryConfig};
     pub use golem_wasm::wasmtime::ResourceTypeId;
-    pub use golem_wasm::Value;
+
     pub use std::collections::{HashMap, HashSet};
 }
 

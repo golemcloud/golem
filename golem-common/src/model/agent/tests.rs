@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::Empty;
 use crate::base_model::agent::{
     Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
 };
+use crate::base_model::Empty;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,

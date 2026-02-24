@@ -40,9 +40,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig,
-};
+use golem_common::model::agent::{AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -2324,7 +2322,6 @@ pub enum ResultOrSubscription {
     Finished(Result<AgentInvocationResult, WorkerExecutorError>),
     Pending(EventsSubscription),
 }
-
 
 struct GetOrCreateWorkerResult {
     initial_worker_metadata: WorkerMetadata,

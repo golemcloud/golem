@@ -23,7 +23,7 @@ use crate::preview2::golem_api_1_x::host::{
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
-use crate::preview2::{Pollable, golem_api_1_x};
+use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::{HasOplogService, HasWorker};
@@ -60,7 +60,7 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{IoView, subscribe};
+use wasmtime_wasi::{subscribe, IoView};
 
 impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     async fn new(

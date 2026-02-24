@@ -19,21 +19,23 @@ use golem_common::model::agent::AgentError;
 use golem_common::model::agent::AgentId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
-use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::RawSnapshotData;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
-use golem_common::model::{AgentInvocation, AgentInvocationKind, AgentInvocationResult, OplogIndex};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationKind, AgentInvocationResult, OplogIndex,
+};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 
 /// Describes how an invocation is being executed with respect to the oplog.
+#[allow(clippy::large_enum_variant)]
 pub enum InvocationMode {
     /// The invocation is happening live and should write oplog markers.
     Live(AgentInvocation),
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
 }
-use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
+use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm::{FromValue, IntoValue, Value};
 use tracing::{debug, error};
 use wasmtime::component::{Func, Val};
@@ -60,14 +62,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
 
     debug!("Beginning invocation {lowered:?}");
 
-    let result = invoke_observed(
-        lowered,
-        &mut store,
-        instance,
-        component_metadata,
-        mode,
-    )
-    .await;
+    let result = invoke_observed(lowered, &mut store, instance, component_metadata, mode).await;
 
     debug!("Invocation resulted in {:?}", result);
 
@@ -693,19 +688,15 @@ pub fn lower_invocation(
                 })?;
 
             let val_account_info = Value::Record(vec![account_id.into_value()]);
-            let val_component_id = metadata.worker_id.component_id.clone().into_value();
+            let val_component_id = metadata.agent_id.component_id.into_value();
             let mut config_pairs = Vec::new();
             for (key, value) in config {
-                config_pairs.push(Value::Tuple(vec![
-                    key.into_value(),
-                    value.into_value(),
-                ]));
+                config_pairs.push(Value::Tuple(vec![key.into_value(), value.into_value()]));
             }
             let val_config = Value::List(config_pairs);
 
-            let val_worker_id = metadata.worker_id.clone().into_value();
-            let agent_metadata_for_guests: AgentMetadataForGuests = metadata.into();
-            let val_metadata = agent_metadata_for_guests.into_value();
+            let val_worker_id = metadata.agent_id.clone().into_value();
+            let val_metadata = metadata.into_value();
             let val_first_entry_index = first_entry_index.into_value();
             let val_entries = Value::List(
                 entries

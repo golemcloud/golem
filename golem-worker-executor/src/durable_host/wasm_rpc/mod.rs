@@ -839,7 +839,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let action = ScheduledAction::Invoke {
                 account_id: self.created_by(),
                 owned_worker_id: remote_worker_id,
-                invocation: AgentInvocation::AgentMethod {
+                invocation: Box::new(AgentInvocation::AgentMethod {
                     idempotency_key,
                     method_name: function_name,
                     input: UntypedDataValue::Tuple(
@@ -850,7 +850,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     ),
                     invocation_context: stack,
                     principal: Principal::anonymous(),
-                },
+                }),
             };
 
             let result = self

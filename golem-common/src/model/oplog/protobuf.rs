@@ -25,11 +25,9 @@ use super::{
     WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
-use crate::model::Empty;
 use crate::model::agent::DataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
-use crate::model::oplog::PersistenceLevel;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -37,16 +35,18 @@ use crate::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingAgentInvocationParams,
+    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
+use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
+use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
-    oplog_entry, wrapped_function_type,
+    invocation_span, oplog_entry, wrapped_function_type, AttributeValue, ExternalParentSpan,
+    InvocationSpan, LocalInvocationSpan,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;

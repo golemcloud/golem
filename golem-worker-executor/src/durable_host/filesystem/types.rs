@@ -15,11 +15,9 @@
 use std::hash::Hasher;
 use std::time::SystemTime;
 
-use fs_set_times::{SystemTimeSpec, set_symlink_times};
+use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use metrohash::MetroHash128;
 use wasmtime::component::Resource;
-use wasmtime_wasi::p2::FsError;
-use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::p2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
@@ -27,6 +25,8 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
+use wasmtime_wasi::p2::FsError;
+use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};

@@ -691,7 +691,7 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
     use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
-    use golem_common::model::Timestamp;
+    use golem_common::model::{AgentInvocationResult, Timestamp};
     use golem_worker_executor::services::oplog::CommitLevel;
     use std::collections::BTreeMap;
     use std::fmt::{Debug, Formatter};
@@ -776,7 +776,9 @@ mod tests {
             if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
                 OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
-                    result: OplogPayload::Inline(Box::new(None)),
+                    result: OplogPayload::Inline(Box::new(
+                        AgentInvocationResult::AgentInitialization,
+                    )),
                     consumed_fuel: 0,
                 }
             } else {

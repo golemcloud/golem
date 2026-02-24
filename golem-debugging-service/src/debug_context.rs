@@ -24,7 +24,10 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId, WorkerStatusRecord};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId,
+    WorkerStatusRecord,
+};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};

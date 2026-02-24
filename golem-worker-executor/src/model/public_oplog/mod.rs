@@ -30,7 +30,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingAgentInvocationParams,
+    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
@@ -38,9 +38,9 @@ use golem_common::model::oplog::public_oplog_entry::{
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest, LoadSnapshotParameters,
+    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
-    JsonSnapshotData, ManualUpdateParameters, OplogEntry, OplogIndex,
+    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicOplogEntry, PublicSnapshotData,
     PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
@@ -50,7 +50,7 @@ use golem_common::model::{
     AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedWorkerId, WorkerId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::IntoValueAndType;
 use std::sync::Arc;
 
 pub struct PublicOplogChunk {
@@ -711,11 +711,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .download_payload(owned_worker_id, data)
                     .await?;
 
-                let snapshot_data =
-                    raw_snapshot_to_public(RawSnapshotData {
-                        data: bytes,
-                        mime_type,
-                    });
+                let snapshot_data = raw_snapshot_to_public(RawSnapshotData {
+                    data: bytes,
+                    mime_type,
+                });
 
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp,
@@ -865,11 +864,11 @@ async fn agent_invocation_to_public(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
         AgentInvocation::SaveSnapshot { .. } => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(
-            PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
+        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(PublicAgentInvocation::LoadSnapshot(
+            LoadSnapshotParameters {
                 snapshot: raw_snapshot_to_public(snapshot),
-            }),
-        ),
+            },
+        )),
         AgentInvocation::ProcessOplogEntries {
             idempotency_key, ..
         } => Ok(PublicAgentInvocation::ProcessOplogEntries(

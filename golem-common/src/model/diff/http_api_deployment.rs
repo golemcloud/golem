@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::BTreeMapDiff;
-use crate::model::diff::{Diffable, Hash, Hashable, hash_from_serialized_value};
+use crate::model::diff::{hash_from_serialized_value, Diffable, Hash, Hashable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 

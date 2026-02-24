@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::component::ComponentFilePermissions;
-use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
+use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::plugin::PluginInstallation;
 use crate::model::diff::ser::serialize_with_mode;
 use crate::model::diff::{BTreeMapDiff, Diffable};

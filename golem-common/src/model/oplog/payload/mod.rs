@@ -19,7 +19,6 @@ mod tests;
 
 use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType};
 use crate::model::component::ComponentRevision;
-use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
@@ -31,6 +30,7 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
+use crate::model::oplog::PayloadId;
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId, WorkerId};
 use crate::oplog_payload;
@@ -581,8 +581,7 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::FromValue for Oplog
                     Ok(OplogPayload::SerializedInline(bytes))
                 }
                 1 => {
-                    let record_value =
-                        *case_value.ok_or("Expected case_value for external")?;
+                    let record_value = *case_value.ok_or("Expected case_value for external")?;
                     match record_value {
                         golem_wasm::Value::Record(fields) if fields.len() == 2 => {
                             let mut iter = fields.into_iter();
@@ -601,9 +600,7 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> golem_wasm::FromValue for Oplog
                 }
                 _ => Err(format!("Invalid case_idx for OplogPayload: {case_idx}")),
             },
-            other => Err(format!(
-                "Expected Variant for OplogPayload, got {other:?}"
-            )),
+            other => Err(format!("Expected Variant for OplogPayload, got {other:?}")),
         }
     }
 }

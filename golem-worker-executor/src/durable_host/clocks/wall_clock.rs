@@ -16,7 +16,7 @@ use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestNoInput, HostResponseWallClock, host_functions,
+    host_functions, DurableFunctionType, HostRequestNoInput, HostResponseWallClock,
 };
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 

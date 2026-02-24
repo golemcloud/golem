@@ -42,11 +42,11 @@ use crate::model::component_metadata::ComponentMetadata;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
-use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{
-    FromValue, IntoValue, IntoValueAndType, Value, ValueAndType, parse_value_and_type,
-    print_value_and_type,
+    parse_value_and_type, print_value_and_type, FromValue, IntoValue, IntoValueAndType, Value,
+    ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
 use regex::Regex;

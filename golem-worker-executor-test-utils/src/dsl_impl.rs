@@ -280,6 +280,7 @@ impl TestDsl for TestWorkerExecutor {
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                invocation_context: None,
             })
             .await?;
 

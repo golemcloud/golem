@@ -31,6 +31,7 @@ use crate::services::{
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use futures::StreamExt;
 use gethostname::gethostname;
@@ -68,7 +69,6 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::GetFileSystemNodeResult;
-use chrono::{DateTime, Utc};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -1639,13 +1639,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mode = request.mode();
 
-        let schedule_at: Option<DateTime<Utc>> = request.schedule_at.and_then(|ts| {
-            DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-        });
+        let schedule_at: Option<DateTime<Utc>> = request
+            .schedule_at
+            .and_then(|ts| DateTime::from_timestamp(ts.seconds, ts.nanos as u32));
 
         let account_id: AccountId = request
             .component_owner_account_id
-            .clone()
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
             .try_into()
             .map_err(|e| {
@@ -1671,7 +1670,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: ik,
             method_name,
-            input: method_parameters.into(),
+            input: method_parameters,
             invocation_context,
             principal,
         };
@@ -1698,7 +1697,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 ScheduledAction::Invoke {
                                     account_id,
                                     owned_worker_id,
-                                    invocation,
+                                    invocation: Box::new(invocation),
                                 },
                             )
                             .await;

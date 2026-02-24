@@ -151,9 +151,15 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                             let field_names = variant
                                 .fields
                                 .iter()
-                                .map(|field| {
-                                    let field = field.ident.as_ref().expect("Expected field to have an identifier");
-                                    quote! { #field }
+                                .zip(&wit_fields)
+                                .map(|(field, wit_field)| {
+                                    let field_ident = field.ident.as_ref().expect("Expected field to have an identifier");
+                                    if wit_field.skip {
+                                        let prefixed = Ident::new(&format!("_{}", field_ident), field_ident.span());
+                                        quote! { #field_ident: #prefixed }
+                                    } else {
+                                        quote! { #field_ident }
+                                    }
                                 })
                                 .collect::<Vec<_>>();
 

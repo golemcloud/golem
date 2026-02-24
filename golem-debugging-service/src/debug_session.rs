@@ -215,9 +215,9 @@ fn get_oplog_entry_from_public_oplog_entry(
 ) -> Result<OplogEntry, String> {
     match public_oplog_entry {
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
-            timestamp,
-            consumed_fuel,
-            result,
+            timestamp: _,
+            consumed_fuel: _,
+            result: _,
             ..
         }) => {
             // TODO: Converting PublicAgentInvocationResult back to raw AgentInvocationResult is not yet implemented

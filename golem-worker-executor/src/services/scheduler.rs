@@ -30,7 +30,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{AgentInvocation, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
@@ -333,11 +333,7 @@ impl SchedulerServiceDefault {
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self
                         .worker_access
-                        .enqueue_invocation(
-                            account_id,
-                            &owned_worker_id,
-                            invocation,
-                        )
+                        .enqueue_invocation(account_id, &owned_worker_id, *invocation)
                         .await;
 
                     if let Err(e) = result {
@@ -449,8 +445,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentInvocation, IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId,
-        WorkerId,
+        AgentInvocation, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;

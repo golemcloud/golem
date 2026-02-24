@@ -14,7 +14,7 @@
 
 use crate::model::agent::{AgentError, AgentType};
 use crate::model::parsed_function_name::ParsedFunctionName;
-use anyhow::{Context, anyhow};
+use anyhow::{anyhow, Context};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
@@ -23,7 +23,7 @@ use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
 };
 use wasmtime::{AsContextMut, Engine, Store};
-use wasmtime_wasi::p2::{StdoutStream, WasiCtx, WasiView, pipe};
+use wasmtime_wasi::p2::{pipe, StdoutStream, WasiCtx, WasiView};
 use wasmtime_wasi::{IoCtx, IoView};
 use wit_parser::{PackageId, Resolve, WorldItem};
 

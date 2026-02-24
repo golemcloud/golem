@@ -33,14 +33,12 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentInvocationMode, AgentPrincipal, Principal, UntypedDataValue,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap};
@@ -655,95 +653,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-/// As we know the target component's metadata, and it includes the root package name, we can
-/// accept function names which are not fully qualified by falling back to use this root package
-/// when the package part is missing.
-pub(crate) async fn enrich_function_name(
-    component_service: &Arc<dyn component::ComponentService>,
-    target_worker_id: &OwnedWorkerId,
-    function_name: String,
-) -> String {
-    let parsed_function_name: Option<ParsedFunctionName> =
-        ParsedFunctionName::parse(&function_name).ok();
-    if matches!(
-        parsed_function_name,
-        Some(ParsedFunctionName {
-            site: ParsedFunctionSite::Global,
-            function: _
-        }) | Some(ParsedFunctionName {
-            site: ParsedFunctionSite::PackagedInterface { .. },
-            function: _
-        })
-    ) {
-        // already valid function name, doing nothing
-        function_name
-    } else if let Ok(target_component) = component_service
-        .get_metadata(target_worker_id.worker_id.component_id, None)
-        .await
-    {
-        enrich_function_name_by_target_information(
-            function_name,
-            target_component.metadata.root_package_name().clone(),
-            target_component.metadata.root_package_version().clone(),
-        )
-    } else {
-        // If we cannot get the target metadata, we just go with the original function name
-        // and let it fail on that.
-        function_name
-    }
-}
-
-fn enrich_function_name_by_target_information(
-    function_name: String,
-    root_package_name: Option<String>,
-    root_package_version: Option<String>,
-) -> String {
-    if let Some(root_package_name) = root_package_name {
-        // Hack for supporting the 'unique' name generation of golem-test-framework. Stripping everything after '---'
-        let root_package_name = strip_unique_suffix(&root_package_name);
-
-        if let Some(root_package_version) = root_package_version {
-            // The target root package is versioned, and the version has to be put _after_ the interface
-            // name which we assume to be the first section (before a dot) of the provided string:
-
-            if let Some((interface_name, rest)) = function_name.split_once('.') {
-                let enriched_function_name =
-                    format!("{root_package_name}/{interface_name}@{root_package_version}.{rest}");
-                if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
-                    enriched_function_name
-                } else {
-                    // If the enriched function name is still not valid, we just return the original function name
-                    function_name
-                }
-            } else {
-                // Unexpected format, we just return the original function name
-                function_name
-            }
-        } else {
-            // The target root package is not versioned, so we can just simply prefix the root package name
-            // to the provided function name and see if it is valid:
-            let enriched_function_name = format!("{root_package_name}/{function_name}");
-            if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
-                enriched_function_name
-            } else {
-                // If the enriched function name is still not valid, we just return the original function name
-                function_name
-            }
-        }
-    } else {
-        // No root package information in the target, we can't do anything
-        function_name
-    }
-}
-
-fn strip_unique_suffix(root_package_name: &str) -> String {
-    if let Some(index) = root_package_name.rfind("---") {
-        root_package_name[..index].to_string()
-    } else {
-        root_package_name.to_string()
-    }
-}
-
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
@@ -867,41 +776,3 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl RpcDemand for () {}
-
-#[cfg(test)]
-mod tests {
-    use crate::services::rpc::enrich_function_name_by_target_information;
-    use test_r::test;
-
-    #[test]
-    fn test_enrich_function_name_by_target_information() {
-        assert_eq!(
-            enrich_function_name_by_target_information("api.{x}".to_string(), None, None),
-            "api.{x}".to_string()
-        );
-        assert_eq!(
-            enrich_function_name_by_target_information(
-                "api.{x}".to_string(),
-                Some("test:pkg".to_string()),
-                None
-            ),
-            "test:pkg/api.{x}".to_string()
-        );
-        assert_eq!(
-            enrich_function_name_by_target_information(
-                "api.{x}".to_string(),
-                Some("test:pkg".to_string()),
-                Some("1.0.0".to_string())
-            ),
-            "test:pkg/api@1.0.0.{x}".to_string()
-        );
-        assert_eq!(
-            enrich_function_name_by_target_information(
-                "run".to_string(),
-                Some("test:pkg".to_string()),
-                Some("1.0.0".to_string())
-            ),
-            "run".to_string()
-        );
-    }
-}

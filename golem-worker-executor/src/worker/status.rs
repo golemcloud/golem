@@ -9,9 +9,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId,
-    RetryConfig, SuccessfulUpdateRecord, TimestampedAgentInvocation, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord,
+    AgentInvocation, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig,
+    SuccessfulUpdateRecord, TimestampedAgentInvocation, WorkerResourceDescription, WorkerStatus,
+    WorkerStatusRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
@@ -450,20 +450,18 @@ fn calculate_pending_invocations(
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 idempotency_key,
-                payload,
+                payload: OplogPayload::Inline(agent_payload),
                 ..
             } => {
-                if let OplogPayload::Inline(agent_payload) = payload {
-                    let invocation = AgentInvocation::from_parts(
-                        idempotency_key.clone(),
-                        *agent_payload.clone(),
-                        InvocationContextStack::fresh(),
-                    );
-                    result.push(TimestampedAgentInvocation {
-                        timestamp: *timestamp,
-                        invocation,
-                    });
-                }
+                let invocation = AgentInvocation::from_parts(
+                    idempotency_key.clone(),
+                    *agent_payload.clone(),
+                    InvocationContextStack::fresh(),
+                );
+                result.push(TimestampedAgentInvocation {
+                    timestamp: *timestamp,
+                    invocation,
+                });
             }
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
@@ -1199,11 +1197,14 @@ mod test {
             .agent_invocation_started("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .pending_invocation(AgentInvocation::ExportedFunction {
+            .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
-                full_function_name: "b".to_string(),
-                function_input: vec![Value::Bool(true)],
+                method_name: "b".to_string(),
+                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                    Value::Bool(true),
+                )]),
                 invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
             })
             .agent_invocation_finished(AgentInvocationResult::AgentInitialization, k1.clone())
             .agent_invocation_started("b", vec![], k2.clone())
@@ -1224,17 +1225,21 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .pending_invocation(AgentInvocation::ExportedFunction {
+            .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k1.clone(),
-                full_function_name: "a".to_string(),
-                function_input: vec![Value::Bool(true)],
+                method_name: "a".to_string(),
+                input: UntypedDataValue::Tuple(vec![UntypedElementValue::ComponentModel(
+                    Value::Bool(true),
+                )]),
                 invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
             })
-            .pending_invocation(AgentInvocation::ExportedFunction {
+            .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
-                full_function_name: "b".to_string(),
-                function_input: vec![],
+                method_name: "b".to_string(),
+                input: UntypedDataValue::Tuple(vec![]),
                 invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
             })
             .cancel_pending_invocation(k1)
             .build();
@@ -1510,7 +1515,13 @@ mod test {
         }
 
         pub fn pending_invocation(self, invocation: AgentInvocation) -> Self {
-            let entry = OplogEntry::pending_worker_invocation(invocation.clone()).rounded();
+            let (idempotency_key, invocation_payload, _invocation_context) =
+                invocation.clone().into_parts();
+            let entry = OplogEntry::pending_agent_invocation(
+                idempotency_key,
+                OplogPayload::Inline(Box::new(invocation_payload)),
+            )
+            .rounded();
             self.add(entry.clone(), move |mut status| {
                 status.pending_invocations.push(TimestampedAgentInvocation {
                     timestamp: entry.timestamp(),
@@ -1525,17 +1536,7 @@ mod test {
             self.add(entry.clone(), move |mut status| {
                 status
                     .pending_invocations
-                    .retain(|invocation| match invocation {
-                        TimestampedAgentInvocation {
-                            invocation:
-                                AgentInvocation::ExportedFunction {
-                                    idempotency_key: key,
-                                    ..
-                                },
-                            ..
-                        } => key != &idempotency_key,
-                        _ => true,
-                    });
+                    .retain(|ti| ti.invocation.idempotency_key() != Some(&idempotency_key));
                 status
             })
         }

@@ -377,7 +377,7 @@ impl TextView for PublicOplogEntry {
                         format_id(&inner.idempotency_key),
                     ));
                     logln(format!("{pad}input:"));
-                    log_data_value(&pad, &inner.function_input);
+                    log_data_value(pad, &inner.function_input);
                 }
                 other => {
                     logln(format!(

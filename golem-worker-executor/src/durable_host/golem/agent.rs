@@ -16,7 +16,6 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_common::model::PromiseId;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
@@ -30,6 +29,7 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
     HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::model::PromiseId;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {

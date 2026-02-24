@@ -71,6 +71,7 @@ macro_rules! oplog_entry {
         #[cfg(feature = "full")]
         impl golem_wasm::IntoValue for OplogEntry {
             fn into_value(self) -> golem_wasm::Value {
+                #[allow(unused_imports)]
                 use golem_wasm::IntoValue as _;
 
                 let _case_names: &[&str] = &[$(stringify!($case)),*];
@@ -89,7 +90,7 @@ macro_rules! oplog_entry {
             }
 
             fn get_type() -> golem_wasm::analysis::AnalysedType {
-                use golem_wasm::IntoValue as _;
+
                 use heck::ToKebabCase as _;
 
                 golem_wasm::analysis::analysed_type::variant(vec![
@@ -202,6 +203,7 @@ macro_rules! oplog_payload {
         }) => {
 
         #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
+        #[allow(clippy::large_enum_variant)]
         pub enum $typename {
             Custom(golem_wasm::ValueAndType),
             $($(#[$casemeta])* $case(

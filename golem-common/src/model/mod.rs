@@ -58,9 +58,12 @@ use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
 use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{OplogEntry, PublicOplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId};
+use crate::model::oplog::types::AgentMetadataForGuests;
+use crate::model::oplog::{
+    OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId,
+};
 use crate::model::regions::DeletedRegions;
-use crate::{SafeDisplay, grpc_uri};
+use crate::{grpc_uri, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -197,8 +200,10 @@ pub trait PoemTypeRequirements:
 }
 
 impl<
-    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
-> PoemTypeRequirements for T
+        T: poem_openapi::types::Type
+            + poem_openapi::types::ParseFromJSON
+            + poem_openapi::types::ToJSON,
+    > PoemTypeRequirements for T
 {
 }
 
@@ -315,7 +320,7 @@ pub enum ScheduledAction {
     Invoke {
         account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
-        invocation: AgentInvocation,
+        invocation: Box<AgentInvocation>,
     },
 }
 
@@ -733,7 +738,7 @@ pub enum AgentInvocation {
         idempotency_key: IdempotencyKey,
         account_id: AccountId,
         config: Vec<(String, String)>,
-        metadata: WorkerMetadata,
+        metadata: AgentMetadataForGuests,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     },
@@ -761,7 +766,7 @@ pub enum AgentInvocationPayload {
     ProcessOplogEntries {
         account_id: AccountId,
         config: Vec<(String, String)>,
-        metadata: WorkerMetadata,
+        metadata: AgentMetadataForGuests,
         first_entry_index: OplogIndex,
         entries: Vec<crate::model::oplog::OplogEntry>,
     },
@@ -825,10 +830,7 @@ fn value_replay_equivalent(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn untyped_element_replay_equivalent(
-    a: &UntypedElementValue,
-    b: &UntypedElementValue,
-) -> bool {
+fn untyped_element_replay_equivalent(a: &UntypedElementValue, b: &UntypedElementValue) -> bool {
     match (a, b) {
         (UntypedElementValue::ComponentModel(a), UntypedElementValue::ComponentModel(b)) => {
             value_replay_equivalent(a, b)
@@ -849,8 +851,7 @@ fn untyped_data_replay_equivalent(a: &UntypedDataValue, b: &UntypedDataValue) ->
         (UntypedDataValue::Multimodal(xs), UntypedDataValue::Multimodal(ys)) => {
             xs.len() == ys.len()
                 && xs.iter().zip(ys.iter()).all(|(x, y)| {
-                    x.name == y.name
-                        && untyped_element_replay_equivalent(&x.value, &y.value)
+                    x.name == y.name && untyped_element_replay_equivalent(&x.value, &y.value)
                 })
         }
         _ => false,

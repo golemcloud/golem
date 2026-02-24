@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter, diff};
+use super::{diff, WorkerResourceDescription, WorkerWasiConfigVarsFilter};
 use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
 use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{

@@ -19,7 +19,7 @@ use crate::model::oplog::public_oplog_entry::{
     BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams, CreateResourceParams,
     DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
     FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
-    NoOpParams, PendingUpdateParams, PendingAgentInvocationParams, RestartParams,
+    NoOpParams, PendingAgentInvocationParams, PendingUpdateParams, RestartParams,
     SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
@@ -33,7 +33,7 @@ use crate::model::regions::OplogRegion;
 use crate::model::{
     AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp, WorkerId,
 };
-use golem_wasm::analysis::analysed_type::{r#enum, field, list, record, s16, str, u64};
+use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use std::collections::{BTreeMap, BTreeSet};
