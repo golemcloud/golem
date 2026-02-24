@@ -22,7 +22,7 @@ use rmcp::{
 };
 use rmcp::handler::server::router::prompt::PromptRouter;
 use serde_json::{json};
-use tokio::sync::{Mutex};
+use tokio::sync::{Mutex, RwLock};
 use golem_common::base_model::agent::{AgentId, AgentMethod, AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchemas};
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::agent::NamedElementSchema;
@@ -32,20 +32,21 @@ use crate::mcp::agent_mcp_prompt::AgentMcpPrompt;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::McpCapabilityLookup;
 
+// Every client will get an instance of this
 #[derive(Clone)]
 pub struct GolemAgentMcpServer {
-    pub processor: Arc<Mutex<OperationProcessor>>,
-    pub tool_router: Arc<Mutex<Option<ToolRouter<GolemAgentMcpServer>>>>,
-    pub domain: Arc<Mutex<Option<Domain>>>,
+    processor: Arc<Mutex<OperationProcessor>>,
+    tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
+    domain: Arc<RwLock<Option<Domain>>>,
     agent_id: Option<AgentId>,
 }
 
 impl GolemAgentMcpServer {
     pub fn new(agent_id: Option<AgentId>) -> Self {
         Self {
-            tool_router: Arc::new(Mutex::new(None)),
+            tool_router: Arc::new(RwLock::new(None)),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
-            domain: Arc::new(Mutex::new(None)),
+            domain: Arc::new(RwLock::new(None)),
             agent_id,
         }
     }
@@ -181,7 +182,7 @@ impl ServerHandler for GolemAgentMcpServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
-        let tool_router = self.tool_router.blocking_lock();
+        let tool_router = self.tool_router.blocking_read();
         if let Some(tool_router) = tool_router.as_ref() {
             tool_router.get(name).cloned()
         } else {
@@ -190,7 +191,7 @@ impl ServerHandler for GolemAgentMcpServer {
     }
 
     async fn list_tools(&self, _request: Option<rmcp::model::PaginatedRequestParams>, _context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        let tool_router = self.tool_router.lock().await;
+        let tool_router = self.tool_router.read().await;
 
         if let Some(tool_router) = tool_router.as_ref() {
                 tracing::info!("Listing tools: {:?}", tool_router.list_all());
@@ -210,7 +211,7 @@ impl ServerHandler for GolemAgentMcpServer {
     }
 
     async fn call_tool(&self, request: rmcp::model::CallToolRequestParams, context: rmcp::service::RequestContext<rmcp::RoleServer>) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-        let tool_router = self.tool_router.lock().await;
+        let tool_router = self.tool_router.read().await;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         if let Some(tool_router) = tool_router.as_ref() {
             tool_router.call(tcc).await
@@ -263,7 +264,6 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
-        // Extract http::request::Parts (injected by rmcp's StreamableHttpService)
         if let Some(parts) = context.extensions.get::<http::request::Parts>() {
             tracing::info!(
                 version = ?parts.version,
@@ -276,9 +276,9 @@ impl ServerHandler for GolemAgentMcpServer {
             // Setting the domain from the Host header depending on the incoming request
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                *self.domain.lock().await = Some(Domain(host.to_str().unwrap().to_string()));
+                *self.domain.write().await = Some(Domain(host.to_str().unwrap().to_string()));
                 let tool_router = self.tool_router(&domain);
-                *self.tool_router.lock().await = Some(tool_router);
+                *self.tool_router.write().await = Some(tool_router);
             }
 
         }
