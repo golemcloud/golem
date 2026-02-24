@@ -267,6 +267,8 @@ impl DeploymentWriteService {
                 .map_err(DeploymentWriteError::from),
         )?;
 
+        tracing::info!("Fetched staged deployment data for environment: {environment_id}, components: {}, http api deployments: {}, mcp deployments: {}", components.len(), http_api_deployments.len(), mcp_deployments.len());
+
         let deployment_context =
             DeploymentContext::new(environment, components, http_api_deployments);
 
@@ -307,6 +309,12 @@ impl DeploymentWriteService {
                 )));
             }
 
+            tracing::info!(
+                "Compiled MCP deployment for environment {environment_id} with domain {} and agent types: {:?}",
+                mcp_deployment.domain,
+                agent_type_implementers.keys().collect::<Vec<_>>()
+            );
+
             CompiledMcp {
                 account_id: auth.account_id(),
                 environment_id,
@@ -315,6 +323,7 @@ impl DeploymentWriteService {
                 agent_type_implementers,
             }
         } else {
+            tracing::info!("No registered agents found in deployment storage");
             // If no MCP deployment is staged, create one with empty agent types
             CompiledMcp {
                 account_id: auth.account_id(),
