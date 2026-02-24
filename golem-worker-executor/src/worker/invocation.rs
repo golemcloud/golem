@@ -612,6 +612,24 @@ pub fn lower_invocation(
             principal,
             ..
         } => {
+            if let Some(agent_id) = agent_id {
+                let agent_type = component_metadata
+                    .find_agent_type_by_name(&agent_id.agent_type)
+                    .map_err(WorkerExecutorError::runtime)?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Agent type '{}' not found in component",
+                            agent_id.agent_type
+                        ))
+                    })?;
+                if !agent_type.methods.iter().any(|m| m.name == method_name) {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Agent method '{method_name}' not found in agent type '{}'",
+                        agent_id.agent_type
+                    )));
+                }
+            }
+
             let invoke_fn = component_metadata
                 .agent_invoke()
                 .map_err(WorkerExecutorError::runtime)?
