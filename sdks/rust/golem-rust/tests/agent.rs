@@ -570,10 +570,12 @@ mod tests {
         }
     }
 
-    #[derive(Schema)]
+    #[derive(ConfigSchema)]
+    #[allow(unused)]
     struct ConfigAgentConfigNested {
         foo: String,
         bar: i32,
+        nested_secret: Secret<bool>
     }
 
     #[derive(ConfigSchema)]
@@ -1328,9 +1330,28 @@ mod tests {
                     "WitTypeNode::PrimU32Type".to_string()
                 ),
                 (
-                    vec!["nested".to_string()],
+                    vec![
+                        "nested".to_string(),
+                        "foo".to_string(),
+                    ],
                     false,
-                    "WitTypeNode::RecordType([(\"foo\", 1), (\"bar\", 2)])".to_string()
+                    "WitTypeNode::PrimStringType".to_string()
+                ),
+                (
+                    vec![
+                        "nested".to_string(),
+                        "bar".to_string(),
+                    ],
+                    false,
+                    "WitTypeNode::PrimS32Type".to_string()
+                ),
+                (
+                    vec![
+                        "nested".to_string(),
+                        "nested_secret".to_string(),
+                    ],
+                    true,
+                    "WitTypeNode::PrimBoolType".to_string()
                 ),
                 (
                     vec!["api_key".to_string()],

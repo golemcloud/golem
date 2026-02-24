@@ -144,7 +144,7 @@ fn get_save_snapshot_item() -> syn::TraitItem {
 fn get_config_item(config_type: &syn::Type) -> syn::TraitItem {
     syn::parse_quote! {
         fn get_config() -> Result<#config_type, String> {
-            <#config_type as ConfigSchema>::load()
+            <#config_type as ConfigSchema>::load(&[])
         }
     }
 }

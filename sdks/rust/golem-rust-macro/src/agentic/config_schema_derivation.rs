@@ -42,8 +42,7 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
         }
     };
 
-    let mut assertions = Vec::with_capacity(fields.len());
-    let mut describe_config_entries = Vec::with_capacity(fields.len());
+    let mut append_config_entries = Vec::with_capacity(fields.len());
     let mut load_entries = Vec::with_capacity(fields.len());
 
     for field in fields {
@@ -51,58 +50,34 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
         let field_name = field_ident.to_string();
         let field_ty = &field.ty;
 
-        {
-            let invalid_type_error = format!("Invalid field `{field_name}`: Only component-model compatible types can be used in configuration");
-            assertions.push(
-                quote! {
-                    const _: () = {
-                        assert!(
-                            <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::Inner::IS_COMPONENT_MODEL_SCHEMA,
-                            #invalid_type_error
-                        );
-                    };
-                }
-            );
-        }
-
-        describe_config_entries.push(
+        append_config_entries.push(
             quote! {
-                #golem_rust_crate_ident::agentic::ConfigEntry {
-                    key: #field_name.to_string(),
-                    shared: <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::IS_SHARED,
-                    schema:
-                        match <<#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::Inner
-                            as #golem_rust_crate_ident::agentic::Schema>::get_type()
-                            .get_element_schema()
-                            // safe because IS_COMPONENT_MODEL_SCHEMA is true
-                            .unwrap() {
-                                #golem_rust_crate_ident::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(inner) => inner,
-                                // safe because IS_COMPONENT_MODEL_SCHEMA is true
-                                other => panic!(
-                                    "ConfigSchema fields must use ElementSchema::ComponentModel, got {:?}",
-                                    other
-                                ),
-                            }
+                {
+                    let mut collected_entries = <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::collect_entries(&[#field_name.to_string()]);
+                    config_entries.append(&mut collected_entries);
                 }
             }
         );
 
         load_entries.push(
             quote! {
-                #field_ident: <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::load_from_path(&[#field_name.to_string()])?
+                #field_ident: {
+                    let mut field_path = path.to_vec();
+                    field_path.push(#field_name.to_string());
+                    <#field_ty as #golem_rust_crate_ident::agentic::ConfigField>::load(&field_path)?
+                }
             }
         );
     }
 
-    let expanded = quote! {
+    let config_schema_impl = quote! {
         impl #golem_rust_crate_ident::agentic::ConfigSchema for #struct_name {
             fn describe_config() -> Vec<#golem_rust_crate_ident::agentic::ConfigEntry> {
-                #(#assertions)*
-                vec![
-                    #(#describe_config_entries),*
-                ]
+                let mut config_entries = Vec::new();
+                #(#append_config_entries)*
+                config_entries
             }
-            fn load() -> Result<Self, String> {
+            fn load(path: &[String]) -> Result<Self, String> {
                 Ok(Self {
                     #(#load_entries),*
                 })
@@ -110,5 +85,42 @@ pub fn derive_config_schema(input: TokenStream, golem_rust_crate_ident: &Ident) 
         }
     };
 
-    expanded.into()
+    let config_field_impl = derive_nested_config_field(&ast, golem_rust_crate_ident);
+
+    quote! {
+        #config_schema_impl
+        #config_field_impl
+    }
+    .into()
+}
+
+fn derive_nested_config_field(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> proc_macro2::TokenStream {
+    let ident = &ast.ident;
+    let generics = &ast.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    quote! {
+        impl #impl_generics #golem_rust_crate_ident::agentic::ConfigField
+            for #ident #ty_generics
+            #where_clause
+        {
+            const IS_SHARED: bool = false;
+
+            fn collect_entries(
+                path_prefix: &[String]
+            ) -> Vec<#golem_rust_crate_ident::agentic::ConfigEntry> {
+                let mut config_entries = <Self as #golem_rust_crate_ident::agentic::ConfigSchema>::describe_config();
+                for config_entry in config_entries.iter_mut() {
+                    let mut key = path_prefix.to_vec();
+                    key.append(&mut config_entry.key);
+                    config_entry.key = key;
+                };
+                config_entries
+            }
+
+            fn load(path: &[String]) -> Result<Self, String> {
+                <Self as #golem_rust_crate_ident::agentic::ConfigSchema>::load(path)
+            }
+        }
+    }
 }
