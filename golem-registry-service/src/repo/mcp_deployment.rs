@@ -308,15 +308,59 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
     ) -> Result<(), McpDeploymentRepoError> {
         self.with_tx_err("delete", |tx| {
             async move {
+                // Check that the current revision matches the provided revision
+                let current_revision: (i64,) = tx
+                    .fetch_one_as(
+                        sqlx::query_as(indoc! { r#"
+                            SELECT current_revision_id
+                            FROM mcp_deployments
+                            WHERE mcp_deployment_id = $1
+                        "# })
+                        .bind(mcp_deployment_id),
+                    )
+                    .await?;
+
+                if current_revision.0 != revision_id {
+                    return Err(McpDeploymentRepoError::ConcurrentModification);
+                }
+
+                // Get the current domain from the current revision
+                let current_domain: (String,) = tx
+                    .fetch_one_as(
+                        sqlx::query_as(indoc! { r#"
+                            SELECT domain
+                            FROM mcp_deployment_revisions
+                            WHERE mcp_deployment_id = $1 AND revision_id = $2
+                        "# })
+                        .bind(mcp_deployment_id)
+                        .bind(revision_id),
+                    )
+                    .await?;
+
+                // Insert a deletion revision
                 tx.execute(
                     sqlx::query(indoc! { r#"
-                        UPDATE mcp_deployment_revisions
-                        SET deleted_at = CURRENT_TIMESTAMP, modified_by = $1
-                        WHERE mcp_deployment_id = $2 AND revision_id = $3
+                        INSERT INTO mcp_deployment_revisions
+                        (mcp_deployment_id, revision_id, domain, created_at, created_by, deleted)
+                        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, true)
+                    "# })
+                    .bind(mcp_deployment_id)
+                    .bind(revision_id + 1)
+                    .bind(&current_domain.0)
+                    .bind(user_account_id),
+                )
+                .await?;
+
+                // Update the main table to point to the deletion revision
+                tx.execute(
+                    sqlx::query(indoc! { r#"
+                        UPDATE mcp_deployments
+                        SET deleted_at = CURRENT_TIMESTAMP, modified_by = $1, current_revision_id = $2
+                        WHERE mcp_deployment_id = $3
                     "# })
                     .bind(user_account_id)
-                    .bind(mcp_deployment_id)
-                    .bind(revision_id),
+                    .bind(revision_id + 1)
+                    .bind(mcp_deployment_id),
                 )
                 .await?;
 

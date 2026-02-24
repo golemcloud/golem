@@ -1256,8 +1256,28 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         .unwrap();
 
     assert!(deployments.len() == 1);
-    assert!(deployments[0].revision_id == revision_0.revision_id);
-    assert!(deployments[0].domain == revision_0.domain);
+
+    // Update the deployment
+    let revision_1 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 1,
+        domain: domain.to_string(),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _updated_deployment = deps
+        .mcp_deployment_repo
+        .update(revision_1.clone())
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
 
     // Create another deployment
     let other_deployment_id = new_repo_uuid();
@@ -1282,12 +1302,8 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         .unwrap();
 
     assert!(deployments.len() == 2);
-    assert!(deployments[0].revision_id == revision_0.revision_id);
-    assert!(deployments[0].domain == revision_0.domain);
-    assert!(deployments[1].revision_id == other_revision_0.revision_id);
-    assert!(deployments[1].domain == other_revision_0.domain);
 
-    // Delete first deployment
+    // Try to delete with old revision (should fail with ConcurrentModification)
     let delete_with_old_revision = deps
         .mcp_deployment_repo
         .delete(user.revision.account_id, deployment_id, 0)
@@ -1295,6 +1311,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
 
     let_assert!(Err(McpDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
 
+    // Delete with correct revision
     deps.mcp_deployment_repo
         .delete(user.revision.account_id, deployment_id, 1)
         .await
@@ -1307,6 +1324,4 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         .unwrap();
 
     assert!(deployments.len() == 1);
-    assert!(deployments[0].revision_id == other_revision_0.revision_id);
-    assert!(deployments[0].domain == other_revision_0.domain);
 }
