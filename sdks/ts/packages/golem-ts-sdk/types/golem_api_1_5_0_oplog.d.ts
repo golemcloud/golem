@@ -430,6 +430,9 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     idempotencyKey: string;
     payload: OplogPayload;
+    traceId: string;
+    traceStates: string[];
+    invocationContext: SpanData[];
   };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;

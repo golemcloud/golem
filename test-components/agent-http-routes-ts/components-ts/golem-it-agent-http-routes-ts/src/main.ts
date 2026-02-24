@@ -8,7 +8,7 @@ import {
     awaitPromise,
     Principal
 } from '@golemcloud/golem-ts-sdk';
-import { createWebhook } from 'golem:agent/host';
+import { createWebhook } from 'golem:agent/host@1.5.0';
 
 @agent({
   mount: '/http-agents/{agentName}',
