@@ -27,8 +27,6 @@ use golem_common::model::worker::{
     FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
 };
 use golem_common::model::{OplogIndex, ScanCursor, WorkerFilter, WorkerId};
-use golem_wasm::ValueAndType;
-use golem_wasm::json::OptionallyValueAndTypeJson;
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,21 +57,11 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InvokeParameters {
-    pub params: Vec<OptionallyValueAndTypeJson>,
-}
-
-// TODO: move these reponse types to common and configure the client generator to use them.
+// TODO: move these response types to common and configure the client generator to use them.
 // TODO: replace empty responses with NoContentResponse
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct DeleteWorkerResponse {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct InvokeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct InterruptResponse {}
@@ -145,13 +133,6 @@ pub struct WorkersMetadataRequest {
     pub cursor: Option<ScanCursor>,
     pub count: Option<u64>,
     pub precise: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct InvokeResult {
-    pub result: Option<ValueAndType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

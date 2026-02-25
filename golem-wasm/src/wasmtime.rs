@@ -52,6 +52,38 @@ pub struct ResourceTypeId {
     pub owner: String,
 }
 
+impl crate::IntoValue for ResourceTypeId {
+    fn into_value(self) -> crate::Value {
+        crate::Value::Record(vec![
+            crate::Value::String(self.name),
+            crate::Value::String(self.owner),
+        ])
+    }
+
+    fn get_type() -> crate::analysis::AnalysedType {
+        use crate::analysis::analysed_type::*;
+        record(vec![field("name", str()), field("owner", str())])
+            .named("resource-type-id")
+            .owned("golem:api@1.5.0/oplog")
+    }
+}
+
+impl crate::FromValue for ResourceTypeId {
+    fn from_value(value: crate::Value) -> Result<Self, String> {
+        match value {
+            crate::Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let name = <String as crate::FromValue>::from_value(iter.next().unwrap())?;
+                let owner = <String as crate::FromValue>::from_value(iter.next().unwrap())?;
+                Ok(ResourceTypeId { name, owner })
+            }
+            other => Err(format!(
+                "Expected Record with 2 fields for ResourceTypeId, got {other:?}"
+            )),
+        }
+    }
+}
+
 #[async_trait]
 pub trait ResourceStore {
     fn self_uri(&self) -> Uri;

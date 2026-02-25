@@ -20,12 +20,14 @@ use super::{
 use crate::base_model::agent::{GolemUserPrincipal, OidcPrincipal, Principal};
 use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
-    AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource, BinaryType,
-    ComponentModelElementSchema, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    RegisteredAgentType, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, TextDescriptor, TextReference, TextSource, TextType, UntypedDataValue,
-    UntypedElementValue, Url,
+    AgentTypeName, BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource,
+    BinaryType, ComponentModelElementSchema, ComponentModelElementValue, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues, RegisteredAgentType, Snapshotting, SnapshottingConfig,
+    SnapshottingEveryNInvocation, SnapshottingPeriodic, TextDescriptor, TextReference,
+    TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
+    UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+    Url,
 };
 use crate::model::Empty;
 use golem_wasm::analysis::AnalysedType;
@@ -329,6 +331,44 @@ impl DataValue {
     }
 }
 
+impl From<ElementValue> for UntypedElementValue {
+    fn from(value: ElementValue) -> Self {
+        match value {
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                UntypedElementValue::ComponentModel(value.value)
+            }
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                UntypedElementValue::UnstructuredText(TextReferenceValue { value })
+            }
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue { value })
+            }
+        }
+    }
+}
+
+impl From<NamedElementValue> for UntypedNamedElementValue {
+    fn from(value: NamedElementValue) -> Self {
+        UntypedNamedElementValue {
+            name: value.name,
+            value: value.value.into(),
+        }
+    }
+}
+
+impl From<DataValue> for UntypedDataValue {
+    fn from(value: DataValue) -> Self {
+        match value {
+            DataValue::Tuple(elements) => {
+                UntypedDataValue::Tuple(elements.elements.into_iter().map(Into::into).collect())
+            }
+            DataValue::Multimodal(elements) => UntypedDataValue::Multimodal(
+                elements.elements.into_iter().map(Into::into).collect(),
+            ),
+        }
+    }
+}
+
 impl From<DataValue> for super::bindings::golem::agent::common::DataValue {
     fn from(value: DataValue) -> Self {
         match value {
@@ -342,6 +382,87 @@ impl From<DataValue> for super::bindings::golem::agent::common::DataValue {
                         .into_iter()
                         .map(|v| (v.name, ElementValue::into(v.value)))
                         .collect(),
+                )
+            }
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::DataValue> for UntypedDataValue {
+    fn from(value: super::bindings::golem::agent::common::DataValue) -> Self {
+        match value {
+            super::bindings::golem::agent::common::DataValue::Tuple(elements) => {
+                UntypedDataValue::Tuple(elements.into_iter().map(Into::into).collect())
+            }
+            super::bindings::golem::agent::common::DataValue::Multimodal(elements) => {
+                UntypedDataValue::Multimodal(
+                    elements
+                        .into_iter()
+                        .map(|(name, value)| UntypedNamedElementValue {
+                            name,
+                            value: value.into(),
+                        })
+                        .collect(),
+                )
+            }
+        }
+    }
+}
+
+impl From<UntypedDataValue> for super::bindings::golem::agent::common::DataValue {
+    fn from(value: UntypedDataValue) -> Self {
+        match value {
+            UntypedDataValue::Tuple(elements) => {
+                super::bindings::golem::agent::common::DataValue::Tuple(
+                    elements.into_iter().map(Into::into).collect(),
+                )
+            }
+            UntypedDataValue::Multimodal(elements) => {
+                super::bindings::golem::agent::common::DataValue::Multimodal(
+                    elements
+                        .into_iter()
+                        .map(|v| (v.name, v.value.into()))
+                        .collect(),
+                )
+            }
+        }
+    }
+}
+
+impl From<super::bindings::golem::agent::common::ElementValue> for UntypedElementValue {
+    fn from(value: super::bindings::golem::agent::common::ElementValue) -> Self {
+        match value {
+            super::bindings::golem::agent::common::ElementValue::ComponentModel(wit_value) => {
+                UntypedElementValue::ComponentModel(Value::from(wit_value))
+            }
+            super::bindings::golem::agent::common::ElementValue::UnstructuredText(text_ref) => {
+                UntypedElementValue::UnstructuredText(TextReferenceValue {
+                    value: text_ref.into(),
+                })
+            }
+            super::bindings::golem::agent::common::ElementValue::UnstructuredBinary(bin_ref) => {
+                UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                    value: bin_ref.into(),
+                })
+            }
+        }
+    }
+}
+
+impl From<UntypedElementValue> for super::bindings::golem::agent::common::ElementValue {
+    fn from(value: UntypedElementValue) -> Self {
+        match value {
+            UntypedElementValue::ComponentModel(val) => {
+                super::bindings::golem::agent::common::ElementValue::ComponentModel(val.into())
+            }
+            UntypedElementValue::UnstructuredText(text_ref) => {
+                super::bindings::golem::agent::common::ElementValue::UnstructuredText(
+                    text_ref.value.into(),
+                )
+            }
+            UntypedElementValue::UnstructuredBinary(bin_ref) => {
+                super::bindings::golem::agent::common::ElementValue::UnstructuredBinary(
+                    bin_ref.value.into(),
                 )
             }
         }
@@ -398,19 +519,19 @@ impl ElementValue {
             ) => {
                 let val: Value = wit_value.into();
                 let typ: AnalysedType = wit_schema.into();
-                Ok(ElementValue::ComponentModel(ValueAndType::new(val, typ)))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue { value: ValueAndType::new(val, typ) }))
             }
             (
                 crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredText(text),
-                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(_),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredText(descriptor),
             ) => {
-                Ok(ElementValue::UnstructuredText(text.into()))
+                Ok(ElementValue::UnstructuredText(UnstructuredTextElementValue { value: text.into(), descriptor: descriptor.into() }))
             }
             (
                 crate::model::agent::bindings::golem::agent::common::ElementValue::UnstructuredBinary(binary),
-                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredBinary(_),
+                crate::model::agent::bindings::golem::agent::common::ElementSchema::UnstructuredBinary(descriptor),
             ) => {
-                Ok(ElementValue::UnstructuredBinary(binary.into()))
+                Ok(ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value: binary.into(), descriptor: descriptor.into() }))
             }
             _ => Err("Element value does not match schema".to_string()),
         }
@@ -426,16 +547,28 @@ impl ElementValue {
                 ElementSchema::ComponentModel(component_model_schema),
             ) => {
                 let typ: AnalysedType = component_model_schema.element_type;
-                Ok(ElementValue::ComponentModel(ValueAndType::new(value, typ)))
+                Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType::new(value, typ),
+                }))
             }
             (
                 UntypedElementValue::UnstructuredText(text_ref),
-                ElementSchema::UnstructuredText(_),
-            ) => Ok(ElementValue::UnstructuredText(text_ref.value)),
+                ElementSchema::UnstructuredText(descriptor),
+            ) => Ok(ElementValue::UnstructuredText(
+                UnstructuredTextElementValue {
+                    value: text_ref.value,
+                    descriptor,
+                },
+            )),
             (
                 UntypedElementValue::UnstructuredBinary(binary_ref),
-                ElementSchema::UnstructuredBinary(_),
-            ) => Ok(ElementValue::UnstructuredBinary(binary_ref.value)),
+                ElementSchema::UnstructuredBinary(descriptor),
+            ) => Ok(ElementValue::UnstructuredBinary(
+                UnstructuredBinaryElementValue {
+                    value: binary_ref.value,
+                    descriptor,
+                },
+            )),
             _ => Err("Element value does not match schema".to_string()),
         }
     }
@@ -444,17 +577,15 @@ impl ElementValue {
 impl From<ElementValue> for super::bindings::golem::agent::common::ElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(wit_value) => {
-                super::bindings::golem::agent::common::ElementValue::ComponentModel(
-                    wit_value.into(),
-                )
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                super::bindings::golem::agent::common::ElementValue::ComponentModel(value.into())
             }
-            ElementValue::UnstructuredText(text) => {
-                super::bindings::golem::agent::common::ElementValue::UnstructuredText(text.into())
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                super::bindings::golem::agent::common::ElementValue::UnstructuredText(value.into())
             }
-            ElementValue::UnstructuredBinary(binary) => {
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
                 super::bindings::golem::agent::common::ElementValue::UnstructuredBinary(
-                    binary.into(),
+                    value.into(),
                 )
             }
         }
@@ -509,8 +640,8 @@ impl From<BinaryReference> for super::bindings::golem::agent::common::BinaryRefe
     }
 }
 
-impl From<super::bindings::golem::agent::common::BinarySource> for BinarySource {
-    fn from(value: crate::model::agent::bindings::golem::agent::common::BinarySource) -> Self {
+impl From<golem_wasm::golem_core_1_5_x::types::BinarySource> for BinarySource {
+    fn from(value: golem_wasm::golem_core_1_5_x::types::BinarySource) -> Self {
         Self {
             data: value.data,
             binary_type: value.binary_type.into(),
@@ -518,7 +649,7 @@ impl From<super::bindings::golem::agent::common::BinarySource> for BinarySource 
     }
 }
 
-impl From<BinarySource> for super::bindings::golem::agent::common::BinarySource {
+impl From<BinarySource> for golem_wasm::golem_core_1_5_x::types::BinarySource {
     fn from(value: BinarySource) -> Self {
         Self {
             data: value.data,
@@ -591,8 +722,8 @@ impl From<TextReference> for super::bindings::golem::agent::common::TextReferenc
     }
 }
 
-impl From<super::bindings::golem::agent::common::TextSource> for TextSource {
-    fn from(value: crate::model::agent::bindings::golem::agent::common::TextSource) -> Self {
+impl From<golem_wasm::golem_core_1_5_x::types::TextSource> for TextSource {
+    fn from(value: golem_wasm::golem_core_1_5_x::types::TextSource) -> Self {
         Self {
             data: value.data,
             text_type: value.text_type.map(TextType::from),
@@ -600,13 +731,13 @@ impl From<super::bindings::golem::agent::common::TextSource> for TextSource {
     }
 }
 
-impl From<TextSource> for super::bindings::golem::agent::common::TextSource {
+impl From<TextSource> for golem_wasm::golem_core_1_5_x::types::TextSource {
     fn from(value: TextSource) -> Self {
         Self {
             data: value.data,
             text_type: value
                 .text_type
-                .map(super::bindings::golem::agent::common::TextType::from),
+                .map(golem_wasm::golem_core_1_5_x::types::TextType::from),
         }
     }
 }

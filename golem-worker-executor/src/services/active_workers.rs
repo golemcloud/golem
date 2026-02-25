@@ -25,6 +25,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{OwnedWorkerId, WorkerId};
@@ -64,6 +65,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -86,6 +88,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             component_revision,
                             parent,
                             &invocation_context_stack,
+                            principal,
                         )
                         .in_current_span()
                         .await?,

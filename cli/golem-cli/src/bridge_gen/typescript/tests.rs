@@ -21,7 +21,6 @@ use crate::model::agent::test::{
 };
 use crate::model::GuestLanguage;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_client::model::ValueAndType;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema,
@@ -33,6 +32,7 @@ use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{bool, f64, field, record, s32, str};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::ValueAndType;
 use golem_wasm::{IntoValueAndType, Value};
 use heck::ToUpperCamelCase;
 use pretty_assertions::assert_eq;

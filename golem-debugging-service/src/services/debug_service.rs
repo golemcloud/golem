@@ -20,6 +20,7 @@ use crate::model::params::*;
 use async_trait::async_trait;
 use gethostname::gethostname;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -227,6 +228,7 @@ impl DebugServiceDefault {
             None,
             None,
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await
         .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
@@ -281,7 +283,7 @@ impl DebugServiceDefault {
             let entry = oplog.read(new_target_oplog_index).await;
 
             match entry {
-                OplogEntry::ExportedFunctionCompleted { .. } => {
+                OplogEntry::AgentInvocationFinished { .. } => {
                     return Ok(new_target_oplog_index);
                 }
                 _ => {
@@ -420,6 +422,7 @@ impl DebugService for DebugServiceDefault {
             ),
             session_data.worker_metadata.parent.clone(),
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await
         .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
@@ -547,6 +550,7 @@ impl DebugService for DebugServiceDefault {
             ),
             debug_session_data.worker_metadata.parent.clone(),
             &InvocationContextStack::fresh(),
+            Principal::anonymous(),
         )
         .await
         .map_err(|e| {
@@ -685,9 +689,10 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::base_model::component::ComponentRevision;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
     use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
-    use golem_common::model::Timestamp;
+    use golem_common::model::{AgentInvocationResult, Timestamp};
     use golem_worker_executor::services::oplog::CommitLevel;
     use std::collections::BTreeMap;
     use std::fmt::{Debug, Formatter};
@@ -770,10 +775,13 @@ mod tests {
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
             if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
-                OplogEntry::ExportedFunctionCompleted {
+                OplogEntry::AgentInvocationFinished {
                     timestamp: Timestamp::now_utc(),
-                    response: OplogPayload::Inline(Box::new(None)),
+                    result: OplogPayload::Inline(Box::new(
+                        AgentInvocationResult::AgentInitialization,
+                    )),
                     consumed_fuel: 0,
+                    component_revision: ComponentRevision::INITIAL,
                 }
             } else {
                 // Any other oplog entry other than export function completed

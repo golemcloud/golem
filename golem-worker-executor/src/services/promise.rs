@@ -22,6 +22,7 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
@@ -379,6 +380,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                     None,
                     None,
                     &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
                 )
                 .await?;
             }

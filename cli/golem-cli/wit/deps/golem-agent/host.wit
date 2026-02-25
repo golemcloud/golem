@@ -1,7 +1,9 @@
-package golem:agent;
+package golem:agent@1.5.0;
 
 interface host {
-    use golem:rpc/types@0.2.2.{component-id, uuid, promise-id, wit-value};
+    use golem:core/types@1.5.0.{component-id, uuid, promise-id, wit-value};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use wasi:io/poll@0.2.3.{pollable};
     use common.{agent-error, agent-type, data-value, registered-agent-type};
 
     /// Gets all the registered agent types
@@ -26,6 +28,58 @@ interface host {
     /// * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
     ///   from a different agent type will trap.
     create-webhook: func(promise-id: promise-id) -> string;
+
+    /// Possible failures of an RPC call
+    variant rpc-error {
+      /// Protocol level error
+      protocol-error(string),
+      /// Access denied
+      denied(string),
+      /// Target agent or function not found
+      not-found(string),
+      /// Internal error on the remote side
+      remote-internal-error(string),
+      /// The remote endpoint returned an agent-domain error
+      remote-agent-error(agent-error)
+    }
+
+    /// An RPC client for invoking remote agents
+    resource wasm-rpc {
+      /// Constructs the RPC client connecting to the given target agent
+      constructor(agent-type-name: string, %constructor: data-value, phantom-id: option<uuid>);
+
+      /// Invokes a remote method with the given parameters, and awaits the result
+      invoke-and-await: func(method-name: string, input: data-value) -> result<data-value, rpc-error>;
+
+      /// Triggers the invocation of a remote method with the given parameters, and returns immediately.
+      invoke: func(method-name: string, input: data-value) -> result<_, rpc-error>;
+
+      /// Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
+      /// be polled for the result.
+      ///
+      /// With this function it is possible to call multiple (different) agents simultaneously.
+      async-invoke-and-await: func(method-name: string, input: data-value) -> future-invoke-result;
+
+      /// Schedule invocation for later
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: data-value);
+
+      /// Schedule invocation for later. Call cancel on the returned resource to cancel the invocation before the scheduled time.
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: data-value) -> cancellation-token;
+    }
+
+    /// Represents a pollable invocation result
+    resource future-invoke-result {
+      /// Subscribes to the result of the invocation
+      subscribe: func() -> pollable;
+      /// Poll for the invocation. If the invocation has not completed yet, returns `none`.
+      get: func() -> option<result<data-value, rpc-error>>;
+    }
+
+    /// Cancellation token for scheduled invocations
+    resource cancellation-token {
+      /// Cancel the scheduled invocation
+      cancel: func();
+    }
 
     /// Get the current value of the config key.
     /// Only keys that are declared by the agent-type are allowed to be accessed. Trying

@@ -65,10 +65,13 @@ async-scoped = "0.9.0"
 async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
-aws-config = "=1.5.10" # Pinned because newer versions were failing with localstack
-aws-sdk-s3 = "=1.65.0" # Pinned because newer versions were failing with localstack
-axum = { version = "0.7.9", features = ["multipart"] }
-axum-jrpc = "0.7.1"
+aws-config = "1.5.10"
+aws-sdk-acm = "1"
+aws-sdk-elasticloadbalancingv2 = "1"
+aws-sdk-route53 = "1"
+aws-sdk-s3 = "1.65.0"
+axum = { version = "0.8", features = ["multipart"] }
+axum-jrpc = "0.9.0"
 base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bit-vec = { version = "0.6.3", features = ["serde"] }
@@ -91,7 +94,7 @@ colored = "3.0.0"
 colored-diff = "0.2.3"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
-console-subscriber = "0.4.1"
+console-subscriber = "0.5.0"
 convert_case = "0.8.0"
 cookie = "0.18.1"
 criterion = "0.5"
@@ -101,7 +104,7 @@ darling = "0.20.11"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
-dirs = "4.0.0"
+dirs = "6.0.0"
 drop-stream = "0.3.2"
 evcxr = "0.21.1"
 evicting_cache_map = "0.4.0"
@@ -166,7 +169,7 @@ nonempty-collections = "0.3.0"
 num-traits = "0.2.19"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
-openidconnect = "3.5.0"
+openidconnect = "4.0.1"
 openssl = "=0.10.73"
 openssl-sys = "=0.9.109"
 opentelemetry = "0.30.0"
@@ -202,12 +205,7 @@ reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "strea
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
 rsa = "0.9.7"
-rusoto_acm = "0.48.0"
-rusoto_core = "0.48.0"
-rusoto_credential = "0.48.0"
-rusoto_elbv2 = "0.48.0"
-rusoto_route53 = "0.48.0"
-rusoto_sts = "0.48.0"
+
 rustc-hash = "2.1.1"
 rustls = { version = "0.23.23", features = ["ring"] }
 rustyline = "15.0.0"
@@ -238,7 +236,7 @@ system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "2.3.1", default-features = true }
+test-r = { version = "3.0.0", default-features = true }
 testcontainers = { version = "0.23.3" }
 testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
@@ -273,7 +271,7 @@ url = { version = "2.5.4", features = ["serde"] }
 urlencoding = "2.1.3"
 uuid = { version = "1.15.1", features = ["serde", "v4", "v5", "v7"] }
 version-compare = "0.2.0"
-wac-graph = "=0.6.1"
+wac-graph = "=0.7.0"
 walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { agent, BaseAgent } from '../src';
-import { Principal } from 'golem:agent/common';
+import { Principal } from 'golem:agent/common@1.5.0';
 
 @agent()
 export class AgentWithPrincipalAutoInjection1 extends BaseAgent {

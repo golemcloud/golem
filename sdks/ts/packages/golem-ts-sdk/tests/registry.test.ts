@@ -15,9 +15,9 @@
 import { describe, expect, it } from 'vitest';
 import { AgentClassName } from '../src';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { Result } from 'golem:rpc/types@0.2.2';
+import { Result } from 'golem:agent/host@1.5.0';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common';
+import { AgentError, AgentType, DataValue } from 'golem:agent/common@1.5.0';
 import { AgentInitiator } from '../src/internal/agentInitiator';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';

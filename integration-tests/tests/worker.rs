@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::worker::{log_event, LogEvent};
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
-use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
+use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
 use golem_common::model::{
@@ -36,7 +36,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::analysed_type;
-use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
 use std::collections::{HashMap, HashSet};
@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
-use tracing::{info, warn, Instrument};
+use tracing::{info, Instrument};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -70,13 +70,13 @@ async fn dynamic_worker_creation(
     let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let args = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_arguments", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let env = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -132,11 +132,11 @@ async fn counter_resource_test_1(
     let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
-    user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
+    user.invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(5u64))
         .await?;
 
     let result = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     let result_value = result.into_return_value().expect("Expected a return value");
@@ -167,11 +167,11 @@ async fn counter_resource_test_1_json(
     let worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
     user.log_output(&worker_id).await?;
 
-    user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(5u64))
+    user.invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(5u64))
         .await?;
 
     let result = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     let result_value = result.into_return_value().expect("Expected a return value");
@@ -202,7 +202,7 @@ async fn shopping_cart_example(
     user.log_output(&worker_id).await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1000", "Golem T-Shirt M"),
@@ -210,7 +210,7 @@ async fn shopping_cart_example(
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -218,7 +218,7 @@ async fn shopping_cart_example(
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1002", "Mud Golem"),
@@ -226,7 +226,7 @@ async fn shopping_cart_example(
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1002", "Mud Golem"),
@@ -234,7 +234,7 @@ async fn shopping_cart_example(
     .await?;
 
     let contents = user
-        .invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     let contents_value = contents
@@ -290,7 +290,7 @@ async fn rust_rpc_with_payload(
 
     let spawn_result = user
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &parent_agent_id,
             "spawn_child",
             data_value!("hello world"),
@@ -306,7 +306,7 @@ async fn rust_rpc_with_payload(
     let child_agent_id = agent_id!("rust-child", uuid);
 
     let get_result = user
-        .invoke_and_await_agent(&component.id, &child_agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &child_agent_id, "get", data_value!())
         .await?;
 
     let option_payload_as_value = get_result
@@ -355,7 +355,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     for &idx in &check_indices {
         let (ref worker_id, ref aid) = agent_map[idx];
 
-        user.invoke_and_await_agent(&component.id, aid, "list", data_value!())
+        user.invoke_and_await_agent(&component, aid, "list", data_value!())
             .await?;
 
         let (cursor, values) = user
@@ -497,107 +497,162 @@ async fn get_running_workers(
     let worker_ids: HashSet<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
 
     for (worker_id, aid) in &workers {
-        user.invoke_agent(&component.id, aid, "start_polling", data_value!("stop"))
+        user.invoke_agent(&component, aid, "start_polling", data_value!("stop"))
             .await?;
 
         user.wait_for_status(worker_id, WorkerStatus::Running, Duration::from_secs(10))
             .await?;
     }
 
-    let mut wait_counter = 0;
+    let start = tokio::time::Instant::now();
+    let polling_deadline = Duration::from_secs(60);
     loop {
-        wait_counter += 1;
         let ids = polling_worker_ids.lock().unwrap().clone();
 
         if worker_ids.eq(&ids) {
             info!("All the spawned workers have polled the server at least once.");
             break;
         }
-        if wait_counter >= 30 {
-            warn!(
-                "Waiting for all spawned workers timed out. Only {}/{} workers polled the server",
+        if start.elapsed() > polling_deadline {
+            let missing: Vec<_> = worker_ids.difference(&ids).collect();
+            return Err(anyhow!(
+                "Timed out waiting for all spawned workers to poll. Only {}/{} polled. Missing: {:?}",
                 ids.len(),
-                workers_count
-            );
-            break;
+                workers_count,
+                missing
+            ));
         }
 
         sleep(Duration::from_secs(1)).await;
     }
 
-    // Testing looking for a single worker
-    let mut cursor = ScanCursor::default();
-    let mut enum_results = Vec::new();
+    // Testing looking for a single worker - with retry for eventual consistency
+    let single_worker_name = worker_ids.iter().next().unwrap().worker_name.clone();
+    let start = tokio::time::Instant::now();
+    let enum_deadline = Duration::from_secs(30);
+    let single_result = loop {
+        let mut cursor = ScanCursor::default();
+        let mut enum_results = Vec::new();
+        loop {
+            let (next_cursor, values) = user
+                .get_workers_metadata(
+                    &component.id,
+                    Some(WorkerFilter::new_name(
+                        StringFilterComparator::Equal,
+                        single_worker_name.clone(),
+                    )),
+                    cursor,
+                    1,
+                    true,
+                )
+                .await?;
+            enum_results.extend(values);
+            if let Some(next_cursor) = next_cursor {
+                cursor = next_cursor;
+            } else {
+                break;
+            }
+        }
+        if enum_results.len() == 1 {
+            break enum_results;
+        }
+        if start.elapsed() > enum_deadline {
+            return Err(anyhow!(
+                "Timed out waiting for single worker enumeration. Got {} results, expected 1",
+                enum_results.len()
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(single_result.len(), 1);
+
+    // Testing looking for all the workers - with retry for eventual consistency
+    let start = tokio::time::Instant::now();
     loop {
-        let (next_cursor, values) = user
-            .get_workers_metadata(
-                &component.id,
-                Some(WorkerFilter::new_name(
-                    StringFilterComparator::Equal,
-                    worker_ids.iter().next().unwrap().worker_name.clone(),
-                )),
-                cursor,
-                1,
-                true,
-            )
-            .await?;
-        enum_results.extend(values);
-        if let Some(next_cursor) = next_cursor {
-            cursor = next_cursor;
-        } else {
+        let mut cursor = ScanCursor::default();
+        let mut enum_results = Vec::new();
+        loop {
+            let (next_cursor, values) = user
+                .get_workers_metadata(&component.id, None, cursor, workers_count, true)
+                .await?;
+            enum_results.extend(values);
+            if let Some(next_cursor) = next_cursor {
+                cursor = next_cursor;
+            } else {
+                break;
+            }
+        }
+        let returned: HashSet<_> = enum_results.iter().map(|m| m.worker_id.clone()).collect();
+        if worker_ids.is_subset(&returned) {
             break;
         }
-    }
-    assert_eq!(enum_results.len(), 1);
-
-    // Testing looking for all the workers
-    let mut cursor = ScanCursor::default();
-    let mut enum_results = Vec::new();
-    loop {
-        let (next_cursor, values) = user
-            .get_workers_metadata(&component.id, None, cursor, workers_count, true)
-            .await?;
-        enum_results.extend(values);
-        if let Some(next_cursor) = next_cursor {
-            cursor = next_cursor;
-        } else {
-            break;
-        }
-    }
-    assert_eq!(enum_results.len(), workers_count as usize);
-
-    // Testing looking for running workers
-    let mut cursor = ScanCursor::default();
-    let mut enum_results = Vec::new();
-    loop {
-        let (next_cursor, values) = user
-            .get_workers_metadata(
-                &component.id,
-                Some(WorkerFilter::new_status(
-                    FilterComparator::Equal,
-                    WorkerStatus::Running,
-                )),
-                cursor,
+        if start.elapsed() > enum_deadline {
+            let missing: Vec<_> = worker_ids.difference(&returned).collect();
+            return Err(anyhow!(
+                "Timed out waiting for all workers to be enumerated. Got {}/{}, missing: {:?}",
+                returned.len(),
                 workers_count,
-                true,
-            )
-            .await?;
-        enum_results.extend(values);
-        if let Some(next_cursor) = next_cursor {
-            cursor = next_cursor;
-        } else {
+                missing
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    // Testing looking for running workers - with retry for eventual consistency
+    let start = tokio::time::Instant::now();
+    loop {
+        let mut cursor = ScanCursor::default();
+        let mut enum_results = Vec::new();
+        loop {
+            let (next_cursor, values) = user
+                .get_workers_metadata(
+                    &component.id,
+                    Some(WorkerFilter::new_status(
+                        FilterComparator::Equal,
+                        WorkerStatus::Running,
+                    )),
+                    cursor,
+                    workers_count,
+                    true,
+                )
+                .await?;
+            enum_results.extend(values);
+            if let Some(next_cursor) = next_cursor {
+                cursor = next_cursor;
+            } else {
+                break;
+            }
+        }
+        if !enum_results.is_empty() && enum_results.len() <= workers_count as usize {
             break;
         }
+        if start.elapsed() > enum_deadline {
+            return Err(anyhow!(
+                "Timed out waiting for at least one running worker. Got {} running workers",
+                enum_results.len()
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
     }
-    // At least one worker should be running; we cannot guarantee that all of them are running simultaneously
-    assert!(enum_results.len() <= workers_count as usize);
-    assert!(!enum_results.is_empty());
 
     *response.lock().unwrap() = "stop".to_string();
 
+    // Wait for all workers to become Idle in parallel with a generous timeout
+    let idle_futs: Vec<_> = worker_ids
+        .iter()
+        .map(|worker_id| {
+            user.wait_for_status(worker_id, WorkerStatus::Idle, Duration::from_secs(30))
+        })
+        .collect();
+    let idle_results = idle_futs.join().await;
+    for result in &idle_results {
+        result
+            .as_ref()
+            .map_err(|e| anyhow!("Worker failed to become Idle: {e}"))?;
+    }
+
+    // Delete workers after all are idle
     for worker_id in &worker_ids {
-        user.wait_for_status(worker_id, WorkerStatus::Idle, Duration::from_secs(10))
-            .await?;
         user.delete_worker(worker_id).await?;
     }
 
@@ -637,7 +692,7 @@ async fn auto_update_on_idle(
         .await?;
 
     let result = user
-        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
     info!("result: {result:?}");
@@ -691,7 +746,7 @@ async fn auto_update_on_idle_via_host_function(
 
     let (high_bits, low_bits) = worker_id.component_id.0.as_u64_pair();
     user.invoke_and_await_agent(
-        &host_api_component.id,
+        &host_api_component,
         &host_api_agent_id,
         "update_worker",
         data_value!(
@@ -728,7 +783,7 @@ async fn auto_update_on_idle_via_host_function(
     .into_return_value();
 
     let result = user
-        .invoke_and_await_agent(&component.id, &agent_id, "f2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
     let metadata = user.get_worker_metadata(&worker_id).await?;
@@ -760,7 +815,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     let idempotency_key2 = IdempotencyKey::fresh();
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &agent_id,
         "generate_idempotency_keys",
         data_value!(),
@@ -768,7 +823,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     .await?;
 
     user.invoke_and_await_agent_with_key(
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key1,
         "generate_idempotency_keys",
@@ -777,7 +832,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     .await?;
 
     user.invoke_and_await_agent_with_key(
-        &component.id,
+        &component,
         &agent_id,
         &idempotency_key2,
         "generate_idempotency_keys",
@@ -793,14 +848,14 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     let invoke_count = oplog
         .iter()
         .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-                ExportedFunctionInvokedParams { function_name, .. }
-            ) if function_name == "golem:agent/guest.{invoke}")
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(
+                AgentInvocationStartedParams { invocation: golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(params), .. }
+            ) if params.method_name == "generate_idempotency_keys")
         })
         .count();
     assert!(
         invoke_count >= 3,
-        "Expected at least 3 ExportedFunctionInvoked entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
+        "Expected at least 3 AgentInvocationStarted entries for golem:agent/guest.{{invoke}}, got {invoke_count}"
     );
 
     Ok(())
@@ -822,7 +877,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1000", "Golem T-Shirt M"),
@@ -830,7 +885,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -838,7 +893,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1002", "Mud Golem"),
@@ -846,14 +901,14 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &repo_id,
         "add",
         data_value!("G1002", "Mud Golem"),
     )
     .await?;
 
-    user.invoke_and_await_agent(&component.id, &repo_id, "list", data_value!())
+    user.invoke_and_await_agent(&component, &repo_id, "list", data_value!())
         .await?;
 
     user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -891,12 +946,12 @@ async fn worker_recreation(
 
     // Doing many requests, so parts of the oplog gets archived
     for _ in 1..=1200 {
-        user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(1u64))
+        user.invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(1u64))
             .await?;
     }
 
     let result1 = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -904,11 +959,11 @@ async fn worker_recreation(
     user.delete_worker(&worker_id).await?;
 
     // Invoking again should create a new worker
-    user.invoke_and_await_agent(&component.id, &agent_id, "inc_by", data_value!(1u64))
+    user.invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(1u64))
         .await?;
 
     let result2 = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     user.delete_worker(&worker_id).await?;
@@ -917,7 +972,7 @@ async fn worker_recreation(
     let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result3 = user
-        .invoke_and_await_agent(&component.id, &agent_id, "get_value", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
 
     let result1_value = result1
@@ -974,7 +1029,7 @@ async fn worker_use_initial_files(
         .await?;
 
     let result = user
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     user.check_oplog_is_queryable(&worker_id).await?;
@@ -1162,7 +1217,7 @@ async fn worker_read_files(
 
     // run the worker so it can update the files.
     let _ = user
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     let result1 = user.get_file_contents(&worker_id, "/foo.txt").await?;
@@ -1212,7 +1267,7 @@ async fn worker_initial_files_after_automatic_worker_update(
 
     // run the worker so it can update the files.
     let _ = user
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     let updated_component = user
@@ -1291,7 +1346,7 @@ async fn resolve_components_from_name(
 
     let result = user
         .invoke_and_await_agent(
-            &resolver_component.id,
+            &resolver_component,
             &agent_id,
             "resolve_component",
             data_value!(),
@@ -1333,29 +1388,24 @@ async fn agent_promise_await(
         .await?;
 
     let result = user
-        .invoke_and_await_agent(
-            &component.id,
-            &promise_agent_id,
-            "getPromise",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component, &promise_agent_id, "getPromise", data_value!())
         .await?;
 
-    let promise_id_value = result
-        .into_return_value()
+    let promise_id_vat = result
+        .into_return_value_and_type()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    let promise_id = PromiseId::from_value(promise_id_value.clone()).map_err(|e| anyhow!("{e}"))?;
-    let promise_id_vat = ValueAndType::new(promise_id_value, PromiseId::get_type());
+    let promise_id =
+        PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
 
     let task = {
         let executor_clone = user.clone();
         let agent_id_clone = promise_agent_id.clone();
-        let component_id_clone = component.id;
+        let component_clone = component.clone();
         tokio::spawn(
             async move {
                 executor_clone
                     .invoke_and_await_agent(
-                        &component_id_clone,
+                        &component_clone,
                         &agent_id_clone,
                         "awaitPromise",
                         data_value!(promise_id_vat),
@@ -1415,7 +1465,7 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
     };
 
     let result_future =
-        user.invoke_and_await_agent(&component.id, &agent_id, "run_high_volume", data_value!());
+        user.invoke_and_await_agent(&component, &agent_id, "run_high_volume", data_value!());
 
     let (found_log_entry, result) = (output_consumer, result_future).join().await;
     result?;
@@ -1491,12 +1541,12 @@ async fn worker_suspends_when_running_out_of_fuel(
 
     let invoker_task = tokio::spawn({
         let user = user.clone();
-        let component_id = component.id;
+        let component = component.clone();
         let agent_id = http_agent_id.clone();
         async move {
             loop {
                 let _ = user
-                    .invoke_and_await_agent(&component_id, &agent_id, "run", data_value!())
+                    .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
                     .await;
             }
         }
@@ -1541,7 +1591,7 @@ async fn agent_await_parallel_rpc_calls(
     let agent_id = agent_id!("test-agent", unique_id.to_string());
     let _worker_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
-    user.invoke_and_await_agent(&component.id, &agent_id, "run", data_value!(20f64))
+    user.invoke_and_await_agent(&component, &agent_id, "run", data_value!(20f64))
         .await?;
 
     Ok(())
@@ -1565,7 +1615,7 @@ async fn agent_update_constructor_signature(
     let agent1_id = agent_id!("counter-agent", "agent1");
     let agent1 = user.start_agent(&component.id, agent1_id.clone()).await?;
     let result1a = user
-        .invoke_and_await_agent(&component.id, &agent1_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
         .await?;
     assert_eq!(result1a.into_return_value(), Some(Value::U32(1)));
 
@@ -1576,12 +1626,7 @@ async fn agent_update_constructor_signature(
     user.log_output(&old_singleton).await?;
 
     let result1b = user
-        .invoke_and_await_agent(
-            &component.id,
-            &old_singleton_id,
-            "call",
-            data_value!("agent1"),
-        )
+        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
         .await?;
     assert_eq!(result1b.into_return_value(), Some(Value::U32(2)));
 
@@ -1591,7 +1636,7 @@ async fn agent_update_constructor_signature(
     let agent2_id = agent_id!("counter-agent", 123u64);
     let agent2 = user.start_agent(&component.id, agent2_id.clone()).await?;
     let result2a = user
-        .invoke_and_await_agent(&component.id, &agent2_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
     assert_eq!(result2a.into_return_value(), Some(Value::U32(1)));
 
@@ -1600,22 +1645,17 @@ async fn agent_update_constructor_signature(
         .start_agent(&component.id, new_singleton_id.clone())
         .await?;
     let result2b = user
-        .invoke_and_await_agent(
-            &component.id,
-            &new_singleton_id,
-            "call",
-            data_value!(123u64),
-        )
+        .invoke_and_await_agent(&component, &new_singleton_id, "call", data_value!(123u64))
         .await?;
     assert_eq!(result2b.into_return_value(), Some(Value::U32(2)));
 
     // Still able to call both agents
     let result3a = user
-        .invoke_and_await_agent(&component.id, &agent1_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
         .await?;
 
     let result4a = user
-        .invoke_and_await_agent(&component.id, &agent2_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
 
     assert_eq!(result3a.into_return_value(), Some(Value::U32(3)));
@@ -1623,22 +1663,12 @@ async fn agent_update_constructor_signature(
 
     // Still able to do RPC
     let result3b = user
-        .invoke_and_await_agent(
-            &component.id,
-            &old_singleton_id,
-            "call",
-            data_value!("agent1"),
-        )
+        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
         .await?;
     assert_eq!(result3b.into_return_value(), Some(Value::U32(4)));
 
     let result4b = user
-        .invoke_and_await_agent(
-            &component.id,
-            &new_singleton_id,
-            "call",
-            data_value!(123u64),
-        )
+        .invoke_and_await_agent(&component, &new_singleton_id, "call", data_value!(123u64))
         .await?;
     assert_eq!(result4b.into_return_value(), Some(Value::U32(4)));
 

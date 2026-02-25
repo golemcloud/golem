@@ -332,7 +332,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()

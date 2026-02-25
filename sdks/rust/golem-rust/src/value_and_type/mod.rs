@@ -49,7 +49,7 @@ pub mod url;
 pub mod uuid;
 
 use crate::PromiseId;
-use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
+use golem_wasm::golem_core_1_5_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
     AccountId, AgentId, ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType,
     WitTypeNode, WitValue, WitValueBuilderExtensions,

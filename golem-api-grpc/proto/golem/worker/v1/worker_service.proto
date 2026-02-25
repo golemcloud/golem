@@ -8,9 +8,7 @@ import "golem/worker/complete_parameters.proto";
 import "golem/worker/cursor.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
-import "golem/worker/invoke_parameters.proto";
-import "golem/worker/invoke_result.proto";
-import "golem/worker/invoke_result_json.proto";
+
 import "golem/worker/v1/worker_error.proto";
 import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_metadata.proto";
@@ -22,16 +20,18 @@ import "golem/component/component_id.proto";
 import "golem/worker/update_mode.proto";
 import "golem/worker/filesystem.proto";
 import "golem/auth/auth_ctx.proto";
+import "golem/component/agent.proto";
+import "golem/common/uuid.proto";
+import "google/protobuf/timestamp.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
-  rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
-  rpc Invoke (InvokeRequest) returns (InvokeResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
+  rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -41,6 +41,8 @@ message LaunchNewWorkerRequest {
   map<string, string> config_vars = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  optional golem.worker.InvocationContext context = 8;
+  optional golem.component.Principal principal = 9;
 }
 
 message LaunchNewWorkerResponse {
@@ -79,38 +81,6 @@ message ForkWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerError error  = 2;
-  }
-}
-
-message InvokeAndAwaitRequest {
-  golem.worker.WorkerId workerId = 1;
-  golem.worker.IdempotencyKey idempotencyKey = 2;
-  string function = 3;
-  golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 5;
-  golem.auth.AuthCtx auth_ctx = 6;
-}
-
-message InvokeAndAwaitResponse {
-  oneof result {
-    golem.worker.InvokeResultTyped success = 1;
-    golem.worker.v1.WorkerError error = 2;
-  }
-}
-
-message InvokeRequest {
-  golem.worker.WorkerId workerId = 1;
-  golem.worker.IdempotencyKey idempotencyKey = 2;
-  string function = 3;
-  golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 5;
-  golem.auth.AuthCtx auth_ctx = 6;
-}
-
-message InvokeResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.worker.v1.WorkerError error = 2;
   }
 }
 
@@ -157,4 +127,34 @@ message RevertWorkerResponse {
     golem.common.Empty success = 1;
     WorkerError error = 2;
   }
+}
+
+enum AgentInvocationMode {
+  AGENT_INVOCATION_MODE_AWAIT = 0;
+  AGENT_INVOCATION_MODE_SCHEDULE = 1;
+}
+
+message InvokeAgentRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string method_name = 2;
+  golem.component.UntypedDataValue method_parameters = 3;
+  AgentInvocationMode mode = 4;
+  optional google.protobuf.Timestamp schedule_at = 5;
+  optional golem.worker.IdempotencyKey idempotency_key = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
+  golem.component.Principal principal = 9;
+}
+
+message InvokeAgentResponse {
+  oneof result {
+    InvokeAgentSuccess success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message InvokeAgentSuccess {
+  optional golem.component.UntypedDataValue result = 1;
+  optional uint64 fuel_consumed = 2;
+  optional uint64 component_revision = 3;
 }

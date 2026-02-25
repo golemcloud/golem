@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { HttpMountDetails, PathSegment } from 'golem:agent/common';
+import { HttpMountDetails, PathSegment } from 'golem:agent/common@1.5.0';
 import { parsePath } from './path';
 import { rejectEmptyString, rejectQueryParamsInPath } from './validation';
 import { AgentDecoratorOptions } from '../../decorators/agent';

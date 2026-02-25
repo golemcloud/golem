@@ -40,7 +40,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, Snapshotting, SnapshottingConfig};
+use golem_common::model::agent::{AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -49,8 +49,8 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation, WorkerId,
-    WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    Timestamp, TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -58,8 +58,7 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
-use golem_wasm::analysis::AnalysedFunctionResult;
-use golem_wasm::{IntoValue, Value, ValueAndType};
+
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -141,6 +140,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -155,6 +155,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_revision,
                 parent,
                 invocation_context_stack,
+                principal,
             )
             .await
     }
@@ -169,6 +170,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -182,6 +184,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
+            principal,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -225,6 +228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
     ) -> Result<Self, WorkerExecutorError> {
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
@@ -271,7 +275,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }),
         )));
 
-        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
+        let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded {
+            startup_failure: None,
+        }));
 
         let worker = Worker {
             owned_worker_id,
@@ -301,27 +307,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // just some sanity checking
         assert!(last_oplog_idx >= OplogIndex::INITIAL);
 
-        tracing::debug!("Checking worker for agent initialization: last_oplog_idx: {last_oplog_idx}; agent_id: {agent_id:?}");
-
         // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
         // We might have crashed between creating the oplog and writing it, so just check here for it.
         if let Some(agent_id) = &agent_id {
             if last_oplog_idx <= OplogIndex::from_u64(2) {
                 worker
-                    .enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
+                    .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
                         idempotency_key: IdempotencyKey::fresh(),
-                        full_function_name: "golem:agent/guest.{initialize}".to_string(),
-                        function_input: vec![
-                            agent_id.agent_type.clone().into_value(),
-                            agent_id.parameters.clone().into_value(),
-                            // Fixme: this needs to come from the invocation that caused this agent to be created
-                            golem_common::model::agent::Principal::anonymous().into_value(),
-                        ],
+                        input: agent_id.parameters.clone().into(),
                         invocation_context: invocation_context_stack.clone(),
+                        principal,
                     })
                     .await
                     .expect("Failed enqueuing initial agent invocations to worker");
             }
+        } else {
+            warn!("Unexpected non-agentic worker"); // TODO: change this once oplog-processors are finalized
         };
         Ok(worker)
     }
@@ -352,7 +353,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut instance_guard = this.lock_non_stopping_worker().await;
         match &*instance_guard {
-            WorkerInstance::Unloaded => {
+            WorkerInstance::Unloaded { .. } => {
                 this.mark_as_loading();
                 *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
                     this.clone(),
@@ -410,7 +411,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::WaitingForPermit(_) => None,
             WorkerInstance::Stopping(_) => None,
-            WorkerInstance::Unloaded => None,
+            WorkerInstance::Unloaded { .. } => None,
             WorkerInstance::Deleting => None,
         };
 
@@ -430,7 +431,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
         let mut instance_guard = self.lock_stopped_worker(Some(error.clone())).await;
         match &*instance_guard {
-            WorkerInstance::Unloaded => {
+            WorkerInstance::Unloaded { .. } => {
                 *instance_guard = WorkerInstance::Deleting;
                 // More invocations might have been enqueued since the worker has stopped
                 self.fail_pending_invocations(error).await;
@@ -544,7 +545,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 Ok(())
             }
-            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => {
+            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
                 Err(WorkerExecutorError::invalid_request(
                     "Explicit resume is not supported for uninitialized workers",
                 ))
@@ -558,11 +559,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn invoke(
         &self,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
+        let idempotency_key = invocation
+            .idempotency_key()
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request("Invocation has no idempotency key")
+            })?
+            .clone();
+
         // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
         let subscription = self.events().subscribe();
 
@@ -572,37 +577,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
-                self.enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
-                    idempotency_key,
-                    full_function_name,
-                    function_input,
-                    invocation_context,
-                })
-                .await?;
+                self.enqueue_worker_invocation(invocation).await?;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
         }
     }
 
     /// Invokes the worker and awaits for a result.
-    ///
-    /// The successful result is an `Option<ValueAndType>` encoding the result value.
     pub async fn invoke_and_await(
         &self,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, WorkerExecutorError> {
-        match self
-            .invoke(
-                idempotency_key.clone(),
-                full_function_name,
-                function_input,
-                invocation_context,
-            )
-            .await?
-        {
+        invocation: AgentInvocation,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        let idempotency_key = invocation
+            .idempotency_key()
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request("Invocation has no idempotency key")
+            })?
+            .clone();
+
+        match self.invoke(invocation).await? {
             ResultOrSubscription::Finished(Ok(output)) => Ok(output),
             ResultOrSubscription::Finished(Err(err)) => Err(err),
             ResultOrSubscription::Pending(subscription) => {
@@ -649,11 +642,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_revision })
+        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
             .await
     }
 
-    pub async fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
+    pub async fn pending_invocations(&self) -> Vec<TimestampedAgentInvocation> {
         self.last_known_status
             .read()
             .await
@@ -673,20 +666,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
-        result: Option<ValueAndType>,
+        output: AgentInvocationOutput,
     ) {
         let mut map = self.invocation_results.write().await;
         map.insert(
             key.clone(),
             InvocationResult::Cached {
-                result: Ok(result.clone()),
+                result: Ok(output.clone()),
             },
         );
         debug!("Stored invocation success for {key}");
         self.events().publish(Event::InvocationCompleted {
             worker_id: self.owned_worker_id.worker_id(),
             idempotency_key: key.clone(),
-            result: Ok(result),
+            result: Ok(output),
         });
     }
 
@@ -763,7 +756,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 false
             }
-            WorkerInstance::Unloaded => {
+            WorkerInstance::Unloaded { .. } => {
                 debug!(
                     "Worker {} is unloaded, cannot be used to free up memory",
                     self.owned_worker_id
@@ -807,7 +800,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::Stopping(_) => Ok(()),
             WorkerInstance::WaitingForPermit(_) => Ok(()),
-            WorkerInstance::Unloaded => Ok(()),
+            WorkerInstance::Unloaded { .. } => Ok(()),
             WorkerInstance::Deleting => Ok(()),
         }
     }
@@ -815,7 +808,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Enqueue invocation of an exported function
     async fn enqueue_worker_invocation(
         &self,
-        invocation: WorkerInvocation,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -825,8 +818,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        let entry = OplogEntry::pending_worker_invocation(invocation.clone());
-        let timestamped_invocation = TimestampedWorkerInvocation {
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
+        let (idempotency_key, invocation_payload, invocation_context) =
+            invocation.clone().into_parts();
+        let payload = self
+            .oplog
+            .upload_payload(&invocation_payload)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Failed to upload invocation payload: {e}"
+                ))
+            })?;
+        let invocation_context_spans = invocation_context.to_oplog_data();
+        let entry = OplogEntry::pending_agent_invocation(
+            idempotency_key,
+            payload,
+            invocation_context.trace_id,
+            invocation_context.trace_states,
+            invocation_context_spans,
+        );
+        let timestamped_invocation = TimestampedAgentInvocation {
             timestamp: entry.timestamp(),
             invocation,
         };
@@ -861,6 +876,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
         let (sender, receiver) = oneshot::channel();
 
         self.queue
@@ -893,6 +912,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
         let (sender, receiver) = oneshot::channel();
 
         self.queue
@@ -917,6 +940,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Cannot await readiness of a deleting worker",
             ));
         };
+
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
 
         let (sender, receiver) = oneshot::channel();
 
@@ -1090,14 +1117,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    /// Starting from the end of the oplog, find the Nth ExportedFunctionInvoked entry's index.
+    /// Starting from the end of the oplog, find the Nth AgentInvocationStarted entry's index.
     async fn find_nth_invocation_from_end(&self, n: usize) -> Option<OplogIndex> {
         let mut current = self.oplog.current_oplog_index().await;
         let mut found = 0;
         loop {
             let entry = self.oplog.read(current).await;
 
-            if matches!(entry, OplogEntry::ExportedFunctionInvoked { .. }) {
+            if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
                 found += 1;
                 if found == n {
                     return Some(current);
@@ -1124,7 +1151,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let instance_guard = self.lock_stopped_worker(None).await;
         match &*instance_guard {
-            WorkerInstance::Unloaded => {}
+            WorkerInstance::Unloaded { .. } => {}
             WorkerInstance::Deleting => {
                 return Err(WorkerExecutorError::invalid_request(
                     "Cannot revert a deleting worker",
@@ -1252,7 +1279,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocations()
                 .await
                 .iter()
-                .any(|entry| entry.invocation.is_idempotency_key(key));
+                .any(|entry| entry.invocation.has_idempotency_key(key));
             if is_pending {
                 LookupResult::Pending
             } else {
@@ -1291,11 +1318,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> StopResult {
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
-        let previous_instance_state =
-            std::mem::replace(&mut **instance_guard, WorkerInstance::Unloaded);
+        let previous_instance_state = std::mem::replace(
+            &mut **instance_guard,
+            WorkerInstance::Unloaded {
+                startup_failure: None,
+            },
+        );
 
         match previous_instance_state {
-            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => StopResult::Stopped,
+            WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
+                StopResult::Stopped
+            }
             WorkerInstance::Deleting => {
                 **instance_guard = previous_instance_state;
                 // Should we return an error here?
@@ -1316,8 +1349,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // TODO: fail pending invocations should be factored out of here and be guaranteed to run
                 // even if there are multiple concurrent stop attempts.
-                if let Some(error) = fail_pending_invocations {
-                    self.fail_pending_invocations(error).await;
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
+                };
+
+                // Store the startup failure so that subsequent enqueue attempts
+                // on this Unloaded worker fail fast instead of hanging forever.
+                **instance_guard = WorkerInstance::Unloaded {
+                    startup_failure: fail_pending_invocations,
                 };
 
                 // Make sure the oplog is committed
@@ -1355,7 +1394,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let mut instance_guard = self.instance.lock().await;
                 assert!(matches!(*instance_guard, WorkerInstance::Stopping(_)));
-                *instance_guard = WorkerInstance::Unloaded;
+                *instance_guard = WorkerInstance::Unloaded {
+                    startup_failure: None,
+                };
                 drop(instance_guard);
 
                 notify.set();
@@ -1424,7 +1465,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             let instance_guard = self.instance.lock().await;
 
-            if let WorkerInstance::Deleting | WorkerInstance::Unloaded = &*instance_guard {
+            if let WorkerInstance::Deleting | WorkerInstance::Unloaded { .. } = &*instance_guard {
                 return instance_guard;
             }
         }
@@ -1689,10 +1730,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let old_status = self.last_known_status.read().await.clone();
 
             let updated_status = update_status_with_new_entries(
+                self,
+                &self.owned_worker_id,
                 old_status.clone(),
                 new_entries,
                 &self.config().retry,
-            );
+            )
+            .await;
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
@@ -1778,7 +1822,9 @@ pub fn merge_worker_env_with_component_env(
 
 #[derive(Debug)]
 enum WorkerInstance {
-    Unloaded,
+    Unloaded {
+        startup_failure: Option<WorkerExecutorError>,
+    },
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
     Stopping(StoppingWorker),
@@ -1788,6 +1834,15 @@ enum WorkerInstance {
 impl WorkerInstance {
     fn is_deleting(&self) -> bool {
         matches!(self, Self::Deleting)
+    }
+
+    fn startup_failure(&self) -> Option<&WorkerExecutorError> {
+        match self {
+            Self::Unloaded {
+                startup_failure: Some(err),
+            } => Some(err),
+            _ => None,
+        }
     }
 }
 
@@ -2174,7 +2229,7 @@ struct FailedInvocationResult {
 #[derive(Debug, Clone)]
 enum InvocationResult {
     Cached {
-        result: Result<Option<ValueAndType>, FailedInvocationResult>,
+        result: Result<AgentInvocationOutput, FailedInvocationResult>,
     },
     Lazy {
         oplog_idx: OplogIndex,
@@ -2192,11 +2247,14 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                    let value: Option<ValueAndType> =
-                        services.oplog().download_payload(response).await.expect("failed to deserialize function response payload");
-
-                    Ok(value)
+                OplogEntry::AgentInvocationFinished { result, consumed_fuel, component_revision, .. } => {
+                    let invocation_result: AgentInvocationResult =
+                        services.oplog().download_payload(result).await.expect("failed to deserialize function response payload");
+                    Ok(AgentInvocationOutput {
+                        result: invocation_result,
+                        consumed_fuel: Some(consumed_fuel as u64),
+                        component_revision: Some(component_revision),
+                    })
                 }
                 OplogEntry::Error { error, retry_from, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
@@ -2320,24 +2378,8 @@ pub enum QueuedWorkerInvocation {
 }
 
 pub enum ResultOrSubscription {
-    Finished(Result<Option<ValueAndType>, WorkerExecutorError>),
+    Finished(Result<AgentInvocationOutput, WorkerExecutorError>),
     Pending(EventsSubscription),
-}
-
-pub fn interpret_function_result(
-    function_results: Option<Value>,
-    expected_types: Option<AnalysedFunctionResult>,
-) -> Result<Option<ValueAndType>, Vec<String>> {
-    match (function_results, expected_types) {
-        (None, None) => Ok(None),
-        (Some(_), None) => Err(vec![
-            "Unexpected result value (got some, expected: none)".to_string()
-        ]),
-        (None, Some(_)) => Err(vec![
-            "Unexpected result value (got none, expected: some)".to_string()
-        ]),
-        (Some(value), Some(expected)) => Ok(Some(ValueAndType::new(value, expected.typ))),
-    }
 }
 
 struct GetOrCreateWorkerResult {

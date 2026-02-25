@@ -15,10 +15,7 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app_raw::{
-    ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
-    InjectToPrebuiltQuickJs,
-};
+use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
 use crate::model::{app_raw, GuestLanguage};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::agent::AgentTypeName;
@@ -124,46 +121,6 @@ pub struct GenerateQuickJSDTSCommandMarkerHash<'a> {
 impl TaskResultMarkerHashSource for GenerateQuickJSDTSCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "GenerateQuickJSDTSCommandMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(serde_json::to_string(self)?))
-    }
-}
-
-#[derive(Serialize)]
-pub struct AgentWrapperCommandMarkerHash<'a> {
-    pub build_dir: &'a Path,
-    pub command: &'a GenerateAgentWrapper,
-}
-
-impl TaskResultMarkerHashSource for AgentWrapperCommandMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "AgentWrapperCommandMarkerHash"
-    }
-
-    fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-
-    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(serde_json::to_string(self)?))
-    }
-}
-
-#[derive(Serialize)]
-pub struct ComposeAgentWrapperCommandMarkerHash<'a> {
-    pub build_dir: &'a Path,
-    pub command: &'a ComposeAgentWrapper,
-}
-
-impl TaskResultMarkerHashSource for ComposeAgentWrapperCommandMarkerHash<'_> {
-    fn kind() -> &'static str {
-        "ComposeAgentWrapperCommandMarkerHash"
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
