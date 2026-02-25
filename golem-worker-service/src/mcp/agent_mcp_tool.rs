@@ -22,13 +22,15 @@ use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
 use rmcp::model::{CallToolResult, Tool};
 use golem_common::base_model::account::AccountId;
+use golem_common::base_model::environment::EnvironmentId;
 
 #[derive(Clone)]
 pub struct AgentMcpTool {
+    pub tool: Tool,
+    pub environment_id: EnvironmentId,
     pub account_id: AccountId,
     pub constructor: AgentConstructor,
     pub raw_method: AgentMethod,
-    pub raw_tool: Tool,
     pub component_id: ComponentId,
     pub agent_type_name: AgentTypeName,
 }
@@ -40,7 +42,6 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
     ) -> BoxFuture<'_, Result<CallToolResult, ErrorData>> {
         async move {
             context.service.invoke(
-                &self.account_id,
                 context.arguments.unwrap_or_default(),
                 &self
             ).await
@@ -51,6 +52,6 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
 
 impl IntoToolRoute<GolemAgentMcpServer, ()> for AgentMcpTool {
     fn into_tool_route(self) -> ToolRoute<GolemAgentMcpServer> {
-        ToolRoute::new(self.raw_tool.clone(), self)
+        ToolRoute::new(self.tool.clone(), self)
     }
 }

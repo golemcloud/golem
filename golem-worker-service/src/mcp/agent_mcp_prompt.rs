@@ -23,6 +23,7 @@ use rmcp::model::{
     GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole,
 };
 
+#[allow(unused)]
 #[derive(Clone)]
 pub struct AgentMcpPrompt {
     pub agent_method: AgentMethod,

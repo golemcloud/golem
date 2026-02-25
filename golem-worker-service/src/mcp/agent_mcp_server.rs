@@ -16,11 +16,9 @@ use crate::mcp::McpCapabilityLookup;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use dashmap::DashMap;
-use golem_common::base_model::agent::{
-    AgentId, ComponentModelElementSchema, DataSchema, ElementSchema,
-};
+use golem_common::base_model::agent::{AgentId, ComponentModelElementSchema, DataSchema, ElementSchema, Principal};
 use golem_common::base_model::domain_registration::Domain;
-use golem_common::model::agent::NamedElementSchema;
+use golem_common::model::agent::{NamedElementSchema, UntypedDataValue, UntypedElementValue};
 use golem_common::model::WorkerId;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use poem::http;
@@ -31,7 +29,7 @@ use rmcp::{
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use golem_common::base_model::account::AccountId;
+use golem_wasm::{IntoValue, ValueAndType};
 use crate::service::worker::WorkerService;
 
 // Every client will get an instance of this
@@ -63,10 +61,11 @@ impl GolemAgentMcpServer {
         }
     }
 
-    pub async fn invoke(&self, account_id: &AccountId, args_map: JsonObject, mcp_tool: &AgentMcpTool) -> Result<CallToolResult, ErrorData> {
+    pub async fn invoke(&self, args_map: JsonObject, mcp_tool: &AgentMcpTool) -> Result<CallToolResult, ErrorData> {
         let constructor_params = extract_parameters_by_schema(
             &args_map,
             &mcp_tool.constructor.input_schema,
+            |value_and_type| value_and_type,
         ).map_err(|e| {
             tracing::error!("Failed to extract constructor parameters: {}", e);
             ErrorData::invalid_params(format!("Failed to extract constructor parameters: {}", e), None)
@@ -87,24 +86,40 @@ impl GolemAgentMcpServer {
         let method_params = extract_parameters_by_schema(
             &args_map,
             &mcp_tool.raw_method.input_schema,
+            |vat| UntypedElementValue::ComponentModel(vat.value)
         ).map_err(|e| {
             tracing::error!("Failed to extract method parameters: {}", e);
             ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
         })?;
+
+        let method_params_data_value = UntypedDataValue::Tuple(method_params);
+
+        let principal = Principal::anonymous();
+
+        let method_params = vec![
+            golem_wasm::protobuf::Val::from(mcp_tool.raw_method.name.clone().into_value()),
+            golem_wasm::protobuf::Val::from(method_params_data_value.into_value()),
+            golem_wasm::protobuf::Val::from(principal.into_value()),
+        ];
 
         let worker_id = WorkerId {
             component_id: mcp_tool.component_id,
             worker_name: agent_id.to_string(),
         };
 
+        let function_name = "golem:agent/guest.{invoke}".to_string();
+
+
         let result = self.worker_service
-            .invoke_and_await_typed(
+            .invoke_and_await_owned_agent(
                 &worker_id,
                 None,
-                mcp_tool.raw_method.name.clone(),
+                function_name.clone(),
                 method_params,
                 None,
-                golem_service_base::model::auth::AuthCtx::impersonated_user(account_id.clone()),
+                mcp_tool.environment_id,
+                mcp_tool.account_id.clone()              ,
+                golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id.clone()),
             )
             .await
             .map_err(|e| {
@@ -141,32 +156,33 @@ impl GolemAgentMcpServer {
     }
 }
 
-fn extract_parameters_by_schema(
+fn extract_parameters_by_schema<F, A>(
     args_map: &JsonObject,
     schema: &DataSchema,
-) -> Result<Vec<golem_wasm::ValueAndType>, String> {
+    f: F
+) -> Result<Vec<A>, String> where F: Fn(ValueAndType) -> A {
     match schema {
         DataSchema::Tuple(named_schemas) => {
             let mut params = Vec::new();
-            
+
             for NamedElementSchema { name, schema: elem_schema } in &named_schemas.elements {
                 match elem_schema {
                     ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
                         let value = args_map
                             .get(name)
                             .ok_or_else(|| format!("Missing parameter: {}", name))?;
-                        
+
                         let value_and_type = golem_wasm::ValueAndType::parse_with_type(value, element_type)
                             .map_err(|errs| format!("Failed to parse parameter '{}': {}", name, errs.join(", ")))?;
-                        
-                        params.push(value_and_type);
+
+                        params.push(f(value_and_type));
                     }
                     _ => {
                         return Err(format!("Unsupported element schema type for parameter '{}'", name));
                     }
                 }
             }
-            
+
             Ok(params)
         }
         DataSchema::Multimodal(_) => {
@@ -189,8 +205,9 @@ pub async fn get_agent_tool_and_handlers(
     };
 
     let mut tools = vec![];
-    
+
     let account_id = compiled_mcp.account_id;
+    let environment_id = compiled_mcp.environment_id;
 
     for agent_type_name in compiled_mcp.agent_types() {
         match mcp_definition_lookup
@@ -202,7 +219,7 @@ pub async fn get_agent_tool_and_handlers(
                 let component_id = registered_agent_type.implemented_by.component_id;
                 for method in &agent_type.methods {
                     let agent_method_mcp =
-                        McpAgentCapability::from(&account_id, &agent_type.type_name, method, &agent_type.constructor, component_id);
+                        McpAgentCapability::from(&account_id, &environment_id, &agent_type.type_name, method, &agent_type.constructor, component_id);
 
                     match agent_method_mcp {
                         McpAgentCapability::Tool(agent_mcp_tool) => {
