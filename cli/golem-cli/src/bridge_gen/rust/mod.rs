@@ -16,7 +16,6 @@ use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
-use crate::SdkOverrides;
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::wit_naming::ToWitNaming;
