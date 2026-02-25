@@ -399,7 +399,7 @@ declare module 'golem:api/oplog@1.5.0' {
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: number[];
-    wasiConfigVars: [string, string][];
+    configVars: [string, string][];
     originalPhantomId?: Uuid;
   };
   export type RawHostCallParameters = {

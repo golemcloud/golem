@@ -351,7 +351,7 @@ interface oplog {
         component-size: u64,
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<s32>,
-        wasi-config-vars: list<tuple<string, string>>,
+        config-vars: list<tuple<string, string>>,
         original-phantom-id: option<uuid>
     }
 
