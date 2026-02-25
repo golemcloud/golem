@@ -795,7 +795,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
         .filter(|entry| {
             matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(
                 AgentInvocationStartedParams { invocation: golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(params), .. }
-            ) if params.method_name == "golem:agent/guest.{invoke}")
+            ) if params.method_name == "generate_idempotency_keys")
         })
         .count();
     assert!(
