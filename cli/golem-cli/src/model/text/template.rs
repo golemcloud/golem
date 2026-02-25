@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app_template::model::TemplateName;
 use crate::model::text::fmt::*;
-use crate::model::TemplateDescription;
+use crate::model::{GuestLanguage, TemplateDescription};
 use cli_table::Table;
-use golem_templates::model::{GuestLanguage, GuestLanguageTier, TemplateName};
 
 #[derive(Table)]
 pub struct TemplateDescriptionTableView {
@@ -23,8 +23,6 @@ pub struct TemplateDescriptionTableView {
     pub name: TemplateName,
     #[table(title = "Language")]
     pub language: GuestLanguage,
-    #[table(title = "Tier")]
-    pub tier: GuestLanguageTier,
     #[table(title = "Description")]
     pub description: String,
 }
@@ -34,7 +32,6 @@ impl From<&TemplateDescription> for TemplateDescriptionTableView {
         Self {
             name: value.name.clone(),
             language: value.language,
-            tier: value.tier.clone(),
             description: textwrap::wrap(&value.description, 30).join("\n"),
         }
     }

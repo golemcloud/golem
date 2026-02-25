@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app_template::model::SdkOverrides;
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::rust::type_name::RustTypeName;
 use crate::bridge_gen::type_naming::TypeNaming;
@@ -21,7 +22,6 @@ use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
     AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
-use golem_templates::model::SdkOverrides;
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};

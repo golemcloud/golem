@@ -23,6 +23,7 @@ use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
+pub mod app_template;
 pub mod auth;
 pub mod bridge_gen;
 pub mod client;
@@ -136,60 +137,4 @@ fn is_golem_evcxr_repl_set() -> bool {
         .and_then(|s| s.parse::<LenientBool>().ok())
         .map(|b| b.into())
         .unwrap_or(false)
-}
-
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::command::GolemCliCommand;
-    use clap::{ArgAction, Command, CommandFactory};
-
-    #[test]
-    fn dump_commands() {
-        let command = GolemCliCommand::command();
-        dump_command(0, &command);
-    }
-
-    fn dump_command(level: usize, command: &Command) {
-        print!("{}{}", "\t".repeat(level), command.get_name());
-
-        let aliases = command.get_aliases().collect::<Vec<_>>();
-        if !aliases.is_empty() {
-            print!(" ({})", aliases.join(", "));
-        }
-
-        let (positional, flag_args): (Vec<_>, Vec<_>) =
-            command.get_arguments().partition(|arg| arg.is_positional());
-
-        if !positional.is_empty() {
-            for arg in positional {
-                let id = arg.get_id().to_string().to_uppercase();
-                if arg.is_required_set() && arg.get_default_values().is_empty() {
-                    print!(" <{id}>");
-                } else {
-                    print!(" [{id}]");
-                }
-                if let ArgAction::Append = arg.get_action() {
-                    print!("...")
-                }
-            }
-        }
-
-        println!();
-
-        if !flag_args.is_empty() {
-            print!("{}", "\t".repeat(level + 2));
-            for arg in flag_args.clone() {
-                print!(" --{}", arg.get_long().unwrap(),);
-                arg.get_short().iter().for_each(|short| print!("({short})"));
-            }
-            println!()
-        }
-
-        let subcommand_level = level + 1;
-        for subcommand in command.get_subcommands() {
-            dump_command(subcommand_level, subcommand);
-        }
-    }
 }

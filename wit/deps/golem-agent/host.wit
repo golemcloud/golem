@@ -1,7 +1,7 @@
 package golem:agent;
 
 interface host {
-    use golem:rpc/types@0.2.2.{component-id, uuid, promise-id};
+    use golem:rpc/types@0.2.2.{component-id, uuid, promise-id, wit-value};
     use common.{agent-error, agent-type, data-value, registered-agent-type};
 
     /// Gets all the registered agent types
@@ -26,4 +26,12 @@ interface host {
     /// * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
     ///   from a different agent type will trap.
     create-webhook: func(promise-id: promise-id) -> string;
+
+    /// Get the current value of the config key.
+    /// Only keys that are declared by the agent-type are allowed to be accessed. Trying
+    /// to access an undeclared key will trap.
+    /// Getting a local key will get values defined as part of the current
+    /// component revision + overrides declared during agent creation.
+    /// Getting a shared key will get the current value of the key in the environment.
+    get-config-value: func(key: list<string>) -> wit-value;
 }
