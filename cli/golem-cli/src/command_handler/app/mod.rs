@@ -69,7 +69,6 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
-use std::iter::once_with;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -163,33 +162,27 @@ impl AppCommandHandler {
         let app_template_repo = self.ctx.app_template_repo()?;
 
         if components.is_empty() {
-            let common_templates = languages
-                .iter()
-                .map(|language| app_template_repo.common_templates(*language))
-                .collect::<Result<Vec<_>, _>>()?
-                .iter()
-                .flat_map(|templates| templates.values())
-                .collect::<Vec<_>>();
-
             {
                 let _indent = LogIndent::new();
-                for common_template in common_templates.into_iter() {
-                    match common_template.generate(
-                        &application_name,
-                        &app_dir,
-                        self.ctx.sdk_overrides(),
-                    ) {
-                        Ok(()) => {
-                            log_action(
-                                "Added",
-                                format!(
-                                    "common template for {}",
-                                    common_template.0.language.name().log_color_highlight()
-                                ),
-                            );
-                        }
-                        Err(error) => {
-                            bail!("Failed to add common template for new app: {:#}", error)
+                for language in &languages {
+                    if let Some(common_template) = app_template_repo.common_template(*language)? {
+                        match common_template.generate(
+                            &application_name,
+                            &app_dir,
+                            self.ctx.sdk_overrides(),
+                        ) {
+                            Ok(()) => {
+                                log_action(
+                                    "Added",
+                                    format!(
+                                        "common template for {}",
+                                        common_template.0.language.name().log_color_highlight()
+                                    ),
+                                );
+                            }
+                            Err(error) => {
+                                bail!("Failed to add common template for new app: {:#}", error)
+                            }
                         }
                     }
                 }
@@ -1855,7 +1848,7 @@ impl AppCommandHandler {
     pub fn get_templates(
         &self,
         requested_template_name: &str,
-    ) -> anyhow::Result<(Vec<&AppTemplateCommon>, &AppTemplateComponent)> {
+    ) -> anyhow::Result<(Option<&AppTemplateCommon>, &AppTemplateComponent)> {
         let segments = requested_template_name.split("/").collect::<Vec<_>>();
         let (language, template_name): (String, Option<String>) = match segments.len() {
             1 => (segments[0].to_string(), None),
@@ -1889,8 +1882,8 @@ impl AppCommandHandler {
 
         let app_template_repo = self.ctx.app_template_repo()?;
 
-        let common_templates = match app_template_repo.common_templates(language) {
-            Ok(common_templates) => common_templates.values().collect(),
+        let common_template = match app_template_repo.common_template(language) {
+            Ok(common_template) => common_template.as_ref(),
             Err(err) => {
                 log_anyhow_error(&err);
                 self.log_templates_help(None, None)?;
@@ -1908,7 +1901,7 @@ impl AppCommandHandler {
                 }
             };
 
-        Ok((common_templates, component_template))
+        Ok((common_template, component_template))
     }
 
     pub fn generate_component(
@@ -1918,25 +1911,18 @@ impl AppCommandHandler {
         app_dir: &Path,
         template_name: &str,
     ) -> anyhow::Result<()> {
-        let (common_templates, component_template) = self.get_templates(template_name)?;
+        let (common_template, component_template) = self.get_templates(template_name)?;
 
-        let result = common_templates
-            .into_iter()
-            .map(|common_template| {
-                common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())
-            })
-            .chain(once_with(|| {
-                component_template.generate(
-                    application_name,
-                    component_name,
-                    app_dir,
-                    self.ctx.sdk_overrides(),
-                )
-            }))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|_| ());
+        if let Some(common_template) = common_template {
+            common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?;
+        }
 
-        match result {
+        match component_template.generate(
+            application_name,
+            component_name,
+            app_dir,
+            self.ctx.sdk_overrides(),
+        ) {
             Ok(()) => {
                 log_action(
                     "Added",
@@ -1946,9 +1932,7 @@ impl AppCommandHandler {
                     ),
                 );
             }
-            Err(error) => {
-                bail!("Failed to create new app component: {}", error)
-            }
+            Err(error) => bail!("Failed to create new app component: {}", error),
         }
 
         Ok(())

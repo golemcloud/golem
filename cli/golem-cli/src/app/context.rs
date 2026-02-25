@@ -628,31 +628,22 @@ fn ensure_on_demand_commons(
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
     let app_template_repo = AppTemplateRepo::get(dev_mode)?;
 
-    let common_on_demand_templates = languages
-        .iter()
-        .map(|language| app_template_repo.common_on_demand_templates(*language))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flat_map(|templates| templates.values())
-        .collect::<Vec<_>>();
+    let mut on_demand_raw_apps = Vec::new();
 
-    common_on_demand_templates
-        .into_iter()
-        .map(|template| {
+    for language in languages {
+        if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template
-                .generate(&target_dir, sdk_overrides)
-                .map(|_| target_dir)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter_map(|target_dir| {
+            template.generate(&target_dir, sdk_overrides)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
-            golem_yaml_path
-                .exists()
-                .then(|| app_raw::ApplicationWithSource::from_yaml_file(golem_yaml_path))
-        })
-        .collect::<Result<Vec<_>, _>>()
+            if golem_yaml_path.exists() {
+                on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
+                    golem_yaml_path,
+                )?);
+            }
+        }
+    }
+
+    Ok(on_demand_raw_apps)
 }
 
 fn load_raw_apps(

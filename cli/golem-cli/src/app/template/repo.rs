@@ -62,17 +62,17 @@ impl AppTemplateRepo {
         &self.languages
     }
 
-    pub fn common_templates(
+    pub fn common_template(
         &self,
         language: GuestLanguage,
-    ) -> anyhow::Result<&BTreeMap<AppTemplateName, AppTemplateCommon>> {
+    ) -> anyhow::Result<&Option<AppTemplateCommon>> {
         Ok(&self.language_templates(language)?.common)
     }
 
-    pub fn common_on_demand_templates(
+    pub fn common_on_demand_template(
         &self,
         language: GuestLanguage,
-    ) -> anyhow::Result<&BTreeMap<AppTemplateName, AppTemplateCommonOnDemand>> {
+    ) -> anyhow::Result<&Option<AppTemplateCommonOnDemand>> {
         Ok(&self.language_templates(language)?.common_on_demand)
     }
 
@@ -139,14 +139,22 @@ impl AppTemplateRepo {
             let entry = templates.entry(template.language).or_default();
             match &template.metadata {
                 AppTemplateMetadata::Common { .. } => {
-                    entry
-                        .common
-                        .insert(template.name.clone(), AppTemplateCommon(template));
+                    if entry.common.is_some() {
+                        bail!(
+                            "Multiple common templates found for {}",
+                            template.language.name()
+                        );
+                    }
+                    entry.common = Some(AppTemplateCommon(template));
                 }
                 AppTemplateMetadata::CommonOnDemand { .. } => {
-                    entry
-                        .common_on_demand
-                        .insert(template.name.clone(), AppTemplateCommonOnDemand(template));
+                    if entry.common_on_demand.is_some() {
+                        bail!(
+                            "Multiple common on-demand templates found for {}",
+                            template.language.name()
+                        );
+                    }
+                    entry.common_on_demand = Some(AppTemplateCommonOnDemand(template));
                 }
                 AppTemplateMetadata::Component { .. } => {
                     entry

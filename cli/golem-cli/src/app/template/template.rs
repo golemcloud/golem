@@ -178,7 +178,7 @@ impl AppTemplateComponent {
 
 #[derive(Debug, Default, Clone)]
 pub struct AppTemplatesForLanguage {
-    pub common: BTreeMap<AppTemplateName, AppTemplateCommon>,
-    pub common_on_demand: BTreeMap<AppTemplateName, AppTemplateCommonOnDemand>,
+    pub common: Option<AppTemplateCommon>,
+    pub common_on_demand: Option<AppTemplateCommonOnDemand>,
     pub component: BTreeMap<AppTemplateName, AppTemplateComponent>,
 }
