@@ -232,7 +232,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
-                        .bind(&revision.hash)
+                        .bind(revision.hash)
                         .bind(&revision.domain)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
@@ -269,7 +269,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
-                        .bind(&revision.hash)
+                        .bind(revision.hash)
                         .bind(&revision.domain)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),

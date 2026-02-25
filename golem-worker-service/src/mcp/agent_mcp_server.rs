@@ -87,7 +87,7 @@ impl GolemAgentMcpServer {
                 golem_common::model::agent::ElementValues {
                     elements: constructor_params
                         .into_iter()
-                        .map(|vat| golem_common::model::agent::ElementValue::ComponentModel(vat))
+                        .map(golem_common::model::agent::ElementValue::ComponentModel)
                         .collect(),
                 },
             ),
@@ -132,10 +132,8 @@ impl GolemAgentMcpServer {
                 method_params,
                 None,
                 mcp_tool.environment_id,
-                mcp_tool.account_id.clone(),
-                golem_service_base::model::auth::AuthCtx::impersonated_user(
-                    mcp_tool.account_id.clone(),
-                ),
+                mcp_tool.account_id,
+                golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id),
             )
             .await
             .map_err(|e| {
@@ -261,7 +259,7 @@ pub async fn get_agent_tool_and_handlers(
 
                     match agent_method_mcp {
                         McpAgentCapability::Tool(agent_mcp_tool) => {
-                            tools.push(agent_mcp_tool);
+                            tools.push(*agent_mcp_tool);
                         }
                         McpAgentCapability::Resource(_) => {}
                     }
@@ -320,7 +318,7 @@ impl ServerHandler for GolemAgentMcpServer {
                     let mut object = ::serde_json::Map::new();
                     let _ = object.insert(
                         ("tool_meta_key").into(),
-                        ::serde_json::to_value(&"tool_meta_value").unwrap(),
+                        ::serde_json::to_value("tool_meta_value").unwrap(),
                     );
                     object
                 })))),

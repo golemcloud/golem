@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum McpAgentCapability {
-    Tool(AgentMcpTool),
+    Tool(Box<AgentMcpTool>),
     #[allow(unused)]
     Resource(AgentMcpResource),
 }
@@ -42,7 +42,7 @@ impl McpAgentCapability {
     ) -> Self {
         match &method.input_schema {
             DataSchema::Tuple(schemas) => {
-                if schemas.elements.len() > 0 {
+                if !schemas.elements.is_empty() {
                     let constructor_schema = constructor.input_schema.get_mcp_schema();
                     let mut tool_schema = method.get_mcp_tool_schema();
                     tool_schema.merge_input_schema(constructor_schema);
@@ -64,15 +64,15 @@ impl McpAgentCapability {
                         meta: None,
                     };
 
-                    Self::Tool(AgentMcpTool {
-                        environment_id: environment_id.clone(),
-                        account_id: account_id.clone(),
+                    Self::Tool(Box::new(AgentMcpTool {
+                        environment_id: *environment_id,
+                        account_id: *account_id,
                         constructor: constructor.clone(),
                         raw_method: method.clone(),
-                        tool: tool,
+                        tool,
                         component_id,
                         agent_type_name: agent_type_name.clone(),
-                    })
+                    }))
                 } else {
                     Self::Resource(AgentMcpResource {
                         resource: method.clone(),
