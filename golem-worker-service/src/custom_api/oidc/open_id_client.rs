@@ -12,14 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use openidconnect::core::{CoreClient, CoreIdTokenVerifier};
+use openidconnect::core::{
+    CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreIdTokenVerifier,
+    CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreRevocableToken,
+    CoreRevocationErrorResponse, CoreTokenIntrospectionResponse, CoreTokenResponse,
+};
+use openidconnect::{
+    Client, EmptyAdditionalClaims, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    StandardErrorResponse,
+};
+
+pub type ConfiguredCoreClient = Client<
+    EmptyAdditionalClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    CoreTokenResponse,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
 #[derive(Clone, Debug)]
 pub struct OpenIdClient {
-    pub client: CoreClient,
+    pub client: ConfiguredCoreClient,
 }
 
 impl OpenIdClient {
-    pub fn new(client: CoreClient) -> Self {
+    pub fn new(client: ConfiguredCoreClient) -> Self {
         OpenIdClient { client }
     }
 

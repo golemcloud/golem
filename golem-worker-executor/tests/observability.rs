@@ -268,13 +268,14 @@ async fn get_oplog_with_api_changing_updates(
     let oplog = oplog
         .into_iter()
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingAgentInvocation(_)))
+        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
         .collect::<Vec<_>>();
 
     assert_eq!(result, data_value!(11u64));
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 15);
+    assert_eq!(oplog.len(), 13);
 
     Ok(())
 }
@@ -315,10 +316,17 @@ async fn get_oplog_starting_with_updated_component(
         .invoke_and_await_agent(&component, &agent_id, "f4", data_value!())
         .await?;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let oplog = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
+        .collect::<Vec<_>>();
 
     assert_eq!(result, data_value!(11u64));
-    assert_eq!(oplog.len(), 11);
+    assert_eq!(oplog.len(), 9);
 
     Ok(())
 }
