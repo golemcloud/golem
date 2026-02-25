@@ -134,12 +134,21 @@ script_runner = "@duckscript"
 script = """
 components = array
 array_push ${components} agent-counters/.wit
+array_push ${components} agent-http-routes-rust/.wit
 array_push ${components} agent-invocation-context/.wit
+array_push ${components} agent-rpc/.wit
+array_push ${components} agent-self-rpc/.wit
 array_push ${components} agent-updates-v1/.wit
 array_push ${components} agent-updates-v2/.wit
+array_push ${components} agent-updates-v3/.wit
+array_push ${components} agent-updates-v4/.wit
+array_push ${components} agent-updates-v4/.wit
 array_push ${components} benchmarks
+array_push ${components} host-api-tests/.wit
+array_push ${components} http-tests/.wit
 array_push ${components} initial-file-system/.wit
 array_push ${components} oplog-processor
+array_push ${components} scalability/.wit
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"

@@ -30,6 +30,7 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
+use golem_wasm::WitValue;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -223,5 +224,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .result
                 .map_err(|e| anyhow!(e))?)
         }
+    }
+
+    async fn get_config_value(&mut self, _key: Vec<String>) -> anyhow::Result<WitValue> {
+        unimplemented!()
     }
 }
