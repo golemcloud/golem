@@ -15,8 +15,6 @@ pub struct CompiledMcp {
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
-    // for now this is the only info required. But in future we will have compiled (fully formed) security scheme
-    // etc for mcp as well. However we will not have per-route row like http
     pub agent_type_implementers: AgentTypeImplementers,
 }
 
