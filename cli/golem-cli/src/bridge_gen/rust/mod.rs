@@ -18,6 +18,7 @@ use crate::bridge_gen::type_naming::TypeNaming;
 use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
 };
@@ -189,7 +190,8 @@ impl RustBridgeGenerator {
     /// Generates the TokenStream for lib.rs content
     fn generate_lib_rs_tokens(&mut self) -> anyhow::Result<TokenStream> {
         let agent_type_name = &self.agent_type.type_name.0;
-        let agent_type_name_lit = Lit::Str(LitStr::new(agent_type_name, Span::call_site()));
+        let agent_type_name_kebab = self.agent_type.type_name.to_wit_naming().0;
+        let agent_type_name_lit = Lit::Str(LitStr::new(&agent_type_name_kebab, Span::call_site()));
         let client_struct_name = Ident::new(agent_type_name, Span::call_site());
 
         let input_schema = self.agent_type.constructor.input_schema.clone();

@@ -35,6 +35,7 @@ use golem_common::base_model::agent::{AgentId, DataValue};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
@@ -406,7 +407,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentInvocationRequest {
                     app_name: app_name.0,
                     env_name: env_name.0,
-                    agent_type_name: agent_id.agent_type.0.clone(),
+                    agent_type_name: agent_id.agent_type.to_wit_naming().0,
                     parameters: agent_id.parameters.clone().into(),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),
@@ -454,7 +455,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentInvocationRequest {
                     app_name: app_name.0,
                     env_name: env_name.0,
-                    agent_type_name: agent_id.agent_type.0.clone(),
+                    agent_type_name: agent_id.agent_type.to_wit_naming().0,
                     parameters: agent_id.parameters.clone().into(),
                     phantom_id: agent_id.phantom_id,
                     method_name: method_name.to_string(),

@@ -30,6 +30,7 @@ use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
     NamedElementSchema, NamedElementSchemas, TextDescriptor,
@@ -673,7 +674,7 @@ impl TypeScriptBridgeGenerator {
         get_method_request.write_line("envName: this.__getConfig().environment,");
         get_method_request.write_line(format!(
             "agentTypeName: \"{}\",",
-            self.agent_type.type_name.0
+            self.agent_type.type_name.to_wit_naming().0
         ));
         get_method_request.write_line("parameters: this.parameters,");
         get_method_request.write_line("phantomId: this.phantomId,");
