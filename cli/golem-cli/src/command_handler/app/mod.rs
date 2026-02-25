@@ -201,12 +201,7 @@ impl AppCommandHandler {
                     format!("component {}", component_name.0.log_color_highlight()),
                 );
 
-                self.generate_component(
-                    &application_name,
-                    &component_name,
-                    &app_dir,
-                    template_name,
-                )?
+                self.generate_component(&application_name, component_name, &app_dir, template_name)?
             }
         }
 
@@ -1928,14 +1923,14 @@ impl AppCommandHandler {
         let result = common_templates
             .into_iter()
             .map(|common_template| {
-                common_template.generate(&application_name, &app_dir, self.ctx.sdk_overrides())
+                common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())
             })
             .chain(once_with(|| {
                 component_template.generate(
-                    &application_name,
-                    &component_name,
-                    &app_dir,
-                    &self.ctx.sdk_overrides(),
+                    application_name,
+                    component_name,
+                    app_dir,
+                    self.ctx.sdk_overrides(),
                 )
             }))
             .collect::<Result<Vec<_>, _>>()

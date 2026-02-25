@@ -641,7 +641,7 @@ fn ensure_on_demand_commons(
         .map(|template| {
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
             template
-                .generate(&target_dir, &sdk_overrides)
+                .generate(&target_dir, sdk_overrides)
                 .map(|_| target_dir)
         })
         .collect::<Result<Vec<_>, _>>()?

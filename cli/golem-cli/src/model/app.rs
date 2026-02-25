@@ -360,7 +360,7 @@ impl Application {
                             .map(|component| &component.templates),
                     )
                     .flat_map(|templates| templates.clone().into_vec())
-                    .filter_map(|template| GuestLanguage::from_id_string(template))
+                    .filter_map(GuestLanguage::from_id_string)
             })
             .collect()
     }

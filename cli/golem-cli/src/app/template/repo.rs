@@ -87,11 +87,10 @@ impl AppTemplateRepo {
         language: GuestLanguage,
         template_name: &AppTemplateName,
     ) -> anyhow::Result<&AppTemplateComponent> {
-        Ok(self
-            .language_templates(language)?
+        self.language_templates(language)?
             .component
             .get(template_name)
-            .ok_or_else(|| anyhow!("{} template '{}' not found", language, template_name))?)
+            .ok_or_else(|| anyhow!("{} template '{}' not found", language, template_name))
     }
 
     pub fn search_component_templates(
@@ -104,7 +103,7 @@ impl AppTemplateRepo {
 
         self.templates
             .iter()
-            .filter(|(&lang, _)| language.map_or(true, |l| lang == l))
+            .filter(|(&lang, _)| language.is_none_or(|l| lang == l))
             .map(|(lang, lang_templates)| {
                 (
                     *lang,
@@ -112,7 +111,7 @@ impl AppTemplateRepo {
                         .component
                         .iter()
                         .filter(|(name, template)| {
-                            query.map_or(true, |q| {
+                            query.is_none_or(|q| {
                                 name.as_str().to_lowercase().contains(q)
                                     || template.0.description().to_lowercase().contains(q)
                             })

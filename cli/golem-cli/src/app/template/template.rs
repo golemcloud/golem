@@ -73,12 +73,11 @@ impl AppTemplate {
     }
 
     pub fn dev_only(&self) -> bool {
-        match &self.metadata {
+        (*match &self.metadata {
             AppTemplateMetadata::Common { dev_only, .. } => dev_only,
             AppTemplateMetadata::CommonOnDemand { dev_only, .. } => dev_only,
             AppTemplateMetadata::Component { dev_only, .. } => dev_only,
-        }
-        .clone()
+        })
         .unwrap_or(false)
     }
 

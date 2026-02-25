@@ -139,7 +139,7 @@ fn generate_root_directory(ctx: &GeneratorContext<'_>) -> anyhow::Result<()> {
         ctx,
         &TEMPLATES_DIR,
         &ctx.template.template_path,
-        &ctx.target_path,
+        ctx.target_path,
     )
 }
 
@@ -161,7 +161,7 @@ fn generate_directory(
             let name = transform_file_name(ctx, name);
             match entry {
                 DirEntry::Dir(dir) => {
-                    generate_directory(&ctx, templates_dir, dir.path(), &target.join(&name))?;
+                    generate_directory(ctx, templates_dir, dir.path(), &target.join(&name))?;
                 }
                 DirEntry::File(file) => {
                     let content_transform = match (ctx.template.metadata.is_common(), name.as_str())

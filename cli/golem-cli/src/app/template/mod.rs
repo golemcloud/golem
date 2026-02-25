@@ -16,6 +16,7 @@ mod generator;
 mod metadata;
 mod repo;
 mod snippet;
+#[allow(clippy::module_inception)]
 mod template;
 
 pub use metadata::AppTemplateMetadata;
