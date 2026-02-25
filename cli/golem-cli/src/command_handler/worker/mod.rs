@@ -65,7 +65,9 @@ use golem_common::model::agent::{
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ParsedFunctionSite;
+use golem_common::model::component_metadata::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
+};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
@@ -338,7 +340,12 @@ impl WorkerCommandHandler {
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
 
-        let matched_method_name = fuzzy_match_agent_method_name(function_name, &agent_type);
+        // If the function name is fully qualified (e.g., "rust:agent/foo-agent.{fun-string}"),
+        // extract the simple method name for fuzzy matching.
+        let method_pattern = extract_simple_method_name(function_name);
+
+        let matched_method_name =
+            resolve_agent_method_name(&method_pattern, &agent_type);
         let method_name = match matched_method_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
@@ -2110,13 +2117,51 @@ impl WorkerCommandHandler {
     }
 }
 
-fn fuzzy_match_agent_method_name(
+/// Extracts the simple method name from a potentially fully qualified function name.
+///
+/// For example, `rust:agent/foo-agent.{fun-string}` → `fun-string`.
+/// Returns the input unchanged if it is already a simple name.
+fn extract_simple_method_name(function_name: &str) -> String {
+    if let Ok(parsed) = ParsedFunctionName::parse(function_name) {
+        match &parsed.function {
+            ParsedFunctionReference::Function { function } => return function.clone(),
+            _ => {}
+        }
+    }
+    function_name.to_string()
+}
+
+/// Fuzzy-matches a method name pattern against both original and WIT-named (kebab-case)
+/// method names, returning the **original** method name on success.
+fn resolve_agent_method_name(
     provided_method_name: &str,
     agent_type: &AgentType,
 ) -> crate::fuzzy::Result {
-    let method_names: Vec<String> = agent_type.methods.iter().map(|m| m.name.clone()).collect();
-    let fuzzy_search = FuzzySearch::new(method_names.iter().map(|s| s.as_str()));
-    fuzzy_search.find(provided_method_name)
+    let mut alias_to_original: HashMap<String, String> = HashMap::new();
+    let mut aliases: Vec<String> = Vec::new();
+
+    for m in &agent_type.methods {
+        let original = m.name.clone();
+        let wit = original.to_wit_naming();
+        for alias in [original.clone(), wit] {
+            if !alias_to_original.contains_key(&alias) {
+                alias_to_original.insert(alias.clone(), original.clone());
+                aliases.push(alias);
+            }
+        }
+    }
+
+    let fuzzy_search = FuzzySearch::new(aliases.iter().map(|s| s.as_str()));
+    fuzzy_search.find(provided_method_name).map(|m| {
+        let original = alias_to_original
+            .get(&m.option)
+            .cloned()
+            .unwrap_or(m.option.clone());
+        crate::fuzzy::Match {
+            option: original,
+            ..m
+        }
+    })
 }
 
 fn wave_args_to_agent_method_parameters(
@@ -2180,8 +2225,9 @@ fn wave_args_to_agent_method_parameters(
     for (schema, wave_arg) in element_schemas.iter().zip(wave_args.iter()) {
         match &schema.schema {
             ElementSchema::ComponentModel(cm) => {
-                match lenient_parse_type_annotated_value(&cm.element_type, wave_arg) {
-                    Ok(vt) => {
+                match lenient_parse_type_annotated_value(&cm.element_type.to_wit_naming(), wave_arg) {
+                    Ok(mut vt) => {
+                        vt.typ = cm.element_type.clone();
                         element_values.push(ElementValue::ComponentModel(
                             ComponentModelElementValue { value: vt },
                         ));

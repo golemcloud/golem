@@ -21,6 +21,7 @@ use crate::model::text::fmt::{
 use cli_table::Table;
 use colored::Colorize;
 use golem_client::model::ComponentDto;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentId, AgentType};
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
@@ -214,7 +215,11 @@ impl AvailableFunctionNamesHelp {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
             agent_name: Some(agent_id.wrapper_agent_type().to_string()),
-            function_names: agent_type.methods.iter().map(|m| m.name.clone()).collect(),
+            function_names: agent_type
+                .methods
+                .iter()
+                .map(|m| m.name.to_wit_naming())
+                .collect(),
         }
     }
 }

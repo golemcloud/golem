@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use golem_rust::agentic::{BaseAgent, MultimodalAdvanced, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation, description};
-use golem_rust::golem_wasm::golem_rpc_0_2_x::types::Datetime;
+use golem_rust::wstd::wasi::clocks::wall_clock::Datetime;
 
 use model::*;
 

@@ -292,7 +292,7 @@ impl ToWitNaming for NamedElementValues {
 impl ToWitNaming for NamedElementValue {
     fn to_wit_naming(&self) -> Self {
         Self {
-            name: self.name.clone(),
+            name: self.name.to_wit_naming(),
             value: self.value.to_wit_naming(),
         }
     }

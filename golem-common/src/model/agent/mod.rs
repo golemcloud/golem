@@ -200,18 +200,21 @@ impl DataValue {
                             let element_schema = element_schemas
                                 .elements
                                 .iter()
-                                .find(|element_schema| element_schema.name == element_name)
+                                .find(|element_schema| {
+                                    element_schema.name == element_name
+                                        || element_schema.name.to_wit_naming() == element_name
+                                })
                                 .ok_or_else(|| {
                                     format!(
                                         "Unknown multimodal element name: `{}`. Should be one of {}",
                                         element_name,
-                                        element_schemas.elements.iter().map(|element_schema| element_schema.name.clone()).collect::<Vec<_>>().join(", ")
+                                        element_schemas.elements.iter().map(|element_schema| element_schema.name.to_wit_naming()).collect::<Vec<_>>().join(", ")
                                     )
                                 })?;
                             let element_value =
                                 ElementValue::parse(element_value, &element_schema.schema)?;
                             element_values.push(NamedElementValue {
-                                name: element_name.to_string(),
+                                name: element_schema.name.clone(),
                                 value: element_value,
                             })
                         } else {
@@ -716,9 +719,7 @@ impl AgentTypeResolver for &ComponentMetadata {
         &self,
         agent_type: &AgentTypeName,
     ) -> Result<AgentType, String> {
-        let result = self
-            .find_agent_type_by_wrapper_name(agent_type)?
-            .to_wit_naming();
+        let result = self.find_agent_type_by_wrapper_name(agent_type)?;
         result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }
