@@ -755,7 +755,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .into_iter()
                     .map(golem_common::model::component::PluginPriority)
                     .collect(),
-                config_vars: params.wasi_config_vars.into_iter().collect(),
+                config_vars: params.config_vars.into_iter().collect(),
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
