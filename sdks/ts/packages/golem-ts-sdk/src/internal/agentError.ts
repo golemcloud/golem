@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentError } from 'golem:agent/common';
+import { AgentError } from 'golem:agent/common@1.5.0';
 import * as Value from './mapping/values/Value';
 
 export function createCustomError(error: string): AgentError {

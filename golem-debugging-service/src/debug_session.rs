@@ -14,20 +14,23 @@
 
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
+use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::oplog::host_functions::{
     host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
 };
 use golem_common::model::oplog::public_oplog_entry::{
-    CreateParams, CreateResourceParams, DropResourceParams, ExportedFunctionCompletedParams,
-    FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, LogParams,
+    AgentInvocationFinishedParams, AgentInvocationStartedParams, CreateParams,
+    CreateResourceParams, DropResourceParams, FailedUpdateParams, GrowMemoryParams, HostCallParams,
+    LogParams, PublicAgentInvocationResult, RawSnapshotData,
 };
-use golem_common::model::oplog::types::decode_span_data;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
-use golem_common::model::{OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata};
+use golem_common::model::{
+    AgentInvocationResult, OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata,
+};
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -214,15 +217,20 @@ fn get_oplog_entry_from_public_oplog_entry(
     public_oplog_entry: PublicOplogEntry,
 ) -> Result<OplogEntry, String> {
     match public_oplog_entry {
-        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+        PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp,
             consumed_fuel,
-            response,
-        }) => Ok(OplogEntry::ExportedFunctionCompleted {
-            timestamp,
-            consumed_fuel,
-            response: OplogPayload::Inline(Box::new(response)),
-        }),
+            result,
+            component_revision,
+        }) => {
+            let raw_result = public_agent_invocation_result_to_raw(result)?;
+            Ok(OplogEntry::AgentInvocationFinished {
+                timestamp,
+                result: OplogPayload::Inline(Box::new(raw_result)),
+                consumed_fuel,
+                component_revision,
+            })
+        }
 
         PublicOplogEntry::Create(CreateParams {
             timestamp,
@@ -254,7 +262,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .collect(),
             original_phantom_id,
         }),
-        PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
+        PublicOplogEntry::HostCall(HostCallParams {
             timestamp,
             function_name,
             response,
@@ -283,7 +291,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 response,
             )?));
 
-            Ok(OplogEntry::ImportedFunctionInvoked {
+            Ok(OplogEntry::HostCall {
                 timestamp,
                 function_name: HostFunctionName::from(function_name.as_str()),
                 request,
@@ -291,28 +299,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 durable_function_type,
             })
         }
-        PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked_parameters) => {
-            // We discard the type info provided by the user to encode it as oplog payload by converting it to
-            // golem_wasm::protobuf::Val
-            let vals = exported_function_invoked_parameters
-                .request
-                .into_iter()
-                .map(|x| x.value)
-                .collect::<Vec<_>>();
-
-            let oplog_payload = OplogPayload::Inline(Box::new(vals));
-
-            Ok(OplogEntry::ExportedFunctionInvoked {
-                timestamp: exported_function_invoked_parameters.timestamp,
-                function_name: exported_function_invoked_parameters.function_name,
-                request: oplog_payload,
-                idempotency_key: exported_function_invoked_parameters.idempotency_key,
-                trace_id: exported_function_invoked_parameters.trace_id,
-                trace_states: exported_function_invoked_parameters.trace_states,
-                invocation_context: decode_span_data(
-                    exported_function_invoked_parameters.invocation_context,
-                ),
-            })
+        PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams { .. }) => {
+            // TODO: Converting PublicAgentInvocation back to raw AgentInvocationPayload is not yet implemented
+            Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
         }
 
         PublicOplogEntry::Suspend(timestamp_parameter) => Ok(OplogEntry::Suspend {
@@ -360,7 +349,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::EndRemoteWrite(_) => {
             Err("Cannot override an oplog with an end atomic write oplog".to_string())
         }
-        PublicOplogEntry::PendingWorkerInvocation(_) => {
+        PublicOplogEntry::PendingAgentInvocation(_) => {
             Err("Cannot override an oplog with a pending worker invocation".to_string())?
         }
         PublicOplogEntry::PendingUpdate(_) => {
@@ -466,13 +455,14 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::StartSpan(start_span) => Ok(OplogEntry::StartSpan {
             timestamp: start_span.timestamp,
             span_id: start_span.span_id,
-            parent_id: start_span.parent_id,
+            parent: start_span.parent_id,
             linked_context_id: start_span.linked_context,
             attributes: start_span
                 .attributes
                 .into_iter()
                 .map(|attr| (attr.key, attr.value.into()))
-                .collect(),
+                .collect::<HashMap<_, _>>()
+                .into(),
         }),
         PublicOplogEntry::FinishSpan(finish_span) => Ok(OplogEntry::FinishSpan {
             timestamp: finish_span.timestamp,
@@ -489,7 +479,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::ChangePersistenceLevel(change_persistence_level) => {
             Ok(OplogEntry::ChangePersistenceLevel {
                 timestamp: change_persistence_level.timestamp,
-                level: change_persistence_level.persistence_level,
+                persistence_level: change_persistence_level.persistence_level,
             })
         }
         PublicOplogEntry::Snapshot(snapshot_params) => {
@@ -504,6 +494,40 @@ fn get_oplog_entry_from_public_oplog_entry(
                 timestamp: snapshot_params.timestamp,
                 data: OplogPayload::Inline(Box::new(bytes.0)),
                 mime_type: bytes.1,
+            })
+        }
+    }
+}
+
+fn public_agent_invocation_result_to_raw(
+    result: PublicAgentInvocationResult,
+) -> Result<AgentInvocationResult, String> {
+    match result {
+        PublicAgentInvocationResult::AgentInitialization(_) => {
+            Ok(AgentInvocationResult::AgentInitialization)
+        }
+        PublicAgentInvocationResult::AgentMethod(_) => Ok(AgentInvocationResult::AgentMethod {
+            output: UntypedDataValue::Tuple(vec![]),
+        }),
+        PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
+        PublicAgentInvocationResult::LoadSnapshot(params) => {
+            Ok(AgentInvocationResult::LoadSnapshot {
+                error: params.error,
+            })
+        }
+        PublicAgentInvocationResult::SaveSnapshot(params) => {
+            let snapshot = match params.snapshot {
+                PublicSnapshotData::Raw(raw) => raw,
+                PublicSnapshotData::Json(json) => RawSnapshotData {
+                    data: serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
+                    mime_type: "application/json".to_string(),
+                },
+            };
+            Ok(AgentInvocationResult::SaveSnapshot { snapshot })
+        }
+        PublicAgentInvocationResult::ProcessOplogEntries(params) => {
+            Ok(AgentInvocationResult::ProcessOplogEntries {
+                error: params.error,
             })
         }
     }

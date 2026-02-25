@@ -114,6 +114,18 @@ impl ComponentMetadata {
         self.cache.lock().unwrap().save_snapshot(&self.data)
     }
 
+    pub fn agent_initialize(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().agent_initialize(&self.data)
+    }
+
+    pub fn agent_invoke(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().agent_invoke(&self.data)
+    }
+
+    pub fn oplog_processor(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().oplog_processor(&self.data)
+    }
+
     pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
         self.cache.lock().unwrap().find_function(&self.data, name)
     }
@@ -267,6 +279,48 @@ impl ComponentMetadataInnerData {
             },
             ParsedFunctionReference::Function {
                 function: "save".to_string(),
+            },
+        ))
+    }
+
+    pub fn agent_initialize(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "agent".to_string(),
+                interface: "guest".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "initialize".to_string(),
+            },
+        ))
+    }
+
+    pub fn agent_invoke(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "agent".to_string(),
+                interface: "guest".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "invoke".to_string(),
+            },
+        ))
+    }
+
+    pub fn oplog_processor(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "api".to_string(),
+                interface: "oplog-processor".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "process".to_string(),
             },
         ))
     }
@@ -506,6 +560,9 @@ impl ComponentMetadataInnerData {
 pub(crate) struct ComponentMetadataInnerCache {
     load_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
+    agent_initialize: Option<Result<Option<InvokableFunction>, String>>,
+    agent_invoke: Option<Result<Option<InvokableFunction>, String>>,
+    oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
     agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
@@ -537,6 +594,45 @@ impl ComponentMetadataInnerCache {
         } else {
             let result = data.save_snapshot();
             self.save_snapshot = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn agent_initialize(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.agent_initialize {
+            cached.clone()
+        } else {
+            let result = data.agent_initialize();
+            self.agent_initialize = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn agent_invoke(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.agent_invoke {
+            cached.clone()
+        } else {
+            let result = data.agent_invoke();
+            self.agent_invoke = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn oplog_processor(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.oplog_processor {
+            cached.clone()
+        } else {
+            let result = data.oplog_processor();
+            self.oplog_processor = Some(result.clone());
             result
         }
     }

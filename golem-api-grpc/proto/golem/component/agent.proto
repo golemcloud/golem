@@ -2,10 +2,13 @@ syntax = "proto3";
 
 import "golem/common/empty.proto";
 import "wasm/rpc/type.proto";
+import "wasm/rpc/val.proto";
 import "wasm/rpc/value_and_type.proto";
 import "golem/common/account_id.proto";
 import "golem/component/component_id.proto";
 import "golem/worker/worker_id.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation_context.proto";
 
 package golem.component;
 
@@ -115,6 +118,34 @@ message NamedElementValue {
 message ElementValue {
   oneof value {
     wasm.rpc.ValueAndType component_model = 1;
+    TextReference unstructured_text = 2;
+    BinaryReference unstructured_binary = 3;
+  }
+}
+
+message UntypedDataValue {
+  oneof value {
+    UntypedTupleValue tuple = 1;
+    UntypedMultimodalValue multimodal = 2;
+  }
+}
+
+message UntypedTupleValue {
+  repeated UntypedElementValue elements = 1;
+}
+
+message UntypedMultimodalValue {
+  repeated UntypedNamedElementValue elements = 1;
+}
+
+message UntypedNamedElementValue {
+  string name = 1;
+  UntypedElementValue value = 2;
+}
+
+message UntypedElementValue {
+  oneof value {
+    wasm.rpc.Val component_model = 1;
     TextReference unstructured_text = 2;
     BinaryReference unstructured_binary = 3;
   }
@@ -272,4 +303,50 @@ message AgentPrincipal {
 
 message GolemUserPrincipal {
   golem.common.AccountId account_id = 1;
+}
+
+message TypedDataValue {
+  UntypedDataValue value = 1;
+  DataSchema schema = 2;
+}
+
+message AgentInvocation {
+  oneof invocation {
+    AgentInitializationInvocation agent_initialization = 1;
+    AgentMethodInvocation agent_method = 2;
+    ManualUpdateInvocation manual_update = 3;
+    LoadSnapshotInvocation load_snapshot = 4;
+    golem.common.Empty save_snapshot = 5;
+    ProcessOplogEntriesInvocation process_oplog_entries = 6;
+  }
+}
+
+message AgentInitializationInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  UntypedDataValue constructor_parameters = 2;
+  string trace_id = 3;
+  repeated string trace_states = 4;
+  repeated golem.worker.InvocationSpan invocation_context = 5;
+}
+
+message AgentMethodInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  string method_name = 2;
+  UntypedDataValue function_input = 3;
+  string trace_id = 4;
+  repeated string trace_states = 5;
+  repeated golem.worker.InvocationSpan invocation_context = 6;
+}
+
+message ManualUpdateInvocation {
+  uint64 target_revision = 1;
+}
+
+message LoadSnapshotInvocation {
+  bytes data = 1;
+  string mime_type = 2;
+}
+
+message ProcessOplogEntriesInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
 }

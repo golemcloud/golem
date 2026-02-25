@@ -29,9 +29,7 @@ use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{PromiseId, WorkerId};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, DataValue};
-use golem_common::model::application::{
-    Application, ApplicationCreation, ApplicationId, ApplicationName,
-};
+use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
@@ -41,9 +39,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
-use golem_common::model::environment::{
-    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
-};
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
@@ -227,13 +223,13 @@ pub trait TestDsl {
 
     async fn invoke_agent(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
         self.invoke_agent_with_key(
-            component_id,
+            component,
             agent_id,
             &IdempotencyKey::fresh(),
             method_name,
@@ -244,7 +240,7 @@ pub trait TestDsl {
 
     async fn invoke_agent_with_key(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
@@ -253,25 +249,25 @@ pub trait TestDsl {
 
     async fn invoke_and_await_agent(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
-        self.invoke_and_await_agent_impl(component_id, agent_id, None, method_name, params)
+        self.invoke_and_await_agent_impl(component, agent_id, None, method_name, params)
             .await
     }
 
     async fn invoke_and_await_agent_with_key(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
         self.invoke_and_await_agent_impl(
-            component_id,
+            component,
             agent_id,
             Some(idempotency_key),
             method_name,
@@ -282,7 +278,7 @@ pub trait TestDsl {
 
     async fn invoke_and_await_agent_impl(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: Option<&IdempotencyKey>,
         method_name: &str,
@@ -522,77 +518,16 @@ pub trait TestDslExtended: TestDsl {
 
     async fn registry_service_client(&self) -> RegistryServiceClientLive;
 
-    async fn app(&self) -> anyhow::Result<Application> {
-        let client = self.registry_service_client().await;
-        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
+    async fn app(&self) -> anyhow::Result<Application>;
 
-        let application = client
-            .create_application(
-                &self.account_id().0,
-                &ApplicationCreation { name: app_name },
-            )
-            .await?;
+    async fn env(&self, application_id: &ApplicationId) -> anyhow::Result<Environment>;
 
-        Ok(application)
-    }
-
-    async fn env(&self, application_id: &ApplicationId) -> anyhow::Result<Environment> {
-        let client = self.registry_service_client().await;
-        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
-
-        let environment = client
-            .create_environment(
-                &application_id.0,
-                &EnvironmentCreation {
-                    name: env_name,
-                    compatibility_check: false,
-                    version_check: false,
-                    security_overrides: false,
-                },
-            )
-            .await?;
-
-        Ok(environment)
-    }
-
-    async fn app_and_env(&self) -> anyhow::Result<(Application, Environment)> {
-        self.app_and_env_custom(&EnvironmentOptions {
-            compatibility_check: false,
-            version_check: false,
-            security_overrides: false,
-        })
-        .await
-    }
+    async fn app_and_env(&self) -> anyhow::Result<(Application, Environment)>;
 
     async fn app_and_env_custom(
         &self,
         environment_options: &EnvironmentOptions,
-    ) -> anyhow::Result<(Application, Environment)> {
-        let client = self.registry_service_client().await;
-        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
-        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
-
-        let application = client
-            .create_application(
-                &self.account_id().0,
-                &ApplicationCreation { name: app_name },
-            )
-            .await?;
-
-        let environment = client
-            .create_environment(
-                &application.id.0,
-                &EnvironmentCreation {
-                    name: env_name,
-                    compatibility_check: environment_options.compatibility_check,
-                    version_check: environment_options.version_check,
-                    security_overrides: environment_options.security_overrides,
-                },
-            )
-            .await?;
-
-        Ok((application, environment))
-    }
+    ) -> anyhow::Result<(Application, Environment)>;
 
     async fn share_environment(
         &self,

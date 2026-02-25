@@ -18,12 +18,92 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, Sp
 use crate::model::oplog::OplogPayload;
 use crate::model::Timestamp;
 use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(transparent)]
+pub struct AttributeMap(pub HashMap<String, AttributeValue>);
+
+impl std::ops::Deref for AttributeMap {
+    type Target = HashMap<String, AttributeValue>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<HashMap<String, AttributeValue>> for AttributeMap {
+    fn from(map: HashMap<String, AttributeValue>) -> Self {
+        Self(map)
+    }
+}
+
+impl From<AttributeMap> for HashMap<String, AttributeValue> {
+    fn from(map: AttributeMap) -> Self {
+        map.0
+    }
+}
+
+impl golem_wasm::IntoValue for AttributeMap {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::List(
+            self.0
+                .into_iter()
+                .map(|(key, value)| {
+                    golem_wasm::Value::Record(vec![
+                        golem_wasm::Value::String(key),
+                        value.into_value(),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        list(
+            record(vec![
+                field("key", str()),
+                field("value", AttributeValue::get_type()),
+            ])
+            .named("attribute")
+            .owned("golem:api@1.5.0/context"),
+        )
+    }
+}
+
+impl golem_wasm::FromValue for AttributeMap {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::List(items) => {
+                let mut map = HashMap::new();
+                for item in items {
+                    match item {
+                        golem_wasm::Value::Record(fields) if fields.len() == 2 => {
+                            let mut iter = fields.into_iter();
+                            let key = String::from_value(iter.next().unwrap())?;
+                            let value = AttributeValue::from_value(iter.next().unwrap())?;
+                            map.insert(key, value);
+                        }
+                        other => {
+                            return Err(format!(
+                                "Expected Record with 2 fields for attribute, got {other:?}"
+                            ));
+                        }
+                    }
+                }
+                Ok(AttributeMap(map))
+            }
+            other => Err(format!("Expected List for AttributeMap, got {other:?}")),
+        }
+    }
+}
 
 pub struct OplogIndexRange {
     current: u64,
@@ -223,8 +303,17 @@ pub struct TimestampedUpdateDescription {
     pub description: UpdateDescription,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_wasm_derive::IntoValue,
+    golem_wasm_derive::FromValue,
+)]
 #[desert(evolution())]
+#[wit(name = "wrapped-function-type", owner = "golem:api@1.5.0/oplog")]
 pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
@@ -254,8 +343,9 @@ pub enum DurableFunctionType {
 }
 
 /// Describes the error that occurred in the worker
-#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
+#[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
 pub enum WorkerError {
     Unknown(String),
     InvalidRequest(String),
@@ -263,6 +353,7 @@ pub enum WorkerError {
     OutOfMemory,
     // The worker tried to grow its memory beyond the limits of the plan
     ExceededMemoryLimit,
+    AgentError(String),
 }
 
 impl WorkerError {
@@ -273,6 +364,7 @@ impl WorkerError {
             Self::StackOverflow => "Stack overflow",
             Self::OutOfMemory => "Out of memory",
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
+            Self::AgentError(message) => message,
         }
     }
 
@@ -284,5 +376,251 @@ impl WorkerError {
             "".to_string()
         };
         format!("{message}{error_logs}")
+    }
+}
+
+impl golem_wasm::IntoValue for UpdateDescription {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            UpdateDescription::Automatic { target_revision } => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(target_revision.into_value())),
+            },
+            UpdateDescription::SnapshotBased {
+                target_revision,
+                payload,
+                mime_type,
+            } => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                    target_revision.into_value(),
+                    payload.into_value(),
+                    mime_type.into_value(),
+                ]))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![
+            case("automatic", ComponentRevision::get_type()),
+            case(
+                "snapshot-based",
+                record(vec![
+                    field("target-revision", ComponentRevision::get_type()),
+                    field("payload", OplogPayload::<Vec<u8>>::get_type()),
+                    field("mime-type", str()),
+                ])
+                .named("raw-snapshot-based-update")
+                .owned("golem:api@1.5.0/oplog"),
+            ),
+        ])
+        .named("raw-update-description")
+        .owned("golem:api@1.5.0/oplog")
+    }
+}
+
+impl golem_wasm::FromValue for UpdateDescription {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let target_revision = ComponentRevision::from_value(
+                        *case_value.ok_or("Expected case_value for automatic")?,
+                    )?;
+                    Ok(UpdateDescription::Automatic { target_revision })
+                }
+                1 => {
+                    let record_value =
+                        *case_value.ok_or("Expected case_value for snapshot-based")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 3 => {
+                            let mut iter = fields.into_iter();
+                            let target_revision =
+                                ComponentRevision::from_value(iter.next().unwrap())?;
+                            let payload =
+                                OplogPayload::<Vec<u8>>::from_value(iter.next().unwrap())?;
+                            let mime_type = String::from_value(iter.next().unwrap())?;
+                            Ok(UpdateDescription::SnapshotBased {
+                                target_revision,
+                                payload,
+                                mime_type,
+                            })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 3 fields for raw-snapshot-based-update, got {other:?}"
+                        )),
+                    }
+                }
+                _ => Err(format!(
+                    "Invalid case_idx for UpdateDescription: {case_idx}"
+                )),
+            },
+            other => Err(format!(
+                "Expected Variant for UpdateDescription, got {other:?}"
+            )),
+        }
+    }
+}
+
+impl golem_wasm::IntoValue for SpanData {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context: _,
+                attributes,
+                inherited,
+            } => {
+                let attrs: Vec<golem_wasm::Value> = attributes
+                    .into_iter()
+                    .map(|(key, value)| {
+                        golem_wasm::Value::Record(vec![
+                            golem_wasm::Value::String(key),
+                            value.into_value(),
+                        ])
+                    })
+                    .collect();
+                golem_wasm::Value::Variant {
+                    case_idx: 0,
+                    case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                        span_id.into_value(),
+                        start.into_value(),
+                        parent_id.into_value(),
+                        golem_wasm::Value::Option(None), // linked_context: option<u64> = None
+                        golem_wasm::Value::List(attrs),
+                        golem_wasm::Value::Bool(inherited),
+                    ]))),
+                }
+            }
+            SpanData::ExternalSpan { span_id } => golem_wasm::Value::Variant {
+                case_idx: 1,
+                case_value: Some(Box::new(golem_wasm::Value::Record(vec![
+                    span_id.into_value()
+                ]))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        let attribute_type = record(vec![
+            field("key", str()),
+            field("value", AttributeValue::get_type()),
+        ])
+        .named("attribute")
+        .owned("golem:api@1.5.0/context");
+        variant(vec![
+            case(
+                "local-span",
+                record(vec![
+                    field("span-id", SpanId::get_type()),
+                    field("start", crate::model::Timestamp::get_type()),
+                    field("parent", option(SpanId::get_type())),
+                    field("linked-context", option(u64())),
+                    field("attributes", list(attribute_type)),
+                    field("inherited", bool()),
+                ])
+                .named("local-span-data")
+                .owned("golem:api@1.5.0/oplog"),
+            ),
+            case(
+                "external-span",
+                record(vec![field("span-id", SpanId::get_type())])
+                    .named("external-span-data")
+                    .owned("golem:api@1.5.0/oplog"),
+            ),
+        ])
+        .named("span-data")
+        .owned("golem:api@1.5.0/oplog")
+    }
+}
+
+impl golem_wasm::FromValue for SpanData {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let record_value = *case_value.ok_or("Expected case_value for local-span")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 6 => {
+                            let mut iter = fields.into_iter();
+                            let span_id = SpanId::from_value(iter.next().unwrap())?;
+                            let start = crate::model::Timestamp::from_value(iter.next().unwrap())?;
+                            let parent_id = Option::<SpanId>::from_value(iter.next().unwrap())?;
+                            let _linked_context_idx =
+                                Option::<u64>::from_value(iter.next().unwrap())?;
+                            let attrs_list = match iter.next().unwrap() {
+                                golem_wasm::Value::List(items) => {
+                                    let mut map = HashMap::new();
+                                    for item in items {
+                                        match item {
+                                            golem_wasm::Value::Record(fields)
+                                                if fields.len() == 2 =>
+                                            {
+                                                let mut fiter = fields.into_iter();
+                                                let key =
+                                                    String::from_value(fiter.next().unwrap())?;
+                                                let value = AttributeValue::from_value(
+                                                    fiter.next().unwrap(),
+                                                )?;
+                                                map.insert(key, value);
+                                            }
+                                            other => {
+                                                return Err(format!(
+                                                    "Expected Record with 2 fields for attribute, got {other:?}"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    map
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "Expected List for attributes, got {other:?}"
+                                    ));
+                                }
+                            };
+                            let inherited = bool::from_value(iter.next().unwrap())?;
+                            Ok(SpanData::LocalSpan {
+                                span_id,
+                                start,
+                                parent_id,
+                                linked_context: None,
+                                attributes: attrs_list,
+                                inherited,
+                            })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 6 fields for local-span-data, got {other:?}"
+                        )),
+                    }
+                }
+                1 => {
+                    let record_value =
+                        *case_value.ok_or("Expected case_value for external-span")?;
+                    match record_value {
+                        golem_wasm::Value::Record(fields) if fields.len() == 1 => {
+                            let span_id = SpanId::from_value(fields.into_iter().next().unwrap())?;
+                            Ok(SpanData::ExternalSpan { span_id })
+                        }
+                        other => Err(format!(
+                            "Expected Record with 1 field for external-span-data, got {other:?}"
+                        )),
+                    }
+                }
+                _ => Err(format!("Invalid case_idx for SpanData: {case_idx}")),
+            },
+            other => Err(format!("Expected Variant for SpanData, got {other:?}")),
+        }
     }
 }

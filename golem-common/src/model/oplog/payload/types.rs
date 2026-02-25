@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::model::agent::{Principal, UntypedDataValue};
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
@@ -20,8 +21,8 @@ use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId, ScheduledAction, WorkerId,
-    WorkerMetadata, WorkerStatus,
+    AccountId, AgentInvocation, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId,
+    ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use anyhow::anyhow;
 use bigdecimal::BigDecimal;
@@ -33,7 +34,7 @@ use desert_rust::{
 };
 use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, IntoValue, NodeIndex, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, NodeIndex, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
 use mac_address::MacAddress;
@@ -74,15 +75,6 @@ pub struct ObjectMetadata {
 pub struct SerializableDateTime {
     pub seconds: u64,
     pub nanoseconds: u32,
-}
-
-impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
 }
 
 impl From<golem_wasm::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
@@ -246,7 +238,7 @@ impl BinaryDeserializer for SerializableFsErrorCode {
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableFsErrorCode: {other}"
-                )))
+                )));
             }
         };
         Ok(SerializableFsErrorCode(error_code))
@@ -543,7 +535,7 @@ impl BinaryDeserializer for SerializableSocketErrorCode {
             other => {
                 return Err(desert_rust::Error::DeserializationFailure(format!(
                     "Invalid tag for SerializableSocketErrorCode: {other}"
-                )))
+                )));
             }
         };
         Ok(SerializableSocketErrorCode(error_code))
@@ -1104,6 +1096,7 @@ pub struct AgentMetadataForGuests {
     pub status: WorkerStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
+    pub environment_id: EnvironmentId,
 }
 
 impl From<WorkerMetadata> for AgentMetadataForGuests {
@@ -1122,6 +1115,7 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
                 .max_by_key(|(idx, _)| **idx)
                 .map(|(_, value)| *value)
                 .unwrap_or_default() as u64,
+            environment_id: value.environment_id,
         }
     }
 }
@@ -1265,7 +1259,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
 pub enum SerializableInvokeResult {
     Failed(String),
     Pending,
-    Completed(Result<Option<ValueAndType>, SerializableRpcError>),
+    Completed(Result<UntypedDataValue, SerializableRpcError>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
@@ -1286,8 +1280,9 @@ pub struct SerializableScheduledInvocation {
     pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
     pub idempotency_key: IdempotencyKey,
-    pub full_function_name: String,
-    pub function_input: Vec<Value>,
+    pub method_name: String,
+    pub input: UntypedDataValue,
+    pub principal: Principal,
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub spans: Vec<Vec<PublicSpanData>>,
@@ -1299,27 +1294,42 @@ impl SerializableScheduledInvocation {
             ScheduledAction::Invoke {
                 account_id,
                 owned_worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Ok(Self {
-                timestamp: schedule_id.timestamp,
-                account_id,
-                environment_id: owned_worker_id.environment_id,
-                worker_id: owned_worker_id.worker_id,
-                idempotency_key,
-                full_function_name,
-                function_input,
-                spans: encode_span_data(&invocation_context.to_oplog_data()),
-                trace_id: invocation_context.trace_id,
-                trace_states: invocation_context.trace_states,
-            }),
+                invocation,
+            } => match *invocation {
+                AgentInvocation::AgentMethod {
+                    idempotency_key,
+                    method_name,
+                    input,
+                    invocation_context,
+                    principal,
+                } => Ok(Self {
+                    timestamp: schedule_id.timestamp,
+                    account_id,
+                    environment_id: owned_worker_id.environment_id,
+                    worker_id: owned_worker_id.worker_id,
+                    idempotency_key,
+                    method_name,
+                    input,
+                    principal,
+                    spans: encode_span_data(&invocation_context.to_oplog_data()),
+                    trace_id: invocation_context.trace_id,
+                    trace_states: invocation_context.trace_states,
+                }),
+                other => Err(format!(
+                    "ScheduleId contains a non-method invocation: {:?}",
+                    other.kind()
+                )),
+            },
             _ => Err("ScheduleId does not describe an invocation".to_string()),
         }
     }
 
     pub fn into_domain(self) -> ScheduleId {
+        let invocation_context = InvocationContextStack::from_oplog_data(
+            self.trace_id,
+            self.trace_states,
+            decode_span_data(self.spans),
+        );
         ScheduleId {
             timestamp: self.timestamp,
             action: ScheduledAction::Invoke {
@@ -1328,14 +1338,13 @@ impl SerializableScheduledInvocation {
                     environment_id: self.environment_id,
                     worker_id: self.worker_id,
                 },
-                idempotency_key: self.idempotency_key,
-                full_function_name: self.full_function_name,
-                function_input: self.function_input,
-                invocation_context: InvocationContextStack::from_oplog_data(
-                    self.trace_id,
-                    self.trace_states,
-                    decode_span_data(self.spans),
-                ),
+                invocation: Box::new(AgentInvocation::AgentMethod {
+                    idempotency_key: self.idempotency_key,
+                    method_name: self.method_name,
+                    input: self.input,
+                    invocation_context,
+                    principal: self.principal,
+                }),
             },
         }
     }

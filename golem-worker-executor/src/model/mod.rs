@@ -24,11 +24,12 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
+use golem_common::model::{
+    AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
+};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm::ValueAndType;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -369,7 +370,7 @@ pub enum LookupResult {
     New,
     Pending,
     Interrupted,
-    Complete(Result<Option<ValueAndType>, WorkerExecutorError>),
+    Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
 }
 
 pub enum ReadFileResult {

@@ -369,11 +369,34 @@ impl<T: FromValue + Ord> FromValue for std::collections::BTreeSet<T> {
     }
 }
 
+impl<T: FromValue + Eq + std::hash::Hash> FromValue for std::collections::HashSet<T> {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::List(values) => {
+                let mut set = std::collections::HashSet::new();
+                for v in values {
+                    set.insert(T::from_value(v)?);
+                }
+                Ok(set)
+            }
+            _ => Err(format!("Expected List value for HashSet, got {value:?}")),
+        }
+    }
+}
+
 impl FromValue for uuid::Uuid {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
+            Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let hi = u64::from_value(iter.next().unwrap())?;
+                let lo = u64::from_value(iter.next().unwrap())?;
+                Ok(uuid::Uuid::from_u64_pair(hi, lo))
+            }
             Value::String(s) => uuid::Uuid::parse_str(&s).map_err(|e| format!("Invalid UUID: {e}")),
-            _ => Err(format!("Expected String value for UUID, got {value:?}")),
+            _ => Err(format!(
+                "Expected Record with 2 fields for UUID, got {value:?}"
+            )),
         }
     }
 }
@@ -381,10 +404,16 @@ impl FromValue for uuid::Uuid {
 impl FromValue for UuidRecord {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Record(mut fields) if fields.len() == 1 => {
-                let value = Uuid::from_value(fields.remove(0))?;
-                Ok(UuidRecord { value })
-            }
+            Value::Record(mut fields) if fields.len() == 1 => match fields.remove(0) {
+                Value::String(s) => {
+                    let value = Uuid::parse_str(&s)
+                        .map_err(|e| format!("Invalid UUID string in UuidRecord: {e}"))?;
+                    Ok(UuidRecord { value })
+                }
+                other => Err(format!(
+                    "Expected String value in UuidRecord, got {other:?}"
+                )),
+            },
             _ => Err(format!(
                 "Expected Record with value for UuidRecord, got {value:?}"
             )),
@@ -622,14 +651,14 @@ impl FromValue for crate::WitTypeNode {
 }
 
 #[cfg(feature = "host")]
-impl FromValue for crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
+impl FromValue for crate::golem_core_1_5_x::types::NamedWitTypeNode {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 3 => {
                 let name = Option::<String>::from_value(fields.remove(0))?;
                 let owner = Option::<String>::from_value(fields.remove(0))?;
                 let type_ = crate::WitTypeNode::from_value(fields.remove(0))?;
-                Ok(crate::golem_rpc_0_2_x::types::NamedWitTypeNode { name, owner, type_ })
+                Ok(crate::golem_core_1_5_x::types::NamedWitTypeNode { name, owner, type_ })
             }
             _ => Err(format!(
                 "Expected Record for NamedWitTypeNode, got {value:?}"
@@ -668,30 +697,6 @@ impl FromValue for crate::ResourceMode {
                 _ => Err(format!("Invalid ResourceMode enum index: {idx}")),
             },
             _ => Err(format!("Expected Enum for ResourceMode, got {value:?}")),
-        }
-    }
-}
-
-#[cfg(feature = "host")]
-impl FromValue for crate::RpcError {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Variant {
-                case_idx,
-                case_value,
-            } => {
-                let inner = *case_value.unwrap();
-                match case_idx {
-                    0 => Ok(crate::RpcError::ProtocolError(String::from_value(inner)?)),
-                    1 => Ok(crate::RpcError::Denied(String::from_value(inner)?)),
-                    2 => Ok(crate::RpcError::NotFound(String::from_value(inner)?)),
-                    3 => Ok(crate::RpcError::RemoteInternalError(String::from_value(
-                        inner,
-                    )?)),
-                    _ => Err(format!("Invalid RpcError variant index: {case_idx}")),
-                }
-            }
-            _ => Err(format!("Expected Variant for RpcError, got {value:?}")),
         }
     }
 }
@@ -819,7 +824,7 @@ impl FromValue for crate::WitType {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Record(mut fields) if fields.len() == 1 => {
-                let nodes = Vec::<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>::from_value(
+                let nodes = Vec::<crate::golem_core_1_5_x::types::NamedWitTypeNode>::from_value(
                     fields.remove(0),
                 )?;
                 Ok(crate::WitType { nodes })

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::agent::ElementValue;
+use golem_common::base_model::agent::{ComponentModelElementValue, ElementValue};
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -57,7 +57,7 @@ async fn rust_rpc_with_payload(
 
     let spawn_result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &parent_agent_id,
             "spawn_child",
             data_value!("hello world"),
@@ -73,7 +73,7 @@ async fn rust_rpc_with_payload(
     let child_agent_id = agent_id!("rust-child", uuid);
 
     let get_result = executor
-        .invoke_and_await_agent(&component.id, &child_agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &child_agent_id, "get", data_value!())
         .await?;
 
     let option_payload_as_value = get_result
@@ -121,7 +121,7 @@ async fn rust_rpc_missing_target(
 
     let call_result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &parent_agent_id,
             "call_ts_agent",
             data_value!("example"),
@@ -162,7 +162,7 @@ async fn counter_resource_test_1(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test1", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test1", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -217,11 +217,11 @@ async fn counter_resource_test_2(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test2", data_value!())
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test2", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -264,14 +264,14 @@ async fn counter_resource_test_2_with_restart(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test2", data_value!())
         .await?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test2", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test2", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -314,11 +314,11 @@ async fn counter_resource_test_3(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test3", data_value!())
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test3", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -361,14 +361,14 @@ async fn counter_resource_test_3_with_restart(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test3", data_value!())
         .await?;
 
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test3", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test3", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -411,7 +411,7 @@ async fn context_inheritance(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test4", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test4", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -496,7 +496,7 @@ async fn counter_resource_test_5(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "test5", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "test5", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -544,11 +544,13 @@ async fn wasm_rpc_bug_32_test(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "bug_wasm_rpc_i32",
             DataValue::Tuple(ElementValues {
-                elements: vec![ElementValue::ComponentModel(input_vat)],
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: input_vat,
+                })],
             }),
         )
         .await?;
@@ -589,12 +591,7 @@ async fn golem_bug_1265_test(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "bug_golem1265",
-            data_value!("test"),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "bug_golem1265", data_value!("test"))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -630,7 +627,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
 
     let _ = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "increment_through_rpc_to_ephemeral",
             data_value!(),
@@ -638,7 +635,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .await?;
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "increment_through_rpc_to_ephemeral",
             data_value!(),
@@ -678,7 +675,7 @@ async fn ephemeral_worker_invocation_via_rpc2(
 
     let _ = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "increment_through_rpc_to_ephemeral_phantom",
             data_value!(),
@@ -686,7 +683,7 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .await;
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "increment_through_rpc_to_ephemeral_phantom",
             data_value!(),

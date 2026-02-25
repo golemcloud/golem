@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import { ResolvedAgent } from './resolvedAgent';
-import { Result } from 'golem:rpc/types@0.2.2';
-import { AgentError, DataValue, Principal } from 'golem:agent/common';
+import { Result } from 'golem:agent/host@1.5.0';
+import { AgentError, DataValue, Principal } from 'golem:agent/common@1.5.0';
 
 /**
  * Any agent creation in SDK across any boundaries goes through `AgentInitiator`

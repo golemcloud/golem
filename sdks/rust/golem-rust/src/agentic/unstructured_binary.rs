@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
-use crate::golem_agentic::golem::agent::common::{
-    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ElementSchema, ElementValue,
-};
+use crate::golem_agentic::golem::agent::common::{BinaryDescriptor, ElementSchema, ElementValue};
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
-use golem_wasm::Value;
+use golem_wasm::golem_core_1_5_x::types::{BinaryReference, BinarySource, BinaryType};
 
 impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
     fn get_type() -> StructuredSchema {
@@ -108,70 +106,62 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
                 }
             },
             ElementValue::UnstructuredText(_) => {
-                Err("Expected UnstructuredBinary ElementValue, got UnstructuredBinary".to_string())
+                Err("Expected UnstructuredBinary ElementValue, got UnstructuredText".to_string())
             }
         }
     }
 
-    fn from_wit_value(
-        wit_value: golem_wasm::WitValue,
-        _schema: StructuredSchema,
-    ) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        UnstructuredBinary::from_wit_value(wit_value)
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        match self {
+            UnstructuredBinary::Inline { data, mime_type } => {
+                let mime_type = mime_type.to_string();
+                Ok(ElementValue::UnstructuredBinary(BinaryReference::Inline(
+                    BinarySource {
+                        data,
+                        binary_type: BinaryType { mime_type },
+                    },
+                )))
+            }
+            UnstructuredBinary::Url(url) => {
+                Ok(ElementValue::UnstructuredBinary(BinaryReference::Url(url)))
+            }
+        }
     }
 
-    fn to_wit_value(self) -> Result<golem_wasm::WitValue, String>
-    where
-        Self: Sized,
-    {
-        let value_type = self.to_structured_value()?;
-
-        let element_value_result = match value_type {
-            StructuredValue::Default(element_value) => Ok(element_value),
-            StructuredValue::Multimodal(_) => {
-                Err("Expected element value but found multimodal".to_string())
-            }
-            StructuredValue::AutoInjected(_) => {
-                Err("Expected element value but found auto-injected".to_string())
-            }
-        };
-
-        let element_value = element_value_result?;
-
-        match element_value {
-            ElementValue::ComponentModel(_) => {
-                Err("Expected UnstructuredBinary ElementValue, got ComponentModel".to_string())
-            }
+    fn from_element_value(value: ElementValue) -> Result<Self, String> {
+        match value {
             ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
-                BinaryReference::Url(url) => {
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(Value::String(url))),
-                    };
-
-                    Ok(golem_wasm::WitValue::from(value))
-                }
+                BinaryReference::Url(url) => Ok(UnstructuredBinary::Url(url)),
                 BinaryReference::Inline(binary_source) => {
-                    let restriction_record =
-                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
+                    let allowed = T::all().iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(Value::Record(vec![
-                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
-                            restriction_record,
-                        ]))),
-                    };
+                    let mime_type = binary_source.binary_type.mime_type;
 
-                    Ok(golem_wasm::WitValue::from(value))
+                    if !allowed.is_empty() && !allowed.contains(&mime_type) {
+                        return Err(format!(
+                            "Mime type '{}' is not allowed. Allowed mime types: {:?}",
+                            mime_type,
+                            allowed.join(",")
+                        ));
+                    }
+
+                    let mime_type = T::from_string(&mime_type).ok_or_else(|| {
+                        format!(
+                            "Failed to convert mime type '{}' to AllowedMimeType",
+                            mime_type
+                        )
+                    })?;
+
+                    Ok(UnstructuredBinary::Inline {
+                        data: binary_source.data,
+                        mime_type,
+                    })
                 }
             },
-            ElementValue::UnstructuredText(_) => {
-                Err("Expected UnstructuredBinary ElementValue, got UnstructuredText".to_string())
-            }
+            other => Err(format!(
+                "Expected UnstructuredBinary ElementValue, got: {:?}",
+                other
+            )),
         }
     }
 }

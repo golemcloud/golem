@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::{
-    AgentWrapperCommandMarkerHash, ComposeAgentWrapperCommandMarkerHash,
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
     InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
 };
@@ -22,19 +20,12 @@ use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::{BuildContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
 use crate::composition::{compose, Plug};
-use crate::error::NonSuccessfulExit;
 use crate::fs;
-use crate::log::log_error;
-use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
-};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app_raw;
-use crate::model::app_raw::{
-    ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
-    InjectToPrebuiltQuickJs,
-};
+use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs};
 use crate::process::{with_hidden_output_unless_error, CommandExt, HiddenOutput};
-use anyhow::{anyhow, bail, Context as AnyhowContext};
+use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
 use std::path::Path;
@@ -62,152 +53,10 @@ pub async fn execute_build_command(
         app_raw::BuildCommand::QuickJSDTS(command) => {
             execute_quickjs_d_ts(ctx, &base_build_dir, command)
         }
-        app_raw::BuildCommand::AgentWrapper(command) => {
-            execute_agent_wrapper(ctx, component_name, &base_build_dir, command).await
-        }
-        app_raw::BuildCommand::ComposeAgentWrapper(command) => {
-            execute_compose_agent_wrapper(ctx, component_name, &base_build_dir, command).await
-        }
         app_raw::BuildCommand::InjectToPrebuiltQuickJs(command) => {
             execute_inject_to_prebuilt_quick_js(ctx, &base_build_dir, command).await
         }
     }
-}
-
-async fn execute_agent_wrapper(
-    ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
-    base_build_dir: &Path,
-    command: &GenerateAgentWrapper,
-) -> anyhow::Result<()> {
-    let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
-    let wrapper_wasm_path = base_build_dir.join(&command.generate_agent_wrapper);
-    let compiled_wasm_path = base_build_dir.join(&command.based_on_compiled_wasm);
-
-    new_task_up_to_date_check(ctx)
-        .with_task_result_marker(AgentWrapperCommandMarkerHash {
-            build_dir: base_build_dir.as_std_path(),
-            command,
-        })?
-        .with_sources(|| [&compiled_wasm_path])
-        .with_targets(|| [&wrapper_wasm_path])
-        .run_async_or_skip(
-            || async {
-                log_action(
-                    "Generating",
-                    format!(
-                        "agent wrapper for {}",
-                        component_name.as_str().log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
-
-                let agent_types = extract_and_store_agent_types(ctx, component_name).await?;
-
-                log_action(
-                    "Generating",
-                    format!(
-                        "agent WIT interface for {}",
-                        component_name.to_string().log_color_highlight()
-                    ),
-                );
-
-                let wrapper_context = crate::model::agent::wit::generate_agent_wrapper_wit(
-                    component_name,
-                    &agent_types,
-                )?;
-
-                log_action(
-                    "Generating",
-                    format!(
-                        "agent WIT interface implementation to {}",
-                        wrapper_wasm_path.to_string().log_color_highlight()
-                    ),
-                );
-
-                with_hidden_output_unless_error(
-                    HiddenOutput::hide_stderr_if(!enabled!(Level::WARN)),
-                    || {
-                        crate::model::agent::moonbit::generate_moonbit_wrapper(
-                            wrapper_context,
-                            wrapper_wasm_path.as_std_path(),
-                        )
-                    },
-                )
-            },
-            || {
-                log_skipping_up_to_date(format!(
-                    "generating agent wrapper for {}",
-                    component_name.as_str().log_color_highlight()
-                ));
-            },
-        )
-        .await
-}
-
-async fn execute_compose_agent_wrapper(
-    ctx: &BuildContext<'_>,
-    component_name: &ComponentName,
-    base_build_dir: &Path,
-    command: &ComposeAgentWrapper,
-) -> anyhow::Result<()> {
-    let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
-    let wrapper_wasm_path = base_build_dir.join(&command.compose_agent_wrapper);
-    let user_component = base_build_dir.join(&command.with_agent);
-    let target_component = base_build_dir.join(&command.to);
-
-    new_task_up_to_date_check(ctx)
-        .with_task_result_marker(ComposeAgentWrapperCommandMarkerHash {
-            build_dir: base_build_dir.as_std_path(),
-            command,
-        })?
-        .with_sources(|| [&wrapper_wasm_path, &user_component])
-        .with_targets(|| [&target_component])
-        .run_async_or_skip(
-            || async {
-                log_action(
-                    "Composing",
-                    format!(
-                        "agent wrapper for {}",
-                        component_name.to_string().log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
-
-                let unused_plugs = compose(
-                    wrapper_wasm_path.as_std_path(),
-                    vec![Plug {
-                        name: user_component.to_string(),
-                        wasm: user_component.as_std_path().to_path_buf(),
-                    }],
-                    target_component.as_std_path(),
-                )
-                .await?;
-
-                if !unused_plugs.is_empty() {
-                    let _ident = LogIndent::stash();
-
-                    logln("");
-                    log_error(format!(
-                        "Failed to compose agent wrapper, unused plugs: {}",
-                        unused_plugs.join(", ")
-                    ));
-                    logln("");
-                    logln("Confirm that you are using the most recent golem CLI and SDKs!");
-
-                    bail!(NonSuccessfulExit)
-                }
-
-                Ok(())
-            },
-            || {
-                log_skipping_up_to_date(format!(
-                    "composing agent wrapper for {}",
-                    component_name.as_str().log_color_highlight()
-                ));
-            },
-        )
-        .await
 }
 
 async fn execute_inject_to_prebuilt_quick_js(

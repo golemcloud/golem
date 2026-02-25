@@ -341,7 +341,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         &mut linker,
         get_durable_ctx,
     )?;
-    golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     Ok(linker)
 }
 

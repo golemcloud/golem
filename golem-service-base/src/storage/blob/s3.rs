@@ -18,7 +18,7 @@ use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, Exis
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region, RequestChecksumCalculation};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
@@ -73,11 +73,15 @@ impl S3BlobStorage {
 
         let s3_config: aws_sdk_s3::config::Config = (&sdk_config).into();
 
-        let s3_config = if let Some(path_style) = &config.aws_path_style {
-            s3_config.to_builder().force_path_style(*path_style).build()
-        } else {
-            s3_config
-        };
+        let mut s3_config_builder = s3_config
+            .to_builder()
+            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
+
+        if let Some(path_style) = &config.aws_path_style {
+            s3_config_builder = s3_config_builder.force_path_style(*path_style);
+        }
+
+        let s3_config = s3_config_builder.build();
 
         Self {
             client: aws_sdk_s3::Client::from_conf(s3_config),

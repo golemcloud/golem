@@ -329,7 +329,7 @@ impl FromValueAndType for chrono::DateTime<chrono::Local> {
 mod tests {
     use super::*;
     use crate::roundtrip_test;
-    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+    use golem_wasm::golem_core_1_5_x::types::ValueAndType;
     use proptest::prop_assert_eq;
     use proptest::proptest;
     use proptest::strategy::Strategy;

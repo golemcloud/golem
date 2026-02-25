@@ -14,7 +14,7 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { DataSchema } from 'golem:agent/common';
+import { DataSchema } from 'golem:agent/common@1.5.0';
 import * as WitType from '../mapping/types/WitType';
 import { AnalysedType, EmptyType, result, tuple } from '../mapping/types/analysedType';
 import {

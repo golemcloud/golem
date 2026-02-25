@@ -83,7 +83,7 @@ async fn http_client(
     let rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -154,7 +154,7 @@ async fn http_client_using_reqwest(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
@@ -235,7 +235,7 @@ async fn http_client_using_reqwest_async(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
@@ -315,7 +315,7 @@ async fn http_client_using_reqwest_async_parallel(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run_parallel", data_value!(32u16))
+        .invoke_and_await_agent(&component, &agent_id, "run_parallel", data_value!(32u16))
         .await?;
     let mut captured_body = captured_body.lock().unwrap().clone();
     captured_body.sort();
@@ -424,7 +424,7 @@ async fn outgoing_http_contains_idempotency_key(
 
     let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
     let result = executor
-        .invoke_and_await_agent_with_key(&component.id, &agent_id, &key, "run", data_value!())
+        .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -434,7 +434,7 @@ async fn outgoing_http_contains_idempotency_key(
 
     assert_eq!(
         result, data_value!(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"15f8d7f6-663b-584d-b597-23d46a929eed\") }"
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"29e89d8e-585f-519d-a57b-fd8650d59edb\") }"
             )
     );
     Ok(())

@@ -27,7 +27,7 @@ import {
   ElementValue,
   Principal,
   TextReference,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,

@@ -16,7 +16,7 @@ use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::base_model::agent::AgentId;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::WorkerId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
@@ -195,7 +195,7 @@ impl Benchmark for ColdStartUnknownMedium {
 
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
-    agents: Vec<(ComponentId, AgentId)>,
+    agents: Vec<(ComponentDto, AgentId)>,
 }
 
 pub struct ColdStartUnknownBenchmark {
@@ -249,7 +249,7 @@ impl ColdStartUnknownBenchmark {
                 .unwrap();
 
             let agent_id = agent_id!(&self.agent_type_name, "test");
-            agents.push((component.id, agent_id));
+            agents.push((component, agent_id));
         }
 
         IterationContext { user, agents }
@@ -269,11 +269,11 @@ impl ColdStartUnknownBenchmark {
         let result_futures = iteration
             .agents
             .iter()
-            .map(move |(component_id, agent_id)| async move {
+            .map(move |(component, agent_id)| async move {
                 let user_clone = iteration.user.clone();
                 invoke_and_await_agent(
                     &user_clone,
-                    component_id,
+                    component,
                     agent_id,
                     "echo",
                     data_value!("benchmark"),
@@ -292,8 +292,8 @@ impl ColdStartUnknownBenchmark {
         let worker_ids: Vec<WorkerId> = iteration
             .agents
             .iter()
-            .filter_map(|(component_id, agent_id)| {
-                WorkerId::from_agent_id(*component_id, agent_id).ok()
+            .filter_map(|(component, agent_id)| {
+                WorkerId::from_agent_id(component.id, agent_id).ok()
             })
             .collect();
         delete_workers(&iteration.user, &worker_ids).await

@@ -54,7 +54,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_container",
             data_value!(container_name.clone()),
@@ -63,7 +63,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "container_exists",
             data_value!(container_name),
@@ -106,7 +106,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "container_exists",
             data_value!(format!("{}-blob-store-service-1-container", component.id)),

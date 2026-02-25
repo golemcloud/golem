@@ -18,7 +18,7 @@ import {
   ElementSchema,
   TextDescriptor,
   WitType,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ParameterDetail } from './mapping/values/dataValue';
 import * as Either from '../newTypes/either';

@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.3.0';
-import { parseUuid } from 'golem:rpc/types@0.2.2';
+import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.5.0';
+import { parseUuid } from 'golem:core/types@1.5.0';
 import { AgentId } from '../agentId';
 import * as wasiEnv from 'wasi:cli/environment@0.2.3';
 
 // reexport golem host api
-export * from 'golem:api/host@1.3.0';
+export * from 'golem:api/host@1.5.0';
 
 export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
   const promise = getPromise(promiseId);

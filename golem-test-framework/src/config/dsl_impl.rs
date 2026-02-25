@@ -15,7 +15,7 @@
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
-    build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended,
+    build_ifs_archive, rename_component_if_needed, EnvironmentOptions, TestDsl, TestDslExtended,
     WorkerInvocationResult, WorkerLogEventStream,
 };
 use crate::model::IFSEntry;
@@ -27,22 +27,27 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive, WorkerError,
+    AgentClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
+    WorkerError,
 };
-use golem_client::model::{
-    CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
-};
-use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
+use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
+use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::agent::AgentError;
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::application::{
+    Application, ApplicationCreation, ApplicationId, ApplicationName,
+};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation,
 };
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{
+    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
+};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::worker::{
@@ -51,7 +56,6 @@ use golem_common::model::worker::{
 use golem_common::model::{IdempotencyKey, WorkerEvent};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
-use golem_wasm::{FromValue, IntoValueAndType, Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -66,6 +70,84 @@ use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::debug;
 use uuid::Uuid;
 
+pub struct NameResolutionCache {
+    app_names: Cache<ApplicationId, (), ApplicationName, String>,
+    env_names: Cache<EnvironmentId, (), EnvironmentName, String>,
+}
+
+impl Default for NameResolutionCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NameResolutionCache {
+    pub fn new() -> Self {
+        Self {
+            app_names: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "app_names",
+            ),
+            env_names: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "env_names",
+            ),
+        }
+    }
+
+    pub async fn resolve_app_name(
+        &self,
+        id: &ApplicationId,
+        client: &RegistryServiceClientLive,
+    ) -> anyhow::Result<ApplicationName> {
+        self.app_names
+            .get_or_insert_simple(id, async || {
+                let app = client
+                    .get_application(&id.0)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(app.name)
+            })
+            .await
+            .map_err(|e| anyhow!(e))
+    }
+
+    pub async fn resolve_env_name(
+        &self,
+        id: &EnvironmentId,
+        client: &RegistryServiceClientLive,
+    ) -> anyhow::Result<EnvironmentName> {
+        self.env_names
+            .get_or_insert_simple(id, async || {
+                let env = client
+                    .get_environment(&id.0)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok(env.name)
+            })
+            .await
+            .map_err(|e| anyhow!(e))
+    }
+
+    pub async fn pre_fill_app(&self, id: ApplicationId, name: ApplicationName) {
+        let _ = self
+            .app_names
+            .get_or_insert_simple(&id, async || Ok(name))
+            .await;
+    }
+
+    pub async fn pre_fill_env(&self, id: EnvironmentId, name: EnvironmentName) {
+        let _ = self
+            .env_names
+            .get_or_insert_simple(&id, async || Ok(name))
+            .await;
+    }
+}
+
 #[derive(Clone)]
 pub struct TestUserContext<Deps> {
     pub deps: Deps,
@@ -73,6 +155,7 @@ pub struct TestUserContext<Deps> {
     pub account_email: AccountEmail,
     pub token: TokenSecret,
     pub auto_deploy_enabled: bool,
+    pub name_cache: Arc<NameResolutionCache>,
 }
 
 impl<Deps: TestDependencies> TestUserContext<Deps> {
@@ -81,37 +164,6 @@ impl<Deps: TestDependencies> TestUserContext<Deps> {
             auto_deploy_enabled: enabled,
             ..self
         }
-    }
-
-    // TODO: Old invocation implementation, to be removed
-    async fn invoke_and_await_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> WorkerInvocationResult<Vec<Value>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
-        let result = client
-            .invoke_and_await_function(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
-                Some(&idempotency_key.value),
-                function_name,
-                &InvokeParameters {
-                    params: params
-                        .into_iter()
-                        .map(|p| p.try_into())
-                        .collect::<Result<_, _>>()
-                        .map_err(|e| anyhow!("Failed converting params: {e}"))?,
-                },
-            )
-            .await?;
-        Ok(Ok(result.result.into_iter().map(|v| v.value).collect()))
     }
 }
 
@@ -328,75 +380,103 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
     async fn invoke_agent_with_key(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
-        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
-            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        let registry_client = self.registry_service_client().await;
+        let app_name = self
+            .name_cache
+            .resolve_app_name(&component.application_id, &registry_client)
+            .await?;
+        let env_name = self
+            .name_cache
+            .resolve_env_name(&component.environment_id, &registry_client)
+            .await?;
 
         let client = self
             .deps
             .worker_service()
-            .worker_http_client(&self.token)
+            .agent_http_client(&self.token)
             .await;
         client
-            .invoke_function(
-                &worker_id.component_id.0,
-                &worker_id.worker_name,
+            .invoke_agent(
                 Some(&idempotency_key.value),
-                "golem:agent/guest.{invoke}",
-                &InvokeParameters {
-                    params: vec![
-                        method_name.into_value_and_type(),
-                        params.into_value_and_type(),
-                        golem_common::model::agent::Principal::anonymous().into_value_and_type(),
-                    ]
-                    .into_iter()
-                    .map(|p| p.try_into())
-                    .collect::<Result<_, _>>()
-                    .map_err(|e| anyhow!("Failed converting params: {e}"))?,
+                &golem_client::model::AgentInvocationRequest {
+                    app_name: app_name.0,
+                    env_name: env_name.0,
+                    agent_type_name: agent_id.agent_type.to_wit_naming().0,
+                    parameters: agent_id.parameters.clone().into(),
+                    phantom_id: agent_id.phantom_id,
+                    method_name: method_name.to_string(),
+                    method_parameters: params.into(),
+                    mode: golem_client::model::AgentInvocationMode::Schedule,
+                    schedule_at: None,
+                    idempotency_key: None,
                 },
             )
-            .await?;
+            .await
+            .map_err(|e| anyhow!("Agent invocation failed: {e}"))?;
         Ok(())
     }
 
     async fn invoke_and_await_agent_impl(
         &self,
-        component_id: &ComponentId,
+        component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: Option<&IdempotencyKey>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
-        // TODO: temporarily going through the dynamic invocation route, will be migrated to the new invocation API
-        let worker_id = WorkerId::from_agent_id(*component_id, agent_id)
-            .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
+        let registry_client = self.registry_service_client().await;
+        let app_name = self
+            .name_cache
+            .resolve_app_name(&component.application_id, &registry_client)
+            .await?;
+        let env_name = self
+            .name_cache
+            .resolve_env_name(&component.environment_id, &registry_client)
+            .await?;
+
         let key = idempotency_key
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
-        let invoke_result = self
-            .invoke_and_await_with_key(
-                &worker_id,
-                &key,
-                "golem:agent/guest.{invoke}",
-                vec![
-                    method_name.into_value_and_type(),
-                    params.into_value_and_type(),
-                    golem_common::model::agent::Principal::anonymous().into_value_and_type(),
-                ],
+
+        let client = self
+            .deps
+            .worker_service()
+            .agent_http_client(&self.token)
+            .await;
+        let result = client
+            .invoke_agent(
+                Some(&key.value),
+                &golem_client::model::AgentInvocationRequest {
+                    app_name: app_name.0,
+                    env_name: env_name.0,
+                    agent_type_name: agent_id.agent_type.to_wit_naming().0,
+                    parameters: agent_id.parameters.clone().into(),
+                    phantom_id: agent_id.phantom_id,
+                    method_name: method_name.to_string(),
+                    method_parameters: params.into(),
+                    mode: golem_client::model::AgentInvocationMode::Await,
+                    schedule_at: None,
+                    idempotency_key: None,
+                },
             )
-            .await?;
-        match invoke_result {
-            Ok(mut values) if values.len() == 1 => {
+            .await
+            .map_err(|e| anyhow!("Agent invocation failed: {e}"))?;
+
+        match result.result {
+            Some(untyped_json) => {
+                let worker_id = WorkerId::from_agent_id(component.id, agent_id)
+                    .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
                 let worker_metadata = self.get_worker_metadata(&worker_id).await?;
-                let component = self
-                    .get_component_at_revision(component_id, worker_metadata.component_revision)
+                let component_at_rev = self
+                    .get_component_at_revision(&component.id, worker_metadata.component_revision)
                     .await?;
-                let agent_type = component
+                let agent_type = component_at_rev
                     .metadata
                     .find_agent_type_by_wrapper_name(&agent_id.agent_type)
                     .map_err(|err| anyhow!("Agent type not found: {err}"))?
@@ -408,34 +488,15 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     .ok_or_else(|| {
                         debug!("Agent method not found: {}", method_name);
                         debug!("In agent type: {:#?}", agent_type);
-                        debug!(
-                            "Got for worker-id: {worker_id} with component revision {}",
-                            worker_metadata.component_revision
-                        );
-
                         anyhow!("Agent method not found: {}", method_name)
                     })?;
 
-                let result = match values.remove(0) {
-                    Value::Result(Ok(Some(data_value_value))) => {
-                        let untyped_data_value = UntypedDataValue::from_value(*data_value_value)
-                            .map_err(|err| anyhow!("Unexpected DataValue value: {err}"))?;
-                        Ok(DataValue::try_from_untyped(
-                            untyped_data_value,
-                            agent_method.output_schema.clone(),
-                        )
-                        .map_err(|err| anyhow!("DataValue conversion error: {err}"))?)
-                    }
-                    Value::Result(Err(Some(agent_error_value))) => {
-                        Err(AgentError::from_value(*agent_error_value)
-                            .map_err(|err| anyhow!("Unexpected AgentError value: {err}"))?)
-                    }
-                    _ => Err(anyhow!("Unexpected return value from agent invocation",))?,
-                };
-                Ok(result.map_err(|err| anyhow!("Agent invocation error: {err}"))?)
+                DataValue::try_from_untyped_json(untyped_json, agent_method.output_schema.clone())
+                    .map_err(|err| anyhow!("DataValue conversion error: {err}"))
             }
-            Ok(_) => Err(anyhow!("Unexpected return value from agent invocation")),
-            Err(err) => Err(anyhow!("Agent invocation failed: {err}")),
+            None => Ok(DataValue::Tuple(
+                golem_common::base_model::agent::ElementValues { elements: vec![] },
+            )),
         }
     }
 
@@ -785,6 +846,87 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
 
     async fn registry_service_client(&self) -> RegistryServiceClientLive {
         self.deps.registry_service().client(&self.token).await
+    }
+
+    async fn app(&self) -> anyhow::Result<Application> {
+        let client = self.registry_service_client().await;
+        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
+        let application = client
+            .create_application(
+                &self.account_id().0,
+                &ApplicationCreation { name: app_name },
+            )
+            .await?;
+        self.name_cache
+            .pre_fill_app(application.id, application.name.clone())
+            .await;
+        Ok(application)
+    }
+
+    async fn env(&self, application_id: &ApplicationId) -> anyhow::Result<Environment> {
+        let client = self.registry_service_client().await;
+        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
+        let environment = client
+            .create_environment(
+                &application_id.0,
+                &EnvironmentCreation {
+                    name: env_name,
+                    compatibility_check: false,
+                    version_check: false,
+                    security_overrides: false,
+                },
+            )
+            .await?;
+        self.name_cache
+            .pre_fill_env(environment.id, environment.name.clone())
+            .await;
+        Ok(environment)
+    }
+
+    async fn app_and_env(&self) -> anyhow::Result<(Application, Environment)> {
+        self.app_and_env_custom(&EnvironmentOptions {
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+        })
+        .await
+    }
+
+    async fn app_and_env_custom(
+        &self,
+        environment_options: &EnvironmentOptions,
+    ) -> anyhow::Result<(Application, Environment)> {
+        let client = self.registry_service_client().await;
+        let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
+        let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
+
+        let application = client
+            .create_application(
+                &self.account_id().0,
+                &ApplicationCreation { name: app_name },
+            )
+            .await?;
+
+        let environment = client
+            .create_environment(
+                &application.id.0,
+                &EnvironmentCreation {
+                    name: env_name,
+                    compatibility_check: environment_options.compatibility_check,
+                    version_check: environment_options.version_check,
+                    security_overrides: environment_options.security_overrides,
+                },
+            )
+            .await?;
+
+        self.name_cache
+            .pre_fill_app(application.id, application.name.clone())
+            .await;
+        self.name_cache
+            .pre_fill_env(environment.id, environment.name.clone())
+            .await;
+
+        Ok((application, environment))
     }
 }
 

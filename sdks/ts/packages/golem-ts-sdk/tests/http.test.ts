@@ -16,7 +16,7 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/internal/http/query';
-import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
+import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@1.5.0';
 import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
