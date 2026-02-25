@@ -25,7 +25,7 @@ use crate::config::{
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::{Application, RustDependencyOverride};
+use crate::model::app::RustDependencyOverride;
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app::{
     ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName, WithSource,
@@ -105,6 +105,16 @@ impl Context {
             bail!(ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags);
         }
 
+        let sdk_overrides = SdkOverrides {
+            golem_rust_path: global_flags
+                .golem_rust_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            golem_rust_version: global_flags.golem_rust_version.clone(),
+            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
+            ts_version: global_flags.golem_ts_version.clone(),
+        };
+
         let (environment_reference, env_ref_can_be_builtin_profile) = {
             if let Some(environment) = &global_flags.environment {
                 (Some(environment.clone()), false)
@@ -129,6 +139,8 @@ impl Context {
 
         let preloaded_app = ApplicationContext::preload_application(
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags),
+            global_flags.dev_mode,
+            &sdk_overrides,
         )?;
 
         if preloaded_app.loaded_with_warnings
@@ -136,38 +148,6 @@ impl Context {
             && !InteractiveHandler::confirm_manifest_profile_warning(global_flags.yes)?
         {
             bail!(NonSuccessfulExit);
-        }
-
-        let sdk_overrides = SdkOverrides {
-            golem_rust_path: global_flags
-                .golem_rust_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            golem_rust_version: global_flags.golem_rust_version.clone(),
-            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
-            ts_version: global_flags.golem_ts_version.clone(),
-        };
-
-        if !preloaded_app.used_language_templates.is_empty() {
-            let app_template_repo = AppTemplateRepo::get(global_flags.dev_mode)?;
-            let common_on_demand_templates = preloaded_app
-                .used_language_templates
-                .iter()
-                .map(|language| app_template_repo.common_on_demand_templates(*language))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .flat_map(|templates| templates.values())
-                .collect::<Vec<_>>();
-
-            common_on_demand_templates
-                .into_iter()
-                .map(|template| {
-                    template.generate(
-                        &Application::on_demand_common_dir(template.0.language),
-                        &sdk_overrides,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
         }
 
         let app_source_mode = preloaded_app.source_mode;

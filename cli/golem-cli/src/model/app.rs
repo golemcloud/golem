@@ -347,20 +347,22 @@ impl Application {
     pub fn language_templates_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
     ) -> HashSet<GuestLanguage> {
-        let mut languages = HashSet::new();
-        // TODO: FCL: this does not cover implicitly referenced templates, either:
-        //       - make required common dir name part of the template
-        //       - specialize language templates
-        for app in apps {
-            for component in app.application.components.values() {
-                for template in component.templates.clone().into_vec().into_iter() {
-                    if let Some(language) = GuestLanguage::from_string(template) {
-                        languages.insert(language);
-                    }
-                }
-            }
-        }
-        languages
+        apps.iter()
+            .flat_map(|app| {
+                app.application
+                    .component_templates
+                    .values()
+                    .map(|template| &template.templates)
+                    .chain(
+                        app.application
+                            .components
+                            .values()
+                            .map(|component| &component.templates),
+                    )
+                    .flat_map(|templates| templates.clone().into_vec())
+                    .filter_map(|template| GuestLanguage::from_id_string(template))
+            })
+            .collect()
     }
 
     pub fn application_name(&self) -> &ApplicationName {
@@ -427,8 +429,12 @@ impl Application {
         custom_commands
     }
 
-    pub fn on_demand_common_dir(language: GuestLanguage) -> PathBuf {
-        Path::new(TEMP_DIR).join("common").join(language.id())
+    pub fn on_demand_common_dir() -> PathBuf {
+        Path::new(TEMP_DIR).join("common")
+    }
+
+    pub fn on_demand_common_dir_for_language(language: GuestLanguage) -> PathBuf {
+        Self::on_demand_common_dir().join(language.id())
     }
 
     pub fn temp_dir(&self) -> &Path {
@@ -1779,7 +1785,7 @@ mod app_builder {
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
                                         webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
-                                        agents
+                                        agents,
                                     },
                                 ));
                             }

@@ -1,5 +1,5 @@
 {
   "type": "common",
   "description": "Common template for TypeScript Agents",
-  "appCommonSkipIfExists": "common-ts/golem.yaml"
+  "skipIfExists": "package.json"
 }

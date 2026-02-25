@@ -3,7 +3,6 @@
 app: app-name
 
 includes:
-- common-*/golem.yaml
 - components-*/*/golem.yaml
 environments:
   local:

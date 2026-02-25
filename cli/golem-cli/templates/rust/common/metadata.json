@@ -1,4 +1,5 @@
 {
   "type": "common",
-  "description": "Common template for Rust"
+  "description": "Common template for Rust",
+  "skipIfExists": "Cargo.toml"
 }

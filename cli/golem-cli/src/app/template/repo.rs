@@ -136,11 +136,23 @@ impl AppTemplateRepo {
         let mut templates = BTreeMap::<GuestLanguage, AppTemplatesForLanguage>::new();
 
         for template in Self::collect_templates(dev_mode)? {
-            templates.entry(template.language);
+            let entry = templates.entry(template.language).or_default();
             match &template.metadata {
-                AppTemplateMetadata::Common { .. } => {}
-                AppTemplateMetadata::CommonOnDemand { .. } => {}
-                AppTemplateMetadata::Component { .. } => {}
+                AppTemplateMetadata::Common { .. } => {
+                    entry
+                        .common
+                        .insert(template.name.clone(), AppTemplateCommon(template));
+                }
+                AppTemplateMetadata::CommonOnDemand { .. } => {
+                    entry
+                        .common_on_demand
+                        .insert(template.name.clone(), AppTemplateCommonOnDemand(template));
+                }
+                AppTemplateMetadata::Component { .. } => {
+                    entry
+                        .component
+                        .insert(template.name.clone(), AppTemplateComponent(template));
+                }
             }
         }
 
@@ -156,7 +168,7 @@ impl AppTemplateRepo {
 
             let lang_dir_name = fs::file_name_to_str(lang_dir.path())?;
 
-            let Some(lang) = GuestLanguage::from_string(lang_dir_name) else {
+            let Some(lang) = GuestLanguage::from_id_string(lang_dir_name) else {
                 bail!(
                     "Invalid guest language template directory: {}",
                     lang_dir.path().display()

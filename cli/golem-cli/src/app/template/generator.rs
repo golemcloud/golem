@@ -15,7 +15,7 @@
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
 use crate::app::template::AppTemplate;
-use crate::SdkOverrides;
+use crate::{fs, SdkOverrides};
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
@@ -25,19 +25,17 @@ use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::{fs, io};
 
 #[derive(Debug, Copy, Clone)]
 enum TargetExistsResolveMode {
     #[allow(dead_code)]
     Skip,
     MergeOrSkip,
-    #[allow(dead_code)]
     Fail,
     MergeOrFail,
 }
 
-type MergeContents = Box<dyn FnOnce(&[u8]) -> io::Result<Vec<u8>>>;
+type MergeContents = Box<dyn FnOnce(&[u8]) -> anyhow::Result<Vec<u8>>>;
 
 enum TargetExistsResolveDecision {
     Skip,
@@ -101,13 +99,17 @@ pub fn generate_on_demand_commons_by_template(
         );
     }
 
+    // TODO: FCL: compare and skip based on hashes
+
+    fs::remove(target_path)?;
+
     generate_root_directory(&GeneratorContext {
         template,
         application_name: None,
         component_name: None,
         target_path,
         sdk_overrides,
-        resolve_mode: TargetExistsResolveMode::MergeOrSkip,
+        resolve_mode: TargetExistsResolveMode::Fail,
     })
 }
 
@@ -143,12 +145,12 @@ fn generate_root_directory(ctx: &GeneratorContext<'_>) -> anyhow::Result<()> {
 
 fn generate_directory(
     ctx: &GeneratorContext<'_>,
-    dir: &Dir<'_>,
+    templates_dir: &Dir<'_>,
     source: &Path,
     target: &Path,
 ) -> anyhow::Result<()> {
     fs::create_dir_all(target)?;
-    for entry in dir
+    for entry in templates_dir
         .get_dir(source)
         .unwrap_or_else(|| panic!("Could not find entry {source:?}"))
         .entries()
@@ -159,7 +161,7 @@ fn generate_directory(
             let name = transform_file_name(ctx, name);
             match entry {
                 DirEntry::Dir(dir) => {
-                    generate_directory(&ctx, dir, dir.path(), &target.join(&name))?;
+                    generate_directory(&ctx, templates_dir, dir.path(), &target.join(&name))?;
                 }
                 DirEntry::File(file) => {
                     let content_transform = match (ctx.template.metadata.is_common(), name.as_str())
@@ -182,7 +184,7 @@ fn generate_directory(
 
                     instantiate_file(
                         ctx,
-                        dir,
+                        templates_dir,
                         file.path(),
                         &target.join(&name),
                         content_transform,
@@ -211,11 +213,11 @@ fn instantiate_file(
                     transform(
                         ctx,
                         std::str::from_utf8(contents.as_ref()).map_err(|err| {
-                            io::Error::other(format!(
+                            anyhow!(
                                 "Failed to decode as utf8, source: {}, err: {}",
                                 source.display(),
                                 err
-                            ))
+                            )
                         })?,
                         &content_transforms,
                     ),
@@ -304,26 +306,21 @@ fn transform_file_name(ctx: &GeneratorContext<'_>, file_name: impl AsRef<str>) -
 fn check_target(
     target: &Path,
     resolve_mode: TargetExistsResolveMode,
-) -> io::Result<Option<TargetExistsResolveDecision>> {
+) -> anyhow::Result<Option<TargetExistsResolveDecision>> {
     if !target.exists() {
         return Ok(None);
     }
 
-    let get_merge = || -> io::Result<Option<TargetExistsResolveDecision>> {
+    let get_merge = || -> anyhow::Result<Option<TargetExistsResolveDecision>> {
         let file_name = target
             .file_name()
-            .ok_or_else(|| {
-                io::Error::other(format!(
-                    "Failed to get file name for target: {}",
-                    target.display()
-                ))
-            })
+            .ok_or_else(|| anyhow!("Failed to get file name for target: {}", target.display()))
             .and_then(|file_name| {
                 file_name.to_str().ok_or_else(|| {
-                    io::Error::other(format!(
+                    anyhow!(
                         "Failed to convert file name to string: {}",
                         file_name.to_string_lossy()
-                    ))
+                    )
                 })
             })?;
 
@@ -332,16 +329,16 @@ fn check_target(
                 let target = target.to_path_buf();
                 let current_content = fs::read_to_string(&target)?;
                 Ok(Some(TargetExistsResolveDecision::Merge(Box::new(
-                    move |new_content: &[u8]| -> io::Result<Vec<u8>> {
+                    move |new_content: &[u8]| -> anyhow::Result<Vec<u8>> {
                         Ok(current_content
                             .lines()
                             .chain(
                                 std::str::from_utf8(new_content).map_err(|err| {
-                                    io::Error::other(format!(
+                                    anyhow!(
                                         "Failed to decode new content for merge as utf8, target: {}, err: {}",
                                         target.display(),
                                         err
-                                    ))
+                                    )
                                 })?.lines(),
                             )
                             .collect::<BTreeSet<&str>>()
@@ -356,7 +353,7 @@ fn check_target(
     };
 
     let target_already_exists = || {
-        Err(io::Error::other(format!(
+        Err(anyhow!(format!(
             "Target ({}) already exists!",
             target.display()
         )))

@@ -71,6 +71,14 @@ impl GuestLanguage {
         }
     }
 
+    pub fn from_id_string(s: impl AsRef<str>) -> Option<GuestLanguage> {
+        match s.as_ref().to_lowercase().as_str() {
+            "rust" => Some(GuestLanguage::Rust),
+            "ts" => Some(GuestLanguage::TypeScript),
+            _ => None,
+        }
+    }
+
     pub fn id(&self) -> &'static str {
         match self {
             GuestLanguage::Rust => "rust",
