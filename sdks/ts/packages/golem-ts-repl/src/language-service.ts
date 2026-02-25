@@ -135,29 +135,14 @@ export class LanguageService {
     let formattedInfo = '';
 
     let remoteMethodExpansion: string | undefined;
-    const node = snippet.getDescendantAtPos(this.snippetEndPos);
-    if (node) {
-      const fullExpressionNode = getFullExpression(node);
-      if (fullExpressionNode.getKind() !== ts.SyntaxKind.SourceFile) {
-        let nodeType;
-        try {
-          nodeType = fullExpressionNode.getType();
-        } catch (e) {
-          console.error();
-          console.error('If you see this, please report it!');
-          console.error(fullExpressionNode);
-          console.error(e);
-          console.error();
-        }
-        if (nodeType) {
-          const checker = this.project.getTypeChecker();
-          remoteMethodExpansion = getRemoteMethodExpansion(
-            nodeType,
-            fullExpressionNode,
-            checker,
-          );
-        }
-      }
+    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
+    if (typeInfo) {
+      const checker = this.project.getTypeChecker();
+      remoteMethodExpansion = getRemoteMethodExpansion(
+        typeInfo.type,
+        typeInfo.fullExpressionNode,
+        checker,
+      );
     }
 
     if (info.displayParts?.length) {
@@ -179,36 +164,19 @@ export class LanguageService {
     const snippet = this.getSnippet();
     if (!snippet) return;
 
-    const node = snippet.getDescendantAtPos(this.snippetEndPos);
-    if (!node) return;
+    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
+    if (!typeInfo) return;
 
-    const fullExpressionNode = getFullExpression(node);
-    if (fullExpressionNode.getKind() === ts.SyntaxKind.SourceFile) {
-      return;
-    }
-
-    let nodeType;
-    try {
-      nodeType = fullExpressionNode.getType();
-    } catch (e) {
-      console.error();
-      console.error('If you see this, please report it!');
-      console.error(fullExpressionNode);
-      console.error(e);
-      console.error();
-    }
-    if (!nodeType) return;
-
-    const typeIsPromise = isPromise(nodeType);
-    const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(nodeType);
+    const typeIsPromise = isPromise(typeInfo.type);
+    const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(typeInfo.type);
 
     const checker = this.project.getTypeChecker();
     let typeText = typeAsLiteralType
       ? typeAsLiteralType
-      : checker.getTypeText(nodeType, fullExpressionNode);
+      : checker.getTypeText(typeInfo.type, typeInfo.fullExpressionNode);
     const remoteMethodExpansion = getRemoteMethodExpansion(
-      nodeType,
-      fullExpressionNode,
+      typeInfo.type,
+      typeInfo.fullExpressionNode,
       checker,
     );
     if (remoteMethodExpansion) {
@@ -1192,47 +1160,10 @@ function formatDisplayParts(
   options?: { elideRemoteMethodGenerics?: boolean },
 ): string {
   if (options?.elideRemoteMethodGenerics) {
-    return formatDisplayPartsWithRemoteMethodElision(parts);
+    const infoText = ts.displayPartsToString(parts as ts.SymbolDisplayPart[]);
+    return formatTypeText(elideRemoteMethodGenerics(infoText));
   }
   return parts.map((p) => colorizePart(p.kind, p.text)).join('');
-}
-
-function formatDisplayPartsWithRemoteMethodElision(
-  parts: Array<{ text: string; kind: string }>,
-): string {
-  let result = '';
-  let awaitingGenericStart = false;
-  let skipDepth = 0;
-
-  for (const part of parts) {
-    if (skipDepth > 0) {
-      if (part.text === '<') {
-        skipDepth++;
-      } else if (part.text === '>') {
-        skipDepth--;
-      }
-      continue;
-    }
-
-    if (awaitingGenericStart) {
-      if (part.text === '<') {
-        skipDepth = 1;
-        awaitingGenericStart = false;
-        continue;
-      }
-      awaitingGenericStart = false;
-    }
-
-    if (part.text === REMOTE_METHOD_ALIAS) {
-      result += colorizePart(part.kind, part.text);
-      awaitingGenericStart = true;
-      continue;
-    }
-
-    result += colorizePart(part.kind, part.text);
-  }
-
-  return result;
 }
 
 function formatTypeText(typeText: string): string {
@@ -1264,6 +1195,48 @@ function formatTypeText(typeText: string): string {
   }
 
   return formatDisplayParts(parts);
+}
+
+function elideRemoteMethodGenerics(text: string): string {
+  const needle = `${REMOTE_METHOD_ALIAS}<`;
+  let result = '';
+  let i = 0;
+
+  while (i < text.length) {
+    const idx = text.indexOf(needle, i);
+    if (idx === -1) {
+      result += text.slice(i);
+      break;
+    }
+
+    result += text.slice(i, idx + REMOTE_METHOD_ALIAS.length);
+    let cursor = idx + REMOTE_METHOD_ALIAS.length;
+
+    if (text[cursor] !== '<') {
+      i = cursor;
+      continue;
+    }
+
+    let depth = 0;
+    let closed = false;
+    for (; cursor < text.length; cursor++) {
+      const ch = text[cursor];
+      if (ch === '<') {
+        depth++;
+      } else if (ch === '>') {
+        depth--;
+        if (depth === 0) {
+          cursor++;
+          closed = true;
+          break;
+        }
+      }
+    }
+
+    i = closed ? cursor : text.length;
+  }
+
+  return result;
 }
 
 const REMOTE_METHOD_ALIAS = 'RemoteMethod';
@@ -1315,7 +1288,7 @@ function getRemoteMethodClientSignature(
     .replace(IMPORT_TYPE_PREFIX, '')
     .trim();
 
-  return `(${argsText}): ${returnText}`;
+  return `(${argsText}) => ${returnText}`;
 }
 
 function formatRemoteMethodArgs(
@@ -1556,4 +1529,27 @@ function lastNonWhitespaceIndex(text: string): number {
     if (!/\s/.test(text[i])) return i;
   }
   return -1;
+}
+
+function getTypeAtSnippetPosition(
+  snippet: tsm.SourceFile,
+  pos: number,
+): { fullExpressionNode: tsm.Node; type: tsm.Type } | undefined {
+  if (pos < 0) return;
+  const node = snippet.getDescendantAtPos(pos);
+  if (!node) return;
+
+  const fullExpressionNode = getFullExpression(node);
+  if (fullExpressionNode.getKind() === ts.SyntaxKind.SourceFile) return;
+
+  try {
+    const type = fullExpressionNode.getType();
+    return {fullExpressionNode, type};
+  } catch (e) {
+    console.error();
+    console.error('If you see this, please report it!');
+    console.error(fullExpressionNode);
+    console.error(e);
+    console.error();
+  }
 }
