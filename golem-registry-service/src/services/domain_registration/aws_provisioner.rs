@@ -197,7 +197,7 @@ mod tests {
         let provisioner = AwsDomainProvisioner::with_aws_config(
             "dev",
             "release",
-            AwsConfig::new("TOKEN", "ARN").await,
+            AwsConfig::new().await,
             &AwsDomainProvisionerConfig {
                 managed_domain: "dev-api.golem.cloud".to_string(),
             },

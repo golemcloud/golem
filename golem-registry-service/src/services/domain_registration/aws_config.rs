@@ -25,7 +25,7 @@ impl AwsConfig {
         Self { sdk_config }
     }
 
-    pub async fn new(_token: &str, _role_arn: &str) -> Self {
+    pub async fn new() -> Self {
         // In tests this is called with dummy values; the default credential chain
         // will resolve credentials from the environment (including web identity token).
         let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;

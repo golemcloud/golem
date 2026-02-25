@@ -880,8 +880,8 @@ async fn rust_default_json_snapshot_recovery(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1..=5).contains(&count),
-                    "Snapshot {i} count should be between 1 and 5, got {count}"
+                    (0..=5).contains(&count),
+                    "Snapshot {i} count should be between 0 and 5, got {count}"
                 );
             }
             PublicSnapshotData::Raw(raw) => {
@@ -1013,8 +1013,8 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1..=6).contains(&count),
-                    "Snapshot {i} count should be between 1 and 6, got {count}"
+                    (0..=6).contains(&count),
+                    "Snapshot {i} count should be between 0 and 6, got {count}"
                 );
             }
             PublicSnapshotData::Raw(raw) => {

@@ -15,6 +15,7 @@
 use crate::log::log_error;
 use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementSchema};
 use golem_common::model::IdempotencyKey;
 use golem_wasm::{print_value_and_type, ValueAndType};
@@ -76,7 +77,7 @@ impl InvokeResultView {
                 }
             };
             let analysed_type = match &first_schema.schema {
-                ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
+                ElementSchema::ComponentModel(cm) => cm.element_type.to_wit_naming(),
                 _ => {
                     log_error("Non-ComponentModel output schema not supported for result display");
                     return None;
@@ -133,7 +134,7 @@ impl InvokeResultView {
             .ok_or_else(|| anyhow!("Empty output schema"))?;
 
         let analysed_type = match &first_schema.schema {
-            ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
+            ElementSchema::ComponentModel(cm) => cm.element_type.to_wit_naming(),
             _ => bail!("Non-ComponentModel output schema not supported for WAVE formatting"),
         };
 

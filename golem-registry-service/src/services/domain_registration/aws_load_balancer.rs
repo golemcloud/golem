@@ -161,7 +161,7 @@ mod tests {
     use test_r::test;
 
     async fn aws_config() -> AwsConfig {
-        AwsConfig::new("TOKEN", "ARN").await
+        AwsConfig::new().await
     }
 
     #[test]
