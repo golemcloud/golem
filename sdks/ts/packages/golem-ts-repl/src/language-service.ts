@@ -152,7 +152,7 @@ export class LanguageService {
     }
 
     if (remoteMethodExpansion) {
-      formattedInfo += formatTypeText(` {\n${indentTypeBlock(remoteMethodExpansion)}\n}`);
+      formattedInfo += formatTypeText(`<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`);
     }
 
     return {formattedInfo};
@@ -183,7 +183,7 @@ export class LanguageService {
       typeText = REMOTE_METHOD_ALIAS;
     }
     if (remoteMethodExpansion) {
-      typeText = `${typeText} {\n${indentTypeBlock(remoteMethodExpansion)}\n}`;
+      typeText = `${typeText}<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`;
     }
 
     const formattedType = formatTypeText(typeText);
