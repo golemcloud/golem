@@ -37,6 +37,7 @@ use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
+use desert_rust::BinaryCodec;
 use sqlx::FromRow;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -413,25 +414,30 @@ impl DeploymentRevisionCreationRecord {
     }
 }
 
+#[derive(Debug, Clone, BinaryCodec)]
+pub struct CompiledMcpData {
+    pub implementers: golem_service_base::mcp::AgentTypeImplementers,
+}
+
 #[derive(FromRow)]
 pub struct DeploymentMcpCapabilityRecord {
     pub account_id: Uuid,
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub domain: String,
-    pub agent_type_implementers: String, // JSON serialization of HashMap<AgentTypeName, (ComponentId, ComponentRevision)>
+    pub mcp_data: Blob<CompiledMcpData>,
 }
 
 impl DeploymentMcpCapabilityRecord {
     pub fn from_model(compiled_mcp: CompiledMcp) -> Self {
-        // Serialize the implementers map directly as JSON using serde
         Self {
             account_id: compiled_mcp.account_id.0,
             environment_id: compiled_mcp.environment_id.0,
             deployment_revision_id: compiled_mcp.deployment_revision.into(),
             domain: compiled_mcp.domain.0.clone(),
-            agent_type_implementers: serde_json::to_string(&compiled_mcp.agent_type_implementers)
-                .unwrap_or_else(|_| "{}".to_string()),
+            mcp_data: Blob::new(CompiledMcpData {
+                implementers: compiled_mcp.agent_type_implementers,
+            }),
         }
     }
 }
@@ -440,21 +446,14 @@ impl TryFrom<DeploymentMcpCapabilityRecord> for CompiledMcp {
     type Error = DeployRepoError;
 
     fn try_from(value: DeploymentMcpCapabilityRecord) -> Result<Self, Self::Error> {
-        // Deserialize the implementers map directly from JSON using serde
-        let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
-            serde_json::from_str(&value.agent_type_implementers).map_err(|e| {
-                DeployRepoError::InternalError(anyhow::anyhow!(
-                    "Failed to parse agent_type_implementers: {}",
-                    e
-                ))
-            })?;
+        let mcp_data = value.mcp_data.into_value();
 
         Ok(Self {
             account_id: AccountId(value.account_id),
             environment_id: EnvironmentId(value.environment_id),
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
-            agent_type_implementers,
+            agent_type_implementers: mcp_data.implementers,
         })
     }
 }

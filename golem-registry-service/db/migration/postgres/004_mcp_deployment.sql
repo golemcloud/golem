@@ -46,7 +46,7 @@ CREATE TABLE deployment_compiled_mcp
     environment_id            UUID   NOT NULL,
     deployment_revision_id    BIGINT NOT NULL,
     domain                    TEXT   NOT NULL,
-    agent_type_implementers   TEXT   NOT NULL,
+    mcp_data                  BYTEA  NOT NULL,
 
     CONSTRAINT deployment_compiled_mcp_pk
         PRIMARY KEY (environment_id, deployment_revision_id, domain),

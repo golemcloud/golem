@@ -736,7 +736,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         cm.environment_id,
                         cm.deployment_revision_id,
                         cm.domain,
-                        cm.agent_type_implementers
+                        cm.mcp_data
 
                     FROM deployment_compiled_mcp cm
 
@@ -1316,14 +1316,14 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_compiled_mcp
-                    (account_id, environment_id, deployment_revision_id, domain, agent_type_implementers)
+                    (account_id, environment_id, deployment_revision_id, domain, mcp_data)
                 VALUES ($1, $2, $3, $4, $5)
             "#})
                 .bind(mcp.account_id)
                 .bind(mcp.environment_id)
                 .bind(mcp.deployment_revision_id)
                 .bind(&mcp.domain)
-                .bind(&mcp.agent_type_implementers)
+                .bind(&mcp.mcp_data)
         )
             .await?;
 

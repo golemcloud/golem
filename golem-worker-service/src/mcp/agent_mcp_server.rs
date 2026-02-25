@@ -248,7 +248,10 @@ pub async fn get_agent_tool_and_handlers(
 impl ServerHandler for GolemAgentMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
+            // This is not the latest,
+            // ProtocolVersion::V_2025_06_18 is the latest, however RMCP
+            // is not widely tested with this version as per comments
+            protocol_version: ProtocolVersion::V_2025_03_26,
             capabilities: ServerCapabilities::builder()
                 .enable_prompts()
                 .enable_resources()
