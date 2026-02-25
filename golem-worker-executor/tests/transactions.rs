@@ -68,7 +68,7 @@ impl TestHttpServer {
                 let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
                 let route = Router::new()
                     .route(
-                        "/step/:step",
+                        "/step/{step}",
                         get(move |step: Path<u64>| async move {
                             let step = step.0;
                             let mut steps = call_count_per_step.lock().unwrap();
@@ -86,7 +86,7 @@ impl TestHttpServer {
                         }),
                     )
                     .route(
-                        "/step/:step",
+                        "/step/{step}",
                         delete(move |step: Path<u64>| async move {
                             let step = step.0;
                             debug!("step: undo {step}");
