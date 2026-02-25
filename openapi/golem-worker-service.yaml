@@ -4634,6 +4634,7 @@ components:
       - timestamp
       - result
       - consumedFuel
+      - componentRevision
       properties:
         timestamp:
           type: string
@@ -4643,6 +4644,9 @@ components:
         consumedFuel:
           type: integer
           format: int64
+        componentRevision:
+          type: integer
+          format: uint64
     r#AgentInvocationStartedParams:
       type: object
       title: r#AgentInvocationStartedParams

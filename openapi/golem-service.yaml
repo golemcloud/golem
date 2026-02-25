@@ -10705,10 +10705,14 @@ components:
         consumedFuel:
           type: integer
           format: int64
+        componentRevision:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - result
       - consumedFuel
+      - componentRevision
     r#AgentInvocationStartedParams:
       title: r#AgentInvocationStartedParams
       type: object
