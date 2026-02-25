@@ -60,6 +60,7 @@ pub struct AppTemplate {
     pub language: GuestLanguage,
     pub template_path: PathBuf,
     pub metadata: AppTemplateMetadata,
+    pub content_hash: Option<String>,
 }
 
 impl AppTemplate {
@@ -69,6 +70,7 @@ impl AppTemplate {
             language,
             template_path: template_path.into(),
             metadata: AppTemplateMetadata::load(template_path)?,
+            content_hash: None,
         })
     }
 

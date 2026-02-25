@@ -20,9 +20,10 @@ use crate::app::template::template::{
 use crate::app::template::AppTemplateName;
 use crate::fs;
 use crate::model::GuestLanguage;
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use include_dir::{include_dir, Dir};
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 use std::sync::LazyLock;
 
 pub static TEMPLATES_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/templates");
@@ -176,7 +177,10 @@ impl AppTemplateRepo {
 
             for sub_entry in lang_dir.entries() {
                 if let Some(template_dir) = sub_entry.as_dir() {
-                    let template = AppTemplate::load(lang, template_dir.path())?;
+                    let mut template = AppTemplate::load(lang, template_dir.path())?;
+                    if template.metadata.is_common_on_demand() {
+                        template.content_hash = Some(Self::hash_template_dir(template_dir)?);
+                    }
                     if dev_mode || !template.dev_only() {
                         result.push(template);
                     }
@@ -184,5 +188,35 @@ impl AppTemplateRepo {
             }
         }
         Ok(result)
+    }
+
+    fn hash_template_dir(template_dir: &Dir) -> anyhow::Result<String> {
+        let mut file_hashes_by_path = BTreeMap::<String, String>::new();
+        let root = template_dir.path();
+        Self::collect_file_hashes(template_dir, root, &mut file_hashes_by_path)?;
+        let serialized = serde_json::to_vec(&file_hashes_by_path)
+            .context("Failed to serialize on-demand template file hash map")?;
+        Ok(blake3::hash(&serialized).to_hex().to_string())
+    }
+
+    fn collect_file_hashes(
+        dir: &Dir,
+        root: &Path,
+        file_hashes: &mut BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        for entry in dir.entries() {
+            if let Some(sub_dir) = entry.as_dir() {
+                Self::collect_file_hashes(sub_dir, root, file_hashes)?;
+            } else if let Some(file) = entry.as_file() {
+                let relative_path = fs::strip_prefix_or_err(file.path(), root)?;
+                let mut relative_path_str = fs::path_to_str(relative_path)?.to_string();
+                if std::path::MAIN_SEPARATOR != '/' {
+                    relative_path_str = relative_path_str.replace('\\', "/");
+                }
+                let hash = blake3::hash(file.contents()).to_hex().to_string();
+                file_hashes.insert(relative_path_str, hash);
+            }
+        }
+        Ok(())
     }
 }

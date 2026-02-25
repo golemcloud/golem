@@ -26,6 +26,8 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+const ON_DEMAND_COMMON_HASH_FILE_NAME: &str = ".golem-template-content-hash";
+
 #[derive(Debug, Copy, Clone)]
 enum TargetExistsResolveMode {
     #[allow(dead_code)]
@@ -99,7 +101,15 @@ pub fn generate_on_demand_commons_by_template(
         );
     }
 
-    // TODO: FCL: compare and skip based on hashes
+    if let Some(content_hash) = template.content_hash.as_deref() {
+        let hash_path = target_path.join(ON_DEMAND_COMMON_HASH_FILE_NAME);
+        if target_path.exists() && hash_path.exists() {
+            let stored_hash = fs::read_to_string(&hash_path)?;
+            if stored_hash.trim() == content_hash {
+                return Ok(());
+            }
+        }
+    }
 
     fs::remove(target_path)?;
 
@@ -110,7 +120,14 @@ pub fn generate_on_demand_commons_by_template(
         target_path,
         sdk_overrides,
         resolve_mode: TargetExistsResolveMode::Fail,
-    })
+    })?;
+
+    if let Some(content_hash) = template.content_hash.as_deref() {
+        let hash_path = target_path.join(ON_DEMAND_COMMON_HASH_FILE_NAME);
+        fs::write_str(hash_path, content_hash)?;
+    }
+
+    Ok(())
 }
 
 pub fn generate_component_by_template(
