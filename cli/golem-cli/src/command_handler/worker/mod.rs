@@ -344,8 +344,7 @@ impl WorkerCommandHandler {
         // extract the simple method name for fuzzy matching.
         let method_pattern = extract_simple_method_name(function_name);
 
-        let matched_method_name =
-            resolve_agent_method_name(&method_pattern, &agent_type);
+        let matched_method_name = resolve_agent_method_name(&method_pattern, &agent_type);
         let method_name = match matched_method_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
@@ -2123,9 +2122,8 @@ impl WorkerCommandHandler {
 /// Returns the input unchanged if it is already a simple name.
 fn extract_simple_method_name(function_name: &str) -> String {
     if let Ok(parsed) = ParsedFunctionName::parse(function_name) {
-        match &parsed.function {
-            ParsedFunctionReference::Function { function } => return function.clone(),
-            _ => {}
+        if let ParsedFunctionReference::Function { function } = &parsed.function {
+            return function.clone();
         }
     }
     function_name.to_string()
@@ -2225,7 +2223,8 @@ fn wave_args_to_agent_method_parameters(
     for (schema, wave_arg) in element_schemas.iter().zip(wave_args.iter()) {
         match &schema.schema {
             ElementSchema::ComponentModel(cm) => {
-                match lenient_parse_type_annotated_value(&cm.element_type.to_wit_naming(), wave_arg) {
+                match lenient_parse_type_annotated_value(&cm.element_type.to_wit_naming(), wave_arg)
+                {
                     Ok(mut vt) => {
                         vt.typ = cm.element_type.clone();
                         element_values.push(ElementValue::ComponentModel(

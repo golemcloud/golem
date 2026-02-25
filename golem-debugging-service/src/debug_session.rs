@@ -14,6 +14,7 @@
 
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
+use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::oplog::host_functions::{
     host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
@@ -27,8 +28,9 @@ use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
-use golem_common::model::{AgentInvocationResult, OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata};
-use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::{
+    AgentInvocationResult, OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata,
+};
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -504,11 +506,9 @@ fn public_agent_invocation_result_to_raw(
         PublicAgentInvocationResult::AgentInitialization(_) => {
             Ok(AgentInvocationResult::AgentInitialization)
         }
-        PublicAgentInvocationResult::AgentMethod(_) => {
-            Ok(AgentInvocationResult::AgentMethod {
-                output: UntypedDataValue::Tuple(vec![]),
-            })
-        }
+        PublicAgentInvocationResult::AgentMethod(_) => Ok(AgentInvocationResult::AgentMethod {
+            output: UntypedDataValue::Tuple(vec![]),
+        }),
         PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
         PublicAgentInvocationResult::LoadSnapshot(params) => {
             Ok(AgentInvocationResult::LoadSnapshot {

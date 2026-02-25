@@ -1146,26 +1146,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bincode"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36eaf5d7b090263e8150820482d5d93cd964a81e4019913c972f4edcc6edb740"
-dependencies = [
- "bincode_derive",
- "serde",
- "unty",
-]
-
-[[package]]
-name = "bincode_derive"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf95709a440f45e986983918d0e8a1f30a9b1df04918fc828670606804ac3c09"
-dependencies = [
- "virtue",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.69.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10449,9 +10429,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "2.3.1"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e625ae01bded7c86830e0f101f456fca4578c3ac5f85851fd8c442c4d085fb9a"
+checksum = "59f6388c54e973da4054b62d08e798c4ffae51db32dfe4e2281a2229070ed663"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -10461,17 +10441,18 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "5.0.1"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0662d87d46d255dd0d2704c2e7909d21299c6498851a24f73edf5e026c9bd902"
+checksum = "62c01ccc358db0dfe6788f701d67077d90fe20b4a605cbc128bfae1b7f4e3b12"
 dependencies = [
  "anstream",
  "anstyle",
  "anstyle-query",
  "anstyle-wincon",
- "bincode",
+ "anyhow",
  "clap",
  "ctrf-rs",
+ "desert_rust",
  "escape8259",
  "futures",
  "interprocess",
@@ -10486,9 +10467,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.3.4"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84949c16bf96298629cd3657291cce0172517cfeaa23ccd076b215e8a3ac8c5e"
+checksum = "dd2d532f3cc9c9235dcbf330d73fab5684f7a857dea1fc3c9ae2fb04c4c6926a"
 dependencies = [
  "darling 0.21.3",
  "humantime",
@@ -11499,12 +11480,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
-name = "unty"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
-
-[[package]]
 name = "url"
 version = "2.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11603,12 +11578,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "virtue"
-version = "0.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
 
 [[package]]
 name = "vsimd"
