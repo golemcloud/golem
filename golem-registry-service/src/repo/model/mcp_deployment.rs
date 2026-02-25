@@ -61,10 +61,7 @@ impl McpDeploymentRevisionRecord {
         value
     }
 
-    pub fn from_model(
-        deployment: McpDeployment,
-        audit: DeletableRevisionAuditFields,
-    ) -> Self {
+    pub fn from_model(deployment: McpDeployment, audit: DeletableRevisionAuditFields) -> Self {
         let mut value = Self {
             mcp_deployment_id: deployment.id.0,
             revision_id: deployment.revision.into(),

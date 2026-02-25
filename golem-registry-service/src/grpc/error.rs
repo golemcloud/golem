@@ -16,9 +16,7 @@ use crate::services::account_usage::error::{AccountUsageError, LimitExceededErro
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
-use crate::services::deployment::{
-    DeployedMcpError, DeployedRoutesError, DeploymentError,
-};
+use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;

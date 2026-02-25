@@ -221,7 +221,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .to_error_on_unique_violation(McpDeploymentRepoError::McpDeploymentViolatesUniqueness)?;
 
                 let revision = revision.with_updated_hash();
-                
+
                 let revision: McpDeploymentRevisionRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
@@ -258,7 +258,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         self.with_tx_err("update", |tx| {
             async move {
                 let revision = revision.with_updated_hash();
-                
+
                 let revision: McpDeploymentRevisionRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"

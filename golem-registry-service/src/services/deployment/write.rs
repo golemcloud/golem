@@ -274,7 +274,7 @@ impl DeploymentWriteService {
             mcp_deployments.len()
         );
 
-        // TODO; Include MCP 
+        // TODO; Include MCP
         let deployment_context =
             DeploymentContext::new(environment, components, http_api_deployments);
 
@@ -292,7 +292,7 @@ impl DeploymentWriteService {
         let compiled_routes =
             deployment_context.compile_http_api_routes(&registered_agent_types)?;
 
-        // TODO; 
+        // TODO;
         let compiled_mcp = if let Some(mcp_deployment) = mcp_deployments.first() {
             let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
                 registered_agent_types

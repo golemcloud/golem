@@ -988,7 +988,6 @@ impl AppCommandHandler {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
             mcp_deployments: Default::default(),
-
         };
 
         let local_deployment_hash = diffable_local_deployment.hash();
@@ -1495,7 +1494,10 @@ impl AppCommandHandler {
             .await;
 
         if let Err(e) = result {
-            tracing::warn!("Failed to create domain registration for smoke test: {:#?}", e);
+            tracing::warn!(
+                "Failed to create domain registration for smoke test: {:#?}",
+                e
+            );
         } else {
             log_action("Created", "domain registration (smoke test)");
         }
@@ -1513,7 +1515,7 @@ impl AppCommandHandler {
             Ok(_) => log_action("Created", "MCP deployment (smoke test)"),
             Err(e) => tracing::warn!("Failed to create MCP deployment for smoke test: {:#?}", e),
         }
-        
+
         Ok(())
     }
 
