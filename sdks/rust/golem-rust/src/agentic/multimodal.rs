@@ -190,11 +190,17 @@ impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
     }
 
     fn to_element_value(self) -> Result<ElementValue, String> {
-        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
+        Err(
+            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
+                .to_string(),
+        )
     }
 
     fn from_element_value(_value: ElementValue) -> Result<Self, String> {
-        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
+        Err(
+            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
+                .to_string(),
+        )
     }
 
     fn to_data_value(self) -> Result<DataValue, String> {
@@ -272,11 +278,17 @@ impl Schema for Multimodal {
     }
 
     fn to_element_value(self) -> Result<ElementValue, String> {
-        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
+        Err(
+            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
+                .to_string(),
+        )
     }
 
     fn from_element_value(_value: ElementValue) -> Result<Self, String> {
-        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
+        Err(
+            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
+                .to_string(),
+        )
     }
 
     fn to_data_value(self) -> Result<DataValue, String> {
@@ -399,8 +411,7 @@ impl MultimodalSchema for BasicModality {
                 Ok(BasicModality::Text(text))
             }
             "Binary" => {
-                let binary =
-                    UnstructuredBinary::<String>::from_element_value(value)?;
+                let binary = UnstructuredBinary::<String>::from_element_value(value)?;
                 Ok(BasicModality::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),
@@ -480,11 +491,17 @@ impl<T: Schema> Schema for MultimodalCustom<T> {
     }
 
     fn to_element_value(self) -> Result<ElementValue, String> {
-        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
+        Err(
+            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
+                .to_string(),
+        )
     }
 
     fn from_element_value(_value: ElementValue) -> Result<Self, String> {
-        Err("Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter".to_string())
+        Err(
+            "Multimodal cannot be encoded as a single ElementValue; it must be the sole parameter"
+                .to_string(),
+        )
     }
 
     fn to_data_value(self) -> Result<DataValue, String> {

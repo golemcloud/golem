@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue, Principal};
+use crate::golem_agentic::golem::agent::common::{
+    DataValue, ElementSchema, ElementValue, Principal,
+};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use golem_wasm::golem_core_1_5_x::types::ValueAndType;
@@ -39,9 +41,7 @@ pub trait Schema {
     where
         Self: Sized,
     {
-        Ok(DataValue::Tuple(vec![
-            self.to_element_value()?,
-        ]))
+        Ok(DataValue::Tuple(vec![self.to_element_value()?]))
     }
 
     fn from_data_value(value: DataValue) -> Result<Self, String>

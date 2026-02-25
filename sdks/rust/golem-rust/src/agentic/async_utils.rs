@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::host::{FutureInvokeResult, RpcError};
 use crate::golem_agentic::golem::agent::common::DataValue;
+use crate::golem_agentic::golem::agent::host::{FutureInvokeResult, RpcError};
 use wstd::wasi::io::poll::Pollable;
 
-pub async fn await_invoke_result(
-    invoke_result: FutureInvokeResult,
-) -> Result<DataValue, RpcError> {
+pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<DataValue, RpcError> {
     loop {
         let pollable = invoke_result.subscribe();
         await_pollable(pollable).await;

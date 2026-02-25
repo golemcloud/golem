@@ -72,7 +72,6 @@ fn rebase_indices(nodes: &mut [WitNode], base_index: usize) {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::agentic::unwrap_wit_tuple;

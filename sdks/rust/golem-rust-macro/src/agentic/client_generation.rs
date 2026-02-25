@@ -51,10 +51,8 @@ pub fn get_remote_client(
 
     let type_name = item_trait.ident.to_string();
 
-    let remote_agent_methods_info = get_remote_agent_methods_info(
-        item_trait,
-        agent_type_parameter_names,
-    );
+    let remote_agent_methods_info =
+        get_remote_agent_methods_info(item_trait, agent_type_parameter_names);
 
     let method_names = &remote_agent_methods_info.method_names;
 

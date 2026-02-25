@@ -14,10 +14,8 @@
 
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{ElementSchema, ElementValue, TextDescriptor};
-use golem_wasm::golem_core_1_5_x::types::{
-    TextReference, TextSource, TextType,
-};
 use golem_wasm::agentic::unstructured_text::{AllowedLanguages, UnstructuredText};
+use golem_wasm::golem_core_1_5_x::types::{TextReference, TextSource, TextType};
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
     fn get_type() -> StructuredSchema {
@@ -125,17 +123,15 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                 let text_type = language_code.map(|code| TextType {
                     language_code: code.to_language_code().to_string(),
                 });
-                Ok(ElementValue::UnstructuredText(
-                    TextReference::Inline(TextSource {
+                Ok(ElementValue::UnstructuredText(TextReference::Inline(
+                    TextSource {
                         data: text,
                         text_type,
-                    }),
-                ))
+                    },
+                )))
             }
             UnstructuredText::Url(url) => {
-                Ok(ElementValue::UnstructuredText(TextReference::Url(
-                    url,
-                )))
+                Ok(ElementValue::UnstructuredText(TextReference::Url(url)))
             }
         }
     }

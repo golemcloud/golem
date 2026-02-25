@@ -14,10 +14,8 @@
 
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{BinaryDescriptor, ElementSchema, ElementValue};
-use golem_wasm::golem_core_1_5_x::types::{
-    BinaryReference, BinarySource, BinaryType,
-};
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
+use golem_wasm::golem_core_1_5_x::types::{BinaryReference, BinarySource, BinaryType};
 
 impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
     fn get_type() -> StructuredSchema {
@@ -117,16 +115,16 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         match self {
             UnstructuredBinary::Inline { data, mime_type } => {
                 let mime_type = mime_type.to_string();
-                Ok(ElementValue::UnstructuredBinary(
-                    BinaryReference::Inline(BinarySource {
+                Ok(ElementValue::UnstructuredBinary(BinaryReference::Inline(
+                    BinarySource {
                         data,
                         binary_type: BinaryType { mime_type },
-                    }),
-                ))
+                    },
+                )))
             }
-            UnstructuredBinary::Url(url) => Ok(ElementValue::UnstructuredBinary(
-                BinaryReference::Url(url),
-            )),
+            UnstructuredBinary::Url(url) => {
+                Ok(ElementValue::UnstructuredBinary(BinaryReference::Url(url)))
+            }
         }
     }
 
