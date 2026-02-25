@@ -1319,13 +1319,13 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     (account_id, environment_id, deployment_revision_id, domain, mcp_data)
                 VALUES ($1, $2, $3, $4, $5)
             "#})
-                .bind(mcp.account_id)
-                .bind(mcp.environment_id)
-                .bind(mcp.deployment_revision_id)
-                .bind(&mcp.domain)
-                .bind(&mcp.mcp_data)
+            .bind(mcp.account_id)
+            .bind(mcp.environment_id)
+            .bind(mcp.deployment_revision_id)
+            .bind(&mcp.domain)
+            .bind(&mcp.mcp_data),
         )
-            .await?;
+        .await?;
 
         Ok(())
     }

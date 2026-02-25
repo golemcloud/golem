@@ -235,7 +235,13 @@ impl WorkerService {
         let worker_service = self.services.worker_service.clone();
 
         let service = StreamableHttpService::new(
-            move || Ok(GolemAgentMcpServer::new(None, lookup.clone(), worker_service.clone())),
+            move || {
+                Ok(GolemAgentMcpServer::new(
+                    None,
+                    lookup.clone(),
+                    worker_service.clone(),
+                ))
+            },
             LocalSessionManager::default().into(),
             StreamableHttpServerConfig::default(),
         );

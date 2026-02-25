@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema};
+use golem_common::base_model::agent::{
+    AgentMethod, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+};
 use golem_wasm::analysis::AnalysedType;
 use rmcp::model::JsonObject;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 pub trait GetMcpSchema {
     fn get_mcp_schema(&self) -> JsonObject;
@@ -52,12 +54,17 @@ pub struct McpToolSchema {
 
 impl McpToolSchema {
     pub fn merge_input_schema(&mut self, input_schema: JsonObject) {
-        let mut new_properties = input_schema.get("properties")
+        let mut new_properties = input_schema
+            .get("properties")
             .and_then(|props| props.as_object())
             .cloned()
             .unwrap_or_default();
 
-        if let Some(existing_properties) = self.input_schema.get("properties").and_then(|props| props.as_object()) {
+        if let Some(existing_properties) = self
+            .input_schema
+            .get("properties")
+            .and_then(|props| props.as_object())
+        {
             for (key, value) in existing_properties {
                 new_properties.insert(key.clone(), value.clone());
             }
@@ -72,7 +79,6 @@ impl McpToolSchema {
         .clone();
     }
 }
-
 
 impl GetMcpToolSchema for AgentMethod {
     fn get_mcp_tool_schema(&self) -> McpToolSchema {

@@ -15,14 +15,14 @@
 use crate::mcp::GolemAgentMcpServer;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::base_model::account::AccountId;
 use golem_common::base_model::agent::{AgentConstructor, AgentMethod, AgentTypeName};
 use golem_common::base_model::component::ComponentId;
-use rmcp::{ErrorData};
+use golem_common::base_model::environment::EnvironmentId;
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
 use rmcp::model::{CallToolResult, Tool};
-use golem_common::base_model::account::AccountId;
-use golem_common::base_model::environment::EnvironmentId;
 
 #[derive(Clone)]
 pub struct AgentMcpTool {
@@ -41,10 +41,10 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
         context: ToolCallContext<'_, GolemAgentMcpServer>,
     ) -> BoxFuture<'_, Result<CallToolResult, ErrorData>> {
         async move {
-            context.service.invoke(
-                context.arguments.unwrap_or_default(),
-                &self
-            ).await
+            context
+                .service
+                .invoke(context.arguments.unwrap_or_default(), &self)
+                .await
         }
         .boxed()
     }
