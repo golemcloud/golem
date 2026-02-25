@@ -3,7 +3,6 @@ use golem_common::base_model::domain_registration::Domain;
 
 impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
     fn from(value: CompiledMcp) -> Self {
-        // Serialize the entire map to JSON string for protobuf transmission
         let agent_type_implementers_json = serde_json::to_string(&value.agent_type_implementers)
             .unwrap_or_else(|_| "{}".to_string());
 

@@ -398,12 +398,10 @@ impl McpDeploymentService {
     pub async fn get_in_deployment_by_domain(
         &self,
         environment_id: EnvironmentId,
-        _deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        _deployment_revision: DeploymentRevision,
         domain: &Domain,
         auth: &AuthCtx,
     ) -> Result<McpDeployment, McpDeploymentError> {
-        // For now, MCP deployments don't have deployment-scoped versions
-        // Just return the staged version by domain
         self.get_staged_by_domain(environment_id, domain, auth)
             .await
     }
@@ -411,11 +409,9 @@ impl McpDeploymentService {
     pub async fn list_in_deployment(
         &self,
         environment_id: EnvironmentId,
-        _deployment_revision: golem_common::model::deployment::DeploymentRevision,
+        _deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<McpDeployment>, McpDeploymentError> {
-        // For now, MCP deployments don't have deployment-scoped versions
-        // Just return all staged deployments
         self.list_staged(environment_id, auth).await
     }
 }

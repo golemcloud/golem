@@ -287,7 +287,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "HttpApiDeploymentUpdate",
                 "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
             ),
-            // mcp_deployment
             (
                 "McpDeployment",
                 "golem_common::model::mcp_deployment::McpDeployment",

@@ -1496,7 +1496,6 @@ impl AppCommandHandler {
                 tracing::warn!("Failed to register domain for smoke test: {:?}", e);
             }
 
-            // Then create the MCP deployment
             let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
                 domain: hardcoded_mcp_domain,
             };

@@ -291,9 +291,7 @@ impl DeploymentWriteService {
         let compiled_routes =
             deployment_context.compile_http_api_routes(&registered_agent_types)?;
 
-        // Compile MCP from staged deployment and agent types
         let compiled_mcp = if let Some(mcp_deployment) = mcp_deployments.first() {
-            // Build a map of agent type names to their component implementations
             let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
                 registered_agent_types
                     .iter()
@@ -329,7 +327,6 @@ impl DeploymentWriteService {
             }
         } else {
             tracing::info!("No registered agents found in deployment storage");
-            // If no MCP deployment is staged, create one with empty agent types
             CompiledMcp {
                 account_id: auth.account_id(),
                 environment_id,
