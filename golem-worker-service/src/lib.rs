@@ -222,6 +222,7 @@ impl WorkerService {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<u16> {
+        // TODO; make config
         let poem_listener = poem::listener::TcpListener::bind(format!("0.0.0.0:{}", 8000));
 
         let acceptor = poem_listener.into_acceptor().await?;

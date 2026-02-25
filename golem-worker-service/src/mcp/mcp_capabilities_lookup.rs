@@ -24,6 +24,7 @@ use std::sync::Arc;
 pub trait McpCapabilityLookup: Send + Sync {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
 
+    // Cache this so that multiple MCP clients using the same server can make use of the cache
     async fn resolve_agent_type(
         &self,
         domain: &Domain,

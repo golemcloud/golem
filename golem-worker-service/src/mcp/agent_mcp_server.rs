@@ -356,6 +356,7 @@ impl ServerHandler for GolemAgentMcpServer {
         ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
+        // TODO; Include Git tickets here
         todo!("Resource support is not implemented yet. URI: {}", uri)
     }
 

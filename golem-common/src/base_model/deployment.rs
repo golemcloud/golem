@@ -75,7 +75,8 @@ declare_structs! {
         pub current_revision: Option<CurrentDeploymentRevision>,
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
-        pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>
+        pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry> 
+        // TODO; should have MCP here
     }
 
     /// Summary of all entities tracked by the deployment
@@ -84,6 +85,7 @@ declare_structs! {
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>
+        // TODO; should have MCP here
     }
 
     pub struct DeploymentPlanComponentEntry {
@@ -98,5 +100,6 @@ declare_structs! {
         pub revision: HttpApiDeploymentRevision,
         pub domain: Domain,
         pub hash: Hash,
+        // TODO; should have MCP here
     }
 }

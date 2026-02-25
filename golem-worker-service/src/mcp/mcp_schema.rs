@@ -49,7 +49,7 @@ pub trait GetMcpToolSchema {
 
 pub struct McpToolSchema {
     pub input_schema: JsonObject,
-    pub output_schema: Option<JsonObject>,
+    pub output_schema: Option<JsonObject>, // TODO; may be avoid Option
 }
 
 impl McpToolSchema {

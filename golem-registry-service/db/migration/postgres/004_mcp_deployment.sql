@@ -40,6 +40,8 @@ CREATE TABLE mcp_deployment_revisions
 CREATE INDEX mcp_deployment_revisions_latest_revision_by_id_idx
     ON mcp_deployment_revisions (mcp_deployment_id, revision_id DESC);
 
+// deployment_mcp_deployment
+
 CREATE TABLE deployment_compiled_mcp
 (
     account_id                UUID   NOT NULL,

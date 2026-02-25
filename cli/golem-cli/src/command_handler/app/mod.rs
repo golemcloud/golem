@@ -1405,6 +1405,7 @@ impl AppCommandHandler {
             Ok(())
         };
 
+        // TODO
         for (component_name, component_diff) in &diff_stage.components {
             approve()?;
 
