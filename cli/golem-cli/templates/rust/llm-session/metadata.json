@@ -1,4 +1,5 @@
 {
   "type": "component",
-  "description": "LLM chat with durable history"
+  "description": "LLM chat with durable history",
+  "devOnly": true
 }
