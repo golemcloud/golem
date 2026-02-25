@@ -86,16 +86,17 @@ impl AwsLoadBalancer {
                 }
             }
 
-            if has_cluster && has_stack {
-                if let Some(resource_arn) = tags.resource_arn() {
-                    balancer_arn = balancers
-                        .load_balancers()
-                        .iter()
-                        .find(|b| b.load_balancer_arn() == Some(resource_arn))
-                        .and_then(|b| b.load_balancer_arn().map(|s| s.to_string()));
-                    if balancer_arn.is_some() {
-                        break;
-                    }
+            if has_cluster
+                && has_stack
+                && let Some(resource_arn) = tags.resource_arn()
+            {
+                balancer_arn = balancers
+                    .load_balancers()
+                    .iter()
+                    .find(|b| b.load_balancer_arn() == Some(resource_arn))
+                    .and_then(|b| b.load_balancer_arn().map(|s| s.to_string()));
+                if balancer_arn.is_some() {
+                    break;
                 }
             }
         }
@@ -118,10 +119,7 @@ impl AwsLoadBalancer {
                     .listeners()
                     .iter()
                     .map(|listener| AwsLoadBalancerListener {
-                        arn: listener
-                            .listener_arn()
-                            .unwrap_or_default()
-                            .to_string(),
+                        arn: listener.listener_arn().unwrap_or_default().to_string(),
                         protocol: listener
                             .protocol()
                             .map(|p| p.as_str().to_string())

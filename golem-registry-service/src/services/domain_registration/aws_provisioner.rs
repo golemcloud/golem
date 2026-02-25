@@ -152,11 +152,7 @@ impl AwsRoute53HostedZone {
             .iter()
             .find(|x| x.name() == target_zone_name)
             .map(move |x| AwsRoute53HostedZone {
-                id: x
-                    .id()
-                    .strip_prefix("/hostedzone/")
-                    .unwrap()
-                    .to_string(),
+                id: x.id().strip_prefix("/hostedzone/").unwrap().to_string(),
                 name: target_zone_name,
             });
 
