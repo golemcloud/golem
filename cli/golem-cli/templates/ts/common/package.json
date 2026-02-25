@@ -1,8 +1,6 @@
 {
   "name": "app",
   "workspaces": [
-    "common-js/*/*",
-    "components-js/*/*",
     "components-ts/*/*"
   ],
   "dependencies": {
