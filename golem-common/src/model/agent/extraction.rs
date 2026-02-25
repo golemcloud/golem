@@ -25,8 +25,6 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::p2::{pipe, StdoutStream, WasiCtx, WasiView};
 use wasmtime_wasi::{IoCtx, IoView};
-use wit_parser::{PackageId, Resolve, WorldItem};
-
 const INTERFACE_NAME: &str = "golem:agent/guest@1.5.0";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
@@ -157,51 +155,6 @@ pub async fn extract_agent_types(
         enable_fs_cache,
     )
     .await
-}
-
-/// Checks if the given resolved component implements the `golem:agent/guest` interface.
-pub fn is_agent(
-    resolve: &Resolve,
-    root_package_id: &PackageId,
-    world: Option<&str>,
-) -> anyhow::Result<bool> {
-    let golem_agent_package = wit_parser::PackageName {
-        namespace: "golem".to_string(),
-        name: "agent".to_string(),
-        version: None,
-    };
-    const GOLEM_AGENT_INTERFACE_NAME: &str = "guest";
-
-    let world_id = resolve.select_world(*root_package_id, world)?;
-    let world = resolve
-        .worlds
-        .get(world_id)
-        .ok_or_else(|| anyhow!("Could not get {world_id:?}"))?;
-    let world_name = &world.name;
-    for (key, item) in &world.exports {
-        if let WorldItem::Interface { id, .. } = &item {
-            let interface = resolve.interfaces.get(*id).ok_or_else(|| {
-                anyhow!("Could not get exported interface {key:?} exported from world {world_name}")
-            })?;
-            if let Some(interface_name) = interface.name.as_ref() {
-                if interface_name == GOLEM_AGENT_INTERFACE_NAME {
-                    if let Some(package_id) = &interface.package {
-                        let package = resolve.packages.get(*package_id).ok_or_else(|| {
-                            anyhow!(
-                                "Could not get owner package of exported interface {interface_name}"
-                            )
-                        })?;
-
-                        if package.name == golem_agent_package {
-                            return Ok(true);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(false)
 }
 
 fn find_discover_function(mut store: impl AsContextMut, instance: &Instance) -> Option<Func> {
