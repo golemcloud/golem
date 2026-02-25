@@ -256,7 +256,7 @@ export class Repl {
     replServer.defineCommand('agent-type-info', {
       help: 'Show auto-imported agent client info',
       action: () => {
-        this.showAutoImportClientInfo(replServer, true);
+        this.showAgentTypeInfo(replServer, true);
       },
     });
 
@@ -314,7 +314,7 @@ export class Repl {
     });
   }
 
-  private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
+  private showAgentTypeInfo(replServer: repl.REPLServer, manual = false) {
     if (this.replCliFlags.disableAutoImports) return;
 
     const agentNames = Object.keys(this.config.agents).sort((a, b) => a.localeCompare(b));
@@ -361,7 +361,7 @@ export class Repl {
     await this.setupRepl(replServer);
 
     if (!script) {
-      this.showAutoImportClientInfo(replServer, false);
+      this.showAgentTypeInfo(replServer, false);
     }
 
     if (script) {

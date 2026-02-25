@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Config, ReplCliFlags } from './config';
+import {Config, ReplCliFlags} from './config';
 
-import tsm, { ts } from 'ts-morph';
+import tsm, {ts} from 'ts-morph';
 import pc from 'picocolors';
 
 export type SnippetTypeCheckResult =
   | {
-      ok: true;
-    }
+  ok: true;
+}
   | {
-      ok: false;
-      formattedErrors: string;
-    };
+  ok: false;
+  formattedErrors: string;
+};
 
 export type SnippetQuickInfo = {
   formattedInfo: string;
@@ -56,13 +56,13 @@ export class LanguageService {
     this.snippetImports = replCliFlags.disableAutoImports
       ? ''
       : Object.entries(config.agents)
-          .map(([agentTypeName, agentConfig]) => {
-            return [
-              `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
-              `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
-            ].join('\n');
-          })
-          .join('\n') + '\n';
+      .map(([agentTypeName, agentConfig]) => {
+        return [
+          `import { ${agentTypeName} } from '${agentConfig.clientPackageName}';`,
+          `import * as ${agentConfig.clientPackageImportedName} from '${agentConfig.clientPackageName}';`,
+        ].join('\n');
+      })
+      .join('\n') + '\n';
 
     this.project = new tsm.Project({
       tsConfigFilePath: 'tsconfig.json',
@@ -82,7 +82,7 @@ export class LanguageService {
     if (this.snippetEndPos < this.snippetHistory.length) {
       this.snippetEndPos = -1;
     }
-    this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, { overwrite: true });
+    this.project.createSourceFile(SNIPPET_FILE_NAME, fullSnippet, {overwrite: true});
   }
 
   addSnippetToHistory(snippet: string) {
@@ -105,14 +105,14 @@ export class LanguageService {
   typeCheckSnippet(): SnippetTypeCheckResult {
     const snippet = this.getSnippet();
     if (!snippet) {
-      return { ok: true };
+      return {ok: true};
     }
 
     const diagnostics = snippet.getPreEmitDiagnostics();
     const errors = diagnostics.filter((d) => d.getCategory() === ts.DiagnosticCategory.Error);
 
     if (errors.length === 0) {
-      return { ok: true };
+      return {ok: true};
     } else {
       return {
         ok: false,
@@ -134,11 +134,45 @@ export class LanguageService {
 
     let formattedInfo = '';
 
-    if (info.displayParts?.length) {
-      formattedInfo += formatDisplayParts(info.displayParts);
+    let remoteMethodExpansion: string | undefined;
+    const node = snippet.getDescendantAtPos(this.snippetEndPos);
+    if (node) {
+      const fullExpressionNode = getFullExpression(node);
+      if (fullExpressionNode.getKind() !== ts.SyntaxKind.SourceFile) {
+        let nodeType;
+        try {
+          nodeType = fullExpressionNode.getType();
+        } catch (e) {
+          console.error();
+          console.error('If you see this, please report it!');
+          console.error(fullExpressionNode);
+          console.error(e);
+          console.error();
+        }
+        if (nodeType) {
+          const checker = this.project.getTypeChecker();
+          const typeText = checker.getTypeText(nodeType, fullExpressionNode);
+          remoteMethodExpansion = getRemoteMethodExpansion(
+            nodeType,
+            fullExpressionNode,
+            checker,
+            typeText,
+          );
+        }
+      }
     }
 
-    return { formattedInfo };
+    if (info.displayParts?.length) {
+      formattedInfo += formatDisplayParts(info.displayParts, {
+        elideRemoteMethodGenerics: Boolean(remoteMethodExpansion),
+      });
+    }
+
+    if (remoteMethodExpansion) {
+      formattedInfo += formatTypeText(` {\n${indentTypeBlock(remoteMethodExpansion)}\n}`);
+    }
+
+    return {formattedInfo};
   }
 
   getSnippetTypeInfo(): SnippetTypeInfo | undefined {
@@ -170,9 +204,22 @@ export class LanguageService {
     const typeIsPromise = isPromise(nodeType);
     const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(nodeType);
 
-    const typeText = typeAsLiteralType
+    const checker = this.project.getTypeChecker();
+    let typeText = typeAsLiteralType
       ? typeAsLiteralType
-      : this.project.getTypeChecker().getTypeText(nodeType, fullExpressionNode);
+      : checker.getTypeText(nodeType, fullExpressionNode);
+    const remoteMethodExpansion = getRemoteMethodExpansion(
+      nodeType,
+      fullExpressionNode,
+      checker,
+      typeText,
+    );
+    if (remoteMethodExpansion) {
+      typeText = REMOTE_METHOD_ALIAS;
+    }
+    if (remoteMethodExpansion) {
+      typeText = `${typeText} {\n${indentTypeBlock(remoteMethodExpansion)}\n}`;
+    }
 
     const formattedType = formatTypeText(typeText);
 
@@ -333,7 +380,11 @@ export class LanguageService {
         const signatures = propType.getCallSignatures();
         if (signatures.length === 0) return;
         const rawTypeText = checker.getTypeText(propType, clientDecl);
-        const typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        let typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        const remoteMethodSignature = getRemoteMethodClientSignature(propType, checker, clientDecl);
+        if (remoteMethodSignature) {
+          typeText = remoteMethodSignature;
+        }
         return {
           name: symbol.getName(),
           signature: formatTypeText(typeText),
@@ -354,7 +405,7 @@ export class LanguageService {
     const context = getCallContextForPlaceholders(snippet, pos, rawStart);
     if (!context) return;
 
-    const { signature, argIndex, argNode, replaceRange, expressionNode } = context;
+    const {signature, argIndex, argNode, replaceRange, expressionNode} = context;
     if (!signature) return;
     if (signature.getParameters().length === 0) {
       const snippetText = snippet.getText();
@@ -552,7 +603,7 @@ function getFallbackCallContext(
     signature,
     argIndex: argInfo.argIndex,
     argNode: undefined,
-    replaceRange: { replaceStart, replaceEnd },
+    replaceRange: {replaceStart, replaceEnd},
   };
 }
 
@@ -662,7 +713,7 @@ function getFallbackArgumentInfo(
   }
 
   const replaceStartAbs = lastComma >= 0 ? lastComma + 1 : openParenPos + 1;
-  return { argIndex: commaCount, replaceStartAbs };
+  return {argIndex: commaCount, replaceStartAbs};
 }
 
 function getResolvedSignature(
@@ -881,19 +932,19 @@ function buildTypePlaceholdersInner(
     const tagged = getTaggedUnionInfo(unionTypes, checker);
     const entries = tagged
       ? tagged.variants.map((variant) =>
-          buildTaggedObjectPlaceholder(
-            variant.type,
-            tagged.tagName,
-            variant.tagValue,
-            checker,
-            options,
-            seen,
-            depth + 1,
-          ),
-        )
+        buildTaggedObjectPlaceholder(
+          variant.type,
+          tagged.tagName,
+          variant.tagValue,
+          checker,
+          options,
+          seen,
+          depth + 1,
+        ),
+      )
       : unionTypes.flatMap((unionType) =>
-          buildTypePlaceholdersInner(unionType, checker, options, seen, depth + 1),
-        );
+        buildTypePlaceholdersInner(unionType, checker, options, seen, depth + 1),
+      );
 
     const result = uniquePlaceholders(entries).slice(0, options.maxVariants);
     seen.delete(type);
@@ -1072,11 +1123,11 @@ function getTaggedUnionInfo(
         break;
       }
 
-      variants.push({ type: variantType, tagValue: literalValue });
+      variants.push({type: variantType, tagValue: literalValue});
     }
 
     if (variants.length === unionTypes.length) {
-      return { tagName: name, variants };
+      return {tagName: name, variants};
     }
   }
 
@@ -1139,8 +1190,52 @@ function getSymbolType(symbol: tsm.Symbol, checker: tsm.TypeChecker): tsm.Type |
   return checker.getTypeAtLocation(decl);
 }
 
-function formatDisplayParts(parts: Array<{ text: string; kind: string }>): string {
+function formatDisplayParts(
+  parts: Array<{ text: string; kind: string }>,
+  options?: { elideRemoteMethodGenerics?: boolean },
+): string {
+  if (options?.elideRemoteMethodGenerics) {
+    return formatDisplayPartsWithRemoteMethodElision(parts);
+  }
   return parts.map((p) => colorizePart(p.kind, p.text)).join('');
+}
+
+function formatDisplayPartsWithRemoteMethodElision(
+  parts: Array<{ text: string; kind: string }>,
+): string {
+  let result = '';
+  let awaitingGenericStart = false;
+  let skipDepth = 0;
+
+  for (const part of parts) {
+    if (skipDepth > 0) {
+      if (part.text === '<') {
+        skipDepth++;
+      } else if (part.text === '>') {
+        skipDepth--;
+      }
+      continue;
+    }
+
+    if (awaitingGenericStart) {
+      if (part.text === '<') {
+        skipDepth = 1;
+        awaitingGenericStart = false;
+        continue;
+      }
+      awaitingGenericStart = false;
+    }
+
+    if (part.text === REMOTE_METHOD_ALIAS) {
+      result += colorizePart(part.kind, part.text);
+      awaitingGenericStart = true;
+      continue;
+    }
+
+    result += colorizePart(part.kind, part.text);
+  }
+
+  return result;
 }
 
 function formatTypeText(typeText: string): string {
@@ -1158,20 +1253,413 @@ function formatTypeText(typeText: string): string {
     const tokenStart = scanner.getTokenStart();
     if (tokenStart > lastPos) {
       const gap = typeText.slice(lastPos, tokenStart);
-      parts.push({ text: gap, kind: 'space' });
+      parts.push({text: gap, kind: 'space'});
     }
 
     const text = scanner.getTokenText();
-    parts.push({ text, kind: tokenKindToDisplayPartKind(token) });
+    parts.push({text, kind: tokenKindToDisplayPartKind(token)});
 
     lastPos = scanner.getTokenEnd();
   }
 
   if (lastPos < typeText.length) {
-    parts.push({ text: typeText.slice(lastPos), kind: 'space' });
+    parts.push({text: typeText.slice(lastPos), kind: 'space'});
   }
 
   return formatDisplayParts(parts);
+}
+
+const REMOTE_METHOD_ALIAS = 'RemoteMethod';
+const IMPORT_TYPE_PREFIX = /import\([^)]*\)\./g;
+
+function getRemoteMethodExpansion(
+  type: tsm.Type,
+  node: tsm.Node,
+  checker: tsm.TypeChecker,
+  typeText: string,
+): string | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
+
+  let expanded = getExpandedAliasTypeText(type, aliasSymbol, node, checker);
+  if (!expanded) {
+    expanded = checker
+      .getTypeText(type.getApparentType(), node, ts.TypeFormatFlags.NoTruncation)
+      .replace(IMPORT_TYPE_PREFIX, '')
+      .trim();
+  }
+
+  if (!expanded || expanded === typeText) return;
+
+  expanded = stripOuterBraces(expanded).trim();
+  if (!expanded) return;
+
+  return formatRemoteMethodExpansion(expanded);
+}
+
+function getRemoteMethodClientSignature(
+  type: tsm.Type,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+): string | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
+
+  const aliasArgs = type.getAliasTypeArguments();
+  if (aliasArgs.length < 2) return;
+
+  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, location);
+  const returnText = checker
+    .getTypeText(aliasArgs[1], location, ts.TypeFormatFlags.NoTruncation)
+    .replace(IMPORT_TYPE_PREFIX, '')
+    .trim();
+
+  return `(${argsText}): ${returnText}`;
+}
+
+function formatRemoteMethodArgs(
+  argsType: tsm.Type,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+): string {
+  const tupleType = argsType.isTuple()
+    ? argsType
+    : argsType.getApparentType().isTuple()
+      ? argsType.getApparentType()
+      : undefined;
+
+  if (tupleType) {
+    const tupleElements = tupleType.getTupleElements();
+    if (!tupleElements.length) return '';
+    return tupleElements
+      .map((elementType, index) => {
+        const typeText = checker
+          .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
+          .replace(IMPORT_TYPE_PREFIX, '')
+          .trim();
+        return `${argNameForIndex(index)}: ${typeText}`;
+      })
+      .join(', ');
+  }
+
+  const elementType =
+    argsType.getArrayElementType() ??
+    argsType.getNumberIndexType() ??
+    argsType.getApparentType().getArrayElementType() ??
+    argsType.getApparentType().getNumberIndexType();
+
+  if (elementType) {
+    const typeText = checker
+      .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
+      .replace(IMPORT_TYPE_PREFIX, '')
+      .trim();
+    return `...args: ${typeText}`;
+  }
+
+  const fallbackTypeText = checker
+    .getTypeText(argsType, location, ts.TypeFormatFlags.NoTruncation)
+    .replace(IMPORT_TYPE_PREFIX, '')
+    .trim();
+  return `...args: ${fallbackTypeText}`;
+}
+
+function getExpandedAliasTypeText(
+  type: tsm.Type,
+  aliasSymbol: tsm.Symbol,
+  node: tsm.Node,
+  checker: tsm.TypeChecker,
+): string | undefined {
+  const decl = aliasSymbol
+    .getDeclarations()
+    .find((entry) => tsm.Node.isTypeAliasDeclaration(entry));
+  if (!decl || !tsm.Node.isTypeAliasDeclaration(decl)) return;
+
+  const typeNode = decl.getTypeNode();
+  if (!typeNode) return;
+
+  const bodyText = typeNode.getText();
+  const typeParams = decl.getTypeParameters().map((param) => param.getName());
+  if (!typeParams.length) {
+    return bodyText.replace(IMPORT_TYPE_PREFIX, '').trim();
+  }
+
+  const typeArgs = type.getAliasTypeArguments();
+  if (!typeArgs.length) {
+    return bodyText.replace(IMPORT_TYPE_PREFIX, '').trim();
+  }
+
+  const replacements: Record<string, string> = {};
+  for (let i = 0; i < typeParams.length; i++) {
+    const typeArg = typeArgs[i];
+    if (!typeArg) continue;
+    const argText = checker
+      .getTypeText(typeArg, node, ts.TypeFormatFlags.NoTruncation)
+      .replace(IMPORT_TYPE_PREFIX, '')
+      .trim();
+    if (argText) {
+      replacements[typeParams[i]] = argText;
+    }
+  }
+
+  return substituteTypeParams(bodyText, replacements).replace(IMPORT_TYPE_PREFIX, '').trim();
+}
+
+function stripOuterBraces(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function indentTypeBlock(text: string, indent = '  '): string {
+  return text
+    .split('\n')
+    .map((line) => indent + line)
+    .join('\n');
+}
+
+function formatRemoteMethodExpansion(text: string): string {
+  let formatted = normalizeTypeBlock(text);
+  formatted = replaceRestTupleParams(formatted);
+  return formatted;
+}
+
+function normalizeTypeBlock(text: string): string {
+  let lines = text.split('\n').map((line) => line.replace(/[ \t]+$/u, ''));
+
+  while (lines.length && !lines[0].trim()) {
+    lines = lines.slice(1);
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) {
+    lines = lines.slice(0, -1);
+  }
+
+  const indents = lines
+    .filter((line) => line.trim())
+    .map((line) => line.match(/^[ \t]*/u)?.[0].length ?? 0);
+  const positiveIndents = indents.filter((value) => value > 0);
+  const minIndent = positiveIndents.length ? Math.min(...positiveIndents) : 0;
+
+  if (minIndent > 0) {
+    lines = lines.map((line) => {
+      if (!line.trim()) return line;
+      const currentIndent = line.match(/^[ \t]*/u)?.[0].length ?? 0;
+      const trimCount = Math.min(minIndent, currentIndent);
+      return line.slice(trimCount);
+    });
+  }
+
+  return lines.join('\n');
+}
+
+function replaceRestTupleParams(text: string): string {
+  const needle = '...args';
+  let result = '';
+  let i = 0;
+
+  while (i < text.length) {
+    const idx = text.indexOf(needle, i);
+    if (idx === -1) {
+      result += text.slice(i);
+      break;
+    }
+
+    result += text.slice(i, idx);
+    let cursor = idx + needle.length;
+    while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
+
+    if (text[cursor] !== ':') {
+      result += text.slice(idx, cursor);
+      i = cursor;
+      continue;
+    }
+    cursor++;
+    while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
+
+    if (text[cursor] !== '[') {
+      result += text.slice(idx, cursor);
+      i = cursor;
+      continue;
+    }
+
+    const tuple = extractBracketContent(text, cursor);
+    if (!tuple) {
+      result += text.slice(idx, cursor);
+      i = cursor;
+      continue;
+    }
+
+    const paramList = formatTupleParamList(tuple.content);
+    if (!paramList) {
+      result = removeTrailingCommaAndSpaces(result);
+    } else {
+      result += paramList;
+    }
+
+    i = tuple.end + 1;
+  }
+
+  return result.replace(/\(\s*\)/g, '()');
+}
+
+function extractBracketContent(
+  text: string,
+  startIndex: number,
+): { content: string; end: number } | undefined {
+  if (text[startIndex] !== '[') return;
+  let depth = 0;
+  for (let i = startIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '[') {
+      depth++;
+    } else if (ch === ']') {
+      depth--;
+      if (depth === 0) {
+        return { content: text.slice(startIndex + 1, i), end: i };
+      }
+    }
+  }
+  return undefined;
+}
+
+function formatTupleParamList(tupleText: string): string {
+  const trimmed = tupleText.trim();
+  if (!trimmed) return '';
+
+  const parts = splitTypeList(trimmed).map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return '';
+
+  return parts
+    .map((part, index) => {
+      const isRest = part.startsWith('...');
+      const typeText = isRest ? part.slice(3).trim() : part;
+      const name = argNameForIndex(index);
+      return isRest ? `...${name}: ${typeText}` : `${name}: ${typeText}`;
+    })
+    .join(', ');
+}
+
+function splitTypeList(text: string): string[] {
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    false,
+    ts.LanguageVariant.Standard,
+    text,
+  );
+
+  let angleDepth = 0;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  const splits: number[] = [];
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    switch (token) {
+      case ts.SyntaxKind.LessThanToken:
+        angleDepth++;
+        break;
+      case ts.SyntaxKind.GreaterThanToken:
+        angleDepth = Math.max(0, angleDepth - 1);
+        break;
+      case ts.SyntaxKind.GreaterThanGreaterThanToken:
+        angleDepth = Math.max(0, angleDepth - 2);
+        break;
+      case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken:
+        angleDepth = Math.max(0, angleDepth - 3);
+        break;
+      case ts.SyntaxKind.OpenParenToken:
+        parenDepth++;
+        break;
+      case ts.SyntaxKind.CloseParenToken:
+        parenDepth = Math.max(0, parenDepth - 1);
+        break;
+      case ts.SyntaxKind.OpenBracketToken:
+        bracketDepth++;
+        break;
+      case ts.SyntaxKind.CloseBracketToken:
+        bracketDepth = Math.max(0, bracketDepth - 1);
+        break;
+      case ts.SyntaxKind.OpenBraceToken:
+        braceDepth++;
+        break;
+      case ts.SyntaxKind.CloseBraceToken:
+        braceDepth = Math.max(0, braceDepth - 1);
+        break;
+      case ts.SyntaxKind.CommaToken:
+        if (angleDepth === 0 && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+          splits.push(scanner.getTokenStart());
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!splits.length) {
+    return [text];
+  }
+
+  const parts: string[] = [];
+  let start = 0;
+  for (const split of splits) {
+    parts.push(text.slice(start, split));
+    start = split + 1;
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function argNameForIndex(index: number): string {
+  if (index >= 0 && index < 26) {
+    return String.fromCharCode('a'.charCodeAt(0) + index);
+  }
+  return `arg${index}`;
+}
+
+function removeTrailingCommaAndSpaces(text: string): string {
+  let i = text.length - 1;
+  while (i >= 0 && /\s/.test(text[i])) i--;
+  if (i >= 0 && text[i] === ',') {
+    return text.slice(0, i).replace(/[ \t]+$/u, '');
+  }
+  return text;
+}
+
+function substituteTypeParams(text: string, replacements: Record<string, string>): string {
+  if (!Object.keys(replacements).length) return text;
+
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    false,
+    ts.LanguageVariant.Standard,
+    text,
+  );
+
+  let result = '';
+  let lastPos = 0;
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const tokenStart = scanner.getTokenStart();
+    if (tokenStart > lastPos) {
+      result += text.slice(lastPos, tokenStart);
+    }
+
+    const tokenText = scanner.getTokenText();
+    if (token === ts.SyntaxKind.Identifier && replacements[tokenText]) {
+      result += replacements[tokenText];
+    } else {
+      result += tokenText;
+    }
+
+    lastPos = scanner.getTokenEnd();
+  }
+
+  if (lastPos < text.length) {
+    result += text.slice(lastPos);
+  }
+
+  return result;
 }
 
 function tokenKindToDisplayPartKind(kind: ts.SyntaxKind): string {
