@@ -65,9 +65,6 @@ export default (async () => { return await import("./src/main");})();
                 noEmitOnError: true,
                 include: [
                     "./src/**/*.ts",
-                    ".agent/**/*.ts",
-                    ".metadata/**/*.ts",
-                    "../../common-ts/src/**/*.ts",
                 ],
             }),
         ],
