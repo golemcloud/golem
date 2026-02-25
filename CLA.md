@@ -4,7 +4,7 @@
 
 This agreement ("Agreement") covers contributions you submit to Golem. "We" means Golem Cloud, Inc. "You" means the person or entity submitting a contribution.
 
-You accept this Agreement by clicking "I Agree" through our CLA tool. You only need to sign once per version of this Agreement.
+You accept this Agreement by posting the required acceptance comment on a pull request, as prompted by our CLA tool. You only need to sign once per version of this Agreement.
 
 A **contribution** means any work you submit for potential inclusion in Golem, including code, documentation, tests, and other materials, and modifications or additions to existing works. A contribution does not include communications you conspicuously mark at the time of submission as **NOT A CONTRIBUTION**.
 
