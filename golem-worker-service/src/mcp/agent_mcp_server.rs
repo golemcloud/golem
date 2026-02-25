@@ -243,6 +243,7 @@ pub async fn get_agent_tool_and_handlers(
     tools
 }
 
+#[allow(deprecated)]
 #[task_handler]
 impl ServerHandler for GolemAgentMcpServer {
     fn get_info(&self) -> ServerInfo {

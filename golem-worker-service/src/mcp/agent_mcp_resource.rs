@@ -16,5 +16,6 @@ use golem_common::base_model::agent::AgentMethod;
 
 #[derive(Clone)]
 pub struct AgentMcpResource {
+    #[allow(dead_code)]
     pub resource: AgentMethod,
 }
