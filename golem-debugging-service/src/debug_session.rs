@@ -21,13 +21,14 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::public_oplog_entry::{
     AgentInvocationFinishedParams, AgentInvocationStartedParams, CreateParams,
     CreateResourceParams, DropResourceParams, FailedUpdateParams, GrowMemoryParams, HostCallParams,
-    LogParams,
+    LogParams, PublicAgentInvocationResult, RawSnapshotData,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
-use golem_common::model::{OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata};
+use golem_common::model::{AgentInvocationResult, OwnedWorkerId, RetryConfig, WorkerId, WorkerMetadata};
+use golem_common::model::agent::UntypedDataValue;
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -215,13 +216,18 @@ fn get_oplog_entry_from_public_oplog_entry(
 ) -> Result<OplogEntry, String> {
     match public_oplog_entry {
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
-            timestamp: _,
-            consumed_fuel: _,
-            result: _,
-            ..
+            timestamp,
+            consumed_fuel,
+            result,
+            component_revision,
         }) => {
-            // TODO: Converting PublicAgentInvocationResult back to raw AgentInvocationResult is not yet implemented
-            Err("Converting AgentInvocationFinished from public to raw oplog entry is not yet supported".to_string())
+            let raw_result = public_agent_invocation_result_to_raw(result)?;
+            Ok(OplogEntry::AgentInvocationFinished {
+                timestamp,
+                result: OplogPayload::Inline(Box::new(raw_result)),
+                consumed_fuel,
+                component_revision,
+            })
         }
 
         PublicOplogEntry::Create(CreateParams {
@@ -486,6 +492,42 @@ fn get_oplog_entry_from_public_oplog_entry(
                 timestamp: snapshot_params.timestamp,
                 data: OplogPayload::Inline(Box::new(bytes.0)),
                 mime_type: bytes.1,
+            })
+        }
+    }
+}
+
+fn public_agent_invocation_result_to_raw(
+    result: PublicAgentInvocationResult,
+) -> Result<AgentInvocationResult, String> {
+    match result {
+        PublicAgentInvocationResult::AgentInitialization(_) => {
+            Ok(AgentInvocationResult::AgentInitialization)
+        }
+        PublicAgentInvocationResult::AgentMethod(_) => {
+            Ok(AgentInvocationResult::AgentMethod {
+                output: UntypedDataValue::Tuple(vec![]),
+            })
+        }
+        PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
+        PublicAgentInvocationResult::LoadSnapshot(params) => {
+            Ok(AgentInvocationResult::LoadSnapshot {
+                error: params.error,
+            })
+        }
+        PublicAgentInvocationResult::SaveSnapshot(params) => {
+            let snapshot = match params.snapshot {
+                PublicSnapshotData::Raw(raw) => raw,
+                PublicSnapshotData::Json(json) => RawSnapshotData {
+                    data: serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
+                    mime_type: "application/json".to_string(),
+                },
+            };
+            Ok(AgentInvocationResult::SaveSnapshot { snapshot })
+        }
+        PublicAgentInvocationResult::ProcessOplogEntries(params) => {
+            Ok(AgentInvocationResult::ProcessOplogEntries {
+                error: params.error,
             })
         }
     }
