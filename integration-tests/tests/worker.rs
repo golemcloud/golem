@@ -36,7 +36,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::analysed_type;
-use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValueAndType, Record, UuidRecord, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use rand::seq::IteratorRandom;
 use std::collections::{HashMap, HashSet};
@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
-use tracing::{info, warn, Instrument};
+use tracing::{info, Instrument};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -582,10 +582,7 @@ async fn get_running_workers(
                 break;
             }
         }
-        let returned: HashSet<_> = enum_results
-            .iter()
-            .map(|m| m.worker_id.clone())
-            .collect();
+        let returned: HashSet<_> = enum_results.iter().map(|m| m.worker_id.clone()).collect();
         if worker_ids.is_subset(&returned) {
             break;
         }
@@ -649,7 +646,9 @@ async fn get_running_workers(
         .collect();
     let idle_results = idle_futs.join().await;
     for result in &idle_results {
-        result.as_ref().map_err(|e| anyhow!("Worker failed to become Idle: {e}"))?;
+        result
+            .as_ref()
+            .map_err(|e| anyhow!("Worker failed to become Idle: {e}"))?;
     }
 
     // Delete workers after all are idle
@@ -1395,7 +1394,8 @@ async fn agent_promise_await(
     let promise_id_vat = result
         .into_return_value_and_type()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    let promise_id = PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
+    let promise_id =
+        PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
 
     let task = {
         let executor_clone = user.clone();
