@@ -151,12 +151,10 @@ export class LanguageService {
         }
         if (nodeType) {
           const checker = this.project.getTypeChecker();
-          const typeText = checker.getTypeText(nodeType, fullExpressionNode);
           remoteMethodExpansion = getRemoteMethodExpansion(
             nodeType,
             fullExpressionNode,
             checker,
-            typeText,
           );
         }
       }
@@ -212,7 +210,6 @@ export class LanguageService {
       nodeType,
       fullExpressionNode,
       checker,
-      typeText,
     );
     if (remoteMethodExpansion) {
       typeText = REMOTE_METHOD_ALIAS;
@@ -1276,25 +1273,29 @@ function getRemoteMethodExpansion(
   type: tsm.Type,
   node: tsm.Node,
   checker: tsm.TypeChecker,
-  typeText: string,
 ): string | undefined {
   const aliasSymbol = type.getAliasSymbol();
   if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
 
-  let expanded = getExpandedAliasTypeText(type, aliasSymbol, node, checker);
-  if (!expanded) {
-    expanded = checker
-      .getTypeText(type.getApparentType(), node, ts.TypeFormatFlags.NoTruncation)
-      .replace(IMPORT_TYPE_PREFIX, '')
-      .trim();
-  }
+  const aliasArgs = type.getAliasTypeArguments();
+  if (aliasArgs.length < 2) return;
 
-  if (!expanded || expanded === typeText) return;
+  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, node);
+  const returnText = checker
+    .getTypeText(aliasArgs[1], node, ts.TypeFormatFlags.NoTruncation)
+    .replace(IMPORT_TYPE_PREFIX, '')
+    .trim();
 
-  expanded = stripOuterBraces(expanded).trim();
-  if (!expanded) return;
+  const scheduleAtText = getRemoteMethodScheduleParam(type, checker, node);
+  const scheduleArgs = argsText ? `${scheduleAtText}, ${argsText}` : scheduleAtText;
 
-  return formatRemoteMethodExpansion(expanded);
+  const lines = [
+    `(${argsText}): Promise<${returnText}>;`,
+    `trigger: (${argsText}) => void;`,
+    `schedule: (${scheduleArgs}) => void;`,
+  ];
+
+  return lines.map((line) => line.replace(/\(\)/g, '()')).join('\n');
 }
 
 function getRemoteMethodClientSignature(
@@ -1363,251 +1364,29 @@ function formatRemoteMethodArgs(
   return `...args: ${fallbackTypeText}`;
 }
 
-function getExpandedAliasTypeText(
+function getRemoteMethodScheduleParam(
   type: tsm.Type,
-  aliasSymbol: tsm.Symbol,
-  node: tsm.Node,
   checker: tsm.TypeChecker,
-): string | undefined {
-  const decl = aliasSymbol
-    .getDeclarations()
-    .find((entry) => tsm.Node.isTypeAliasDeclaration(entry));
-  if (!decl || !tsm.Node.isTypeAliasDeclaration(decl)) return;
-
-  const typeNode = decl.getTypeNode();
-  if (!typeNode) return;
-
-  const bodyText = typeNode.getText();
-  const typeParams = decl.getTypeParameters().map((param) => param.getName());
-  if (!typeParams.length) {
-    return bodyText.replace(IMPORT_TYPE_PREFIX, '').trim();
-  }
-
-  const typeArgs = type.getAliasTypeArguments();
-  if (!typeArgs.length) {
-    return bodyText.replace(IMPORT_TYPE_PREFIX, '').trim();
-  }
-
-  const replacements: Record<string, string> = {};
-  for (let i = 0; i < typeParams.length; i++) {
-    const typeArg = typeArgs[i];
-    if (!typeArg) continue;
-    const argText = checker
-      .getTypeText(typeArg, node, ts.TypeFormatFlags.NoTruncation)
-      .replace(IMPORT_TYPE_PREFIX, '')
-      .trim();
-    if (argText) {
-      replacements[typeParams[i]] = argText;
-    }
-  }
-
-  return substituteTypeParams(bodyText, replacements).replace(IMPORT_TYPE_PREFIX, '').trim();
-}
-
-function stripOuterBraces(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    return trimmed.slice(1, -1).trim();
-  }
-  return trimmed;
-}
-
-function indentTypeBlock(text: string, indent = '  '): string {
-  return text
-    .split('\n')
-    .map((line) => indent + line)
-    .join('\n');
-}
-
-function formatRemoteMethodExpansion(text: string): string {
-  let formatted = normalizeTypeBlock(text);
-  formatted = replaceRestTupleParams(formatted);
-  return formatted;
-}
-
-function normalizeTypeBlock(text: string): string {
-  let lines = text.split('\n').map((line) => line.replace(/[ \t]+$/u, ''));
-
-  while (lines.length && !lines[0].trim()) {
-    lines = lines.slice(1);
-  }
-  while (lines.length && !lines[lines.length - 1].trim()) {
-    lines = lines.slice(0, -1);
-  }
-
-  const indents = lines
-    .filter((line) => line.trim())
-    .map((line) => line.match(/^[ \t]*/u)?.[0].length ?? 0);
-  const positiveIndents = indents.filter((value) => value > 0);
-  const minIndent = positiveIndents.length ? Math.min(...positiveIndents) : 0;
-
-  if (minIndent > 0) {
-    lines = lines.map((line) => {
-      if (!line.trim()) return line;
-      const currentIndent = line.match(/^[ \t]*/u)?.[0].length ?? 0;
-      const trimCount = Math.min(minIndent, currentIndent);
-      return line.slice(trimCount);
-    });
-  }
-
-  return lines.join('\n');
-}
-
-function replaceRestTupleParams(text: string): string {
-  const needle = '...args';
-  let result = '';
-  let i = 0;
-
-  while (i < text.length) {
-    const idx = text.indexOf(needle, i);
-    if (idx === -1) {
-      result += text.slice(i);
-      break;
-    }
-
-    result += text.slice(i, idx);
-    let cursor = idx + needle.length;
-    while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
-
-    if (text[cursor] !== ':') {
-      result += text.slice(idx, cursor);
-      i = cursor;
-      continue;
-    }
-    cursor++;
-    while (cursor < text.length && /\s/.test(text[cursor])) cursor++;
-
-    if (text[cursor] !== '[') {
-      result += text.slice(idx, cursor);
-      i = cursor;
-      continue;
-    }
-
-    const tuple = extractBracketContent(text, cursor);
-    if (!tuple) {
-      result += text.slice(idx, cursor);
-      i = cursor;
-      continue;
-    }
-
-    const paramList = formatTupleParamList(tuple.content);
-    if (!paramList) {
-      result = removeTrailingCommaAndSpaces(result);
-    } else {
-      result += paramList;
-    }
-
-    i = tuple.end + 1;
-  }
-
-  return result.replace(/\(\s*\)/g, '()');
-}
-
-function extractBracketContent(
-  text: string,
-  startIndex: number,
-): { content: string; end: number } | undefined {
-  if (text[startIndex] !== '[') return;
-  let depth = 0;
-  for (let i = startIndex; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '[') {
-      depth++;
-    } else if (ch === ']') {
-      depth--;
-      if (depth === 0) {
-        return { content: text.slice(startIndex + 1, i), end: i };
+  location: tsm.Node,
+): string {
+  const apparent = type.getApparentType();
+  const scheduleProp = apparent.getProperty('schedule') ?? type.getProperty('schedule');
+  if (scheduleProp) {
+    const scheduleType = checker.getTypeOfSymbolAtLocation(scheduleProp, location);
+    const signature = scheduleType.getCallSignatures()[0];
+    const param = signature?.getParameters()[0];
+    if (param) {
+      const paramType = checker.getTypeOfSymbolAtLocation(param, location);
+      const paramText = checker
+        .getTypeText(paramType, location, ts.TypeFormatFlags.NoTruncation)
+        .replace(IMPORT_TYPE_PREFIX, '')
+        .trim();
+      if (paramText) {
+        return `scheduleAt: ${paramText}`;
       }
     }
   }
-  return undefined;
-}
-
-function formatTupleParamList(tupleText: string): string {
-  const trimmed = tupleText.trim();
-  if (!trimmed) return '';
-
-  const parts = splitTypeList(trimmed).map((part) => part.trim()).filter(Boolean);
-  if (!parts.length) return '';
-
-  return parts
-    .map((part, index) => {
-      const isRest = part.startsWith('...');
-      const typeText = isRest ? part.slice(3).trim() : part;
-      const name = argNameForIndex(index);
-      return isRest ? `...${name}: ${typeText}` : `${name}: ${typeText}`;
-    })
-    .join(', ');
-}
-
-function splitTypeList(text: string): string[] {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    ts.LanguageVariant.Standard,
-    text,
-  );
-
-  let angleDepth = 0;
-  let parenDepth = 0;
-  let bracketDepth = 0;
-  let braceDepth = 0;
-  const splits: number[] = [];
-
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    switch (token) {
-      case ts.SyntaxKind.LessThanToken:
-        angleDepth++;
-        break;
-      case ts.SyntaxKind.GreaterThanToken:
-        angleDepth = Math.max(0, angleDepth - 1);
-        break;
-      case ts.SyntaxKind.GreaterThanGreaterThanToken:
-        angleDepth = Math.max(0, angleDepth - 2);
-        break;
-      case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken:
-        angleDepth = Math.max(0, angleDepth - 3);
-        break;
-      case ts.SyntaxKind.OpenParenToken:
-        parenDepth++;
-        break;
-      case ts.SyntaxKind.CloseParenToken:
-        parenDepth = Math.max(0, parenDepth - 1);
-        break;
-      case ts.SyntaxKind.OpenBracketToken:
-        bracketDepth++;
-        break;
-      case ts.SyntaxKind.CloseBracketToken:
-        bracketDepth = Math.max(0, bracketDepth - 1);
-        break;
-      case ts.SyntaxKind.OpenBraceToken:
-        braceDepth++;
-        break;
-      case ts.SyntaxKind.CloseBraceToken:
-        braceDepth = Math.max(0, braceDepth - 1);
-        break;
-      case ts.SyntaxKind.CommaToken:
-        if (angleDepth === 0 && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
-          splits.push(scanner.getTokenStart());
-        }
-        break;
-      default:
-        break;
-    }
-  }
-
-  if (!splits.length) {
-    return [text];
-  }
-
-  const parts: string[] = [];
-  let start = 0;
-  for (const split of splits) {
-    parts.push(text.slice(start, split));
-    start = split + 1;
-  }
-  parts.push(text.slice(start));
-  return parts;
+  return 'scheduleAt: string';
 }
 
 function argNameForIndex(index: number): string {
@@ -1617,49 +1396,11 @@ function argNameForIndex(index: number): string {
   return `arg${index}`;
 }
 
-function removeTrailingCommaAndSpaces(text: string): string {
-  let i = text.length - 1;
-  while (i >= 0 && /\s/.test(text[i])) i--;
-  if (i >= 0 && text[i] === ',') {
-    return text.slice(0, i).replace(/[ \t]+$/u, '');
-  }
-  return text;
-}
-
-function substituteTypeParams(text: string, replacements: Record<string, string>): string {
-  if (!Object.keys(replacements).length) return text;
-
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    ts.LanguageVariant.Standard,
-    text,
-  );
-
-  let result = '';
-  let lastPos = 0;
-
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    const tokenStart = scanner.getTokenStart();
-    if (tokenStart > lastPos) {
-      result += text.slice(lastPos, tokenStart);
-    }
-
-    const tokenText = scanner.getTokenText();
-    if (token === ts.SyntaxKind.Identifier && replacements[tokenText]) {
-      result += replacements[tokenText];
-    } else {
-      result += tokenText;
-    }
-
-    lastPos = scanner.getTokenEnd();
-  }
-
-  if (lastPos < text.length) {
-    result += text.slice(lastPos);
-  }
-
-  return result;
+function indentTypeBlock(text: string, indent = '  '): string {
+  return text
+    .split('\n')
+    .map((line) => indent + line)
+    .join('\n');
 }
 
 function tokenKindToDisplayPartKind(kind: ts.SyntaxKind): string {
