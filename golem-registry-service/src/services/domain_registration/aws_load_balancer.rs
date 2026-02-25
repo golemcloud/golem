@@ -14,16 +14,13 @@
 
 use super::aws_config::AwsConfig;
 use anyhow::anyhow;
-use rusoto_elbv2::{
-    DescribeListenersInput, DescribeLoadBalancersInput, DescribeTagsInput, Elb, ElbClient,
-    LoadBalancer,
-};
+use aws_sdk_elasticloadbalancingv2::types::Tag;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AwsLoadBalancerListener {
     pub arn: String,
     pub protocol: String,
-    pub port: i64,
+    pub port: i32,
 }
 
 impl AwsLoadBalancerListener {
@@ -47,42 +44,40 @@ impl AwsLoadBalancer {
         workspace: &str,
         config: &AwsConfig,
     ) -> anyhow::Result<AwsLoadBalancer> {
-        let cluster_tag = rusoto_elbv2::Tag {
-            key: "elbv2.k8s.aws/cluster".to_string(),
-            value: Some(format!("golem-eks-cluster-{environment}")),
-        };
-        let stack_tag = rusoto_elbv2::Tag {
-            key: "ingress.k8s.aws/stack".to_string(),
-            value: Some(format!("{environment}-{workspace}/ingress-api-gateway")),
-        };
-        let client: ElbClient = config.clone().try_into()?;
+        let cluster_tag = Tag::builder()
+            .key("elbv2.k8s.aws/cluster")
+            .value(format!("golem-eks-cluster-{environment}"))
+            .build();
+        let stack_tag = Tag::builder()
+            .key("ingress.k8s.aws/stack")
+            .value(format!("{environment}-{workspace}/ingress-api-gateway"))
+            .build();
+        let client = config.elb_client();
 
-        let balancers = client
-            .describe_load_balancers(DescribeLoadBalancersInput::default())
-            .await?;
+        let balancers = client.describe_load_balancers().send().await?;
 
-        let resource_arns = balancers
-            .load_balancers
+        let resource_arns: Vec<String> = balancers
+            .load_balancers()
             .iter()
-            .flatten()
-            .map(|balancer| balancer.load_balancer_arn.clone().unwrap())
+            .filter_map(|balancer| balancer.load_balancer_arn().map(|s| s.to_string()))
             .collect();
 
         let balancers_tags = client
-            .describe_tags(DescribeTagsInput { resource_arns })
+            .describe_tags()
+            .set_resource_arns(Some(resource_arns))
+            .send()
             .await?;
 
-        let mut balancer: Option<&LoadBalancer> = None;
+        let mut balancer_arn: Option<String> = None;
 
-        for tags in balancers_tags.tag_descriptions.iter().flatten() {
+        for tags in balancers_tags.tag_descriptions() {
             let mut has_cluster = false;
             let mut has_stack = false;
 
-            for tag in tags.tags.iter().flatten() {
-                let t = tag.clone();
-                if t == cluster_tag {
+            for tag in tags.tags() {
+                if tag.key() == cluster_tag.key() && tag.value() == cluster_tag.value() {
                     has_cluster = true;
-                } else if t == stack_tag {
+                } else if tag.key() == stack_tag.key() && tag.value() == stack_tag.value() {
                     has_stack = true;
                 }
 
@@ -91,43 +86,59 @@ impl AwsLoadBalancer {
                 }
             }
 
-            if has_cluster && has_stack {
-                balancer = balancers.load_balancers.iter().flatten().find(|balancer| {
-                    balancer.load_balancer_arn.is_some()
-                        && balancer.load_balancer_arn == tags.resource_arn
-                });
-
-                if balancer.is_some() {
+            if has_cluster
+                && has_stack
+                && let Some(resource_arn) = tags.resource_arn()
+            {
+                balancer_arn = balancers
+                    .load_balancers()
+                    .iter()
+                    .find(|b| b.load_balancer_arn() == Some(resource_arn))
+                    .and_then(|b| b.load_balancer_arn().map(|s| s.to_string()));
+                if balancer_arn.is_some() {
                     break;
                 }
             }
         }
 
-        match balancer {
-            Some(balancer) => {
+        match balancer_arn {
+            Some(ref arn) => {
+                let balancer = balancers
+                    .load_balancers()
+                    .iter()
+                    .find(|b| b.load_balancer_arn() == Some(arn.as_str()))
+                    .ok_or_else(|| anyhow!("load balancer not found"))?;
+
                 let balancer_listeners = client
-                    .describe_listeners(DescribeListenersInput {
-                        load_balancer_arn: balancer.load_balancer_arn.clone(),
-                        ..Default::default()
-                    })
+                    .describe_listeners()
+                    .load_balancer_arn(arn)
+                    .send()
                     .await?;
 
                 let listeners = balancer_listeners
-                    .listeners
+                    .listeners()
                     .iter()
-                    .flatten()
                     .map(|listener| AwsLoadBalancerListener {
-                        arn: listener.listener_arn.clone().unwrap(),
-                        protocol: listener.protocol.clone().unwrap(),
-                        port: listener.port.unwrap(),
+                        arn: listener.listener_arn().unwrap_or_default().to_string(),
+                        protocol: listener
+                            .protocol()
+                            .map(|p| p.as_str().to_string())
+                            .unwrap_or_default(),
+                        port: listener.port().unwrap_or_default(),
                     })
                     .collect();
 
                 Ok(AwsLoadBalancer {
-                    arn: balancer.load_balancer_arn.clone().unwrap(),
-                    name: balancer.load_balancer_name.clone().unwrap(),
-                    dns_name: balancer.dns_name.clone().unwrap(),
-                    hosted_zone: balancer.canonical_hosted_zone_id.clone().unwrap(),
+                    arn: arn.clone(),
+                    name: balancer
+                        .load_balancer_name()
+                        .unwrap_or_default()
+                        .to_string(),
+                    dns_name: balancer.dns_name().unwrap_or_default().to_string(),
+                    hosted_zone: balancer
+                        .canonical_hosted_zone_id()
+                        .unwrap_or_default()
+                        .to_string(),
                     listeners,
                 })
             }
@@ -149,14 +160,14 @@ mod tests {
     use crate::services::domain_registration::aws_load_balancer::AwsLoadBalancer;
     use test_r::test;
 
-    fn aws_config() -> AwsConfig {
-        AwsConfig::new("TOKEN", "ARN")
+    async fn aws_config() -> AwsConfig {
+        AwsConfig::new().await
     }
 
     #[test]
     #[ignore]
     pub async fn test_aws_load_balancer() {
-        let config = aws_config();
+        let config = aws_config().await;
         let result = AwsLoadBalancer::new("dev", "release", &config).await;
 
         println!("result: {result:?}");

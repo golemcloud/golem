@@ -398,203 +398,6 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function and await its resolution
-      description: Supply the parameters in the request body as JSON.
-      operationId: invoke_and_await_function
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function
-      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      operationId: invoke_function
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
   /v1/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
@@ -7944,11 +7747,45 @@ components:
     ActivatePluginResponse:
       title: ActivatePluginResponse
       type: object
+    AgentInitializationParameters:
+      title: AgentInitializationParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+        constructorParameters:
+          $ref: '#/components/schemas/DataValue'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - idempotencyKey
+      - constructorParameters
+      - traceId
+      - traceStates
+      - invocationContext
     AgentInvocationMode:
       type: string
       enum:
       - await
       - schedule
+    AgentInvocationOutputParameters:
+      title: AgentInvocationOutputParameters
+      type: object
+      properties:
+        output:
+          $ref: '#/components/schemas/DataValue'
+      required:
+      - output
     AgentInvocationRequest:
       title: AgentInvocationRequest
       type: object
@@ -7989,6 +7826,35 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+    AgentMethodInvocationParameters:
+      title: AgentMethodInvocationParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+        methodName:
+          type: string
+        functionInput:
+          $ref: '#/components/schemas/DataValue'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - idempotencyKey
+      - methodName
+      - functionInput
+      - traceId
+      - traceStates
+      - invocationContext
     AnalysedResourceMode:
       type: string
       enum:
@@ -8308,6 +8174,14 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/TypeVariant'
+    BinaryDescriptor:
+      title: BinaryDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinaryType'
     BinaryReference:
       discriminator:
         propertyName: type
@@ -8400,12 +8274,112 @@ components:
       enum:
       - read-only
       - read-write
+    ComponentModelElementValue:
+      title: ComponentModelElementValue
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/ValueAndType'
+      required:
+      - value
+    DataValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataValue_ElementValues'
+          Multimodal: '#/components/schemas/DataValue_NamedElementValues'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataValue_ElementValues'
+      - $ref: '#/components/schemas/DataValue_NamedElementValues'
+    DataValue_ElementValues:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Tuple
+            type: string
+            enum:
+            - Tuple
+        required:
+        - type
+      - $ref: '#/components/schemas/ElementValues'
+    DataValue_NamedElementValues:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multimodal
+            type: string
+            enum:
+            - Multimodal
+        required:
+        - type
+      - $ref: '#/components/schemas/NamedElementValues'
     DeactivatePluginResponse:
       title: DeactivatePluginResponse
       type: object
     DeleteWorkerResponse:
       title: DeleteWorkerResponse
       type: object
+    ElementValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementValue_ComponentModelElementValue'
+          UnstructuredText: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
+          UnstructuredBinary: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementValue_ComponentModelElementValue'
+      - $ref: '#/components/schemas/ElementValue_UnstructuredTextElementValue'
+      - $ref: '#/components/schemas/ElementValue_UnstructuredBinaryElementValue'
+    ElementValue_ComponentModelElementValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentModelElementValue'
+    ElementValue_UnstructuredBinaryElementValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredBinary
+            type: string
+            enum:
+            - UnstructuredBinary
+        required:
+        - type
+      - $ref: '#/components/schemas/UnstructuredBinaryElementValue'
+    ElementValue_UnstructuredTextElementValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredText
+            type: string
+            enum:
+            - UnstructuredText
+        required:
+        - type
+      - $ref: '#/components/schemas/UnstructuredTextElementValue'
+    ElementValues:
+      title: ElementValues
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementValue'
+      required:
+      - elements
     Empty:
       title: Empty
       type: object
@@ -8437,36 +8411,6 @@ components:
             type: string
       required:
       - errors
-    ExportedFunctionParameters:
-      title: ExportedFunctionParameters
-      type: object
-      properties:
-        idempotencyKey:
-          type: string
-        fullFunctionName:
-          type: string
-        functionInput:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
-        traceId:
-          type: string
-        traceStates:
-          type: array
-          items:
-            type: string
-        invocationContext:
-          type: array
-          items:
-            type: array
-            items:
-              $ref: '#/components/schemas/PublicSpanData'
-      required:
-      - idempotencyKey
-      - fullFunctionName
-      - traceId
-      - traceStates
-      - invocationContext
     ExportedResourceMetadata:
       title: ExportedResourceMetadata
       type: object
@@ -8494,6 +8438,12 @@ components:
       required:
       - timestamp
       - targetRevision
+    FallibleResultParameters:
+      title: FallibleResultParameters
+      type: object
+      properties:
+        error:
+          type: string
     FilterComparator:
       type: string
       enum:
@@ -8576,25 +8526,6 @@ components:
     InterruptResponse:
       title: InterruptResponse
       type: object
-    InvokeParameters:
-      title: InvokeParameters
-      type: object
-      properties:
-        params:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndOptionalType'
-      required:
-      - params
-    InvokeResponse:
-      title: InvokeResponse
-      type: object
-    InvokeResult:
-      title: InvokeResult
-      type: object
-      properties:
-        result:
-          $ref: '#/components/schemas/ValueAndType'
     JsonComponentModelValue:
       title: JsonComponentModelValue
       type: object
@@ -8609,6 +8540,14 @@ components:
         data: {}
       required:
       - data
+    LoadSnapshotParameters:
+      title: LoadSnapshotParameters
+      type: object
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/PublicSnapshotData'
+      required:
+      - snapshot
     LogLevel:
       description: Worker log levels including the special stdout and stderr channels
       type: string
@@ -8651,6 +8590,27 @@ components:
       required:
       - name
       - typ
+    NamedElementValue:
+      title: NamedElementValue
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/ElementValue'
+      required:
+      - name
+      - value
+    NamedElementValues:
+      title: NamedElementValues
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementValue'
+      required:
+      - elements
     OplogCursor:
       title: OplogCursor
       type: object
@@ -8719,6 +8679,170 @@ components:
       - pluginName
       - pluginVersion
       - parameters
+    ProcessOplogEntriesParameters:
+      title: ProcessOplogEntriesParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+      required:
+      - idempotencyKey
+    PublicAgentInvocation:
+      discriminator:
+        propertyName: type
+        mapping:
+          AgentInitialization: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
+          AgentMethodInvocation: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+          SaveSnapshot: '#/components/schemas/PublicAgentInvocation_Empty'
+          LoadSnapshot: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
+          ManualUpdate: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_Empty'
+      - $ref: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
+    PublicAgentInvocationResult:
+      discriminator:
+        propertyName: type
+        mapping:
+          AgentInitialization: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+          AgentMethod: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+          ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
+          LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+          SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
+          ProcessOplogEntries: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
+    PublicAgentInvocationResult_AgentInvocationOutputParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentMethod
+            type: string
+            enum:
+            - AgentMethod
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentInvocationOutputParameters'
+    PublicAgentInvocationResult_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ManualUpdate
+            type: string
+            enum:
+            - ManualUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocationResult_FallibleResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ProcessOplogEntries
+            type: string
+            enum:
+            - ProcessOplogEntries
+        required:
+        - type
+      - $ref: '#/components/schemas/FallibleResultParameters'
+    PublicAgentInvocationResult_SaveSnapshotResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SaveSnapshot
+            type: string
+            enum:
+            - SaveSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/SaveSnapshotResultParameters'
+    PublicAgentInvocation_AgentInitializationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInitialization
+            type: string
+            enum:
+            - AgentInitialization
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentInitializationParameters'
+    PublicAgentInvocation_AgentMethodInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentMethodInvocation
+            type: string
+            enum:
+            - AgentMethodInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentMethodInvocationParameters'
+    PublicAgentInvocation_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SaveSnapshot
+            type: string
+            enum:
+            - SaveSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocation_LoadSnapshotParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: LoadSnapshot
+            type: string
+            enum:
+            - LoadSnapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/LoadSnapshotParameters'
+    PublicAgentInvocation_ManualUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ManualUpdate
+            type: string
+            enum:
+            - ManualUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/ManualUpdateParameters'
+    PublicAgentInvocation_ProcessOplogEntriesParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ProcessOplogEntries
+            type: string
+            enum:
+            - ProcessOplogEntries
+        required:
+        - type
+      - $ref: '#/components/schemas/ProcessOplogEntriesParameters'
     PublicAttribute:
       title: PublicAttribute
       type: object
@@ -8842,9 +8966,9 @@ components:
         propertyName: type
         mapping:
           Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
-          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
-          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
+          HostCall: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
+          AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
+          AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
@@ -8856,7 +8980,7 @@ components:
           EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
           BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
           EndRemoteWrite: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
-          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+          PendingAgentInvocation: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
@@ -8882,9 +9006,9 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#HostCallParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
@@ -8896,7 +9020,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingAgentInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
@@ -8943,6 +9067,30 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#AgentInvocationFinishedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationFinished
+            type: string
+            enum:
+            - AgentInvocationFinished
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationStartedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationStarted
+            type: string
+            enum:
+            - AgentInvocationStarted
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationStartedParams'
     PublicOplogEntry_r#BeginAtomicRegionParams:
       allOf:
       - type: object
@@ -9123,30 +9271,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ExitedParams'
-    PublicOplogEntry_r#ExportedFunctionCompletedParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ExportedFunctionCompleted
-            type: string
-            enum:
-            - ExportedFunctionCompleted
-        required:
-        - type
-      - $ref: '#/components/schemas/r#ExportedFunctionCompletedParams'
-    PublicOplogEntry_r#ExportedFunctionInvokedParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ExportedFunctionInvoked
-            type: string
-            enum:
-            - ExportedFunctionInvoked
-        required:
-        - type
-      - $ref: '#/components/schemas/r#ExportedFunctionInvokedParams'
     PublicOplogEntry_r#FailedUpdateParams:
       allOf:
       - type: object
@@ -9183,18 +9307,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#GrowMemoryParams'
-    PublicOplogEntry_r#ImportedFunctionInvokedParams:
+    PublicOplogEntry_r#HostCallParams:
       allOf:
       - type: object
         properties:
           type:
-            example: ImportedFunctionInvoked
+            example: HostCall
             type: string
             enum:
-            - ImportedFunctionInvoked
+            - HostCall
         required:
         - type
-      - $ref: '#/components/schemas/r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/r#HostCallParams'
     PublicOplogEntry_r#InterruptedParams:
       allOf:
       - type: object
@@ -9243,6 +9367,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#PendingAgentInvocationParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingAgentInvocation
+            type: string
+            enum:
+            - PendingAgentInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/r#PendingAgentInvocationParams'
     PublicOplogEntry_r#PendingUpdateParams:
       allOf:
       - type: object
@@ -9255,18 +9391,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#PendingUpdateParams'
-    PublicOplogEntry_r#PendingWorkerInvocationParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PendingWorkerInvocation
-            type: string
-            enum:
-            - PendingWorkerInvocation
-        required:
-        - type
-      - $ref: '#/components/schemas/r#PendingWorkerInvocationParams'
     PublicOplogEntry_r#PreCommitRemoteTransactionParams:
       allOf:
       - type: object
@@ -9513,40 +9637,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
-    PublicWorkerInvocation:
-      discriminator:
-        propertyName: type
-        mapping:
-          ExportedFunction: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
-          ManualUpdate: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
-      - $ref: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
-    PublicWorkerInvocation_ExportedFunctionParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ExportedFunction
-            type: string
-            enum:
-            - ExportedFunction
-        required:
-        - type
-      - $ref: '#/components/schemas/ExportedFunctionParameters'
-    PublicWorkerInvocation_ManualUpdateParameters:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ManualUpdate
-            type: string
-            enum:
-            - ManualUpdate
-        required:
-        - type
-      - $ref: '#/components/schemas/ManualUpdateParameters'
     RawSnapshotData:
       title: RawSnapshotData
       type: object
@@ -9619,6 +9709,14 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RevertToOplogIndex'
+    SaveSnapshotResultParameters:
+      title: SaveSnapshotResultParameters
+      type: object
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/PublicSnapshotData'
+      required:
+      - snapshot
     ScanCursor:
       title: ScanCursor
       type: object
@@ -9675,6 +9773,14 @@ components:
       required:
       - timestamp
       - targetRevision
+    TextDescriptor:
+      title: TextDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextType'
     TextReference:
       discriminator:
         propertyName: type
@@ -9896,6 +10002,28 @@ components:
             $ref: '#/components/schemas/NameOptionTypePair'
       required:
       - cases
+    UnstructuredBinaryElementValue:
+      title: UnstructuredBinaryElementValue
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/BinaryReference'
+        descriptor:
+          $ref: '#/components/schemas/BinaryDescriptor'
+      required:
+      - value
+      - descriptor
+    UnstructuredTextElementValue:
+      title: UnstructuredTextElementValue
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/TextReference'
+        descriptor:
+          $ref: '#/components/schemas/TextDescriptor'
+      required:
+      - value
+      - descriptor
     UntypedJsonDataValue:
       discriminator:
         propertyName: type
@@ -10081,14 +10209,6 @@ components:
       properties:
         value:
           type: string
-      required:
-      - value
-    ValueAndOptionalType:
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
       required:
       - value
     ValueAndType:
@@ -10573,6 +10693,38 @@ components:
       required:
       - timestamp
       - plugin
+    r#AgentInvocationFinishedParams:
+      title: r#AgentInvocationFinishedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        result:
+          $ref: '#/components/schemas/PublicAgentInvocationResult'
+        consumedFuel:
+          type: integer
+          format: int64
+        componentRevision:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - result
+      - consumedFuel
+      - componentRevision
+    r#AgentInvocationStartedParams:
+      title: r#AgentInvocationStartedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicAgentInvocation'
+      required:
+      - timestamp
+      - invocation
     r#BeginAtomicRegionParams:
       title: r#BeginAtomicRegionParams
       type: object
@@ -10805,56 +10957,6 @@ components:
           format: date-time
       required:
       - timestamp
-    r#ExportedFunctionCompletedParams:
-      title: r#ExportedFunctionCompletedParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        response:
-          $ref: '#/components/schemas/ValueAndType'
-        consumedFuel:
-          type: integer
-          format: int64
-      required:
-      - timestamp
-      - consumedFuel
-    r#ExportedFunctionInvokedParams:
-      title: r#ExportedFunctionInvokedParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        functionName:
-          type: string
-        request:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
-        idempotencyKey:
-          type: string
-        traceId:
-          type: string
-        traceStates:
-          type: array
-          items:
-            type: string
-        invocationContext:
-          type: array
-          items:
-            type: array
-            items:
-              $ref: '#/components/schemas/PublicSpanData'
-      required:
-      - timestamp
-      - functionName
-      - request
-      - idempotencyKey
-      - traceId
-      - traceStates
-      - invocationContext
     r#FailedUpdateParams:
       title: r#FailedUpdateParams
       type: object
@@ -10895,8 +10997,8 @@ components:
       required:
       - timestamp
       - delta
-    r#ImportedFunctionInvokedParams:
-      title: r#ImportedFunctionInvokedParams
+    r#HostCallParams:
+      title: r#HostCallParams
       type: object
       properties:
         timestamp:
@@ -10964,6 +11066,18 @@ components:
           format: date-time
       required:
       - timestamp
+    r#PendingAgentInvocationParams:
+      title: r#PendingAgentInvocationParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicAgentInvocation'
+      required:
+      - timestamp
+      - invocation
     r#PendingUpdateParams:
       title: r#PendingUpdateParams
       type: object
@@ -10980,18 +11094,6 @@ components:
       - timestamp
       - targetRevision
       - description
-    r#PendingWorkerInvocationParams:
-      title: r#PendingWorkerInvocationParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        invocation:
-          $ref: '#/components/schemas/PublicWorkerInvocation'
-      required:
-      - timestamp
-      - invocation
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object
@@ -11511,14 +11613,6 @@ components:
           type: string
       required:
       - currentRevision
-    BinaryDescriptor:
-      title: BinaryDescriptor
-      type: object
-      properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/BinaryType'
     ComponentCreation:
       title: ComponentCreation
       type: object
@@ -13353,14 +13447,6 @@ components:
           type: string
       required:
       - headerName
-    TextDescriptor:
-      title: TextDescriptor
-      type: object
-      properties:
-        restrictions:
-          type: array
-          items:
-            $ref: '#/components/schemas/TextType'
     Token:
       title: Token
       type: object

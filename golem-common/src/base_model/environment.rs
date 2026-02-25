@@ -27,6 +27,8 @@ use std::str::FromStr;
 
 newtype_uuid!(
     EnvironmentId,
+    wit_name: "environment-id",
+    wit_owner: "golem:api@1.5.0/host",
     golem_api_grpc::proto::golem::common::EnvironmentId
 );
 

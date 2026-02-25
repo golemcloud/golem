@@ -68,7 +68,7 @@ impl TestHttpServer {
                 let call_count_per_step = Arc::new(Mutex::new(HashMap::<u64, u64>::new()));
                 let route = Router::new()
                     .route(
-                        "/step/:step",
+                        "/step/{step}",
                         get(move |step: Path<u64>| async move {
                             let step = step.0;
                             let mut steps = call_count_per_step.lock().unwrap();
@@ -86,7 +86,7 @@ impl TestHttpServer {
                         }),
                     )
                     .route(
-                        "/step/:step",
+                        "/step/{step}",
                         delete(move |step: Path<u64>| async move {
                             let step = step.0;
                             debug!("step: undo {step}");
@@ -165,7 +165,7 @@ async fn golem_rust_jump(
     let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "jump", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "jump", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -235,12 +235,7 @@ async fn golem_rust_explicit_oplog_commit(
 
     // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
     let result = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "explicit_commit",
-            data_value!(0u8),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "explicit_commit", data_value!(0u8))
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -278,7 +273,7 @@ async fn golem_rust_set_retry_policy(
     let start = SystemTime::now();
     let result1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "fail_with_custom_max_retries",
             data_value!(2u64),
@@ -288,7 +283,7 @@ async fn golem_rust_set_retry_policy(
 
     let result2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "fail_with_custom_max_retries",
             data_value!(1u64),
@@ -346,7 +341,7 @@ async fn golem_rust_atomic_region(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "atomic_region", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "atomic_region", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -396,12 +391,7 @@ async fn golem_rust_idempotence_on(
         .await?;
 
     executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "idempotence_flag",
-            data_value!(true),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "idempotence_flag", data_value!(true))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -449,7 +439,7 @@ async fn golem_rust_idempotence_off(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "idempotence_flag",
             data_value!(false),
@@ -502,7 +492,7 @@ async fn golem_rust_persist_nothing(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "persist_nothing", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "persist_nothing", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -561,7 +551,7 @@ async fn golem_rust_fallible_transaction(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "fallible_transaction_test",
             data_value!(),
@@ -632,7 +622,7 @@ async fn golem_rust_infallible_transaction(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "infallible_transaction_test",
             data_value!(),
@@ -695,7 +685,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result11 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "generate_idempotency_keys",
             data_value!(),
@@ -706,7 +696,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result21 = executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key1,
             "generate_idempotency_keys",
@@ -718,7 +708,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result31 = executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key2,
             "generate_idempotency_keys",
@@ -730,7 +720,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result12 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "generate_idempotency_keys",
             data_value!(),
@@ -741,7 +731,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result22 = executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key1,
             "generate_idempotency_keys",
@@ -753,7 +743,7 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result32 = executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key2,
             "generate_idempotency_keys",

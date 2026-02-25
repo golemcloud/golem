@@ -75,7 +75,7 @@ async fn write_stdout(
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "write_stdout", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "write_stdout", data_value!())
         .await?;
 
     let mut events = vec![];
@@ -125,7 +125,7 @@ async fn write_stderr(
     let mut rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "write_stderr", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "write_stderr", data_value!())
         .await?;
 
     let mut events = vec![];
@@ -174,7 +174,7 @@ async fn read_stdin(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -209,7 +209,7 @@ async fn clocks(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "use_std_time_apis", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -275,7 +275,7 @@ async fn file_write_read_delete(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "run_file_write_read_delete",
             data_value!(),
@@ -340,7 +340,7 @@ async fn initial_file_read_write(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -538,7 +538,7 @@ async fn initial_file_reading_through_api(
 
     // run the agent so it can update the files.
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
         .await?;
 
     let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await?;
@@ -583,7 +583,7 @@ async fn directories(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run_directories", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run_directories", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -656,7 +656,7 @@ async fn directories_replay(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "run_directories", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "run_directories", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -741,7 +741,7 @@ async fn file_write_read(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file",
             data_value!("/testfile.txt", "hello world"),
@@ -755,7 +755,7 @@ async fn file_write_read(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "read_file",
             data_value!("/testfile.txt"),
@@ -805,12 +805,12 @@ async fn file_update_1(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "load_file", data_value!())
         .await?;
 
     {
         let content_before_update = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -838,7 +838,7 @@ async fn file_update_1(
 
     {
         let content_after_update = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -850,7 +850,7 @@ async fn file_update_1(
 
     {
         let content_after_crash = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -859,12 +859,12 @@ async fn file_update_1(
     }
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "load_file", data_value!())
         .await?;
 
     {
         let content_after_reload = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -876,7 +876,7 @@ async fn file_update_1(
 
     {
         let content_after_crash = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -904,7 +904,7 @@ async fn file_update_1(
 
     {
         let content_after_manual_update = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -916,12 +916,12 @@ async fn file_update_1(
     }
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "load_file", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "load_file", data_value!())
         .await?;
 
     {
         let content_after_reload = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -933,7 +933,7 @@ async fn file_update_1(
 
     {
         let content_after_crash = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_file_content", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_file_content", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1013,7 +1013,7 @@ async fn file_update_in_the_middle_of_exported_function(
 
     executor
         .invoke_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &idempotency_key,
             "run",
@@ -1044,7 +1044,7 @@ async fn file_update_in_the_middle_of_exported_function(
     {
         let result = executor
             .invoke_and_await_agent_with_key(
-                &component.id,
+                &component,
                 &agent_id,
                 &idempotency_key,
                 "run",
@@ -1095,7 +1095,7 @@ async fn environment_variables(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_environment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1191,7 +1191,7 @@ async fn http_client_response_persisted_between_invocations(
     let rx = executor.capture_output(&worker_id).await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "send_request", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "send_request", data_value!())
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1202,7 +1202,7 @@ async fn http_client_response_persisted_between_invocations(
     let _rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "process_response", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "process_response", data_value!())
         .await?;
 
     http_server.abort();
@@ -1285,14 +1285,14 @@ async fn http_client_interrupting_response_stream(
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
         async move {
             let _ = executor_clone
                 .invoke_and_await_agent_with_key(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     &key_clone,
                     "slow_body_stream",
@@ -1319,7 +1319,7 @@ async fn http_client_interrupting_response_stream(
 
     let result = executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &key,
             "slow_body_stream",
@@ -1414,14 +1414,14 @@ async fn http_client_interrupting_response_stream_async(
     let key = IdempotencyKey::fresh();
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let key_clone = key.clone();
     let _handle = spawn(
         async move {
             let _ = executor_clone
                 .invoke_and_await_agent_with_key(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     &key_clone,
                     "slow_body_stream",
@@ -1447,7 +1447,7 @@ async fn http_client_interrupting_response_stream_async(
 
     let result = executor
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &agent_id,
             &key,
             "slow_body_stream",
@@ -1495,18 +1495,17 @@ async fn sleep(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(10u64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(10u64))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let component_id = component.id;
     drop(executor);
     let executor = start(deps, &context).await?;
 
     let start = Instant::now();
     executor
-        .invoke_and_await_agent(&component_id, &agent_id, "sleep", data_value!(0u64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(0u64))
         .await?;
     let duration = start.elapsed();
 
@@ -1541,11 +1540,11 @@ async fn sleep_less_than_suspend_threshold(
 
     let start = Instant::now();
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(1u64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(1u64))
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "healthcheck", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1587,11 +1586,11 @@ async fn sleep_longer_than_suspend_threshold(
 
     let start = Instant::now();
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "sleep", data_value!(12u64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64))
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "healthcheck", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1660,7 +1659,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     let start = Instant::now();
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "sleep_during_request",
             data_value!(2u64),
@@ -1714,7 +1713,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     let start = Instant::now();
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "sleep_during_request",
             data_value!(30u64),
@@ -1768,7 +1767,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     let start = Instant::now();
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "sleep_during_request",
             data_value!(15u64),
@@ -1823,7 +1822,7 @@ async fn sleep_and_awaiting_parallel_responses(
     let start = Instant::now();
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "sleep_during_parallel_requests",
             data_value!(20u64),
@@ -1834,7 +1833,6 @@ async fn sleep_and_awaiting_parallel_responses(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let component_id = component.id;
     drop(executor);
     server.abort();
 
@@ -1846,7 +1844,7 @@ async fn sleep_and_awaiting_parallel_responses(
     info!("Worker restarted");
 
     let healthcheck_result = executor
-        .invoke_and_await_agent(&component_id, &agent_id, "healthcheck", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1892,7 +1890,7 @@ async fn sleep_below_threshold_between_http_responses(
     let start = Instant::now();
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "sleep_between_requests",
             data_value!(1u64, 5u64),
@@ -1904,7 +1902,6 @@ async fn sleep_below_threshold_between_http_responses(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
-    let component_id = component.id;
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -1914,7 +1911,7 @@ async fn sleep_below_threshold_between_http_responses(
     info!("Worker restarted");
 
     let healthcheck_result = executor
-        .invoke_and_await_agent(&component_id, &agent_id, "healthcheck", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -1956,7 +1953,7 @@ async fn sleep_above_threshold_between_http_responses(
     let start = Instant::now();
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "sleep_between_requests",
             data_value!(12u64, 2u64),
@@ -1968,7 +1965,6 @@ async fn sleep_above_threshold_between_http_responses(
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
-    let component_id = component.id;
     drop(executor);
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -1978,7 +1974,7 @@ async fn sleep_above_threshold_between_http_responses(
     info!("Worker restarted");
 
     let healthcheck_result = executor
-        .invoke_and_await_agent(&component_id, &agent_id, "healthcheck", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2019,13 +2015,13 @@ async fn resuming_sleep(
         .await?;
 
     let executor_clone = executor.clone();
-    let component_id_clone = component.id;
+    let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = spawn(
         async move {
             executor_clone
                 .invoke_and_await_agent(
-                    &component_id_clone,
+                    &component_clone,
                     &agent_id_clone,
                     "sleep",
                     data_value!(10u64),
@@ -2039,7 +2035,6 @@ async fn resuming_sleep(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let component_id = component.id;
     drop(executor);
     fiber.await??;
 
@@ -2051,7 +2046,7 @@ async fn resuming_sleep(
 
     let start = Instant::now();
     executor
-        .invoke_and_await_agent(&component_id, &agent_id, "sleep", data_value!(10u64))
+        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(10u64))
         .await?;
     let duration = start.elapsed();
 
@@ -2084,15 +2079,15 @@ async fn failing_worker(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(5u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5u64))
         .await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "add", data_value!(50u64))
+        .invoke_and_await_agent(&component, &agent_id, "add", data_value!(50u64))
         .await;
 
     let result3 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2150,7 +2145,7 @@ async fn file_service_write_direct(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file_direct",
             data_value!("testfile.txt", "hello world"),
@@ -2164,7 +2159,7 @@ async fn file_service_write_direct(
 
     let result = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "read_file",
             data_value!("/testfile.txt"),
@@ -2208,7 +2203,7 @@ async fn filesystem_write_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file_direct",
             data_value!("testfile.txt", "hello world"),
@@ -2217,7 +2212,7 @@ async fn filesystem_write_replay_restores_file_times(
 
     let times1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_file_info",
             data_value!("/testfile.txt"),
@@ -2233,7 +2228,7 @@ async fn filesystem_write_replay_restores_file_times(
 
     let times2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_file_info",
             data_value!("/testfile.txt"),
@@ -2274,7 +2269,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test"),
@@ -2282,7 +2277,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .await?;
 
     let times1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2293,7 +2288,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2330,7 +2325,7 @@ async fn file_hard_link(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file",
             data_value!("/testfile.txt", "hello world"),
@@ -2339,7 +2334,7 @@ async fn file_hard_link(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_link",
             data_value!("/testfile.txt", "/link.txt"),
@@ -2347,12 +2342,7 @@ async fn file_hard_link(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "read_file",
-            data_value!("/link.txt"),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/link.txt"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2392,7 +2382,7 @@ async fn filesystem_link_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test"),
@@ -2401,7 +2391,7 @@ async fn filesystem_link_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test2"),
@@ -2410,7 +2400,7 @@ async fn filesystem_link_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file",
             data_value!("/test/testfile.txt", "hello world"),
@@ -2419,7 +2409,7 @@ async fn filesystem_link_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_link",
             data_value!("/test/testfile.txt", "/test2/link.txt"),
@@ -2428,7 +2418,7 @@ async fn filesystem_link_replay_restores_file_times(
 
     let times_file_1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test2/link.txt"),
@@ -2438,7 +2428,7 @@ async fn filesystem_link_replay_restores_file_times(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_dir_1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test2"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2449,14 +2439,14 @@ async fn filesystem_link_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times_dir_2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test2"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test2/link.txt"),
@@ -2498,7 +2488,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test"),
@@ -2507,7 +2497,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test/a"),
@@ -2516,7 +2506,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "remove_directory",
             data_value!("/test/a"),
@@ -2524,7 +2514,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .await?;
 
     let times1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2535,7 +2525,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2572,7 +2562,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test"),
@@ -2581,7 +2571,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test2"),
@@ -2590,7 +2580,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file_direct",
             data_value!("test/testfile.txt", "hello world"),
@@ -2599,7 +2589,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_sym_link",
             data_value!("../test/testfile.txt", "/test2/link.txt"),
@@ -2608,7 +2598,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     let times_file_1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test2/link.txt"),
@@ -2618,7 +2608,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_dir_1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test2"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2627,14 +2617,14 @@ async fn filesystem_symlink_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times_dir_2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test2"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test2/link.txt"),
@@ -2678,7 +2668,7 @@ async fn filesystem_rename_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test"),
@@ -2687,7 +2677,7 @@ async fn filesystem_rename_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test2"),
@@ -2696,7 +2686,7 @@ async fn filesystem_rename_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file",
             data_value!("/test/testfile.txt", "hello world"),
@@ -2705,7 +2695,7 @@ async fn filesystem_rename_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "rename_file",
             data_value!("/test/testfile.txt", "/test2/link.txt"),
@@ -2713,20 +2703,20 @@ async fn filesystem_rename_replay_restores_file_times(
         .await?;
 
     let times_srcdir_1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_destdir_1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test2"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test2/link.txt"),
@@ -2739,20 +2729,20 @@ async fn filesystem_rename_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times_srcdir_2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_destdir_2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test2"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test2"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     let times_file_2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test2/link.txt"),
@@ -2797,7 +2787,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "create_directory",
             data_value!("/test"),
@@ -2806,7 +2796,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file",
             data_value!("/test/testfile.txt", "hello world"),
@@ -2815,7 +2805,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test/testfile.txt"),
@@ -2824,7 +2814,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "remove_file",
             data_value!("/test/testfile.txt"),
@@ -2833,7 +2823,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_info",
             data_value!("/test/testfile.txt"),
@@ -2841,7 +2831,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .await?;
 
     let times1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2850,7 +2840,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let times2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get_info", data_value!("/test"))
+        .invoke_and_await_agent(&component, &agent_id, "get_info", data_value!("/test"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2889,7 +2879,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file",
             data_value!("/testfile.txt", "hello world"),
@@ -2898,7 +2888,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 
     let times1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_file_info",
             data_value!("/testfile.txt"),
@@ -2912,7 +2902,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 
     let times2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "get_file_info",
             data_value!("/testfile.txt"),
@@ -2955,7 +2945,7 @@ async fn filesystem_metadata_hash(
 
     executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "write_file_direct",
             data_value!("testfile.txt", "hello world"),
@@ -2963,12 +2953,7 @@ async fn filesystem_metadata_hash(
         .await?;
 
     let hash1 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "hash",
-            data_value!("testfile.txt"),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "hash", data_value!("testfile.txt"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -2977,12 +2962,7 @@ async fn filesystem_metadata_hash(
     let executor = start(deps, &context).await?;
 
     let hash2 = executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "hash",
-            data_value!("testfile.txt"),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "hash", data_value!("testfile.txt"))
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3015,13 +2995,12 @@ async fn ip_address_resolve(
         .store()
         .await?;
     let agent_id = agent_id!("networking", "ip-address-resolve-1");
-    let component_id = component.id;
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3032,7 +3011,7 @@ async fn ip_address_resolve(
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
     let result2 = executor
-        .invoke_and_await_agent(&component_id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3091,7 +3070,7 @@ async fn wasi_config_initial_worker_config(
         // get existing key
 
         let result = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!("k1"))
+            .invoke_and_await_agent(&component, &agent_id, "get", data_value!("k1"))
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3106,7 +3085,7 @@ async fn wasi_config_initial_worker_config(
         // get non-existent key
 
         let result = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!("k3"))
+            .invoke_and_await_agent(&component, &agent_id, "get", data_value!("k3"))
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3118,7 +3097,7 @@ async fn wasi_config_initial_worker_config(
         // get all keys
 
         let result = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_all", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3184,7 +3163,7 @@ async fn wasi_config_component_update(
 
     {
         let result = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_all", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "get_all", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
@@ -3230,7 +3209,7 @@ async fn wasi_config_component_update(
 
     {
         let result = executor
-            .invoke_and_await_agent(&component.id, &agent_id, "get_all", data_value!())
+            .invoke_and_await_agent(&updated_component, &agent_id, "get_all", data_value!())
             .await?
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;

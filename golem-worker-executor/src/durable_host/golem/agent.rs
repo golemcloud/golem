@@ -107,7 +107,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
         input: DataValue,
-        phantom_id: Option<crate::preview2::golem::rpc::types::Uuid>,
+        phantom_id: Option<golem_wasm::Uuid>,
     ) -> anyhow::Result<Result<String, AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
 
@@ -134,16 +134,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn parse_agent_id(
         &mut self,
         agent_id: String,
-    ) -> anyhow::Result<
-        Result<
-            (
-                String,
-                DataValue,
-                Option<crate::preview2::golem::rpc::types::Uuid>,
-            ),
-            AgentError,
-        >,
-    > {
+    ) -> anyhow::Result<Result<(String, DataValue, Option<golem_wasm::Uuid>), AgentError>> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
@@ -203,7 +194,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
             let Some(webhook_url) = webhook_url else {
-                return Err(anyhow!("Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"));
+                return Err(anyhow!(
+                    "Agent is not currently deployed as part of an http api. Only deployed agents can create webhook urls"
+                ));
             };
 
             let persisted = durability

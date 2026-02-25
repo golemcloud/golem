@@ -50,7 +50,7 @@ import {
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
-import { BinaryReference, DataValue, ElementValue, TextReference } from 'golem:agent/common';
+import { BinaryReference, DataValue, ElementValue, TextReference } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';

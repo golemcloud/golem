@@ -122,6 +122,18 @@ Use `--nocapture` when debugging tests to allow debugger attachment:
 cargo test -p <crate> <test> -- --nocapture
 ```
 
+**Handling hanging tests:** Worker executor and integration tests can hang indefinitely (e.g., due to `unimplemented!()` panics in async tasks, deadlocks, or missing shard assignments). To debug a hanging test:
+
+1. Add a `#[timeout("30s")]` attribute (from `test_r::timeout`) so the test fails instead of hanging forever
+2. Run with `--nocapture` to capture all log output
+3. Save the **full output** to a file for analysis (the relevant error may appear far before the hang point)
+
+```shell
+cargo test -p <crate> <test_name> -- --nocapture > tmp/test_output.txt 2>&1
+```
+
+Then search the saved output for `ERROR`, `panic`, or `unimplemented` to find the root cause.
+
 ## Project Structure
 
 - `golem-worker-executor/` - Worker execution engine

@@ -1,5 +1,5 @@
 import { describe } from 'vitest';
-import { AgentType } from 'golem:agent/common';
+import { AgentType } from 'golem:agent/common@1.5.0';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { ComplexHttpAgentClassName, SimpleHttpAgentClassName } from './testUtils';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';

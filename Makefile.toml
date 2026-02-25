@@ -21,6 +21,7 @@
 # - `cargo make run-with-login-enabled`: runs all services locally with login enabled, requires redis, lnav and nginx. Also requires oauth2 configuration to be provided.
 # - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
 # - `cargo make generate-configs`: generates configs from code defaults
+# - `cargo make check-unused-deps`: detects unused Cargo dependencies using cargo-udeps (requires nightly)
 # - `cargo make elastic-up`: starts elastic, kibana, filebeat (in detached mode) and loads logs into elastic
 # - `cargo make elastic-stop`: stops the elastic env
 # - `cargo make elastic-down`: stops and removes the elastic env, including all stored data
@@ -84,7 +85,7 @@ mkdir golem-wasm/wit/deps
 cp wit/deps/io golem-wasm/wit/deps
 cp wit/deps/clocks golem-wasm/wit/deps
 cp wit/deps/golem-1.x golem-wasm/wit/deps
-cp wit/deps/golem-rpc golem-wasm/wit/deps
+cp wit/deps/golem-core golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]
@@ -96,7 +97,7 @@ mkdir golem-common/wit/deps
 cp wit/deps/io golem-common/wit/deps
 cp wit/deps/clocks golem-common/wit/deps
 cp wit/deps/golem-1.x golem-common/wit/deps
-cp wit/deps/golem-rpc golem-common/wit/deps
+cp wit/deps/golem-core golem-common/wit/deps
 cp wit/deps/golem-agent golem-common/wit/deps
 """
 
@@ -123,7 +124,7 @@ mkdir cli/golem-cli/wit/deps
 cp wit/deps/clocks cli/golem-cli/wit/deps
 cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
-cp wit/deps/golem-rpc cli/golem-cli/wit/deps
+cp wit/deps/golem-core cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
 """
@@ -133,7 +134,6 @@ private = true
 script_runner = "@duckscript"
 script = """
 components = array
-array_push ${components} benchmarks
 array_push ${components} oplog-processor
 
 for component in ${components}
@@ -839,6 +839,208 @@ git diff --exit-code \
     golem-worker-executor/config/worker-executor.sample.env \
     golem-debugging-service/config/debug-worker-executor.toml \
     golem-debugging-service/config/debug-worker-executor.sample.env
+'''
+
+## ** CHECK UNUSED DEPS **
+
+[tasks.check-unused-deps]
+description = "Detects unused Cargo dependencies using cargo-udeps (requires nightly). Use UDEPS_FEATURES='' for default features only, or UDEPS_INSTALL=true to auto-install prerequisites."
+env = { UDEPS_NIGHTLY = { default_value = "nightly", condition = { env_not_set = ["UDEPS_NIGHTLY"] } }, UDEPS_FEATURES = { default_value = "--all-features", condition = { env_not_set = ["UDEPS_FEATURES"] } }, UDEPS_INSTALL = { default_value = "false", condition = { env_not_set = ["UDEPS_INSTALL"] } } }
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+NIGHTLY="${UDEPS_NIGHTLY}"
+FEATURE_FLAG="${UDEPS_FEATURES}"
+AUTO_INSTALL="${UDEPS_INSTALL}"
+
+# ── Check prerequisites ──────────────────────────────────────────────────────
+if ! rustup toolchain list | grep -q "$NIGHTLY"; then
+    if [ "$AUTO_INSTALL" = "true" ]; then
+        echo "📦 Installing $NIGHTLY toolchain..."
+        rustup toolchain install "$NIGHTLY"
+    else
+        echo "❌ $NIGHTLY toolchain not installed."
+        echo "   Run: rustup toolchain install $NIGHTLY"
+        echo "   Or re-run with: cargo make -e UDEPS_INSTALL=true check-unused-deps"
+        exit 1
+    fi
+fi
+
+if ! cargo "+$NIGHTLY" udeps --version >/dev/null 2>&1; then
+    if [ "$AUTO_INSTALL" = "true" ]; then
+        echo "📦 Installing cargo-udeps..."
+        cargo "+$NIGHTLY" install cargo-udeps --locked
+    else
+        echo "❌ cargo-udeps not installed."
+        echo "   Run: cargo +$NIGHTLY install cargo-udeps --locked"
+        echo "   Or re-run with: cargo make -e UDEPS_INSTALL=true check-unused-deps"
+        exit 1
+    fi
+fi
+
+# ── Use a separate target dir so we don't pollute the stable build ────────────
+export CARGO_TARGET_DIR="${CARGO_MAKE_WORKING_DIRECTORY}/target/nightly-udeps"
+
+echo "════════════════════════════════════════════════════════════════════════════"
+echo "  Unused Dependency Report (compiler-based, cargo-udeps)"
+echo "  Generated: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  Workspace: ${CARGO_MAKE_WORKING_DIRECTORY}"
+echo "  Nightly:   $NIGHTLY"
+echo "  Features:  ${FEATURE_FLAG:-default only}"
+echo "  Target:    $CARGO_TARGET_DIR"
+echo "════════════════════════════════════════════════════════════════════════════"
+echo ""
+echo "Running cargo +$NIGHTLY udeps on the entire workspace..."
+echo "(First run is slow — full nightly build. Subsequent runs are incremental.)"
+echo ""
+
+# ── Run cargo-udeps on the whole workspace at once ────────────────────────────
+UDEPS_OUTPUT_FILE=$(mktemp)
+trap "rm -f '$UDEPS_OUTPUT_FILE'" EXIT
+
+UDEPS_EXIT=0
+# shellcheck disable=SC2086
+cargo "+$NIGHTLY" udeps \
+    --workspace \
+    $FEATURE_FLAG \
+    --output human \
+    > "$UDEPS_OUTPUT_FILE" 2>&1 || UDEPS_EXIT=$?
+
+# ── Check for compilation failure ─────────────────────────────────────────────
+if grep -q "^error\[E" "$UDEPS_OUTPUT_FILE" || grep -q "could not compile" "$UDEPS_OUTPUT_FILE"; then
+    echo "❌ Build failed! cargo-udeps requires a successful nightly compilation."
+    echo ""
+    echo "Compilation errors:"
+    grep -A2 "^error\[E\|could not compile" "$UDEPS_OUTPUT_FILE" | head -30
+    echo ""
+    echo "You may need to set UDEPS_NIGHTLY to a version that compiles the workspace."
+    echo "Current: $NIGHTLY"
+    exit 1
+fi
+
+# ── Parse and display results ─────────────────────────────────────────────────
+TOTAL_UNUSED=0
+CRATES_WITH_UNUSED=0
+AGENT_LINES=""
+
+current_crate=""
+current_manifest=""
+current_section=""
+crate_header_printed=false
+agent_deps=""
+
+flush_crate() {
+    if [ "$crate_header_printed" = true ]; then
+        echo "└─"
+        echo ""
+    fi
+    if [ -n "$agent_deps" ] && [ -n "$current_manifest" ]; then
+        if [ -n "$AGENT_LINES" ]; then
+            AGENT_LINES="$AGENT_LINES
+"
+        fi
+        AGENT_LINES="${AGENT_LINES}  In $current_manifest, remove:$agent_deps"
+    fi
+    current_crate=""
+    current_manifest=""
+    current_section=""
+    crate_header_printed=false
+    agent_deps=""
+}
+
+print_crate_header() {
+    if [ "$crate_header_printed" = false ]; then
+        CRATES_WITH_UNUSED=$((CRATES_WITH_UNUSED + 1))
+        echo "┌─ $current_crate ($current_manifest)"
+        echo "│"
+        crate_header_printed=true
+    fi
+}
+
+while IFS= read -r line; do
+    crate_name=$(echo "$line" | sed -n 's/^`\([a-zA-Z0-9_-]*\) v[0-9].* (\(.*\))`$/\1/p')
+    crate_path=$(echo "$line" | sed -n 's/^`\([a-zA-Z0-9_-]*\) v[0-9].* (\(.*\))`$/\2/p')
+
+    if [ -n "$crate_name" ] && [ -n "$crate_path" ]; then
+        flush_crate
+        current_crate="$crate_name"
+        rel_path="${crate_path#"${CARGO_MAKE_WORKING_DIRECTORY}/"}"
+        current_manifest="$rel_path/Cargo.toml"
+        current_section=""
+        continue
+    fi
+
+    case "$line" in
+        *"── dependencies"*)
+            if echo "$line" | grep -q "dev-dependencies"; then
+                current_section="dev"
+            elif echo "$line" | grep -q "build-dependencies"; then
+                current_section="build"
+            else
+                current_section="normal"
+            fi
+            continue
+            ;;
+    esac
+
+    dep=$(echo "$line" | sed -n 's/.*[└├]─*── "\([a-zA-Z0-9_-]*\)".*/\1/p')
+    if [ -n "$dep" ] && [ -n "$current_crate" ] && [ -n "$current_section" ]; then
+        print_crate_header
+        TOTAL_UNUSED=$((TOTAL_UNUSED + 1))
+
+        case "$current_section" in
+            normal)
+                echo "│    - $dep"
+                agent_deps="$agent_deps $dep"
+                ;;
+            dev)
+                echo "│    - $dep  (dev-dependency)"
+                agent_deps="$agent_deps (dev) $dep"
+                ;;
+            build)
+                echo "│    - $dep  (build-dependency)"
+                agent_deps="$agent_deps (build) $dep"
+                ;;
+        esac
+    fi
+done < "$UDEPS_OUTPUT_FILE"
+
+flush_crate
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo ""
+echo "────────────────────────────────────────────────────────────────────────────"
+echo "  Summary"
+echo "────────────────────────────────────────────────────────────────────────────"
+
+if [ "$TOTAL_UNUSED" -eq 0 ]; then
+    echo ""
+    echo "  ✅ No unused dependencies found in any workspace member."
+else
+    echo ""
+    echo "  Crates with unused deps: $CRATES_WITH_UNUSED"
+    echo "  Total unused deps:       $TOTAL_UNUSED"
+fi
+
+echo ""
+echo "════════════════════════════════════════════════════════════════════════════"
+echo ""
+
+if [ -n "$AGENT_LINES" ]; then
+    echo "── Copy-paste for an agent ───────────────────────────────────────────────"
+    echo ""
+    echo "Please remove the following unused dependencies from the workspace."
+    echo "After removing each dependency from the crate's Cargo.toml, also check"
+    echo "if it can be removed from [workspace.dependencies] in the root"
+    echo "Cargo.toml (if no other crate uses it). Deps prefixed with (dev) are"
+    echo "in [dev-dependencies], and (build) are in [build-dependencies]."
+    echo ""
+    echo "$AGENT_LINES"
+    echo ""
+    echo "After removing, run 'cargo make build' to verify nothing breaks."
+    echo ""
+fi
 '''
 
 ## ** Elastic tasks **

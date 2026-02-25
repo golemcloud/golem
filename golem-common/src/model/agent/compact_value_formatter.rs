@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::model::agent::{
-    DataValue, ElementValue, ElementValues, NamedElementValue, NamedElementValues,
+    ComponentModelElementValue, DataValue, ElementValue, ElementValues, NamedElementValue,
+    NamedElementValues, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
 };
 use itertools::Itertools;
 use std::fmt::Write as FmtWrite;
@@ -251,11 +252,17 @@ impl ToCompactString for ElementValues {
 impl ToCompactString for ElementValue {
     fn to_compact_string(&self) -> String {
         match self {
-            ElementValue::ComponentModel(value) => value.to_compact_string(),
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+                value.to_compact_string()
+            }
             // TODO: also encode as wave for escaping?
-            ElementValue::UnstructuredText(text_reference) => text_reference.to_string(),
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+                value.to_string()
+            }
             // TODO: also encode as wave for escaping?
-            ElementValue::UnstructuredBinary(binary_reference) => binary_reference.to_string(),
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+                value.to_string()
+            }
         }
     }
 }

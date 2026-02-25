@@ -15,7 +15,7 @@
 pub use super::PublicOplogEntry;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
-    PublicAttribute, PublicAttributeValue, PublicWorkerInvocation, StringAttributeValue,
+    PublicAgentInvocation, PublicAttribute, PublicAttributeValue, StringAttributeValue,
 };
 use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -98,34 +98,69 @@ impl PublicOplogEntry {
             PublicOplogEntry::Create(_params) => {
                 Self::string_match("create", &[], query_path, query)
             }
-            PublicOplogEntry::ImportedFunctionInvoked(params) => {
-                Self::string_match("importedfunctioninvoked", &[], query_path, query)
-                    || Self::string_match("imported-function-invoked", &[], query_path, query)
+            PublicOplogEntry::HostCall(params) => {
+                Self::string_match("HostCall", &[], query_path, query)
+                    || Self::string_match("host-call", &[], query_path, query)
                     || Self::string_match("imported-function", &[], query_path, query)
                     || Self::string_match(&params.function_name, &[], query_path, query)
                     || Self::match_value(&params.request, &[], query_path, query)
                     || Self::match_value(&params.response, &[], query_path, query)
             }
-            PublicOplogEntry::ExportedFunctionInvoked(params) => {
-                Self::string_match("exportedfunctioninvoked", &[], query_path, query)
-                    || Self::string_match("exported-function-invoked", &[], query_path, query)
-                    || Self::string_match("exported-function", &[], query_path, query)
-                    || Self::string_match(&params.function_name, &[], query_path, query)
-                    || params
-                        .request
-                        .iter()
-                        .any(|v| Self::match_value(v, &[], query_path, query))
-                    || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
-            }
-            PublicOplogEntry::ExportedFunctionCompleted(params) => {
-                Self::string_match("exportedfunctioncompleted", &[], query_path, query)
-                    || Self::string_match("exported-function-completed", &[], query_path, query)
-                    || Self::string_match("exported-function", &[], query_path, query)
-                    || match &params.response {
-                        Some(response) => Self::match_value(response, &[], query_path, query),
-                        None => false,
+            PublicOplogEntry::AgentInvocationStarted(params) => {
+                Self::string_match("agentinvocationstarted", &[], query_path, query)
+                    || Self::string_match("agent-invocation-started", &[], query_path, query)
+                    || match &params.invocation {
+                        PublicAgentInvocation::AgentInitialization(inv_params) => {
+                            Self::string_match("agent-initialization", &[], query_path, query)
+                                || Self::string_match(
+                                    &inv_params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
+                        PublicAgentInvocation::AgentMethodInvocation(inv_params) => {
+                            Self::string_match("agent-method-invocation", &[], query_path, query)
+                                || Self::string_match(
+                                    &inv_params.method_name,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                                || Self::string_match(
+                                    &inv_params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
+                        PublicAgentInvocation::SaveSnapshot(_) => {
+                            Self::string_match("save-snapshot", &[], query_path, query)
+                        }
+                        PublicAgentInvocation::LoadSnapshot(_) => {
+                            Self::string_match("load-snapshot", &[], query_path, query)
+                        }
+                        PublicAgentInvocation::ProcessOplogEntries(inv_params) => {
+                            Self::string_match("process-oplog-entries", &[], query_path, query)
+                                || Self::string_match(
+                                    &inv_params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
+                        PublicAgentInvocation::ManualUpdate(inv_params) => Self::string_match(
+                            &inv_params.target_revision.to_string(),
+                            &[],
+                            query_path,
+                            query,
+                        ),
                     }
-                // TODO: should we store function name and idempotency key in ExportedFunctionCompleted?
+            }
+            PublicOplogEntry::AgentInvocationFinished(params) => {
+                Self::string_match("agentinvocationfinished", &[], query_path, query)
+                    || Self::string_match("agent-invocation-finished", &[], query_path, query)
+                    || Self::string_match(&params.consumed_fuel.to_string(), &[], query_path, query)
             }
             PublicOplogEntry::Suspend(_params) => {
                 Self::string_match("suspend", &[], query_path, query)
@@ -162,29 +197,45 @@ impl PublicOplogEntry {
                 Self::string_match("endremotewrite", &[], query_path, query)
                     || Self::string_match("end-remote-write", &[], query_path, query)
             }
-            PublicOplogEntry::PendingWorkerInvocation(params) => {
+            PublicOplogEntry::PendingAgentInvocation(params) => {
                 Self::string_match("pendingworkerinvocation", &[], query_path, query)
                     || Self::string_match("pending-worker-invocation", &[], query_path, query)
                     || match &params.invocation {
-                        PublicWorkerInvocation::ExportedFunction(params) => {
-                            Self::string_match(&params.full_function_name, &[], query_path, query)
+                        PublicAgentInvocation::AgentInitialization(params) => {
+                            Self::string_match("agent-initialization", &[], query_path, query)
                                 || Self::string_match(
                                     &params.idempotency_key.value,
                                     &[],
                                     query_path,
                                     query,
                                 )
-                                || params
-                                    .function_input
-                                    .as_ref()
-                                    .map(|params| {
-                                        params
-                                            .iter()
-                                            .any(|v| Self::match_value(v, &[], query_path, query))
-                                    })
-                                    .unwrap_or(false)
                         }
-                        PublicWorkerInvocation::ManualUpdate(params) => Self::string_match(
+                        PublicAgentInvocation::AgentMethodInvocation(params) => {
+                            Self::string_match("agent-method-invocation", &[], query_path, query)
+                                || Self::string_match(&params.method_name, &[], query_path, query)
+                                || Self::string_match(
+                                    &params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
+                        PublicAgentInvocation::SaveSnapshot(_) => {
+                            Self::string_match("save-snapshot", &[], query_path, query)
+                        }
+                        PublicAgentInvocation::LoadSnapshot(_) => {
+                            Self::string_match("load-snapshot", &[], query_path, query)
+                        }
+                        PublicAgentInvocation::ProcessOplogEntries(params) => {
+                            Self::string_match("process-oplog-entries", &[], query_path, query)
+                                || Self::string_match(
+                                    &params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                        }
+                        PublicAgentInvocation::ManualUpdate(params) => Self::string_match(
                             &params.target_revision.to_string(),
                             &[],
                             query_path,

@@ -60,9 +60,11 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host;
-use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
+use crate::worker::invocation::{
+    invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
+};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
-use crate::worker::{interpret_function_result, RetryDecision, Worker};
+use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, HasConfigVars, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
@@ -77,7 +79,7 @@ use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentId, AgentMode, Principal};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
@@ -88,15 +90,16 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry, OplogIndex,
-    PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
-    WorkerResourceId,
+    PersistenceLevel, RawSnapshotData, TimestampedUpdateDescription, UpdateDescription,
+    WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId,
-    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -104,7 +107,7 @@ use golem_service_base::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::{Uri, Value, ValueAndType};
+use golem_wasm::Uri;
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -440,6 +443,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
+                error: WorkerError::AgentError(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
                 error: WorkerError::Unknown(_),
                 retry_from,
             } => {
@@ -572,7 +579,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
                     match lookup_result {
                         OplogEntryLookupResult::Found { index, .. } => {
-                            debug!("Remote write operation {begin_index} already completed at {index}, continue replaying");
+                            debug!(
+                                "Remote write operation {begin_index} already completed at {index}, continue replaying"
+                            );
                             Ok(begin_index)
                         }
                         OplogEntryLookupResult::NotFound {
@@ -993,81 +1002,84 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .metadata
                             .clone();
 
-                        let failed = match component_metadata.load_snapshot() {
-                            Ok(Some(load_snapshot)) => {
-                                let idempotency_key = IdempotencyKey::fresh();
+                        let idempotency_key = IdempotencyKey::fresh();
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .set_current_idempotency_key(idempotency_key.clone())
+                            .await;
+
+                        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+                            idempotency_key,
+                            snapshot: RawSnapshotData { data, mime_type },
+                        };
+                        let agent_id = store.as_context().data().agent_id();
+                        let lowered = match lower_invocation(
+                            load_snapshot_invocation,
+                            &component_metadata,
+                            agent_id.as_ref(),
+                        ) {
+                            Ok(lowered) => lowered,
+                            Err(err) => {
                                 store
                                     .as_context_mut()
                                     .data_mut()
-                                    .durable_ctx_mut()
-                                    .set_current_idempotency_key(idempotency_key.clone())
-                                    .await;
-
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .begin_call_snapshotting_function();
-
-                                let load_result = invoke_observed_and_traced(
-                                    load_snapshot.name.to_string(),
-                                    vec![Value::Record(vec![
-                                        Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
-                                        Value::String(mime_type),
-                                    ])],
-                                    store,
-                                    instance,
-                                    &component_metadata,
-                                    true,
-                                )
-                                .await;
-
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .end_call_snapshotting_function();
-
-                                match load_result {
-                                    Err(error) => Some(format!(
-                                        "Manual update failed to load snapshot: {error}"
-                                    )),
-                                    Ok(InvokeResult::Failed { error, .. }) => {
-                                        let stderr = store
-                                            .as_context()
-                                            .data()
-                                            .get_public_state()
-                                            .event_service()
-                                            .get_last_invocation_errors();
-                                        let error = error.to_string(&stderr);
+                                    .on_worker_update_failed(
+                                        target_revision,
                                         Some(format!(
-                                            "Manual update failed to load snapshot: {error}"
-                                        ))
-                                    }
-                                    Ok(InvokeResult::Succeeded { output, .. }) => {
-                                        if let Some(output) = output {
-                                            match output {
-                                                Value::Result(Err(Some(boxed_error_value))) => {
-                                                    match &*boxed_error_value {
-                                                        Value::String(error) =>
-                                                            Some(format!("Manual update failed to load snapshot: {error}")),
-                                                        _ =>
-                                                            Some("Unexpected result value from the snapshot load function".to_string())
-                                                    }
-                                                }
-                                                _ => None
-                                            }
-                                        } else {
-                                            Some("Unexpected result value from the snapshot load function".to_string())
-                                        }
-                                    }
-                                    _ => None,
-                                }
+                                            "Manual update failed to lower load-snapshot invocation: {err}"
+                                        )),
+                                    )
+                                    .await;
+                                return Some(RetryDecision::Immediate);
                             }
-                            Ok(None) => {
-                                Some("Failed to find exported load-snapshot function".to_string())
+                        };
+
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .begin_call_snapshotting_function();
+
+                        let load_result = invoke_observed_and_traced(
+                            lowered,
+                            store,
+                            instance,
+                            &component_metadata,
+                            InvocationMode::Replay,
+                        )
+                        .await;
+
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .end_call_snapshotting_function();
+
+                        let failed = match load_result {
+                            Err(error) => {
+                                Some(format!("Manual update failed to load snapshot: {error}"))
                             }
-                            Err(err) => Some(format!(
-                                "Failed to find exported load-snapshot function: {err}"
-                            )),
+                            Ok(InvokeResult::Failed { error, .. }) => {
+                                let stderr = store
+                                    .as_context()
+                                    .data()
+                                    .get_public_state()
+                                    .event_service()
+                                    .get_last_invocation_errors();
+                                let error = error.to_string(&stderr);
+                                Some(format!("Manual update failed to load snapshot: {error}"))
+                            }
+                            Ok(InvokeResult::Succeeded {
+                                result: AgentInvocationResult::LoadSnapshot { error },
+                                ..
+                            }) => {
+                                error.map(|e| format!("Manual update failed to load snapshot: {e}"))
+                            }
+                            Ok(InvokeResult::Succeeded { .. }) => Some(
+                                "Unexpected result value from the snapshot load function"
+                                    .to_string(),
+                            ),
+                            _ => None,
                         };
 
                         if let Some(error) = failed {
@@ -1120,7 +1132,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                 }
             }
             _ => {
-                panic!("`finalize_pending_snapshot_update` can only be called with a snapshot update description")
+                panic!(
+                    "`finalize_pending_snapshot_update` can only be called with a snapshot update description"
+                )
             }
         }
     }
@@ -1156,7 +1170,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                 data, mime_type, ..
             } => (data, mime_type),
             _ => {
-                warn!("Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay");
+                warn!(
+                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                );
                 store
                     .as_context_mut()
                     .data_mut()
@@ -1199,34 +1215,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .metadata
             .clone();
 
-        let load_snapshot_fn = match component_metadata.load_snapshot() {
-            Ok(Some(f)) => f,
-            Ok(None) => {
-                warn!("Component does not export load-snapshot; falling back to full replay");
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .drop_override_and_restart()
-                    .await;
-                return SnapshotRecoveryResult::NotAttempted;
-            }
-            Err(err) => {
-                warn!("Failed to find load-snapshot function: {err}; falling back to full replay");
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .drop_override_and_restart()
-                    .await;
-                return SnapshotRecoveryResult::NotAttempted;
-            }
-        };
-
         let idempotency_key = IdempotencyKey::fresh();
         store
             .as_context_mut()
@@ -1235,21 +1223,34 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key.clone())
             .await;
 
+        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+            idempotency_key,
+            snapshot: RawSnapshotData { data, mime_type },
+        };
+        let agent_id = store.as_context().data().agent_id();
+        let lowered = match lower_invocation(
+            load_snapshot_invocation,
+            &component_metadata,
+            agent_id.as_ref(),
+        ) {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                warn!("Snapshot recovery failed to lower load-snapshot invocation: {err}");
+                return SnapshotRecoveryResult::Failed;
+            }
+        };
+
         store
             .as_context_mut()
             .data_mut()
             .begin_call_snapshotting_function();
 
         let load_result = invoke_observed_and_traced(
-            load_snapshot_fn.name.to_string(),
-            vec![Value::Record(vec![
-                Value::List(data.iter().map(|b| Value::U8(*b)).collect()),
-                Value::String(mime_type),
-            ])],
+            lowered,
             store,
             instance,
             &component_metadata,
-            true,
+            InvocationMode::Replay,
         )
         .await;
 
@@ -1274,22 +1275,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     "Snapshot recovery failed to load snapshot: {error}"
                 ))
             }
-            Ok(InvokeResult::Succeeded { output, .. }) => {
-                if let Some(output) = output {
-                    match output {
-                        Value::Result(Err(Some(boxed_error_value))) => match &*boxed_error_value {
-                            Value::String(error) => Some(format!(
-                                "Snapshot recovery load-snapshot returned error: {error}"
-                            )),
-                            _ => Some(
-                                "Unexpected result value from load-snapshot function".to_string(),
-                            ),
-                        },
-                        _ => None,
-                    }
-                } else {
-                    Some("Unexpected empty result from load-snapshot function".to_string())
-                }
+            Ok(InvokeResult::Succeeded {
+                result: AgentInvocationResult::LoadSnapshot { error },
+                ..
+            }) => error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}")),
+            Ok(InvokeResult::Succeeded { .. }) => {
+                Some("Unexpected result value from load-snapshot function".to_string())
             }
             Ok(_) => Some("Snapshot recovery interrupted".to_string()),
         };
@@ -1545,29 +1536,35 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
-    async fn on_exported_function_invoked(
+    async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        mut invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
             let stack = self.get_current_invocation_context().await;
 
+            match &mut invocation {
+                AgentInvocation::AgentInitialization {
+                    invocation_context, ..
+                } => {
+                    *invocation_context = stack;
+                }
+                AgentInvocation::AgentMethod {
+                    invocation_context, ..
+                } => {
+                    *invocation_context = stack;
+                }
+                _ => {}
+            }
+
             self.public_state
                 .worker()
                 .oplog()
-                .add_exported_function_invoked(
-                    full_function_name.to_string(),
-                    function_input,
-                    self.get_current_idempotency_key().await.ok_or(anyhow!(
-                        "No active invocation key is associated with the worker"
-                    ))?,
-                    stack,
-                )
+                .add_agent_invocation_started(invocation)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "could not encode function input for {full_function_name} on {}: {err}",
+                        "could not encode agent invocation on {}: {err}",
                         self.worker_id()
                     )
                 });
@@ -1666,21 +1663,27 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         decision
     }
 
-    async fn on_invocation_success(
+    async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Value>,
         consumed_fuel: u64,
-        output: Option<ValueAndType>,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
 
         if is_live {
             if self.state.snapshotting_mode.is_none() {
+                let component_revision = output
+                    .component_revision
+                    .expect("component_revision must be set in AgentInvocationOutput");
                 self.public_state
                     .worker()
                     .oplog()
-                    .add_exported_function_completed(&output, consumed_fuel)
+                    .add_agent_invocation_finished(
+                        &output.result,
+                        consumed_fuel,
+                        component_revision,
+                    )
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
@@ -1708,15 +1711,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let response = self
                 .state
                 .replay_state
-                .get_oplog_entry_exported_function_completed()
+                .get_oplog_entry_agent_invocation_finished()
                 .await?;
-
-            if let Some(function_output) = response {
-                let is_diverged = function_output != output;
-                if is_diverged {
+            if let Some(recorded_result) = response {
+                if !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("{full_function_name}({function_input:?}) => {function_output:?}"),
-                        format!("{full_function_name}({function_input:?}) => {output:?}"),
+                        format!("{full_function_name} => {recorded_result:?}"),
+                        format!("{full_function_name} => {:?}", output.result),
                     ));
                 }
             }
@@ -1895,9 +1896,9 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .add_to_oplog(OplogEntry::StartSpan {
                     timestamp: span.start().unwrap_or(Timestamp::now_utc()),
                     span_id: span.span_id().clone(),
-                    parent_id: Some(parent.clone()),
+                    parent: Some(parent.clone()),
                     linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
-                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()),
+                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
                 })
                 .await;
         }
@@ -2048,7 +2049,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .state
                     .replay_state
-                    .get_oplog_entry_exported_function_invoked()
+                    .get_oplog_entry_agent_invocation_started()
                     .await;
 
                 match oplog_entry {
@@ -2062,12 +2063,32 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .await?;
                         break Ok(None);
                     }
-                    Ok(Some(replay_state::ExportedFunctionInvoked {
-                        function_name,
-                        function_input,
+                    Ok(Some(replay_state::AgentInvocationStartedEntry {
                         idempotency_key,
+                        invocation_payload,
                         invocation_context,
                     })) => {
+                        let agent_invocation = AgentInvocation::from_parts(
+                            idempotency_key.clone(),
+                            invocation_payload,
+                            invocation_context.clone(),
+                        );
+
+                        let component_metadata = store
+                            .as_context()
+                            .data()
+                            .component_metadata()
+                            .metadata
+                            .clone();
+
+                        let agent_id = store.as_context().data().agent_id();
+                        let lowered = lower_invocation(
+                            agent_invocation,
+                            &component_metadata,
+                            agent_id.as_ref(),
+                        )?;
+                        let full_function_name = lowered.wit_fqfn.clone();
+
                         store
                             .as_context_mut()
                             .data_mut()
@@ -2075,12 +2096,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .process_pending_replay_events()
                             .await?;
 
-                        debug!("Replaying function {function_name}");
+                        debug!("Replaying function {}", &full_function_name);
                         debug!(
                             "Replay state: {:?}",
                             store.as_context().data().durable_ctx().state.replay_state
                         );
-                        let span = span!(Level::INFO, "replaying", function = function_name);
+                        let span = span!(
+                            Level::INFO,
+                            "replaying",
+                            function = full_function_name.as_str()
+                        );
                         store
                             .as_context_mut()
                             .data_mut()
@@ -2093,30 +2118,20 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .data_mut()
                             .set_current_invocation_context(invocation_context)
                             .await?;
-
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let full_function_name = function_name.to_string();
                         let invoke_result = invoke_observed_and_traced(
-                            full_function_name.clone(),
-                            function_input.clone(),
+                            lowered,
                             store,
                             instance,
                             &component_metadata,
-                            false,
+                            InvocationMode::Replay,
                         )
                         .instrument(span)
                         .await;
 
                         // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
                         // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-                        // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
-                        // are finished at ExportedFunctionCompleted.
+                        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
+                        // are finished at AgentInvocationFinished.
                         for span_id in local_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
@@ -2126,78 +2141,27 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                output,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                let component_metadata =
-                                    store.as_context().data().component_metadata();
-
-                                match component_metadata
-                                    .metadata
-                                    .find_function(&full_function_name)
+                                let component_revision =
+                                    store.as_context().data().component_metadata().revision;
+                                let output = AgentInvocationOutput {
+                                    result: invocation_result,
+                                    consumed_fuel: Some(consumed_fuel),
+                                    component_revision: Some(component_revision),
+                                };
+                                if let Err(err) = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .on_agent_invocation_success(
+                                        &full_function_name,
+                                        consumed_fuel,
+                                        &output,
+                                    )
+                                    .await
                                 {
-                                    Ok(value) => {
-                                        if let Some(value) = value {
-                                            let result = interpret_function_result(
-                                                output,
-                                                value.analysed_export.result,
-                                            )
-                                            .map_err(|e| WorkerExecutorError::ValueMismatch {
-                                                details: e.join(", "),
-                                            })?;
-                                            if let Err(err) = store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_invocation_success(
-                                                    &full_function_name,
-                                                    &function_input,
-                                                    consumed_fuel,
-                                                    result,
-                                                )
-                                                .await
-                                            {
-                                                break Err(err);
-                                            }
-                                        } else {
-                                            let trap_type = TrapType::Error {
-                                                error: WorkerError::InvalidRequest(format!(
-                                                    "Function {full_function_name} not found"
-                                                )),
-                                                retry_from: OplogIndex::INITIAL,
-                                            };
-
-                                            let _ = store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_invocation_failure(
-                                                    &full_function_name,
-                                                    &trap_type,
-                                                )
-                                                .await;
-
-                                            break Err(WorkerExecutorError::invalid_request(
-                                                format!("Function {full_function_name} not found"),
-                                            ));
-                                        }
-                                    }
-                                    Err(err) => {
-                                        let trap_type = TrapType::Error {
-                                            error: WorkerError::InvalidRequest(format!(
-                                                "Function {full_function_name} not found: {err}"
-                                            )),
-                                            retry_from: OplogIndex::INITIAL,
-                                        };
-
-                                        let _ = store
-                                            .as_context_mut()
-                                            .data_mut()
-                                            .on_invocation_failure(&full_function_name, &trap_type)
-                                            .await;
-
-                                        break Err(WorkerExecutorError::invalid_request(format!(
-                                            "Function {full_function_name} not found: {err}"
-                                        )));
-                                    }
+                                    break Err(err);
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
@@ -2228,7 +2192,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 TrapType::Exit => {
                                                     break Err(WorkerExecutorError::runtime(
                                                         "Process exited",
-                                                    ))
+                                                    ));
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -2369,7 +2333,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 )
                                                 .await;
 
-                                            debug!("Retrying prepare_instance after failed update attempt");
+                                            debug!(
+                                                "Retrying prepare_instance after failed update attempt"
+                                            );
 
                                             Ok(Some(RetryDecision::Immediate))
                                         }
@@ -2456,6 +2422,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         &InvocationContextStack::fresh(),
+                        Principal::anonymous(),
                     )
                     .await?;
                 }
@@ -2687,8 +2654,8 @@ async fn last_error<T: HasOplogService + HasConfig>(
                     }
                     Some((
                         _,
-                        OplogEntry::ExportedFunctionInvoked { .. }
-                        | OplogEntry::ExportedFunctionCompleted { .. },
+                        OplogEntry::AgentInvocationStarted { .. }
+                        | OplogEntry::AgentInvocationFinished { .. },
                     )) => {
                         // Retry counting never gets across invocation boundaries
                         break;
@@ -2775,23 +2742,18 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
             }
             Some((
                 _,
-                OplogEntry::ExportedFunctionInvoked {
-                    function_name,
-                    idempotency_key,
-                    ..
+                OplogEntry::AgentInvocationStarted {
+                    idempotency_key, ..
                 },
             )) => match &first_seen_invocation {
                 None => {
-                    first_seen_invocation = Some((function_name.clone(), idempotency_key.clone()));
+                    first_seen_invocation = Some(idempotency_key.clone());
                     stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
                     if stderr_entries.len() >= max_count {
                         break;
                     };
                 }
-                Some((expected_function, expected_idempotency_key))
-                    if function_name == expected_function
-                        && idempotency_key == expected_idempotency_key =>
-                {
+                Some(expected_idempotency_key) if idempotency_key == expected_idempotency_key => {
                     stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
                     if stderr_entries.len() >= max_count {
                         break;

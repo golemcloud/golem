@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataValue, makeAgentId, parseAgentId } from 'golem:agent/host';
-import { Uuid } from 'golem:api/host@1.3.0';
+import { DataValue, makeAgentId, parseAgentId } from 'golem:agent/host@1.5.0';
+import { Uuid } from 'golem:api/host@1.5.0';
 
 /**
  * Globally unique ID of an `agent`.

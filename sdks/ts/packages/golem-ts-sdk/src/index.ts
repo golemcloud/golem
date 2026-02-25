@@ -14,7 +14,7 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentType, Principal, DataValue } from 'golem:agent/common';
+import { AgentType, Principal, DataValue } from 'golem:agent/common@1.5.0';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
@@ -32,7 +32,7 @@ export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
-export { Principal } from 'golem:agent/common';
+export { Principal } from 'golem:agent/common@1.5.0';
 
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';

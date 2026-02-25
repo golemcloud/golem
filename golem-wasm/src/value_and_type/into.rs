@@ -21,7 +21,7 @@ use crate::{UuidRecord, Value, ValueAndType};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{Datelike, Offset, Timelike};
-use std::collections::{BTreeMap, BTreeSet, Bound, HashMap};
+use std::collections::{BTreeMap, BTreeSet, Bound, HashMap, HashSet};
 use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
@@ -385,23 +385,39 @@ impl<T: IntoValue> IntoValue for BTreeSet<T> {
     }
 }
 
-impl IntoValue for Uuid {
+impl<T: IntoValue> IntoValue for HashSet<T> {
     fn into_value(self) -> Value {
-        Value::String(self.to_string())
+        Value::List(self.into_iter().map(IntoValue::into_value).collect())
     }
 
     fn get_type() -> AnalysedType {
-        analysed_type::str()
+        list(T::get_type())
+    }
+}
+
+impl IntoValue for Uuid {
+    fn into_value(self) -> Value {
+        let (hi, lo) = self.as_u64_pair();
+        Value::Record(vec![Value::U64(hi), Value::U64(lo)])
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("high-bits", analysed_type::u64()),
+            analysed_type::field("low-bits", analysed_type::u64()),
+        ])
+        .named("uuid")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
 impl IntoValue for UuidRecord {
     fn into_value(self) -> Value {
-        Value::Record(vec![self.value.into_value()])
+        Value::Record(vec![Value::String(self.value.to_string())])
     }
 
     fn get_type() -> AnalysedType {
-        record(vec![field("value", Uuid::get_type())])
+        record(vec![field("value", analysed_type::str())])
     }
 }
 
@@ -607,13 +623,13 @@ impl IntoValue for crate::WitType {
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![analysed_type::field(
             "nodes",
-            list(crate::golem_rpc_0_2_x::types::NamedWitTypeNode::get_type()),
+            list(crate::golem_core_1_5_x::types::NamedWitTypeNode::get_type()),
         )])
     }
 }
 
 #[cfg(feature = "host")]
-impl IntoValue for crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
+impl IntoValue for crate::golem_core_1_5_x::types::NamedWitTypeNode {
     fn into_value(self) -> Value {
         Value::Record(vec![
             self.name.into_value(),
@@ -804,41 +820,6 @@ impl IntoValue for crate::ResourceMode {
 }
 
 #[cfg(feature = "host")]
-impl IntoValue for crate::RpcError {
-    fn into_value(self) -> Value {
-        match self {
-            crate::RpcError::ProtocolError(value) => Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(Value::String(value))),
-            },
-            crate::RpcError::Denied(value) => Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(Value::String(value))),
-            },
-            crate::RpcError::NotFound(value) => Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(Value::String(value))),
-            },
-            crate::RpcError::RemoteInternalError(value) => Value::Variant {
-                case_idx: 3,
-                case_value: Some(Box::new(Value::String(value))),
-            },
-        }
-    }
-
-    fn get_type() -> AnalysedType {
-        use crate::analysis::analysed_type::case;
-
-        variant(vec![
-            case("protocol-error", analysed_type::str()),
-            case("denied", analysed_type::str()),
-            case("not-found", analysed_type::str()),
-            case("remote-internal-error", analysed_type::str()),
-        ])
-    }
-}
-
-#[cfg(feature = "host")]
 impl IntoValue for ValueAndType {
     fn into_value(self) -> Value {
         let wit_value: crate::WitValue = self.value.into();
@@ -888,8 +869,8 @@ impl From<crate::WitType> for AnalysedType {
 
 #[cfg(feature = "host")]
 fn build_tree(
-    node: &crate::golem_rpc_0_2_x::types::NamedWitTypeNode,
-    nodes: &[crate::golem_rpc_0_2_x::types::NamedWitTypeNode],
+    node: &crate::golem_core_1_5_x::types::NamedWitTypeNode,
+    nodes: &[crate::golem_core_1_5_x::types::NamedWitTypeNode],
 ) -> AnalysedType {
     match &node.type_ {
         crate::WitTypeNode::RecordType(fields) => {
@@ -991,7 +972,7 @@ impl From<AnalysedType> for crate::WitType {
 
 #[cfg(feature = "host")]
 struct WitTypeBuilder {
-    nodes: Vec<crate::golem_rpc_0_2_x::types::NamedWitTypeNode>,
+    nodes: Vec<crate::golem_core_1_5_x::types::NamedWitTypeNode>,
     mapping: HashMap<AnalysedType, usize>,
 }
 
@@ -1012,7 +993,7 @@ impl WitTypeBuilder {
         } else {
             let idx = self.nodes.len();
             self.nodes
-                .push(crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
+                .push(crate::golem_core_1_5_x::types::NamedWitTypeNode {
                     name: None,
                     owner: None,
                     type_: crate::WitTypeNode::PrimBoolType,
@@ -1080,7 +1061,7 @@ impl WitTypeBuilder {
                     },
                 )),
             };
-            self.nodes[idx] = crate::golem_rpc_0_2_x::types::NamedWitTypeNode {
+            self.nodes[idx] = crate::golem_core_1_5_x::types::NamedWitTypeNode {
                 name,
                 owner,
                 type_: node,
@@ -1095,8 +1076,8 @@ impl WitTypeBuilder {
 }
 
 #[cfg(feature = "host")]
-impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
-    fn from(value: crate::golem_rpc_0_2_x::types::ValueAndType) -> Self {
+impl From<crate::golem_core_1_5_x::types::ValueAndType> for ValueAndType {
+    fn from(value: crate::golem_core_1_5_x::types::ValueAndType) -> Self {
         Self {
             value: value.value.into(),
             typ: value.typ.into(),
@@ -1105,7 +1086,7 @@ impl From<crate::golem_rpc_0_2_x::types::ValueAndType> for ValueAndType {
 }
 
 #[cfg(feature = "host")]
-impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
+impl From<ValueAndType> for crate::golem_core_1_5_x::types::ValueAndType {
     fn from(value: ValueAndType) -> Self {
         Self {
             value: value.value.into(),
@@ -1220,16 +1201,8 @@ impl IntoValue for Url {
 #[cfg(test)]
 mod tests {
     use crate::analysis::AnalysedType;
-    use crate::{IntoValue, RpcError, WitType, WitValue};
+    use crate::{IntoValue, WitType, WitValue};
     use test_r::test;
-
-    #[test]
-    fn encoding_rpc_error_type() {
-        let typ1 = RpcError::get_type();
-        let encoded: WitType = typ1.clone().into();
-        let typ2: AnalysedType = encoded.into();
-        assert_eq!(typ1, typ2);
-    }
 
     #[test]
     fn encoding_wit_value_type() {

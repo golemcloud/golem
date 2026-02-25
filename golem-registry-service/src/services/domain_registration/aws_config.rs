@@ -12,81 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rusoto_acm::AcmClient;
-use rusoto_core::{HttpClient, Region};
-use rusoto_credential::{Secret, Variable};
-use rusoto_elbv2::ElbClient;
-use rusoto_route53::Route53Client;
+use aws_config::BehaviorVersion;
 
 #[derive(Debug, Clone)]
 pub struct AwsConfig {
-    pub credentials_provider: rusoto_sts::WebIdentityProvider,
-    pub region: Region,
+    pub sdk_config: aws_config::SdkConfig,
 }
 
 impl AwsConfig {
-    pub fn from_k8s_env() -> Self {
-        Self {
-            credentials_provider: rusoto_sts::WebIdentityProvider::from_k8s_env(),
-            region: Region::default(),
-        }
+    pub async fn from_k8s_env() -> Self {
+        let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        Self { sdk_config }
     }
 
-    pub fn new(token: &str, role_arn: &str) -> Self {
-        let credentials_provider = rusoto_sts::WebIdentityProvider {
-            web_identity_token: Variable::with_value(Secret::from(token.to_string())),
-            role_arn: Variable::with_value(role_arn.to_string()),
-            role_session_name: None,
-            duration_seconds: None,
-            policy: None,
-            policy_arns: None,
-        };
-
-        AwsConfig {
-            credentials_provider,
-            region: Region::default(),
-        }
+    pub async fn new() -> Self {
+        // In tests this is called with dummy values; the default credential chain
+        // will resolve credentials from the environment (including web identity token).
+        let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+        Self { sdk_config }
     }
-}
 
-impl TryInto<AcmClient> for AwsConfig {
-    type Error = anyhow::Error;
-
-    fn try_into(self) -> Result<AcmClient, Self::Error> {
-        let http_client = HttpClient::new()?;
-
-        Ok(AcmClient::new_with(
-            http_client,
-            self.credentials_provider.clone(),
-            self.region.clone(),
-        ))
+    pub fn acm_client(&self) -> aws_sdk_acm::Client {
+        aws_sdk_acm::Client::new(&self.sdk_config)
     }
-}
 
-impl TryInto<ElbClient> for AwsConfig {
-    type Error = anyhow::Error;
-
-    fn try_into(self) -> Result<ElbClient, Self::Error> {
-        let http_client = HttpClient::new()?;
-
-        Ok(ElbClient::new_with(
-            http_client,
-            self.credentials_provider.clone(),
-            self.region.clone(),
-        ))
+    pub fn elb_client(&self) -> aws_sdk_elasticloadbalancingv2::Client {
+        aws_sdk_elasticloadbalancingv2::Client::new(&self.sdk_config)
     }
-}
 
-impl TryInto<Route53Client> for AwsConfig {
-    type Error = anyhow::Error;
-
-    fn try_into(self) -> Result<Route53Client, Self::Error> {
-        let http_client = HttpClient::new()?;
-
-        Ok(Route53Client::new_with(
-            http_client,
-            self.credentials_provider.clone(),
-            self.region.clone(),
-        ))
+    pub fn route53_client(&self) -> aws_sdk_route53::Client {
+        aws_sdk_route53::Client::new(&self.sdk_config)
     }
 }

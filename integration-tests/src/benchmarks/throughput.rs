@@ -19,7 +19,7 @@ use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
 use golem_common::base_model::agent::{AgentId, DataValue};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
@@ -375,31 +375,34 @@ impl AgentIdPair {
 
 enum AgentInvocationTarget {
     Single {
-        component_id: ComponentId,
+        component: ComponentDto,
         agent_id: AgentId,
     },
-    Pair(AgentIdPair),
+    Pair {
+        component: ComponentDto,
+        pair: AgentIdPair,
+    },
 }
 
 impl AgentInvocationTarget {
-    pub fn component_id(&self) -> &ComponentId {
+    pub fn component(&self) -> &ComponentDto {
         match self {
-            AgentInvocationTarget::Single { component_id, .. } => component_id,
-            AgentInvocationTarget::Pair(pair) => &pair.component_id,
+            AgentInvocationTarget::Single { component, .. } => component,
+            AgentInvocationTarget::Pair { component, .. } => component,
         }
     }
 
     pub fn agent_id(&self) -> &AgentId {
         match self {
             AgentInvocationTarget::Single { agent_id, .. } => agent_id,
-            AgentInvocationTarget::Pair(pair) => &pair.parent,
+            AgentInvocationTarget::Pair { pair, .. } => &pair.parent,
         }
     }
 
     pub fn prefix(&self, prefix: &str, routing_table: &RoutingTable) -> String {
         match self {
             AgentInvocationTarget::Single { .. } => prefix.to_string(),
-            AgentInvocationTarget::Pair(pair) => {
+            AgentInvocationTarget::Pair { pair, .. } => {
                 if pair.at_same_worker_executor(routing_table) {
                     format!("{prefix}local-")
                 } else {
@@ -413,8 +416,8 @@ impl AgentInvocationTarget {
 pub struct IterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     domain: Domain,
-    rust_agent_component_id: ComponentId,
-    ts_agent_component_id: ComponentId,
+    rust_agent_component: ComponentDto,
+    ts_agent_component: ComponentDto,
     rust_agent_ids: Vec<AgentId>,
     ts_agent_ids: Vec<AgentId>,
     rust_agent_ids_for_http: Vec<AgentId>,
@@ -575,8 +578,8 @@ impl ThroughputBenchmark {
         IterationContext {
             user,
             domain,
-            rust_agent_component_id: rust_agent_component.id,
-            ts_agent_component_id: ts_agent_component.id,
+            rust_agent_component,
+            ts_agent_component,
             rust_agent_ids,
             ts_agent_ids,
             rust_agent_ids_for_http,
@@ -591,7 +594,7 @@ impl ThroughputBenchmark {
     pub async fn warmup(&self, iteration: &IterationContext) {
         async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
-            component_id: &ComponentId,
+            component: &ComponentDto,
             ids: &[AgentId],
             method_name: &str,
             params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
@@ -603,7 +606,7 @@ impl ThroughputBenchmark {
                     let user_clone = user.clone();
                     invoke_and_await_agent(
                         &user_clone,
-                        component_id,
+                        component,
                         agent_id,
                         method_name,
                         (params)(length),
@@ -618,7 +621,7 @@ impl ThroughputBenchmark {
         info!("Warming up rust agents...");
         warmup_agents(
             &iteration.user,
-            &iteration.rust_agent_component_id,
+            &iteration.rust_agent_component,
             &iteration.rust_agent_ids,
             &self.method_name,
             &self.agent_params,
@@ -629,7 +632,7 @@ impl ThroughputBenchmark {
         info!("Warming up TS agents...");
         warmup_agents(
             &iteration.user,
-            &iteration.ts_agent_component_id,
+            &iteration.ts_agent_component,
             &iteration.ts_agent_ids,
             &self.method_name,
             &self.agent_params,
@@ -640,7 +643,7 @@ impl ThroughputBenchmark {
         info!("Warming up Rust agents for http mapping...");
         warmup_agents(
             &iteration.user,
-            &iteration.rust_agent_component_id,
+            &iteration.rust_agent_component,
             &iteration.rust_agent_ids_for_http,
             &self.method_name,
             &self.agent_params,
@@ -651,7 +654,7 @@ impl ThroughputBenchmark {
         info!("Warming up TS agents for http mapping...");
         warmup_agents(
             &iteration.user,
-            &iteration.ts_agent_component_id,
+            &iteration.ts_agent_component,
             &iteration.ts_agent_ids_for_http,
             &self.method_name,
             &self.agent_params,
@@ -662,11 +665,7 @@ impl ThroughputBenchmark {
         info!("Warming up TS RPC agents...");
         warmup_agents(
             &iteration.user,
-            iteration
-                .ts_rpc_agent_id_pairs
-                .first()
-                .map(|p| &p.component_id)
-                .unwrap_or(&iteration.ts_agent_component_id),
+            &iteration.ts_agent_component,
             &iteration
                 .ts_rpc_agent_id_pairs
                 .iter()
@@ -681,11 +680,7 @@ impl ThroughputBenchmark {
         info!("Warming up Rust RPC agents...");
         warmup_agents(
             &iteration.user,
-            iteration
-                .rust_rpc_agent_id_pairs
-                .first()
-                .map(|p| &p.component_id)
-                .unwrap_or(&iteration.rust_agent_component_id),
+            &iteration.rust_agent_component,
             &iteration
                 .rust_rpc_agent_id_pairs
                 .iter()
@@ -723,7 +718,7 @@ impl ThroughputBenchmark {
                             results.push(
                                 invoke_and_await_agent(
                                     &user_clone,
-                                    target.component_id(),
+                                    target.component(),
                                     target.agent_id(),
                                     method_name,
                                     (params)(length),
@@ -757,7 +752,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .cloned()
                 .map(|id| AgentInvocationTarget::Single {
-                    component_id: iteration.rust_agent_component_id,
+                    component: iteration.rust_agent_component.clone(),
                     agent_id: id,
                 })
                 .collect::<Vec<_>>(),
@@ -779,7 +774,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .cloned()
                 .map(|id| AgentInvocationTarget::Single {
-                    component_id: iteration.ts_agent_component_id,
+                    component: iteration.ts_agent_component.clone(),
                     agent_id: id,
                 })
                 .collect::<Vec<_>>(),
@@ -872,7 +867,10 @@ impl ThroughputBenchmark {
                 .ts_rpc_agent_id_pairs
                 .iter()
                 .cloned()
-                .map(AgentInvocationTarget::Pair)
+                .map(|pair| AgentInvocationTarget::Pair {
+                    component: iteration.ts_agent_component.clone(),
+                    pair,
+                })
                 .collect::<Vec<_>>(),
             &self.method_name,
             &self.agent_params,
@@ -891,7 +889,10 @@ impl ThroughputBenchmark {
                 .rust_rpc_agent_id_pairs
                 .iter()
                 .cloned()
-                .map(AgentInvocationTarget::Pair)
+                .map(|pair| AgentInvocationTarget::Pair {
+                    component: iteration.rust_agent_component.clone(),
+                    pair,
+                })
                 .collect::<Vec<_>>(),
             &self.method_name,
             &self.agent_params,
@@ -903,18 +904,18 @@ impl ThroughputBenchmark {
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(iteration.rust_agent_component_id, &iteration.rust_agent_ids),
+            &agent_ids_to_worker_ids(iteration.rust_agent_component.id, &iteration.rust_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(iteration.ts_agent_component_id, &iteration.ts_agent_ids),
+            &agent_ids_to_worker_ids(iteration.ts_agent_component.id, &iteration.ts_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
             &agent_ids_to_worker_ids(
-                iteration.rust_agent_component_id,
+                iteration.rust_agent_component.id,
                 &iteration.rust_agent_ids_for_http,
             ),
         )
@@ -922,7 +923,7 @@ impl ThroughputBenchmark {
         delete_workers(
             &iteration.user,
             &agent_ids_to_worker_ids(
-                iteration.ts_agent_component_id,
+                iteration.ts_agent_component.id,
                 &iteration.ts_agent_ids_for_http,
             ),
         )

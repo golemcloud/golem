@@ -1076,6 +1076,7 @@ pub mod worker {
         AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::worker::AgentUpdateMode;
+    use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -1117,6 +1118,9 @@ pub mod worker {
             stream_args: StreamArgs,
             #[command(flatten)]
             post_deploy_args: Option<PostDeployArgs>,
+            /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)
+            #[clap(long, requires = "trigger")]
+            schedule_at: Option<DateTime<Utc>>,
         },
         /// Get agent metadata
         Get {

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, Principal } from 'golem:agent/common';
+import { AgentType, Principal } from 'golem:agent/common@1.5.0';
 import { AgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
-import { Datetime } from 'golem:rpc/types@0.2.2';
-import { Uuid } from 'golem:agent/host';
+import { Datetime } from 'wasi:clocks/wall-clock@0.2.3';
+import { Uuid } from 'golem:agent/host@1.5.0';
 
 /**
  * BaseAgent is the foundational class for defining agent implementations.
