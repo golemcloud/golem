@@ -253,7 +253,7 @@ export class Repl {
       },
     });
 
-    replServer.defineCommand('agentTypeInfo', {
+    replServer.defineCommand('agent-type-info', {
       help: 'Show auto-imported agent client info',
       action: () => {
         this.showAutoImportClientInfo(replServer, true);
