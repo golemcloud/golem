@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use super::audit::DeletableRevisionAuditFields;
+use super::hash::SqlBlake3Hash;
 use crate::repo::model::datetime::SqlDateTime;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry;
+use golem_common::model::diff::{Hashable, McpDeployment as DiffMcpDeployment};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentId, McpDeploymentRevision};
@@ -40,6 +42,7 @@ error_forwarding!(McpDeploymentRepoError, RepoError);
 pub struct McpDeploymentRevisionRecord {
     pub mcp_deployment_id: Uuid,
     pub revision_id: i64,
+    pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub domain: String,
@@ -47,33 +50,72 @@ pub struct McpDeploymentRevisionRecord {
 
 impl McpDeploymentRevisionRecord {
     pub fn creation(mcp_deployment_id: McpDeploymentId, domain: Domain, actor: AccountId) -> Self {
-        Self {
+        let mut value = Self {
             mcp_deployment_id: mcp_deployment_id.0,
             revision_id: McpDeploymentRevision::INITIAL.into(),
+            hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
             domain: domain.0,
+        };
+        value.update_hash();
+        value
+    }
+
+    pub fn from_model(
+        deployment: McpDeployment,
+        audit: DeletableRevisionAuditFields,
+    ) -> Self {
+        let mut value = Self {
+            mcp_deployment_id: deployment.id.0,
+            revision_id: deployment.revision.into(),
+            hash: SqlBlake3Hash::empty(),
+            audit,
+            domain: deployment.domain.0,
+        };
+        value.update_hash();
+        value
+    }
+
+    pub fn deletion(
+        created_by: uuid::Uuid,
+        mcp_deployment_id: Uuid,
+        current_revision_id: i64,
+        domain: String,
+    ) -> Self {
+        let mut value = Self {
+            mcp_deployment_id,
+            revision_id: current_revision_id,
+            hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::deletion(created_by),
+            domain,
+        };
+        value.update_hash();
+        value
+    }
+
+    pub fn to_diffable(&self) -> DiffMcpDeployment {
+        DiffMcpDeployment {
+            agents: Default::default(),
         }
     }
 
-    pub fn from_model(deployment: McpDeployment) -> Self {
-        Self {
-            mcp_deployment_id: deployment.id.0,
-            revision_id: deployment.revision.into(),
-            audit: DeletableRevisionAuditFields::new(uuid::Uuid::nil()),
-            domain: deployment.domain.0,
-        }
+    pub fn update_hash(&mut self) {
+        self.hash = self.to_diffable().hash().into_blake3().into();
+    }
+
+    pub fn with_updated_hash(mut self) -> Self {
+        self.update_hash();
+        self
     }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct McpDeploymentExtRevisionRecord {
-    pub mcp_deployment_id: Uuid,
     pub environment_id: Uuid,
-    pub revision_id: i64,
-    #[sqlx(flatten)]
-    pub audit: DeletableRevisionAuditFields,
     pub domain: String,
-    pub created_at: SqlDateTime,
+    pub entity_created_at: SqlDateTime,
+    #[sqlx(flatten)]
+    pub revision: McpDeploymentRevisionRecord,
 }
 
 impl TryFrom<McpDeploymentExtRevisionRecord> for McpDeployment {
@@ -81,11 +123,13 @@ impl TryFrom<McpDeploymentExtRevisionRecord> for McpDeployment {
 
     fn try_from(value: McpDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
         Ok(McpDeployment {
-            id: McpDeploymentId(value.mcp_deployment_id),
-            revision: value.revision_id.try_into()?,
+            id: McpDeploymentId(value.revision.mcp_deployment_id),
+            revision: value.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
-            created_at: value.created_at.into(),
+            hash: value.revision.hash.into(),
+            agents: Default::default(),
+            created_at: value.entity_created_at.into(),
         })
     }
 }
@@ -95,6 +139,7 @@ pub struct McpDeploymentRevisionIdentityRecord {
     pub mcp_deployment_id: Uuid,
     pub domain: String,
     pub revision_id: i64,
+    pub hash: SqlBlake3Hash,
 }
 
 impl TryFrom<McpDeploymentRevisionIdentityRecord> for DeploymentPlanMcpDeploymentEntry {
@@ -104,6 +149,7 @@ impl TryFrom<McpDeploymentRevisionIdentityRecord> for DeploymentPlanMcpDeploymen
             id: McpDeploymentId(value.mcp_deployment_id),
             revision: value.revision_id.try_into()?,
             domain: Domain(value.domain),
+            hash: value.hash.into(),
         })
     }
 }

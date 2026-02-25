@@ -757,6 +757,7 @@ fn normalized_diff_deployment(
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
+        mcp_deployments: Default::default(),
     }
 }
 

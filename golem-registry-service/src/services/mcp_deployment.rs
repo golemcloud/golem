@@ -172,7 +172,10 @@ impl McpDeploymentService {
             mcp_deployment.domain = domain;
         };
 
-        let record = McpDeploymentRevisionRecord::from_model(mcp_deployment);
+        let record = McpDeploymentRevisionRecord::from_model(
+            mcp_deployment,
+            crate::repo::model::audit::DeletableRevisionAuditFields::new(auth.account_id().0),
+        );
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo

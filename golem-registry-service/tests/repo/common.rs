@@ -1164,6 +1164,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
     let revision_0 = McpDeploymentRevisionRecord {
         mcp_deployment_id: deployment_id,
         revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
         domain: domain.to_string(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -1180,7 +1181,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(fetched_deployment) = fetched_deployment);
-    assert!(fetched_deployment.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
     assert!(fetched_deployment.domain == revision_0.domain);
 
     let fetched_by_domain = deps
@@ -1189,7 +1190,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(fetched_by_domain) = fetched_by_domain);
-    assert!(fetched_by_domain.revision_id == revision_0.revision_id);
+    assert!(fetched_by_domain.revision.revision_id == revision_0.revision_id);
     assert!(fetched_by_domain.domain == revision_0.domain);
 
     // Update the deployment
@@ -1197,6 +1198,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
     let revision_1 = McpDeploymentRevisionRecord {
         mcp_deployment_id: deployment_id,
         revision_id: 1,
+        hash: SqlBlake3Hash::empty(),
         domain: new_domain.to_string(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -1207,7 +1209,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
 
-    assert!(updated_deployment.revision_id == revision_1.revision_id);
+    assert!(updated_deployment.revision.revision_id == revision_1.revision_id);
     assert!(updated_deployment.domain == revision_1.domain);
 
     // Old domain should no longer be found
@@ -1225,7 +1227,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(new_domain_query) = new_domain_query);
-    assert!(new_domain_query.revision_id == revision_1.revision_id);
+    assert!(new_domain_query.revision.revision_id == revision_1.revision_id);
     assert!(new_domain_query.domain == revision_1.domain);
 }
 
@@ -1239,6 +1241,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
     let revision_0 = McpDeploymentRevisionRecord {
         mcp_deployment_id: deployment_id,
         revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
         domain: domain.to_string(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -1261,6 +1264,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
     let revision_1 = McpDeploymentRevisionRecord {
         mcp_deployment_id: deployment_id,
         revision_id: 1,
+        hash: SqlBlake3Hash::empty(),
         domain: domain.to_string(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -1285,6 +1289,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
     let other_revision_0 = McpDeploymentRevisionRecord {
         mcp_deployment_id: other_deployment_id,
         revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
         domain: other_domain.to_string(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };

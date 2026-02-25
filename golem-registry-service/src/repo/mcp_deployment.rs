@@ -220,16 +220,19 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .await
                     .to_error_on_unique_violation(McpDeploymentRepoError::McpDeploymentViolatesUniqueness)?;
 
+                let revision = revision.with_updated_hash();
+                
                 let revision: McpDeploymentRevisionRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, domain, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, false)
-                            RETURNING mcp_deployment_id, revision_id, domain, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, false)
+                            RETURNING mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
+                        .bind(&revision.hash)
                         .bind(&revision.domain)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
@@ -237,12 +240,10 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .await?;
 
                 Ok(McpDeploymentExtRevisionRecord {
-                    mcp_deployment_id: revision.mcp_deployment_id,
                     environment_id,
-                    revision_id: revision.revision_id,
-                    audit: revision.audit.clone(),
-                    domain: revision.domain,
-                    created_at: revision.audit.created_at,
+                    domain: revision.domain.clone(),
+                    entity_created_at: revision.audit.created_at.clone(),
+                    revision,
                 })
             }
             .boxed()
@@ -256,16 +257,19 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
     ) -> Result<McpDeploymentExtRevisionRecord, McpDeploymentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
+                let revision = revision.with_updated_hash();
+                
                 let revision: McpDeploymentRevisionRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, domain, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, false)
-                            RETURNING mcp_deployment_id, revision_id, domain, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, false)
+                            RETURNING mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
+                        .bind(&revision.hash)
                         .bind(&revision.domain)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
@@ -287,12 +291,10 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .await?;
 
                 Ok(McpDeploymentExtRevisionRecord {
-                    mcp_deployment_id: revision.mcp_deployment_id,
                     environment_id: mcp_deployment.0,
-                    revision_id: revision.revision_id,
-                    audit: revision.audit.clone(),
-                    domain: revision.domain,
-                    created_at: revision.audit.created_at,
+                    domain: revision.domain.clone(),
+                    entity_created_at: revision.audit.created_at.clone(),
+                    revision,
                 })
             }
             .boxed()
@@ -382,11 +384,12 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         m.mcp_deployment_id,
                         m.environment_id,
                         mr.revision_id,
+                        mr.hash,
                         mr.created_at,
                         mr.created_by,
                         mr.deleted,
                         mr.domain,
-                        m.created_at
+                        m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
@@ -410,11 +413,12 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         m.mcp_deployment_id,
                         m.environment_id,
                         mr.revision_id,
+                        mr.hash,
                         mr.created_at,
                         mr.created_by,
                         mr.deleted,
                         mr.domain,
-                        m.created_at
+                        m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
@@ -438,11 +442,12 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         m.mcp_deployment_id,
                         m.environment_id,
                         mr.revision_id,
+                        mr.hash,
                         mr.created_at,
                         mr.created_by,
                         mr.deleted,
                         mr.domain,
-                        m.created_at
+                        m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id

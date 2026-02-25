@@ -17,7 +17,7 @@ use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{
-    DeployedMcpError, DeployedMcpService, DeployedRoutesError, DeploymentError,
+    DeployedMcpError, DeployedRoutesError, DeploymentError,
 };
 use crate::services::environment::EnvironmentError;
 use golem_common::IntoAnyhow;

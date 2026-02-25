@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::agent::AgentTypeName;
+use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
+use std::collections::BTreeMap;
 
 newtype_uuid!(McpDeploymentId);
 
@@ -36,6 +39,20 @@ declare_structs! {
         pub revision: McpDeploymentRevision,
         pub environment_id: EnvironmentId,
         pub domain: Domain,
+        pub hash: diff::Hash,
+        pub agents: BTreeMap<AgentTypeName, crate::model::diff::McpDeploymentAgentOptions>,
         pub created_at: DateTime<chrono::Utc>,
+    }
+}
+
+impl McpDeployment {
+    pub fn to_diffable(&self) -> crate::model::diff::McpDeployment {
+        crate::model::diff::McpDeployment {
+            agents: self
+                .agents
+                .iter()
+                .map(|(k, v)| (k.0.clone(), v.clone()))
+                .collect(),
+        }
     }
 }

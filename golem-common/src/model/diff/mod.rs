@@ -17,6 +17,7 @@ mod deployment;
 mod environment;
 mod hash;
 mod http_api_deployment;
+mod mcp_deployment;
 mod plugin;
 mod ser;
 
@@ -25,6 +26,7 @@ pub use deployment::*;
 pub use environment::*;
 pub use hash::*;
 pub use http_api_deployment::*;
+pub use mcp_deployment::*;
 pub use plugin::*;
 pub use ser::*;
 

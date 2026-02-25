@@ -987,6 +987,8 @@ impl AppCommandHandler {
         let diffable_local_deployment = diff::Deployment {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
+            mcp_deployments: Default::default(),
+
         };
 
         let local_deployment_hash = diffable_local_deployment.hash();
@@ -1475,41 +1477,43 @@ impl AppCommandHandler {
             }
         }
 
-        // TODO: remove this temporary test from CLI
-        {
-            use golem_client::api::{ApiDomainClient, McpDeploymentClient};
-            use golem_client::model::DomainRegistrationCreation;
+        use golem_client::api::{ApiDomainClient, McpDeploymentClient};
+        use golem_client::model::DomainRegistrationCreation;
 
-            let hardcoded_mcp_domain =
-                Domain("collect-featuring-springer-holes.trycloudflare.com".to_string());
-            let clients = self.ctx.golem_clients().await?;
+        let hardcoded_mcp_domain =
+            Domain("replaced-donate-converter-heights.trycloudflare.com".to_string());
+        let clients = self.ctx.golem_clients().await?;
 
-            if let Err(e) = clients
-                .api_domain
-                .create_domain_registration(
-                    &deploy_diff.environment.environment_id.0,
-                    &DomainRegistrationCreation {
-                        domain: hardcoded_mcp_domain.clone(),
-                    },
-                )
-                .await
-            {
-                tracing::warn!("Failed to register domain for smoke test: {:?}", e);
-            }
+        let result = clients
+            .api_domain
+            .create_domain_registration(
+                &deploy_diff.environment.environment_id.0,
+                &DomainRegistrationCreation {
+                    domain: hardcoded_mcp_domain.clone(),
+                },
+            )
+            .await;
 
-            let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
-                domain: hardcoded_mcp_domain,
-            };
-
-            if let Ok(_) = clients
-                .mcp_deployment
-                .create_mcp_deployment(&deploy_diff.environment.environment_id.0, &mcp_creation)
-                .await
-            {
-                log_action("Created", "MCP deployment (smoke test)");
-            }
+        if let Err(e) = result {
+            tracing::warn!("Failed to create domain registration for smoke test: {:#?}", e);
+        } else {
+            log_action("Created", "domain registration (smoke test)");
         }
 
+        let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
+            domain: hardcoded_mcp_domain,
+        };
+
+        let result = clients
+            .mcp_deployment
+            .create_mcp_deployment(&deploy_diff.environment.environment_id.0, &mcp_creation)
+            .await;
+
+        match result {
+            Ok(_) => log_action("Created", "MCP deployment (smoke test)"),
+            Err(e) => tracing::warn!("Failed to create MCP deployment for smoke test: {:#?}", e),
+        }
+        
         Ok(())
     }
 

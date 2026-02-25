@@ -107,5 +107,6 @@ declare_structs! {
         pub id: McpDeploymentId,
         pub revision: McpDeploymentRevision,
         pub domain: Domain,
+        pub hash: Hash,
     }
 }

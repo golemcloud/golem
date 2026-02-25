@@ -1300,7 +1300,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
-                    SELECT d.mcp_deployment_id, d.domain, dr.revision_id
+                    SELECT d.mcp_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM mcp_deployments d
                     JOIN mcp_deployment_revisions dr
                         ON d.mcp_deployment_id = dr.mcp_deployment_id
@@ -1552,7 +1552,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         let deployments: Vec<McpDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_mcp_deployments - deployments")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT md.mcp_deployment_id, md.domain, mdr.revision_id
+                    SELECT md.mcp_deployment_id, md.domain, mdr.revision_id, mdr.hash
                     FROM mcp_deployments md
                     JOIN mcp_deployment_revisions mdr ON md.mcp_deployment_id = mdr.mcp_deployment_id
                     JOIN deployment_mcp_deployment_revisions dmdr

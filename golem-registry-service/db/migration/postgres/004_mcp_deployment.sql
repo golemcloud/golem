@@ -25,6 +25,8 @@ CREATE TABLE mcp_deployment_revisions
     mcp_deployment_id UUID      NOT NULL,
     revision_id       BIGINT    NOT NULL,
 
+    hash              BYTEA     NOT NULL,
+
     created_at        TIMESTAMP NOT NULL,
     created_by        UUID      NOT NULL,
     deleted           BOOLEAN   NOT NULL,

@@ -89,6 +89,7 @@ impl DeploymentContext {
                 .iter()
                 .map(|(k, v)| (k.0.clone(), HashOf::from_hash(v.hash)))
                 .collect(),
+            mcp_deployments: Default::default(),
         };
         diffable.hash()
     }

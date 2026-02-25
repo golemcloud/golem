@@ -21,7 +21,6 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use anyhow::anyhow;
 use desert_rust::BinaryCodec;
-use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
@@ -259,6 +258,7 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
+            mcp_deployments: Default::default(),
         }
     }
 }
