@@ -510,11 +510,18 @@ impl DataValue {
     ///
     /// Note that this conversion does not support unstructured binary/text and multimodal return values
     pub fn into_return_value(self) -> Option<Value> {
+        self.into_return_value_and_type().map(|vat| vat.value)
+    }
+
+    /// Returns the DataValue as a single ComponentModel ValueAndType if possible
+    ///
+    /// Note that this conversion does not support unstructured binary/text and multimodal return values
+    pub fn into_return_value_and_type(self) -> Option<ValueAndType> {
         match self {
             DataValue::Tuple(mut elements) if elements.elements.len() == 1 => {
                 match elements.elements.remove(0) {
                     ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
-                        Some(value.value)
+                        Some(value)
                     }
                     _ => None,
                 }

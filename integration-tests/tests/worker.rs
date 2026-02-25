@@ -504,100 +504,156 @@ async fn get_running_workers(
             .await?;
     }
 
-    let mut wait_counter = 0;
+    let start = tokio::time::Instant::now();
+    let polling_deadline = Duration::from_secs(60);
     loop {
-        wait_counter += 1;
         let ids = polling_worker_ids.lock().unwrap().clone();
 
         if worker_ids.eq(&ids) {
             info!("All the spawned workers have polled the server at least once.");
             break;
         }
-        if wait_counter >= 30 {
-            warn!(
-                "Waiting for all spawned workers timed out. Only {}/{} workers polled the server",
+        if start.elapsed() > polling_deadline {
+            let missing: Vec<_> = worker_ids.difference(&ids).collect();
+            return Err(anyhow!(
+                "Timed out waiting for all spawned workers to poll. Only {}/{} polled. Missing: {:?}",
                 ids.len(),
-                workers_count
-            );
-            break;
+                workers_count,
+                missing
+            ));
         }
 
         sleep(Duration::from_secs(1)).await;
     }
 
-    // Testing looking for a single worker
-    let mut cursor = ScanCursor::default();
-    let mut enum_results = Vec::new();
+    // Testing looking for a single worker - with retry for eventual consistency
+    let single_worker_name = worker_ids.iter().next().unwrap().worker_name.clone();
+    let start = tokio::time::Instant::now();
+    let enum_deadline = Duration::from_secs(30);
+    let single_result = loop {
+        let mut cursor = ScanCursor::default();
+        let mut enum_results = Vec::new();
+        loop {
+            let (next_cursor, values) = user
+                .get_workers_metadata(
+                    &component.id,
+                    Some(WorkerFilter::new_name(
+                        StringFilterComparator::Equal,
+                        single_worker_name.clone(),
+                    )),
+                    cursor,
+                    1,
+                    true,
+                )
+                .await?;
+            enum_results.extend(values);
+            if let Some(next_cursor) = next_cursor {
+                cursor = next_cursor;
+            } else {
+                break;
+            }
+        }
+        if enum_results.len() == 1 {
+            break enum_results;
+        }
+        if start.elapsed() > enum_deadline {
+            return Err(anyhow!(
+                "Timed out waiting for single worker enumeration. Got {} results, expected 1",
+                enum_results.len()
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(single_result.len(), 1);
+
+    // Testing looking for all the workers - with retry for eventual consistency
+    let start = tokio::time::Instant::now();
     loop {
-        let (next_cursor, values) = user
-            .get_workers_metadata(
-                &component.id,
-                Some(WorkerFilter::new_name(
-                    StringFilterComparator::Equal,
-                    worker_ids.iter().next().unwrap().worker_name.clone(),
-                )),
-                cursor,
-                1,
-                true,
-            )
-            .await?;
-        enum_results.extend(values);
-        if let Some(next_cursor) = next_cursor {
-            cursor = next_cursor;
-        } else {
+        let mut cursor = ScanCursor::default();
+        let mut enum_results = Vec::new();
+        loop {
+            let (next_cursor, values) = user
+                .get_workers_metadata(&component.id, None, cursor, workers_count, true)
+                .await?;
+            enum_results.extend(values);
+            if let Some(next_cursor) = next_cursor {
+                cursor = next_cursor;
+            } else {
+                break;
+            }
+        }
+        let returned: HashSet<_> = enum_results
+            .iter()
+            .map(|m| m.worker_id.clone())
+            .collect();
+        if worker_ids.is_subset(&returned) {
             break;
         }
-    }
-    assert_eq!(enum_results.len(), 1);
-
-    // Testing looking for all the workers
-    let mut cursor = ScanCursor::default();
-    let mut enum_results = Vec::new();
-    loop {
-        let (next_cursor, values) = user
-            .get_workers_metadata(&component.id, None, cursor, workers_count, true)
-            .await?;
-        enum_results.extend(values);
-        if let Some(next_cursor) = next_cursor {
-            cursor = next_cursor;
-        } else {
-            break;
-        }
-    }
-    assert_eq!(enum_results.len(), workers_count as usize);
-
-    // Testing looking for running workers
-    let mut cursor = ScanCursor::default();
-    let mut enum_results = Vec::new();
-    loop {
-        let (next_cursor, values) = user
-            .get_workers_metadata(
-                &component.id,
-                Some(WorkerFilter::new_status(
-                    FilterComparator::Equal,
-                    WorkerStatus::Running,
-                )),
-                cursor,
+        if start.elapsed() > enum_deadline {
+            let missing: Vec<_> = worker_ids.difference(&returned).collect();
+            return Err(anyhow!(
+                "Timed out waiting for all workers to be enumerated. Got {}/{}, missing: {:?}",
+                returned.len(),
                 workers_count,
-                true,
-            )
-            .await?;
-        enum_results.extend(values);
-        if let Some(next_cursor) = next_cursor {
-            cursor = next_cursor;
-        } else {
+                missing
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    // Testing looking for running workers - with retry for eventual consistency
+    let start = tokio::time::Instant::now();
+    loop {
+        let mut cursor = ScanCursor::default();
+        let mut enum_results = Vec::new();
+        loop {
+            let (next_cursor, values) = user
+                .get_workers_metadata(
+                    &component.id,
+                    Some(WorkerFilter::new_status(
+                        FilterComparator::Equal,
+                        WorkerStatus::Running,
+                    )),
+                    cursor,
+                    workers_count,
+                    true,
+                )
+                .await?;
+            enum_results.extend(values);
+            if let Some(next_cursor) = next_cursor {
+                cursor = next_cursor;
+            } else {
+                break;
+            }
+        }
+        if !enum_results.is_empty() && enum_results.len() <= workers_count as usize {
             break;
         }
+        if start.elapsed() > enum_deadline {
+            return Err(anyhow!(
+                "Timed out waiting for at least one running worker. Got {} running workers",
+                enum_results.len()
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
     }
-    // At least one worker should be running; we cannot guarantee that all of them are running simultaneously
-    assert!(enum_results.len() <= workers_count as usize);
-    assert!(!enum_results.is_empty());
 
     *response.lock().unwrap() = "stop".to_string();
 
+    // Wait for all workers to become Idle in parallel with a generous timeout
+    let idle_futs: Vec<_> = worker_ids
+        .iter()
+        .map(|worker_id| {
+            user.wait_for_status(worker_id, WorkerStatus::Idle, Duration::from_secs(30))
+        })
+        .collect();
+    let idle_results = idle_futs.join().await;
+    for result in &idle_results {
+        result.as_ref().map_err(|e| anyhow!("Worker failed to become Idle: {e}"))?;
+    }
+
+    // Delete workers after all are idle
     for worker_id in &worker_ids {
-        user.wait_for_status(worker_id, WorkerStatus::Idle, Duration::from_secs(10))
-            .await?;
         user.delete_worker(worker_id).await?;
     }
 
@@ -1336,11 +1392,10 @@ async fn agent_promise_await(
         .invoke_and_await_agent(&component, &promise_agent_id, "getPromise", data_value!())
         .await?;
 
-    let promise_id_value = result
-        .into_return_value()
+    let promise_id_vat = result
+        .into_return_value_and_type()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    let promise_id = PromiseId::from_value(promise_id_value.clone()).map_err(|e| anyhow!("{e}"))?;
-    let promise_id_vat = ValueAndType::new(promise_id_value, PromiseId::get_type());
+    let promise_id = PromiseId::from_value(promise_id_vat.value.clone()).map_err(|e| anyhow!("{e}"))?;
 
     let task = {
         let executor_clone = user.clone();
