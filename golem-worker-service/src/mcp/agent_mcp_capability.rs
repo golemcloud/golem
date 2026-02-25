@@ -20,6 +20,7 @@ use golem_common::base_model::component::ComponentId;
 use rmcp::model::Tool;
 use std::borrow::Cow;
 use std::sync::Arc;
+use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::AgentConstructor;
 
 #[derive(Clone)]
@@ -30,7 +31,7 @@ pub enum McpAgentCapability {
 }
 
 impl McpAgentCapability {
-    pub fn from(agent_type_name: &AgentTypeName, method: &AgentMethod, constructor: &AgentConstructor, component_id: ComponentId) -> Self {
+    pub fn from(account_id: &AccountId, agent_type_name: &AgentTypeName, method: &AgentMethod, constructor: &AgentConstructor, component_id: ComponentId) -> Self {
         match &method.input_schema {
             DataSchema::Tuple(schemas) => {
                 if schemas.elements.len() > 0 {
@@ -56,6 +57,7 @@ impl McpAgentCapability {
                     };
 
                     Self::Tool(AgentMcpTool {
+                        account_id: account_id.clone(),
                         constructor: constructor.clone(),
                         raw_method: method.clone(),
                         raw_tool: tool,

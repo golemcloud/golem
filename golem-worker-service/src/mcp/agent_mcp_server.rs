@@ -31,6 +31,7 @@ use rmcp::{
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
+use golem_common::base_model::account::AccountId;
 use crate::service::worker::WorkerService;
 
 // Every client will get an instance of this
@@ -62,7 +63,7 @@ impl GolemAgentMcpServer {
         }
     }
 
-    pub async fn invoke(&self, args_map: JsonObject, mcp_tool: &AgentMcpTool) -> Result<CallToolResult, ErrorData> {
+    pub async fn invoke(&self, account_id: &AccountId, args_map: JsonObject, mcp_tool: &AgentMcpTool) -> Result<CallToolResult, ErrorData> {
         let constructor_params = extract_parameters_by_schema(
             &args_map,
             &mcp_tool.constructor.input_schema,
@@ -103,7 +104,7 @@ impl GolemAgentMcpServer {
                 mcp_tool.raw_method.name.clone(),
                 method_params,
                 None,
-                golem_service_base::model::auth::AuthCtx::system(),
+                golem_service_base::model::auth::AuthCtx::impersonated_user(account_id.clone()),
             )
             .await
             .map_err(|e| {
@@ -188,6 +189,8 @@ pub async fn get_agent_tool_and_handlers(
     };
 
     let mut tools = vec![];
+    
+    let account_id = compiled_mcp.account_id;
 
     for agent_type_name in compiled_mcp.agent_types() {
         match mcp_definition_lookup
@@ -199,7 +202,7 @@ pub async fn get_agent_tool_and_handlers(
                 let component_id = registered_agent_type.implemented_by.component_id;
                 for method in &agent_type.methods {
                     let agent_method_mcp =
-                        McpAgentCapability::from(&agent_type.type_name, method, &agent_type.constructor, component_id);
+                        McpAgentCapability::from(&account_id, &agent_type.type_name, method, &agent_type.constructor, component_id);
 
                     match agent_method_mcp {
                         McpAgentCapability::Tool(agent_mcp_tool) => {

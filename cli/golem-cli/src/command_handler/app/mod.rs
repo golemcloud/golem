@@ -1486,7 +1486,7 @@ impl AppCommandHandler {
             use golem_client::model::DomainRegistrationCreation;
 
             let hardcoded_mcp_domain =
-                Domain("solomon-socket-compute-pattern.trycloudflare.com".to_string());
+                Domain("collectables-explosion-calculated-coffee.trycloudflare.com".to_string());
             let clients = self.ctx.golem_clients().await?;
 
             if let Err(e) = clients
