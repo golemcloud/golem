@@ -18,6 +18,7 @@ use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
+use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use anyhow::anyhow;
 use desert_rust::BinaryCodec;
 use golem_common::base_model::agent::AgentTypeName;
@@ -33,6 +34,7 @@ use golem_common::model::deployment::{
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
@@ -172,6 +174,30 @@ impl DeploymentHttpApiDeploymentRevisionRecord {
     }
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct DeploymentMcpDeploymentRevisionRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub mcp_deployment_id: Uuid,
+    pub mcp_deployment_revision_id: i64,
+}
+
+impl DeploymentMcpDeploymentRevisionRecord {
+    pub fn from_model(
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        mcp_deployment_id: Uuid,
+        mcp_deployment_revision_id: i64,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            mcp_deployment_id,
+            mcp_deployment_revision_id,
+        }
+    }
+}
+
 pub struct DeploymentHashes {
     pub env_hash: SqlBlake3Hash,
     pub deployment_hash: SqlBlake3Hash,
@@ -180,6 +206,7 @@ pub struct DeploymentHashes {
 pub struct DeploymentIdentity {
     pub components: Vec<ComponentRevisionIdentityRecord>,
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
+    pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
 }
 
 impl DeploymentIdentity {
@@ -199,6 +226,11 @@ impl DeploymentIdentity {
                 .http_api_deployments
                 .into_iter()
                 .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            mcp_deployments: self
+                .mcp_deployments
+                .into_iter()
+                .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -253,6 +285,12 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .http_api_deployments
                 .into_iter()
                 .map(|had| had.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            mcp_deployments: value
+                .identity
+                .mcp_deployments
+                .into_iter()
+                .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -347,6 +385,7 @@ pub struct DeploymentRevisionCreationRecord {
 
     pub components: Vec<DeploymentComponentRevisionRecord>,
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
+    pub mcp_deployments: Vec<DeploymentMcpDeploymentRevisionRecord>,
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
     pub compiled_mcp: DeploymentMcpCapabilityRecord,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
@@ -360,6 +399,7 @@ impl DeploymentRevisionCreationRecord {
         hash: diff::Hash,
         components: Vec<Component>,
         http_api_deployments: Vec<HttpApiDeployment>,
+        mcp_deployments: Vec<McpDeployment>,
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: CompiledMcp,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
@@ -386,6 +426,17 @@ impl DeploymentRevisionCreationRecord {
                         environment_id,
                         deployment_revision,
                         had,
+                    )
+                })
+                .collect(),
+            mcp_deployments: mcp_deployments
+                .into_iter()
+                .map(|mcd| {
+                    DeploymentMcpDeploymentRevisionRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        mcd.id.0,
+                        mcd.revision.into(),
                     )
                 })
                 .collect(),

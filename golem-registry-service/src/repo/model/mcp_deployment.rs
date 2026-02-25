@@ -16,6 +16,7 @@ use super::audit::DeletableRevisionAuditFields;
 use crate::repo::model::datetime::SqlDateTime;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentId, McpDeploymentRevision};
@@ -85,6 +86,24 @@ impl TryFrom<McpDeploymentExtRevisionRecord> for McpDeployment {
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             created_at: value.created_at.into(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct McpDeploymentRevisionIdentityRecord {
+    pub mcp_deployment_id: Uuid,
+    pub domain: String,
+    pub revision_id: i64,
+}
+
+impl TryFrom<McpDeploymentRevisionIdentityRecord> for DeploymentPlanMcpDeploymentEntry {
+    type Error = RepoError;
+    fn try_from(value: McpDeploymentRevisionIdentityRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: McpDeploymentId(value.mcp_deployment_id),
+            revision: value.revision_id.try_into()?,
+            domain: Domain(value.domain),
         })
     }
 }

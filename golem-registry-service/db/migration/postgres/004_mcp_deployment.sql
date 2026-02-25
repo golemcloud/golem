@@ -40,8 +40,6 @@ CREATE TABLE mcp_deployment_revisions
 CREATE INDEX mcp_deployment_revisions_latest_revision_by_id_idx
     ON mcp_deployment_revisions (mcp_deployment_id, revision_id DESC);
 
-// deployment_mcp_deployment
-
 CREATE TABLE deployment_compiled_mcp
 (
     account_id                UUID   NOT NULL,
@@ -58,3 +56,22 @@ CREATE TABLE deployment_compiled_mcp
 
 CREATE INDEX deployment_compiled_mcp_domain_idx
     ON deployment_compiled_mcp (domain);
+
+CREATE TABLE deployment_mcp_deployment_revisions
+(
+    environment_id              UUID   NOT NULL,
+    deployment_revision_id      BIGINT NOT NULL,
+    mcp_deployment_id           UUID   NOT NULL,
+    mcp_deployment_revision_id  BIGINT NOT NULL,
+    CONSTRAINT deployment_mcp_deployment_revisions_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, mcp_deployment_id),
+    CONSTRAINT deployment_mcp_deployment_revisions_deployment_fk
+        FOREIGN KEY (environment_id, deployment_revision_id)
+            REFERENCES deployment_revisions (environment_id, revision_id),
+    CONSTRAINT deployment_mcp_deployment_revisions_mcp_fk
+        FOREIGN KEY (mcp_deployment_id, mcp_deployment_revision_id)
+            REFERENCES mcp_deployment_revisions (mcp_deployment_id, revision_id)
+);
+
+CREATE INDEX deployment_mcp_deployment_revisions_mcp_idx
+    ON deployment_mcp_deployment_revisions (mcp_deployment_id, mcp_deployment_revision_id);

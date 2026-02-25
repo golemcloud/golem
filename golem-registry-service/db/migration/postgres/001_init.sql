@@ -379,7 +379,6 @@ CREATE TABLE current_deployments
 CREATE INDEX current_deployments_environment_current_revision_idx
     ON current_deployments (environment_id, current_revision_id);
 
-// deployment_mcp_deployment_revision
 CREATE TABLE deployment_component_revisions
 (
     environment_id         UUID   NOT NULL,

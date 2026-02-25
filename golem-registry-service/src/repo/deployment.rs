@@ -19,7 +19,8 @@ use super::model::deployment::{
 };
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
-    DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
+    DeploymentHttpApiDeploymentRevisionRecord, DeploymentMcpDeploymentRevisionRecord,
+    DeploymentRegisteredAgentTypeRecord,
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -29,6 +30,7 @@ use crate::repo::model::deployment::{
 };
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
+use crate::repo::model::mcp_deployment::McpDeploymentRevisionIdentityRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -640,6 +642,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 http_api_deployments: self
                     .get_deployed_http_api_deployments(environment_id, revision_id)
                     .await?,
+                mcp_deployments: self
+                    .get_deployed_mcp_deployments(environment_id, revision_id)
+                    .await?,
             },
         }))
     }
@@ -690,6 +695,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                 for deployment in &deployment_creation.http_api_deployments {
                     Self::create_deployment_http_api_deployment_revision(tx, deployment).await?
+                }
+
+                for deployment in &deployment_creation.mcp_deployments {
+                    Self::create_deployment_mcp_deployment_revision(tx, deployment).await?
                 }
 
                 for compiled_route in &deployment_creation.compiled_routes {
@@ -1134,6 +1143,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
+    async fn get_staged_mcp_deployments(
+        tx: &mut Self::Tx,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>>;
+
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
         environment_id: Uuid,
@@ -1144,6 +1158,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn create_deployment_http_api_deployment_revision(
         tx: &mut Self::Tx,
         http_api_deployment: &DeploymentHttpApiDeploymentRevisionRecord,
+    ) -> RepoResult<()>;
+
+    async fn create_deployment_mcp_deployment_revision(
+        tx: &mut Self::Tx,
+        mcp_deployment: &DeploymentMcpDeploymentRevisionRecord,
     ) -> RepoResult<()>;
 
     async fn create_deployment_compiled_route(
@@ -1179,6 +1198,12 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
+
+    async fn get_deployed_mcp_deployments(
+        &self,
+        environment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>>;
 
     async fn version_exists(&self, environment_id: Uuid, version: &str) -> RepoResult<bool>;
 }
@@ -1229,6 +1254,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         Ok(DeploymentIdentity {
             components: Self::get_staged_components(tx, environment_id).await?,
             http_api_deployments: Self::get_staged_http_api_deployments(tx, environment_id).await?,
+            mcp_deployments: Self::get_staged_mcp_deployments(tx, environment_id).await?,
         })
     }
 
@@ -1260,6 +1286,24 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     FROM http_api_deployments d
                     JOIN http_api_deployment_revisions dr
                         ON d.http_api_deployment_id = dr.http_api_deployment_id
+                        AND d.current_revision_id = dr.revision_id
+                    WHERE d.environment_id = $1 AND d.deleted_at IS NULL
+                "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_staged_mcp_deployments(
+        tx: &mut Self::Tx,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
+        tx.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                    SELECT d.mcp_deployment_id, d.domain, dr.revision_id
+                    FROM mcp_deployments d
+                    JOIN mcp_deployment_revisions dr
+                        ON d.mcp_deployment_id = dr.mcp_deployment_id
                         AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
                 "#})
@@ -1303,6 +1347,26 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(http_api_deployment.deployment_revision_id)
                 .bind(http_api_deployment.http_api_deployment_id)
                 .bind(http_api_deployment.http_api_deployment_revision_id)
+        )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_mcp_deployment_revision(
+        tx: &mut Self::Tx,
+        mcp_deployment: &DeploymentMcpDeploymentRevisionRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_mcp_deployment_revisions
+                    (environment_id, deployment_revision_id, mcp_deployment_id, mcp_deployment_revision_id)
+                VALUES ($1, $2, $3, $4)
+            "#})
+                .bind(mcp_deployment.environment_id)
+                .bind(mcp_deployment.deployment_revision_id)
+                .bind(mcp_deployment.mcp_deployment_id)
+                .bind(mcp_deployment.mcp_deployment_revision_id)
         )
             .await?;
 
@@ -1471,6 +1535,31 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                             AND dhadr.http_api_deployment_revision_id = hadr.revision_id
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
                     ORDER BY had.domain
+                "#})
+                    .bind(environment_id)
+                    .bind(revision_id),
+            )
+            .await?;
+
+        Ok(deployments)
+    }
+
+    async fn get_deployed_mcp_deployments(
+        &self,
+        environment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
+        let deployments: Vec<McpDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_mcp_deployments - deployments")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT md.mcp_deployment_id, md.domain, mdr.revision_id
+                    FROM mcp_deployments md
+                    JOIN mcp_deployment_revisions mdr ON md.mcp_deployment_id = mdr.mcp_deployment_id
+                    JOIN deployment_mcp_deployment_revisions dmdr
+                        ON dmdr.mcp_deployment_id = mdr.mcp_deployment_id
+                            AND dmdr.mcp_deployment_revision_id = mdr.revision_id
+                    WHERE dmdr.environment_id = $1 AND dmdr.deployment_revision_id = $2
+                    ORDER BY md.domain
                 "#})
                     .bind(environment_id)
                     .bind(revision_id),

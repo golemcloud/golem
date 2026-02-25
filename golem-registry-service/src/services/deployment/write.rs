@@ -352,6 +352,7 @@ impl DeploymentWriteService {
                 .http_api_deployments
                 .into_values()
                 .collect(),
+            mcp_deployments.clone(),
             compiled_routes,
             compiled_mcp,
             registered_agent_types
