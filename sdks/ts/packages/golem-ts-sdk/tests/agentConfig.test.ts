@@ -13,14 +13,9 @@
 // limitations under the License.
 
 import { describe, it } from 'vitest';
-import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentClassName, AgentDecoratorOptions } from '../src';
-import { parseQuery } from '../src/internal/http/query';
-import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
-import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import { tuple } from 'fast-check';
 
 describe('agent config handling', () => {
   it('correctly describes a complex config type', () => {

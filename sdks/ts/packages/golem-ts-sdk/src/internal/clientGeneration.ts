@@ -431,7 +431,7 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
           'Internal error: Value of `Principal` should not be serialized at any point during RPC call',
         );
       case 'config':
-        return Either.left(
+        throw new Error(
           'Internal error: Value of `Config` should not be serialized at any point during RPC call',
         );
       case 'multimodal': {

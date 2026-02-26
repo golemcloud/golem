@@ -42,7 +42,7 @@ import * as Value from '../values/Value';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config, Secret } from '../../..';
 import { Type } from '@golemcloud/golem-ts-types-core';
-import { getConfigValue } from 'golem:agent/host';
+import { getConfigValue } from 'golem:agent/host@1.5.0';
 
 export type ParameterDetail = {
   name: string;
