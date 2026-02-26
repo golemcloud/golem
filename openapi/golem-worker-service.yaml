@@ -1757,6 +1757,8 @@ components:
         deploymentRevision:
           type: integer
           format: int64
+        ownerAccountEmail:
+          type: string
     AgentInvocationResult:
       type: object
       title: AgentInvocationResult

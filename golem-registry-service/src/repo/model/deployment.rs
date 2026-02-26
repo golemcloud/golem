@@ -334,6 +334,34 @@ impl TryFrom<DeploymentRegisteredAgentTypeRecord> for DeployedRegisteredAgentTyp
     }
 }
 
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct ResolvedAgentTypeRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+    pub agent_wrapper_type_name: String,
+    pub component_id: Uuid,
+    pub component_revision_id: i64,
+    pub webhook_prefix_authority_and_path: Option<String>,
+    pub agent_type: Blob<AgentType>,
+    pub owner_account_id: Uuid,
+    pub environment_roles_from_shares: i32,
+}
+
+impl TryFrom<ResolvedAgentTypeRecord> for DeployedRegisteredAgentType {
+    type Error = DeployRepoError;
+    fn try_from(value: ResolvedAgentTypeRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_type: value.agent_type.into_value(),
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: value.component_id.into(),
+                component_revision: value.component_revision_id.try_into()?,
+            },
+            webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
+        })
+    }
+}
+
 pub struct DeploymentRevisionCreationRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,

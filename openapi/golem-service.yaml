@@ -7815,6 +7815,8 @@ components:
         deploymentRevision:
           type: integer
           format: int64
+        ownerAccountEmail:
+          type: string
       required:
       - appName
       - envName
