@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::domain_registration::{DomainRegistrationError, DomainRegistrationService};
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::mcp_deployment::McpDeploymentRepo;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
@@ -36,6 +37,8 @@ pub enum McpDeploymentError {
     McpDeploymentByDomainNotFound(Domain),
     #[error("MCP deployment for domain {0} already exists in this environment")]
     McpDeploymentForDomainAlreadyExists(Domain),
+    #[error("Domain {0} is not registered")]
+    DomainNotRegistered(Domain),
     #[error("Concurrent update attempt")]
     ConcurrentUpdate,
     #[error(transparent)]
@@ -51,6 +54,7 @@ impl SafeDisplay for McpDeploymentError {
             Self::McpDeploymentByDomainNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::McpDeploymentForDomainAlreadyExists(_) => self.to_string(),
+            Self::DomainNotRegistered(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -63,21 +67,25 @@ error_forwarding!(
     McpDeploymentRepoError,
     RepoError,
     EnvironmentError,
+    DomainRegistrationError,
 );
 
 pub struct McpDeploymentService {
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
     environment_service: Arc<EnvironmentService>,
+    domain_registration_service: Arc<DomainRegistrationService>,
 }
 
 impl McpDeploymentService {
     pub fn new(
         mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
         environment_service: Arc<EnvironmentService>,
+        domain_registration_service: Arc<DomainRegistrationService>,
     ) -> Self {
         Self {
             mcp_deployment_repo,
             environment_service,
+            domain_registration_service,
         }
     }
 
@@ -104,9 +112,19 @@ impl McpDeploymentService {
             EnvironmentAction::CreateHttpApiDeployment,
         )?;
 
+        self.domain_registration_service
+            .get_in_environment(&environment, &data.domain, auth)
+            .await
+            .map_err(|err| match err {
+                DomainRegistrationError::DomainRegistrationByDomainNotFound(domain) => {
+                    McpDeploymentError::DomainNotRegistered(domain)
+                }
+                other => other.into(),
+            })?;
+
         let id = McpDeploymentId::new();
         let record =
-            McpDeploymentRevisionRecord::creation(id, data.domain.clone(), auth.account_id());
+            McpDeploymentRevisionRecord::creation(id, data.domain.clone(), auth.account_id(), data.agents);
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo

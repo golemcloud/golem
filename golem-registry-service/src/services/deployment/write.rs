@@ -33,7 +33,6 @@ use golem_common::model::{
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::PathSegment;
-use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
@@ -102,6 +101,13 @@ pub enum DeployValidationError {
     )]
     HttpApiDeploymentMissingAgentType {
         http_api_deployment_domain: Domain,
+        missing_agent_type: AgentTypeName,
+    },
+    #[error(
+        "Agent type {missing_agent_type} requested by mcp deployment {mcp_deployment_domain} is not part of the deployment"
+    )]
+    McpDeploymentMissingAgentType {
+        mcp_deployment_domain: Domain,
         missing_agent_type: AgentTypeName,
     },
     #[error("Invalid path pattern: {0}")]
@@ -274,9 +280,13 @@ impl DeploymentWriteService {
             mcp_deployments.len()
         );
 
-        // TODO; Include MCP
-        let deployment_context =
-            DeploymentContext::new(environment, components, http_api_deployments);
+        let account_id = environment.owner_account_id.clone();
+        let deployment_context = DeploymentContext::new(
+            environment,
+            components,
+            http_api_deployments,
+            mcp_deployments.clone(),
+        );
 
         {
             let actual_hash = deployment_context.hash();
@@ -292,55 +302,11 @@ impl DeploymentWriteService {
         let compiled_routes =
             deployment_context.compile_http_api_routes(&registered_agent_types)?;
 
-        // TODO;
-        let compiled_mcp = if let Some(mcp_deployment) = mcp_deployments.first() {
-            let agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
-                registered_agent_types
-                    .iter()
-                    .map(|(name, in_progress_agent_type)| {
-                        (
-                            name.clone(),
-                            (
-                                in_progress_agent_type.implemented_by.component_id,
-                                in_progress_agent_type.implemented_by.component_revision,
-                            ),
-                        )
-                    })
-                    .collect();
-
-            if agent_type_implementers.is_empty() {
-                return Err(DeploymentWriteError::InternalError(anyhow::anyhow!(
-                    "MCP deployment has no agent types"
-                )));
-            }
-
-            tracing::info!(
-                "Compiled MCP deployment for environment {environment_id} with domain {} and agent types: {:?}",
-                mcp_deployment.domain,
-                agent_type_implementers.keys().collect::<Vec<_>>()
-            );
-
-            CompiledMcp {
-                account_id: auth.account_id(),
-                environment_id,
-                deployment_revision: next_deployment_revision,
-                domain: mcp_deployment.domain.clone(),
-                agent_type_implementers,
-            }
-        } else {
-            // TODO; remove this
-            tracing::info!("No registered agents found in deployment storage");
-            CompiledMcp {
-                account_id: auth.account_id(),
-                environment_id,
-                deployment_revision: next_deployment_revision,
-                domain: golem_common::model::domain_registration::Domain(format!(
-                    "mcp-{}",
-                    environment_id.0
-                )),
-                agent_type_implementers: Default::default(),
-            }
-        };
+        let compiled_mcps = deployment_context.compile_mcp_deployments(
+            &registered_agent_types,
+            account_id,
+            next_deployment_revision,
+        )?;
 
         let record = DeploymentRevisionCreationRecord::from_model(
             environment_id,
@@ -352,9 +318,9 @@ impl DeploymentWriteService {
                 .http_api_deployments
                 .into_values()
                 .collect(),
-            mcp_deployments.clone(),
+            mcp_deployments,
             compiled_routes,
-            compiled_mcp,
+            compiled_mcps,
             registered_agent_types
                 .into_values()
                 .map(DeployedRegisteredAgentType::from)

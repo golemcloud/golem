@@ -158,6 +158,24 @@ impl ApiDeploymentCommandHandler {
             .unwrap_or_default())
     }
 
+    pub async fn deployable_manifest_mcp_deployments(
+        &self,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<BTreeMap<Domain, crate::model::http_api::McpDeploymentDeployProperties>> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        Ok(app_ctx
+            .application()
+            .mcp_deployments(environment_name)
+            .map(|deployments: &BTreeMap<golem_common::model::domain_registration::Domain, crate::model::app::WithSource<crate::model::http_api::McpDeploymentDeployProperties>>| {
+                deployments
+                    .iter()
+                    .map(|(domain, mcp_deployment)| (domain.clone(), mcp_deployment.value.clone()))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default())
+    }
+
     pub async fn get_http_api_deployment_revision_by_id(
         &self,
         http_api_deployment_id: &HttpApiDeploymentId,

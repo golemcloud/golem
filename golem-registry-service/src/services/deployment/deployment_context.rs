@@ -23,6 +23,7 @@ use crate::services::deployment::route_compilation::{
     make_invalid_agent_mount_error_maker,
 };
 use crate::services::deployment::write::DeployValidationError;
+use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
@@ -56,6 +57,7 @@ pub struct DeploymentContext {
     pub environment: Environment,
     pub components: BTreeMap<ComponentName, Component>,
     pub http_api_deployments: BTreeMap<Domain, HttpApiDeployment>,
+    pub mcp_deployments: BTreeMap<Domain, golem_common::model::mcp_deployment::McpDeployment>,
 }
 
 impl DeploymentContext {
@@ -63,6 +65,7 @@ impl DeploymentContext {
         environment: Environment,
         components: Vec<Component>,
         http_api_deployments: Vec<HttpApiDeployment>,
+        mcp_deployments: Vec<golem_common::model::mcp_deployment::McpDeployment>,
     ) -> Self {
         Self {
             environment,
@@ -73,6 +76,10 @@ impl DeploymentContext {
             http_api_deployments: http_api_deployments
                 .into_iter()
                 .map(|had| (had.domain.clone(), had))
+                .collect(),
+            mcp_deployments: mcp_deployments
+                .into_iter()
+                .map(|mcd| (mcd.domain.clone(), mcd))
                 .collect(),
         }
     }
@@ -89,7 +96,11 @@ impl DeploymentContext {
                 .iter()
                 .map(|(k, v)| (k.0.clone(), HashOf::from_hash(v.hash)))
                 .collect(),
-            mcp_deployments: Default::default(),
+            mcp_deployments: self
+                .mcp_deployments
+                .iter()
+                .map(|(k, v)| (k.0.clone(), HashOf::from_hash(v.hash)))
+                .collect(),
         };
         diffable.hash()
     }
@@ -258,6 +269,56 @@ impl DeploymentContext {
         };
 
         Ok(all_routes)
+    }
+
+    pub fn compile_mcp_deployments(
+        &self,
+        registered_agent_types: &HashMap<AgentTypeName, InProgressDeployedRegisteredAgentType>,
+        account_id: AccountId,
+        deployment_revision: golem_common::model::deployment::DeploymentRevision,
+    ) -> Result<Vec<golem_service_base::mcp::CompiledMcp>, DeploymentWriteError> {
+        let mut all_compiled_mcps = Vec::new();
+        let mut errors = Vec::new();
+
+        for (domain, mcp_deployment) in &self.mcp_deployments {
+            let mut agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
+                HashMap::new();
+
+            for (agent_type, _agent_options) in &mcp_deployment.agents {
+                let registered_agent_type = ok_or_continue!(
+                    registered_agent_types.get(agent_type).ok_or(
+                        DeployValidationError::McpDeploymentMissingAgentType {
+                            mcp_deployment_domain: domain.clone(),
+                            missing_agent_type: agent_type.clone(),
+                        }
+                    ),
+                    errors
+                );
+
+                agent_type_implementers.insert(
+                    agent_type.clone(),
+                    (
+                        registered_agent_type.implemented_by.component_id,
+                        registered_agent_type.implemented_by.component_revision,
+                    ),
+                );
+            }
+
+            let compiled_mcp = golem_service_base::mcp::CompiledMcp {
+                account_id: account_id.clone(),
+                environment_id: self.environment.id.clone(),
+                deployment_revision,
+                domain: domain.clone(),
+                agent_type_implementers,
+            };
+            all_compiled_mcps.push(compiled_mcp);
+        }
+
+        if !errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+        };
+
+        Ok(all_compiled_mcps)
     }
 }
 

@@ -43,6 +43,12 @@ impl McpAgentCapability {
         match &method.input_schema {
             DataSchema::Tuple(schemas) => {
                 if !schemas.elements.is_empty() {
+                    tracing::debug!(
+                        "Method {} of agent type {} has input parameters, exposing as tool",
+                        method.name,
+                        agent_type_name.0
+                    );
+
                     let constructor_schema = constructor.input_schema.get_mcp_schema();
                     let mut tool_schema = method.get_mcp_tool_schema();
                     tool_schema.merge_input_schema(constructor_schema);
@@ -74,6 +80,12 @@ impl McpAgentCapability {
                         agent_type_name: agent_type_name.clone(),
                     }))
                 } else {
+                    tracing::debug!(
+                        "Method {} of agent type {} has no input parameters, exposing as resource",
+                        method.name,
+                        agent_type_name.0
+                    );
+
                     Self::Resource(AgentMcpResource {
                         resource: method.clone(),
                     })
