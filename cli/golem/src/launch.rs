@@ -332,6 +332,7 @@ fn worker_service_config(
     WorkerServiceConfig {
         port: 0,
         custom_request_port: args.custom_request_port,
+        mcp_port: 0,
         grpc: golem_worker_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()

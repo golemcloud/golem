@@ -222,8 +222,10 @@ impl WorkerService {
         join_set: &mut JoinSet<anyhow::Result<()>>,
         tracer: Option<SdkTracer>,
     ) -> anyhow::Result<u16> {
-        // TODO; make config
-        let poem_listener = poem::listener::TcpListener::bind(format!("0.0.0.0:{}", 8000));
+        let poem_listener = poem::listener::TcpListener::bind(format!(
+            "0.0.0.0:{}",
+            self.config.mcp_port
+        ));
 
         let acceptor = poem_listener.into_acceptor().await?;
 
@@ -232,13 +234,16 @@ impl WorkerService {
             .expect("socket address")
             .port();
 
-        let lookup = self.services.mcp_capability_lookup.clone();
-        let worker_service = self.services.worker_service.clone();
+        let mcp_capability_lookup =
+            self.services.mcp_capability_lookup.clone();
+
+        let worker_service =
+            self.services.worker_service.clone();
 
         let service = StreamableHttpService::new(
             move || {
                 Ok(GolemAgentMcpServer::new(
-                    lookup.clone(),
+                    mcp_capability_lookup.clone(),
                     worker_service.clone(),
                 ))
             },
