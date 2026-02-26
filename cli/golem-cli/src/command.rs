@@ -1569,6 +1569,10 @@ pub mod server {
         #[clap(long)]
         pub custom_request_port: Option<u16>,
 
+        /// Port to serve custom requests on, defaults to 9006
+        #[clap(long)]
+        pub mcp_port: Option<u16>,
+
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
         #[clap(long)]
         pub data_dir: Option<PathBuf>,
@@ -1589,6 +1593,9 @@ pub mod server {
 
         pub fn custom_request_port(&self) -> u16 {
             self.custom_request_port.unwrap_or(9006)
+        }
+        pub fn mcp_port(&self) -> u16 {
+            self.mcp_port.unwrap_or(9007)
         }
     }
 

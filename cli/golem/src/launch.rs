@@ -61,6 +61,7 @@ pub struct LaunchArgs {
     pub router_addr: String,
     pub router_port: u16,
     pub custom_request_port: u16,
+    pub mcp_port: u16,
     pub data_dir: PathBuf,
 }
 
@@ -332,7 +333,7 @@ fn worker_service_config(
     WorkerServiceConfig {
         port: 0,
         custom_request_port: args.custom_request_port,
-        mcp_port: 0,
+        mcp_port: args.mcp_port,
         grpc: golem_worker_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()
