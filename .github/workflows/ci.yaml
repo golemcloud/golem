@@ -165,6 +165,7 @@ jobs:
           # pull-request-report: true
           flaky-report: true
           collapse-large-reports: true
+          exit-on-no-files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -235,6 +236,7 @@ jobs:
           # pull-request-report: true
           flaky-report: true
           collapse-large-reports: true
+          exit-on-no-files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -346,6 +348,7 @@ jobs:
           # pull-request-report: true
           flaky-report: true
           collapse-large-reports: true
+          exit-on-no-files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
