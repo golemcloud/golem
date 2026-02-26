@@ -106,7 +106,7 @@ pub mod service {
         pub fn is_domain_is_not_registered(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
-                    err.status_code == 409
+                    (err.status_code == 409 || err.status_code == 404)
                         && err.message.starts_with("Domain")
                         && err.message.ends_with("is not registered")
                 }

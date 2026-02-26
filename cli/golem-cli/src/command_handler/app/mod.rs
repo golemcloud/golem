@@ -54,9 +54,7 @@ use crate::model::GuestLanguage;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_client::api::{
-    ApplicationClient, ComponentClient, EnvironmentClient, McpDeploymentClient,
-};
+use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -1508,64 +1506,14 @@ impl AppCommandHandler {
 
             match mcp_deployment_diff {
                 diff::BTreeMapDiffValue::Create => {
-                    let clients = self.ctx.golem_clients().await?;
-
-                    log_action(
-                        "Creating",
-                        format!("MCP deployment {}", domain.0.log_color_highlight()),
-                    );
-                    let _indent = LogIndent::new();
-
-                    let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
-                    let agents = mcp_deployment
-                        .agents
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.to_diffable()))
-                        .collect();
-
-                    let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
-                        domain: domain.clone(),
-                        agents,
-                    };
-
-                    let create = async || {
-                        clients
-                            .mcp_deployment
-                            .create_mcp_deployment(
-                                &deploy_diff.environment.environment_id.0,
-                                &mcp_creation,
-                            )
-                            .await
-                            .map_err(|e| anyhow::anyhow!(e))
-                    };
-
-                    let deployment = match create().await {
-                        Ok(result) => Ok(result),
-                        Err(err) => {
-                            let err_str = err.to_string();
-                            if err_str.contains("not registered") {
-                                self.ctx
-                                    .api_domain_handler()
-                                    .register_missing_domain(
-                                        &deploy_diff.environment.environment_id,
-                                        &domain,
-                                    )
-                                    .await?;
-                                create().await
-                            } else {
-                                Err(err)
-                            }
-                        }
-                    }?;
-
-                    log_action(
-                        "Created",
-                        format!(
-                            "MCP deployment revision: {} {}",
-                            deployment.domain.0.log_color_highlight(),
-                            deployment.revision.to_string().log_color_highlight()
-                        ),
-                    );
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    mcp_deployment_handler
+                        .create_staged_mcp_deployment(
+                            &deploy_diff.environment,
+                            &domain,
+                            deploy_diff.deployable_manifest_mcp_deployment(&domain),
+                        )
+                        .await?
                 }
                 diff::BTreeMapDiffValue::Delete => {
                     let mcp_deployment_handler = self.ctx.api_deployment_handler();

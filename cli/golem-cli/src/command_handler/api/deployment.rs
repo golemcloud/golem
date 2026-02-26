@@ -18,7 +18,7 @@ use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::http_api::HttpApiDeploymentDeployProperties;
+use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
 use anyhow::{anyhow, bail};
 use golem_client::api::{ApiDeploymentClient, McpDeploymentClient};
@@ -358,6 +358,64 @@ impl ApiDeploymentCommandHandler {
             "Created",
             format!(
                 "HTTP API deployment revision: {} {}",
+                deployment.domain.0.log_color_highlight(),
+                deployment.revision.to_string().log_color_highlight()
+            ),
+        );
+
+        Ok(())
+    }
+
+    pub async fn create_staged_mcp_deployment(
+        &self,
+        environment_id: &ResolvedEnvironmentIdentity,
+        domain: &Domain,
+        deployable_mcp_deployment: &McpDeploymentDeployProperties,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        log_action(
+            "Creating",
+            format!("MCP deployment {}", domain.0.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        let agents = deployable_mcp_deployment
+            .agents
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_diffable()))
+            .collect();
+
+        let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
+            domain: domain.clone(),
+            agents,
+        };
+
+        let create = async || {
+            clients
+                .mcp_deployment
+                .create_mcp_deployment(&environment_id.environment_id.0, &mcp_creation)
+                .await
+                .map_err(ServiceError::from)
+        };
+
+        let deployment = match create().await {
+            Ok(result) => Ok(result),
+            Err(err) if err.is_domain_is_not_registered() => {
+                self.ctx
+                    .api_domain_handler()
+                    .register_missing_domain(&environment_id.environment_id, domain)
+                    .await?;
+
+                create().await
+            }
+            Err(err) => Err(err),
+        }?;
+
+        log_action(
+            "Created",
+            format!(
+                "MCP deployment revision: {} {}",
                 deployment.domain.0.log_color_highlight(),
                 deployment.revision.to_string().log_color_highlight()
             ),
