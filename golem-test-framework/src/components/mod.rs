@@ -117,7 +117,7 @@ fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
     let message = obj
         .get("message")
         .and_then(|v| v.as_str())
-        .unwrap_or(line);
+        .unwrap_or("");
 
     let context = extract_span_context(&obj);
 
@@ -166,14 +166,24 @@ fn extract_span_context(obj: &serde_json::Value) -> String {
     let Some(map) = obj.as_object() else {
         return String::new();
     };
-    let pairs: Vec<String> = map
-        .iter()
-        .filter(|(k, _)| !RESERVED_KEYS.contains(&k.as_str()))
-        .map(|(k, v)| match v {
-            serde_json::Value::String(s) => format!("{k}={s}"),
-            other => format!("{k}={other}"),
-        })
-        .collect();
+    let mut pairs: Vec<String> = Vec::new();
+    for (k, v) in map.iter() {
+        if RESERVED_KEYS.contains(&k.as_str()) {
+            continue;
+        }
+        match v {
+            serde_json::Value::String(s) => pairs.push(format!("{k}={s}")),
+            serde_json::Value::Object(inner) => {
+                for (ik, iv) in inner {
+                    match iv {
+                        serde_json::Value::String(s) => pairs.push(format!("{ik}={s}")),
+                        other => pairs.push(format!("{ik}={other}")),
+                    }
+                }
+            }
+            other => pairs.push(format!("{k}={other}")),
+        }
+    }
     if pairs.is_empty() {
         String::new()
     } else {
