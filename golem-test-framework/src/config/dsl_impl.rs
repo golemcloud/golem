@@ -425,7 +425,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
-                    component_revision: None,
                     deployment_revision: None,
                 },
             )
@@ -477,7 +476,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     schedule_at: None,
                     idempotency_key: None,
                     deployment_revision: deployment_revision.map(i64::from),
-                    component_revision: None,
                 },
             )
             .await

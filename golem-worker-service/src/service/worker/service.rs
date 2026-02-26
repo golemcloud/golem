@@ -784,21 +784,13 @@ impl WorkerService {
         };
 
         let component_id = registered_agent_type.implemented_by.component_id;
-        let component_metadata = match request.component_revision {
-            Some(revision) => {
-                self.component_service
-                    .get_revision(component_id, revision)
-                    .await?
-            }
-            None => {
-                self.component_service
-                    .get_revision(
-                        component_id,
-                        registered_agent_type.implemented_by.component_revision,
-                    )
-                    .await?
-            }
-        };
+        let component_metadata = self
+            .component_service
+            .get_revision(
+                component_id,
+                registered_agent_type.implemented_by.component_revision,
+            )
+            .await?;
 
         let agent_type = component_metadata
             .metadata
@@ -903,7 +895,6 @@ impl WorkerService {
             } => {
                 let decode_revision = output
                     .component_revision
-                    .or(request.component_revision)
                     .unwrap_or(registered_agent_type.implemented_by.component_revision);
                 let component_metadata_for_decode = self
                     .component_service
