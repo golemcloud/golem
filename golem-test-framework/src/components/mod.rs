@@ -115,9 +115,7 @@ fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
         .and_then(|v| v.as_str())
         .unwrap_or("child_process");
 
-    let file = obj
-        .get("filename")
-        .and_then(|v| v.as_str());
+    let file = obj.get("filename").and_then(|v| v.as_str());
 
     let line = obj
         .get("line_number")
@@ -139,10 +137,8 @@ fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
         .map(|(name, fields)| dynamic_span::make_span(prefix, name, fields).entered())
         .collect();
 
-    let event_fields = format_kv_fields(
-        obj.get("fields").and_then(|f| f.as_object()),
-        &["message"],
-    );
+    let event_fields =
+        format_kv_fields(obj.get("fields").and_then(|f| f.as_object()), &["message"]);
 
     let msg = if event_fields.is_empty() {
         format!("{prefix} {message}")
@@ -159,8 +155,7 @@ fn parse_span_infos(obj: &serde_json::Value) -> Vec<(String, Vec<(String, String
             arr.iter()
                 .filter_map(|span_obj| {
                     let name = span_obj.get("name")?.as_str()?.to_string();
-                    let fields =
-                        parse_kv_fields(span_obj.as_object(), &["name"]);
+                    let fields = parse_kv_fields(span_obj.as_object(), &["name"]);
                     Some((name, fields))
                 })
                 .collect()

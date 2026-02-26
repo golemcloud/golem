@@ -64,8 +64,7 @@ fn new_callsite_and_meta(
     file: Option<&str>,
     line: Option<u32>,
 ) -> &'static Metadata<'static> {
-    let static_field_names: Vec<&'static str> =
-        field_names.iter().map(|n| intern(n)).collect();
+    let static_field_names: Vec<&'static str> = field_names.iter().map(|n| intern(n)).collect();
     let static_field_names_slice: &'static [&'static str] =
         Box::leak(static_field_names.into_boxed_slice());
 
@@ -74,7 +73,7 @@ fn new_callsite_and_meta(
         intern(name),
         intern(target),
         level,
-        file.map(|f| intern(f)),
+        file.map(intern),
         line,
         None,
         FieldSet::new(static_field_names_slice, Identifier(callsite)),
@@ -117,7 +116,15 @@ fn get_or_create_span_meta(
         return meta;
     }
 
-    let meta = new_callsite_and_meta(name, target, Level::TRACE, field_names, Kind::SPAN, None, None);
+    let meta = new_callsite_and_meta(
+        name,
+        target,
+        Level::TRACE,
+        field_names,
+        Kind::SPAN,
+        None,
+        None,
+    );
     map.insert(cache_key.to_string(), meta);
     meta
 }
@@ -152,26 +159,51 @@ fn level_key(level: Level) -> &'static str {
     }
 }
 
-fn get_or_create_event_meta(target: &str, level: Level, file: Option<&str>, line: Option<u32>) -> &'static Metadata<'static> {
-    let cache_key = format!("{}:{}:{}:{}", target, level_key(level), file.unwrap_or(""), line.unwrap_or(0));
+fn get_or_create_event_meta(
+    target: &str,
+    level: Level,
+    file: Option<&str>,
+    line: Option<u32>,
+) -> &'static Metadata<'static> {
+    let cache_key = format!(
+        "{}:{}:{}:{}",
+        target,
+        level_key(level),
+        file.unwrap_or(""),
+        line.unwrap_or(0)
+    );
     let mut map = event_cache().lock().unwrap();
     if let Some(meta) = map.get(&cache_key) {
         return meta;
     }
 
-    let meta =
-        new_callsite_and_meta("child_process_event", target, level, &["message"], Kind::EVENT, file, line);
+    let meta = new_callsite_and_meta(
+        "child_process_event",
+        target,
+        level,
+        &["message"],
+        Kind::EVENT,
+        file,
+        line,
+    );
     map.insert(cache_key, meta);
     meta
 }
 
-pub fn dispatch_event(target: &str, level: Level, message: &str, file: Option<&str>, line: Option<u32>) {
+pub fn dispatch_event(
+    target: &str,
+    level: Level,
+    message: &str,
+    file: Option<&str>,
+    line: Option<u32>,
+) {
     let meta = get_or_create_event_meta(target, level, file, line);
     let message_field = meta.fields().field("message").unwrap();
     tracing_core::Event::dispatch(
         meta,
-        &meta
-            .fields()
-            .value_set(&[(&message_field, Some(&message as &dyn tracing_core::field::Value))]),
+        &meta.fields().value_set(&[(
+            &message_field,
+            Some(&message as &dyn tracing_core::field::Value),
+        )]),
     );
 }
