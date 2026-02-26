@@ -21,16 +21,12 @@ use golem_common::model::account::AccountId;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 use golem_service_base::repo::RepoError;
-use golem_wasm::analysis::AnalysedExport;
 use std::sync::Arc;
-
-const OPLOG_PROCESSOR_INTERFACE: &str = "golem:api/oplog-processor";
-const OPLOG_PROCESSOR_VERSION_PREFIX: &str = "1.";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginRegistrationError {
@@ -236,30 +232,15 @@ impl PluginRegistrationService {
 
         let implements_oplog_processor_interface = component
             .metadata
-            .exports()
-            .iter()
-            .any(is_valid_oplog_processor_implementation);
+            .oplog_processor()
+            .ok()
+            .flatten()
+            .is_some();
 
         if !implements_oplog_processor_interface {
             return Err(PluginRegistrationError::OplogProcessorComponentDoesNotExist);
         }
 
         Ok(())
-    }
-}
-
-fn is_valid_oplog_processor_implementation(analyzed_export: &AnalysedExport) -> bool {
-    match analyzed_export {
-        AnalysedExport::Instance(inner) => {
-            let parts = inner.name.split("@").collect::<Vec<_>>();
-
-            parts.len() == 2 && {
-                let interface_name = parts[0];
-                let version = parts[1];
-                interface_name == OPLOG_PROCESSOR_INTERFACE
-                    && version.starts_with(OPLOG_PROCESSOR_VERSION_PREFIX)
-            }
-        }
-        _ => false,
     }
 }

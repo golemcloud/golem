@@ -228,6 +228,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let agent_types = extract_agent_types(&source_path, false, true).await?;
 
+        debug!("Agent types in component {component_name}:\n{agent_types:#?}");
+
         let component = client
             .create_component(
                 &environment_id.0,

@@ -15,7 +15,6 @@
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::wave::function_wave_compatible;
 use crate::model::worker::WorkerName;
-use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
@@ -26,7 +25,6 @@ use golem_common::model::component::{
 };
 use golem_common::model::component::{ComponentName, InitialComponentFile};
 
-use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
@@ -146,33 +144,14 @@ impl ComponentView {
 
     pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: ComponentDto) -> Self {
         let exports = {
-            if value.metadata.is_agent() {
-                if show_exports_for_rib {
-                    let agent_types = value
-                        .metadata
-                        .agent_types()
-                        .iter()
-                        .map(|a| a.to_wit_naming())
-                        .collect::<Vec<_>>();
+            let agent_types = value
+                .metadata
+                .agent_types()
+                .iter()
+                .map(|a| a.to_wit_naming())
+                .collect::<Vec<_>>();
 
-                    show_exported_agents(&agent_types, true, true)
-                } else {
-                    value
-                        .metadata
-                        .agent_types()
-                        .iter()
-                        .flat_map(|agent| {
-                            show_exported_functions(
-                                value.metadata.exports(),
-                                true,
-                                agent_interface_name(&value, &agent.wrapper_type_name()).as_deref(),
-                            )
-                        })
-                        .collect()
-                }
-            } else {
-                show_exported_functions(value.metadata.exports(), true, None)
-            }
+            show_exported_agents(&agent_types, true, true)
         };
 
         ComponentView {
@@ -499,64 +478,6 @@ pub fn format_function_name(prefix: Option<&str>, name: &str) -> String {
         Some(prefix) => format!("{prefix}.{{{name}}}"),
         None => name.to_string(),
     }
-}
-
-fn resolve_function<'t>(
-    component: &'t ComponentDto,
-    function: &str,
-) -> anyhow::Result<(&'t AnalysedFunction, ParsedFunctionName)> {
-    let parsed = ParsedFunctionName::parse(function).map_err(|err| anyhow!(err))?;
-    let mut functions = Vec::new();
-
-    for export in component.metadata.exports() {
-        match export {
-            AnalysedExport::Instance(interface) => {
-                if matches!(parsed.site().interface_name(), Some(name) if name == interface.name) {
-                    for function in &interface.functions {
-                        if parsed.function().function_name() == function.name {
-                            functions.push(function);
-                        }
-                    }
-                }
-            }
-            AnalysedExport::Function(ref f @ AnalysedFunction { name, .. }) => {
-                if parsed.site() == &ParsedFunctionSite::Global
-                    && &parsed.function().function_name() == name
-                {
-                    functions.push(f);
-                }
-            }
-        }
-    }
-
-    if functions.len() > 1 {
-        bail!(
-            "Multiple function results with the same name ({}) declared",
-            function
-        )
-    } else if let Some(func) = functions.first() {
-        Ok((func, parsed))
-    } else {
-        bail!("Can't find function ({}) in component", function)
-    }
-}
-
-pub fn function_result_types<'t>(
-    component: &'t ComponentDto,
-    function: &str,
-) -> anyhow::Result<Vec<&'t AnalysedType>> {
-    let (func, _) = resolve_function(component, function)?;
-
-    Ok(func.result.iter().map(|r| &r.typ).collect())
-}
-
-pub fn function_params_types<'t>(
-    component: &'t ComponentDto,
-    function: &str,
-) -> anyhow::Result<Vec<&'t AnalysedType>> {
-    let (func, _parsed) = resolve_function(component, function)?;
-
-    Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
 
 pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> Option<String> {

@@ -4299,6 +4299,7 @@ dependencies = [
  "golem-wasm",
  "humantime-serde",
  "itertools 0.14.0",
+ "log",
  "prometheus",
  "redis",
  "reqwest",

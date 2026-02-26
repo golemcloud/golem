@@ -66,12 +66,12 @@ impl ChildProcessLogger {
         let stdout_handle = std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
-                match out_level {
-                    Level::TRACE => trace!("{} {}", prefix_clone, line.unwrap()),
-                    Level::DEBUG => debug!("{} {}", prefix_clone, line.unwrap()),
-                    Level::INFO => info!("{} {}", prefix_clone, line.unwrap()),
-                    Level::WARN => warn!("{} {}", prefix_clone, line.unwrap()),
-                    Level::ERROR => error!("{} {}", prefix_clone, line.unwrap()),
+                match line {
+                    Ok(line) => relay_line(&prefix_clone, &line, out_level),
+                    Err(e) => {
+                        warn!("{} failed to read stdout: {e}", prefix_clone);
+                        break;
+                    }
                 }
             }
         });
@@ -80,12 +80,12 @@ impl ChildProcessLogger {
         let stderr_handle = std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
-                match err_level {
-                    Level::TRACE => trace!("{} {}", prefix_clone, line.unwrap()),
-                    Level::DEBUG => debug!("{} {}", prefix_clone, line.unwrap()),
-                    Level::INFO => info!("{} {}", prefix_clone, line.unwrap()),
-                    Level::WARN => warn!("{} {}", prefix_clone, line.unwrap()),
-                    Level::ERROR => error!("{} {}", prefix_clone, line.unwrap()),
+                match line {
+                    Ok(line) => relay_line(&prefix_clone, &line, err_level),
+                    Err(e) => {
+                        warn!("{} failed to read stderr: {e}", prefix_clone);
+                        break;
+                    }
                 }
             }
         });
@@ -94,6 +94,90 @@ impl ChildProcessLogger {
             _out_handle: stdout_handle,
             _err_handle: stderr_handle,
         }
+    }
+}
+
+fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
+    let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
+        emit_at_level(fallback_level, prefix, line);
+        return;
+    };
+
+    let log_level = obj
+        .get("level")
+        .and_then(|v| v.as_str())
+        .and_then(parse_log_level)
+        .unwrap_or_else(|| tracing_to_log_level(fallback_level));
+
+    let target = obj
+        .get("target")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    let message = obj
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or(line);
+
+    let context = extract_span_context(&obj);
+
+    log::log!(target: target, log_level, "{prefix} {message}{context}");
+}
+
+fn emit_at_level(level: Level, prefix: &str, line: &str) {
+    match level {
+        Level::TRACE => trace!("{prefix} {line}"),
+        Level::DEBUG => debug!("{prefix} {line}"),
+        Level::INFO => info!("{prefix} {line}"),
+        Level::WARN => warn!("{prefix} {line}"),
+        Level::ERROR => error!("{prefix} {line}"),
+    }
+}
+
+fn parse_log_level(s: &str) -> Option<log::Level> {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("Level(")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(s);
+    match s.to_uppercase().as_str() {
+        "TRACE" => Some(log::Level::Trace),
+        "DEBUG" => Some(log::Level::Debug),
+        "INFO" => Some(log::Level::Info),
+        "WARN" => Some(log::Level::Warn),
+        "ERROR" => Some(log::Level::Error),
+        _ => None,
+    }
+}
+
+fn tracing_to_log_level(level: Level) -> log::Level {
+    match level {
+        Level::TRACE => log::Level::Trace,
+        Level::DEBUG => log::Level::Debug,
+        Level::INFO => log::Level::Info,
+        Level::WARN => log::Level::Warn,
+        Level::ERROR => log::Level::Error,
+    }
+}
+
+const RESERVED_KEYS: &[&str] = &["timestamp", "level", "target", "message"];
+
+fn extract_span_context(obj: &serde_json::Value) -> String {
+    let Some(map) = obj.as_object() else {
+        return String::new();
+    };
+    let pairs: Vec<String> = map
+        .iter()
+        .filter(|(k, _)| !RESERVED_KEYS.contains(&k.as_str()))
+        .map(|(k, v)| match v {
+            serde_json::Value::String(s) => format!("{k}={s}"),
+            other => format!("{k}={other}"),
+        })
+        .collect();
+    if pairs.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", pairs.join(" "))
     }
 }
 
@@ -219,6 +303,10 @@ impl EnvVarBuilder {
             .with_rust_back_log()
             .with_tracing_from_env()
             .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
+            .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
+            .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
+            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "true".to_string())
+            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN", "true".to_string())
     }
 
     fn with(mut self, name: &str, value: String) -> Self {

@@ -31,6 +31,7 @@ colored = { workspace = true }
 futures = { workspace = true }
 humantime-serde = { workspace = true }
 itertools = { workspace = true }
+log = { workspace = true }
 prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
