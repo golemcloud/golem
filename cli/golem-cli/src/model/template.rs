@@ -89,6 +89,7 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
         Ok(app_raw::ExternalCommand {
             command: self.command.render(env, ctx)?,
             dir: self.dir.render(env, ctx)?,
+            env: self.env.render(env, ctx)?,
             rmdirs: self.rmdirs.render(env, ctx)?,
             mkdirs: self.mkdirs.render(env, ctx)?,
             sources: self.sources.render(env, ctx)?,

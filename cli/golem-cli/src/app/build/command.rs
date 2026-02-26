@@ -365,9 +365,10 @@ pub async fn execute_external_command(
                 )
                 .await?;
 
-                Command::new(command_tokens[0].clone())
-                    .args(command_tokens.iter().skip(1))
+                let mut cmd = Command::new(command_tokens[0].clone());
+                cmd.args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
+                    .envs(&command.env)
                     .stream_and_run(&command_tokens[0])
                     .await
             },

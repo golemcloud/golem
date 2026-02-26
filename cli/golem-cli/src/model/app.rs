@@ -691,17 +691,30 @@ enum ComponentLayerPropertiesKind {
     },
 }
 
+const EMPTY_STR: &str = "";
+
 #[derive(Debug, Clone)]
 pub struct ComponentLayerApplyContext {
     env: minijinja::Environment<'static>,
     component_name: Option<ComponentName>,
+    app_root_dir: Option<String>,
+    golem_temp_dir: Option<String>,
+    component_dir: Option<String>,
 }
 
 impl ComponentLayerApplyContext {
-    pub fn new(id: &ComponentLayerId) -> Self {
+    pub fn new(
+        component_name: Option<ComponentName>,
+        app_root_dir: Option<String>,
+        golem_temp_dir: Option<String>,
+        component_dir: Option<String>,
+    ) -> Self {
         Self {
             env: Self::new_template_env(),
-            component_name: id.component_name().cloned(),
+            component_name,
+            app_root_dir,
+            golem_temp_dir,
+            component_dir,
         }
     }
 
@@ -731,12 +744,14 @@ impl ComponentLayerApplyContext {
         &self.env
     }
 
-    fn template_context(&self) -> Option<impl Serialize> {
-        self.component_name.as_ref().map(|component_name| {
-            minijinja::context! {
-                componentName => component_name.0.as_str(),
-                component_name => component_name.0.as_str(),
-            }
+    fn template_context(&self) -> impl Serialize {
+        let component_name = self.component_name.as_ref().map(|name| name.0.as_str());
+        Some(minijinja::context! {
+            componentName => component_name,
+            component_name => component_name,
+            appRootDir => self.app_root_dir.as_deref().unwrap_or(EMPTY_STR),
+            golemTempDir => self.golem_temp_dir.as_deref().unwrap_or(EMPTY_STR),
+            componentDir => self.component_dir.as_deref().unwrap_or(EMPTY_STR),
         })
     }
 }
@@ -826,11 +841,7 @@ impl Layer for ComponentLayer {
 
         for properties in property_layers_to_apply {
             let template_env = ctx.template_env();
-            let template_ctx = self
-                .id
-                .is_template()
-                .then(|| ctx.template_context())
-                .flatten();
+            let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
 
             value.source_wit.apply_layer(
@@ -954,10 +965,6 @@ impl Layer for ComponentLayer {
         }
 
         Ok(())
-    }
-
-    fn root_id_to_context(id: &Self::Id) -> Self::ApplyContext {
-        ComponentLayerApplyContext::new(id)
     }
 }
 
@@ -1460,15 +1467,17 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerId,
-        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
-        ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, WithSource,
+        Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerApplyContext,
+        ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
+        ComponentPresetName, ComponentPresetSelector, ComponentProperties,
+        PartitionedComponentPresets, WithSource, TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
+    use anyhow::anyhow;
     use colored::Colorize;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -1556,6 +1565,10 @@ mod app_builder {
         default_environment_names: BTreeSet<EnvironmentName>,
         environments: IndexMap<EnvironmentName, app_raw::Environment>,
 
+        // "Consts" for component templating
+        app_root_dir_str: String,
+        golem_temp_dir_str: String,
+
         // For app build
         include: Vec<String>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
@@ -1590,8 +1603,28 @@ mod app_builder {
             component_presets: ComponentPresetSelector,
             apps: Vec<app_raw::ApplicationWithSource>,
         ) -> ValidatedResult<Application> {
-            let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
+            let mut builder = Self::default();
+
+            match std::env::current_dir()
+                .map_err(|err| anyhow!(err))
+                .and_then(|path| {
+                    Ok((
+                        fs::path_to_str(&path).map(|path| path.to_string())?,
+                        fs::path_to_str(&path.join(TEMP_DIR)).map(|path| path.to_string())?,
+                    ))
+                }) {
+                Ok((app_root_dir, golem_temp_dir)) => {
+                    builder.app_root_dir_str = app_root_dir;
+                    builder.golem_temp_dir_str = golem_temp_dir;
+                }
+                Err(err) => {
+                    return ValidatedResult::from_error(format!(
+                        "Failed to get app root directory: {}",
+                        err
+                    ));
+                }
+            }
 
             for app in apps {
                 builder.add_raw_app(&mut validation, app);
@@ -2098,9 +2131,28 @@ mod app_builder {
             source: PathBuf,
             component_name: ComponentName,
         ) {
+            let component_dir = match fs::parent_or_err(&source)
+                .and_then(|parent| fs::canonicalize_path(parent))
+                .and_then(|path| fs::path_to_str(&path).map(|path| path.to_string()))
+            {
+                Ok(path) => path,
+                Err(err) => {
+                    validation.add_error(err.to_string());
+                    return;
+                }
+            };
+
+            let ctx = ComponentLayerApplyContext::new(
+                Some(component_name.clone()),
+                Some(self.app_root_dir_str.clone()),
+                Some(self.golem_temp_dir_str.clone()),
+                Some(component_dir),
+            );
+
             match self.component_layer_store.value(
                 &ComponentLayerId::ComponentCustomPresets(component_name.clone()),
                 component_presets,
+                &ctx,
             ) {
                 Ok(component_layer_properties) => {
                     let component_properties = ComponentProperties::from_merged(

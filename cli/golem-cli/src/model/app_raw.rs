@@ -472,6 +472,8 @@ pub struct ExternalCommand {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub env: IndexMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rmdirs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
