@@ -27,6 +27,7 @@ declare_revision!(McpDeploymentRevision);
 declare_structs! {
     pub struct McpDeploymentCreation {
         pub domain: Domain,
+        pub agents: BTreeMap<AgentTypeName, crate::model::diff::McpDeploymentAgentOptions>,
     }
 
     pub struct McpDeploymentUpdate {

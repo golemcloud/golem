@@ -272,6 +272,7 @@ impl Services {
         let mcp_deployment_service = Arc::new(McpDeploymentService::new(
             repos.mcp_deployment_repo.clone(),
             environment_service.clone(),
+            domain_registration_service.clone(),
         ));
 
         let deployment_write_service = Arc::new(DeploymentWriteService::new(

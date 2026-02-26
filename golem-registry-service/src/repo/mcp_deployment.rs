@@ -23,6 +23,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::blob::Blob;
 use indoc::indoc;
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
@@ -226,14 +227,15 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, false)
-                            RETURNING mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+                            RETURNING mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
                         .bind(revision.hash)
                         .bind(&revision.domain)
+                        .bind(&revision.data)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
                     )
@@ -263,14 +265,15 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, false)
-                            RETURNING mcp_deployment_id, revision_id, hash, domain, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+                            RETURNING mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
                         .bind(revision.hash)
                         .bind(&revision.domain)
+                        .bind(&revision.data)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
                     )
@@ -340,15 +343,18 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .await?;
 
                 // Insert a deletion revision
+                let deletion_data = Blob::new(crate::repo::model::mcp_deployment::McpDeploymentData { agents: Default::default() });
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         INSERT INTO mcp_deployment_revisions
-                        (mcp_deployment_id, revision_id, domain, created_at, created_by, deleted)
-                        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, true)
+                        (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
+                        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, true)
                     "# })
                     .bind(mcp_deployment_id)
                     .bind(revision_id + 1)
+                    .bind(crate::repo::model::hash::SqlBlake3Hash::empty())
                     .bind(&current_domain.0)
+                    .bind(&deletion_data)
                     .bind(user_account_id),
                 )
                 .await?;
@@ -447,6 +453,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         mr.created_by,
                         mr.deleted,
                         mr.domain,
+                        mr.data,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr

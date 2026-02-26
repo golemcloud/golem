@@ -21,3 +21,19 @@ pub struct HttpApiDeploymentDeployProperties {
     pub webhooks_url: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
+
+#[derive(Clone, Debug)]
+pub struct McpDeploymentDeployProperties {
+    pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpDeploymentAgentOptions {
+    // MCP agent configuration options coming soon
+}
+
+impl McpDeploymentAgentOptions {
+    pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentAgentOptions {
+        golem_common::model::diff::McpDeploymentAgentOptions {}
+    }
+}

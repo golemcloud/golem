@@ -15,8 +15,9 @@
 use crate::model::diff::{hash_from_serialized_value, BTreeMapDiff, Diffable, Hash, Hashable};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use desert_rust::BinaryCodec;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, BinaryCodec)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 pub struct McpDeploymentAgentOptions {

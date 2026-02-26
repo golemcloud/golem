@@ -597,7 +597,8 @@ impl From<McpDeploymentError> for ApiError {
         match value {
             McpDeploymentError::ParentEnvironmentNotFound(_)
             | McpDeploymentError::McpDeploymentNotFound(_)
-            | McpDeploymentError::McpDeploymentByDomainNotFound(_) => {
+            | McpDeploymentError::McpDeploymentByDomainNotFound(_)
+            | McpDeploymentError::DomainNotRegistered(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 

@@ -239,12 +239,29 @@ pub async fn get_agent_tool_and_handlers(
     let account_id = compiled_mcp.account_id;
     let environment_id = compiled_mcp.environment_id;
 
-    for agent_type_name in compiled_mcp.agent_types() {
+    let agent_types = compiled_mcp.agent_types();
+
+    tracing::info!(
+        "Found {} agent types for domain {}: {:?}",
+        agent_types.len(),
+        domain.0,
+        agent_types.iter().map(|at| at.0.clone()).collect::<Vec<_>>()
+    );
+
+    for agent_type_name in &agent_types {
         match mcp_definition_lookup
             .resolve_agent_type(domain, &agent_type_name)
             .await
         {
             Ok(registered_agent_type) => {
+                tracing::debug!(
+                    "Resolved agent type {} for domain {}: implemented by component {}, methods: {:?}",
+                    agent_type_name.0,
+                    domain.0,
+                    registered_agent_type.implemented_by.component_id.0,
+                    registered_agent_type.agent_type.methods.iter().map(|m| m.name.clone()).collect::<Vec<_>>()
+                );
+
                 let agent_type = &registered_agent_type.agent_type;
                 let component_id = registered_agent_type.implemented_by.component_id;
                 for method in &agent_type.methods {
@@ -274,6 +291,12 @@ pub async fn get_agent_tool_and_handlers(
                 );
             }
         }
+    }
+
+    if tools.is_empty() {
+        tracing::warn!("No tools found for domain {}", domain.0);
+    } else {
+        tracing::info!("Found {} tools for domain {}", tools.len(), domain.0);
     }
 
     tools

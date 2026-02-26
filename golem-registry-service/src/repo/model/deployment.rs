@@ -387,7 +387,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
     pub mcp_deployments: Vec<DeploymentMcpDeploymentRevisionRecord>,
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
-    pub compiled_mcp: DeploymentMcpCapabilityRecord,
+    pub compiled_mcp: Vec<DeploymentMcpCapabilityRecord>,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
 }
 
@@ -401,7 +401,7 @@ impl DeploymentRevisionCreationRecord {
         http_api_deployments: Vec<HttpApiDeployment>,
         mcp_deployments: Vec<McpDeployment>,
         compiled_routes: Vec<UnboundCompiledRoute>,
-        compiled_mcp: CompiledMcp,
+        compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
     ) -> Self {
         Self {
@@ -450,7 +450,10 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
-            compiled_mcp: DeploymentMcpCapabilityRecord::from_model(compiled_mcp),
+            compiled_mcp: compiled_mcp
+                .into_iter()
+                .map(DeploymentMcpCapabilityRecord::from_model)
+                .collect(),
             registered_agent_types: registered_agent_types
                 .into_iter()
                 .map(|r| {
