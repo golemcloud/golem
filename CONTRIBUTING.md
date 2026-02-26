@@ -103,15 +103,6 @@ To run all CLI tests use
 ```shell
 cargo make cli-tests
 ```
-
-#### Running API tests
-The **API tests** test the REST and gRPC APIs separately:
-
-```shell
-cargo make api-tests-http   # HTTP API tests
-cargo make api-tests-grpc   # gRPC API tests
-```
-
 #### Running sharding tests
 For sharding-related tests with file logging:
 

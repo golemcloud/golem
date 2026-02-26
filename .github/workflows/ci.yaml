@@ -259,8 +259,6 @@ jobs:
             description: "IT #3"
           - name: integration-tests-group4
             description: "IT #4"
-          - name: api-tests
-            description: "API tests"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
