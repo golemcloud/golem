@@ -1612,6 +1612,8 @@ async fn agent_update_constructor_signature(
         .store()
         .await?;
 
+    let first_deployment_revision = user.get_last_deployment_revision(&env.id)?;
+
     let agent1_id = agent_id!("counter-agent", "agent1");
     let agent1 = user.start_agent(&component.id, agent1_id.clone()).await?;
     let result1a = user
@@ -1651,7 +1653,13 @@ async fn agent_update_constructor_signature(
 
     // Still able to call both agents
     let result3a = user
-        .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
+        .invoke_and_await_agent_at_deployment(
+            &component,
+            &agent1_id,
+            first_deployment_revision,
+            "increment",
+            data_value!(),
+        )
         .await?;
 
     let result4a = user
@@ -1663,7 +1671,13 @@ async fn agent_update_constructor_signature(
 
     // Still able to do RPC
     let result3b = user
-        .invoke_and_await_agent(&component, &old_singleton_id, "call", data_value!("agent1"))
+        .invoke_and_await_agent_at_deployment(
+            &component,
+            &old_singleton_id,
+            first_deployment_revision,
+            "call",
+            data_value!("agent1"),
+        )
         .await?;
     assert_eq!(result3b.into_return_value(), Some(Value::U32(4)));
 

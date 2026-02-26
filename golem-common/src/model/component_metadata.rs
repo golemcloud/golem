@@ -15,7 +15,7 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
-use crate::{virtual_exports, SafeDisplay};
+use crate::SafeDisplay;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -72,10 +72,6 @@ impl ComponentMetadata {
             }),
             cache: Arc::default(),
         }
-    }
-
-    pub fn exports(&self) -> &[AnalysedExport] {
-        &self.data.exports
     }
 
     pub fn producers(&self) -> &[Producers] {
@@ -753,7 +749,6 @@ impl RawComponentMetadata {
         }
 
         add_resource_drops(&mut exports);
-        add_virtual_exports(&mut exports);
 
         let memories = wit_analysis
             .linear_memories()
@@ -989,17 +984,6 @@ fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
             result: None,
         }
     }
-}
-
-fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
-    // Some interfaces like the golem/http:incoming-handler do not exist on the component
-    // but are dynamically created by the worker executor based on other existing interfaces.
-
-    if virtual_exports::http_incoming_handler::implements_required_interfaces(exports) {
-        exports.extend(vec![
-            virtual_exports::http_incoming_handler::ANALYZED_EXPORT.clone(),
-        ]);
-    };
 }
 
 mod protobuf {

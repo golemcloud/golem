@@ -11,7 +11,6 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
-use poem_openapi::types::Type;
 use poem_openapi_derive::{Enum, Object, OpenApi};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -43,7 +42,7 @@ impl AgentsApi {
     ) -> Result<Json<AgentInvocationResult>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        if request.idempotency_key.is_empty() {
+        if request.idempotency_key.is_none() {
             request.idempotency_key = idempotency_key.0;
         }
 
@@ -89,6 +88,7 @@ pub struct AgentInvocationRequest {
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
+    pub deployment_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
