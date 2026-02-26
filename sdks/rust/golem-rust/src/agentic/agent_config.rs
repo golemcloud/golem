@@ -15,7 +15,7 @@
 use crate::golem_agentic::golem::agent::common::{ConfigKeyValueType, ConfigValueType};
 use crate::golem_agentic::golem::agent::host::get_config_value;
 use crate::value_and_type::{FromValueAndType, IntoValue};
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 use golem_wasm::WitType;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::Hash;
