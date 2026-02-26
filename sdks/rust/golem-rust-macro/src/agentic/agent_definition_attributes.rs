@@ -110,7 +110,6 @@ pub fn parse_agent_definition_attributes(
                 }
             }
         }
-
         parse_http_expr(expr, &mut http)?;
     }
 
