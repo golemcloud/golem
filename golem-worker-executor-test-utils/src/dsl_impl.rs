@@ -33,6 +33,7 @@ use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
     InitialComponentFile, PluginInstallation,
 };
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::RevertWorkerTarget;
@@ -347,6 +348,7 @@ impl TestDsl for TestWorkerExecutor {
         component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: Option<&IdempotencyKey>,
+        _deployment_revision: Option<DeploymentRevision>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {

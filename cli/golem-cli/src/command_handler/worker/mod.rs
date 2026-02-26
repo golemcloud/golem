@@ -460,6 +460,8 @@ impl WorkerCommandHandler {
             mode,
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
+            component_revision: None,
+            deployment_revision: None,
         };
 
         let clients = self.ctx.golem_clients().await?;

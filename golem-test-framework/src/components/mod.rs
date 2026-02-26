@@ -114,10 +114,7 @@ fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    let message = obj
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let message = obj.get("message").and_then(|v| v.as_str()).unwrap_or("");
 
     let context = extract_span_context(&obj);
 
@@ -316,7 +313,10 @@ impl EnvVarBuilder {
             .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
             .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
             .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "true".to_string())
-            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN", "true".to_string())
+            .with(
+                "GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN",
+                "true".to_string(),
+            )
     }
 
     fn with(mut self, name: &str, value: String) -> Self {

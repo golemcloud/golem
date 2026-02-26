@@ -28,6 +28,7 @@ use golem_common::model::agent::{
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
@@ -750,23 +751,54 @@ impl WorkerService {
         request: AgentInvocationRequest,
         auth: AuthCtx,
     ) -> WorkerResult<AgentInvocationResult> {
-        let registered_agent_type = self
-            .registry_service
-            .resolve_latest_agent_type_by_names(
-                &auth.account_id(),
-                &request.app_name,
-                &request.env_name,
-                &request.agent_type_name,
-            )
-            .await?;
+        let registered_agent_type = match request.deployment_revision {
+            Some(rev) => {
+                let rev_u64 = u64::try_from(rev).map_err(|_| {
+                    WorkerServiceError::Internal(format!(
+                        "Invalid deployment revision (must be non-negative): {rev}"
+                    ))
+                })?;
+                let deployment_revision = DeploymentRevision::new(rev_u64).map_err(|e| {
+                    WorkerServiceError::Internal(format!("Invalid deployment revision: {e}"))
+                })?;
+                self.registry_service
+                    .resolve_agent_type_at_deployment(
+                        &auth.account_id(),
+                        &request.app_name,
+                        &request.env_name,
+                        &request.agent_type_name,
+                        deployment_revision,
+                    )
+                    .await?
+            }
+            None => {
+                self.registry_service
+                    .resolve_latest_agent_type_by_names(
+                        &auth.account_id(),
+                        &request.app_name,
+                        &request.env_name,
+                        &request.agent_type_name,
+                    )
+                    .await?
+            }
+        };
 
-        let component_metadata = self
-            .component_service
-            .get_revision(
-                registered_agent_type.implemented_by.component_id,
-                registered_agent_type.implemented_by.component_revision,
-            )
-            .await?;
+        let component_id = registered_agent_type.implemented_by.component_id;
+        let component_metadata = match request.component_revision {
+            Some(revision) => {
+                self.component_service
+                    .get_revision(component_id, revision)
+                    .await?
+            }
+            None => {
+                self.component_service
+                    .get_revision(
+                        component_id,
+                        registered_agent_type.implemented_by.component_revision,
+                    )
+                    .await?
+            }
+        };
 
         let agent_type = component_metadata
             .metadata
@@ -871,6 +903,7 @@ impl WorkerService {
             } => {
                 let decode_revision = output
                     .component_revision
+                    .or(request.component_revision)
                     .unwrap_or(registered_agent_type.implemented_by.component_revision);
                 let component_metadata_for_decode = self
                     .component_service
