@@ -32,15 +32,16 @@ impl TextEdit {
     }
 }
 
-pub fn apply_edits(source: &str, mut edits: Vec<TextEdit>) -> anyhow::Result<String> {
+pub fn apply_edits(source: &str, edits: Vec<TextEdit>) -> anyhow::Result<String> {
     if edits.is_empty() {
         return Ok(source.to_string());
     }
 
-    edits.sort_by_key(|edit| Reverse(edit.start));
+    let mut indexed: Vec<(usize, TextEdit)> = edits.into_iter().enumerate().collect();
+    indexed.sort_by_key(|(idx, edit)| (Reverse(edit.start), Reverse(*idx)));
 
     let mut output = source.to_string();
-    for edit in edits {
+    for (_, edit) in indexed {
         if edit.start > edit.end || edit.end > output.len() {
             return Err(anyhow!("Invalid edit range {}..{}", edit.start, edit.end));
         }
