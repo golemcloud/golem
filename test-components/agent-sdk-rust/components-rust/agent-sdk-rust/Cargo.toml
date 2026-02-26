@@ -1,5 +1,5 @@
 [package]
-name = "http_rust"
+name = "golem_it_agent_sdk_rust"
 version = "0.0.1"
 edition = "2021"
 

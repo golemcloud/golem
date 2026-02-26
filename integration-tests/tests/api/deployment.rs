@@ -303,14 +303,14 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         .store()
         .await?;
 
-    let deployment_1 = user.deploy_environment(&env.id).await?;
+    let deployment_1 = user.deploy_environment(env.id).await?;
 
     user.component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
         .store()
         .await?;
 
-    let deployment_2 = user.deploy_environment(&env.id).await?;
+    let deployment_2 = user.deploy_environment(env.id).await?;
 
     assert_ne!(deployment_2.revision, deployment_1.revision);
     assert_ne!(deployment_2.deployment_hash, deployment_1.deployment_hash);
@@ -398,7 +398,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
         .store()
         .await?;
 
-    let deployment_1 = user.deploy_environment(&env.id).await?;
+    let deployment_1 = user.deploy_environment(env.id).await?;
 
     client
         .update_component(
@@ -421,7 +421,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
         )
         .await?;
 
-    let deployment_2 = user.deploy_environment(&env.id).await?;
+    let deployment_2 = user.deploy_environment(env.id).await?;
 
     {
         let deployments = client.list_deployments(&env.id.0, None).await?;

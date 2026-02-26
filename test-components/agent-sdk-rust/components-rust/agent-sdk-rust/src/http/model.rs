@@ -15,7 +15,6 @@ pub struct RemainingPathResponse {
     pub tail: String,
 }
 
-
 #[derive(Schema)]
 pub struct PathAndQueryResponse {
     pub id: String,

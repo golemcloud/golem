@@ -29,7 +29,7 @@
 #           - http-rust-api
 
 components:
-  http:rust:
+  golem-it:agent-sdk-rust:
     templates: rust
 
     # Component environment variables can reference system environment variables with minijinja syntax:

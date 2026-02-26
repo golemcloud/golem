@@ -587,7 +587,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         std::slice::from_ref(&agent_type)
     );
 
-    let deployment = user.deploy_environment(&env.id).await?;
+    let deployment = user.deploy_environment(env.id).await?;
 
     let agent_types = client
         .list_deployment_agent_types(&env.id.0, deployment.revision.into())

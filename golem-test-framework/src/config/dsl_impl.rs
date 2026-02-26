@@ -70,6 +70,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, trace};
 use uuid::Uuid;
+use golem_common::model::deployment::{
+    CurrentDeployment, DeploymentCreation, DeploymentVersion,
+};
 
 pub struct NameResolutionCache {
     app_names: Cache<ApplicationId, (), ApplicationName, String>,
@@ -251,11 +254,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         if self.auto_deploy_enabled {
-            let deployment = self.deploy_environment(&component.environment_id).await?;
-            self.last_deployments
-                .write()
-                .unwrap()
-                .insert(component.environment_id, deployment.revision);
+            self.deploy_environment(component.environment_id).await?;
         }
 
         Ok(component)
@@ -355,11 +354,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         if self.auto_deploy_enabled {
-            let deployment = self.deploy_environment(&component.environment_id).await?;
-            self.last_deployments
-                .write()
-                .unwrap()
-                .insert(component.environment_id, deployment.revision);
+            self.deploy_environment(component.environment_id).await?;
         }
 
         Ok(component)
@@ -944,6 +939,35 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             .await;
 
         Ok((application, environment))
+    }
+
+    async fn deploy_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> anyhow::Result<CurrentDeployment> {
+        let client = self.registry_service_client().await;
+
+        let plan = client
+            .get_environment_deployment_plan(&environment_id.0)
+            .await?;
+
+        let deployment = client
+            .deploy_environment(
+                &environment_id.0,
+                &DeploymentCreation {
+                    current_revision: plan.current_revision,
+                    expected_deployment_hash: plan.deployment_hash,
+                    version: DeploymentVersion(Uuid::new_v4().to_string()),
+                },
+            )
+            .await?;
+
+        self.last_deployments
+            .write()
+            .unwrap()
+            .insert(environment_id, deployment.revision);
+
+        Ok(deployment)
     }
 
     fn get_last_deployment_revision(

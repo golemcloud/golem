@@ -38,7 +38,7 @@ use golem_common::model::component::{
 use golem_common::model::component::{LocalAgentConfigEntry, PluginPriority};
 use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentCreation, DeploymentRevision, DeploymentVersion,
+    CurrentDeployment, DeploymentRevision,
 };
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -601,27 +601,8 @@ pub trait TestDslExtended: TestDsl {
 
     async fn deploy_environment(
         &self,
-        environment_id: &EnvironmentId,
-    ) -> anyhow::Result<CurrentDeployment> {
-        let client = self.registry_service_client().await;
-
-        let plan = client
-            .get_environment_deployment_plan(&environment_id.0)
-            .await?;
-
-        let deployment = client
-            .deploy_environment(
-                &environment_id.0,
-                &DeploymentCreation {
-                    current_revision: plan.current_revision,
-                    expected_deployment_hash: plan.deployment_hash,
-                    version: DeploymentVersion(Uuid::new_v4().to_string()),
-                },
-            )
-            .await?;
-
-        Ok(deployment)
-    }
+        environment_id: EnvironmentId,
+    ) -> anyhow::Result<CurrentDeployment>;
 
     fn get_last_deployment_revision(
         &self,

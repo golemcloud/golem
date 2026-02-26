@@ -1,7 +1,4 @@
-mod model;
-
-use model::*;
-
+use super::model::*;
 use golem_rust::{agent_definition, agent_implementation, endpoint, AllowedMimeTypes};
 use golem_rust::agentic::{create_webhook, UnstructuredBinary};
 use serde::Deserialize;

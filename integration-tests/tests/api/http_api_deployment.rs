@@ -444,7 +444,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    let deployment = user.deploy_environment(&env.id).await?;
+    let deployment = user.deploy_environment(env.id).await?;
 
     {
         let fetched_http_api_deployment = client
