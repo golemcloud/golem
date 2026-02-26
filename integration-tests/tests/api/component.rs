@@ -37,7 +37,7 @@ use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
-use pretty_assertions::{assert_eq, assert_ne};
+use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
@@ -1034,17 +1034,17 @@ async fn local_agent_config_with_invalid_type_fails_with_400(
     let downcasted: golem_client::Error<RegistryServiceCreateComponentError> =
         error.downcast().unwrap();
 
-    assert!(matches!(
+    assert_matches!(
         downcasted,
         golem_client::Error::Item(RegistryServiceCreateComponentError::Error400(_))
-    ));
+    );
 
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn local_agent_config_with_undeclared_path_fails_with_400(
+async fn local_agent_config_with_undeclared_path_fails_with_409(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -1068,10 +1068,10 @@ async fn local_agent_config_with_undeclared_path_fails_with_400(
     let downcasted: golem_client::Error<RegistryServiceCreateComponentError> =
         error.downcast().unwrap();
 
-    assert!(matches!(
+    assert_matches!(
         downcasted,
-        golem_client::Error::Item(RegistryServiceCreateComponentError::Error400(_))
-    ));
+        golem_client::Error::Item(RegistryServiceCreateComponentError::Error409(_))
+    );
 
     Ok(())
 }
@@ -1171,10 +1171,10 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
     let downcasted: golem_client::Error<RegistryServiceUpdateComponentError> =
         error.downcast().unwrap();
 
-    assert!(matches!(
+    assert_matches!(
         downcasted,
         golem_client::Error::Item(RegistryServiceUpdateComponentError::Error400(_))
-    ));
+    );
 
     Ok(())
 }

@@ -1128,10 +1128,10 @@ pub struct ConfigKeyValueType {
     pub value: ConfigValueType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -1141,10 +1141,10 @@ pub enum ConfigValueType {
     Shared(ConfigValueTypeShared),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -1154,10 +1154,10 @@ pub struct ConfigValueTypeLocal {
     pub value: AnalysedType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
