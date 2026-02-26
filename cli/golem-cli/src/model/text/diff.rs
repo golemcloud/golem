@@ -186,11 +186,7 @@ impl TextView for DeploymentDiff {
             logln("");
         }
         if !self.mcp_deployments.is_empty() {
-            logln(
-                "MCP deployment changes:"
-                    .log_color_help_group()
-                    .to_string(),
-            );
+            logln("MCP deployment changes:".log_color_help_group().to_string());
             for (domain, mcp_deployment_diff) in &self.mcp_deployments {
                 match mcp_deployment_diff {
                     BTreeMapDiffValue::Create => {

@@ -123,8 +123,12 @@ impl McpDeploymentService {
             })?;
 
         let id = McpDeploymentId::new();
-        let record =
-            McpDeploymentRevisionRecord::creation(id, data.domain.clone(), auth.account_id(), data.agents);
+        let record = McpDeploymentRevisionRecord::creation(
+            id,
+            data.domain.clone(),
+            auth.account_id(),
+            data.agents,
+        );
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo

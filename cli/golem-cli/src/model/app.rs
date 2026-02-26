@@ -1465,7 +1465,9 @@ mod app_builder {
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
-    use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties, McpDeploymentAgentOptions};
+    use crate::model::http_api::{
+        HttpApiDeploymentDeployProperties, McpDeploymentAgentOptions, McpDeploymentDeployProperties,
+    };
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
@@ -1579,7 +1581,8 @@ mod app_builder {
             BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>,
         >,
 
-        mcp_deployments: BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+        mcp_deployments:
+            BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 

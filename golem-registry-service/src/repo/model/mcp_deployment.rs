@@ -15,21 +15,23 @@
 use super::audit::DeletableRevisionAuditFields;
 use super::hash::SqlBlake3Hash;
 use crate::repo::model::datetime::SqlDateTime;
-use golem_service_base::repo::blob::Blob;
+use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry;
-use golem_common::model::diff::{Hashable, McpDeployment as DiffMcpDeployment, McpDeploymentAgentOptions};
+use golem_common::model::diff::{
+    Hashable, McpDeployment as DiffMcpDeployment, McpDeploymentAgentOptions,
+};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentId, McpDeploymentRevision};
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::blob::Blob;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use uuid::Uuid;
-use desert_rust::BinaryCodec;
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpDeploymentRepoError {
@@ -60,7 +62,12 @@ pub struct McpDeploymentRevisionRecord {
 }
 
 impl McpDeploymentRevisionRecord {
-    pub fn creation(mcp_deployment_id: McpDeploymentId, domain: Domain, actor: AccountId, agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>) -> Self {
+    pub fn creation(
+        mcp_deployment_id: McpDeploymentId,
+        domain: Domain,
+        actor: AccountId,
+        agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+    ) -> Self {
         let mut value = Self {
             mcp_deployment_id: mcp_deployment_id.0,
             revision_id: McpDeploymentRevision::INITIAL.into(),
@@ -80,7 +87,9 @@ impl McpDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit,
             domain: deployment.domain.0,
-            data: Blob::new(McpDeploymentData { agents: deployment.agents }),
+            data: Blob::new(McpDeploymentData {
+                agents: deployment.agents,
+            }),
         };
         value.update_hash();
         value
@@ -98,7 +107,9 @@ impl McpDeploymentRevisionRecord {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             domain,
-            data: Blob::new(McpDeploymentData { agents: Default::default() }),
+            data: Blob::new(McpDeploymentData {
+                agents: Default::default(),
+            }),
         };
         value.update_hash();
         value

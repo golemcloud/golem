@@ -245,7 +245,10 @@ pub async fn get_agent_tool_and_handlers(
         "Found {} agent types for domain {}: {:?}",
         agent_types.len(),
         domain.0,
-        agent_types.iter().map(|at| at.0.clone()).collect::<Vec<_>>()
+        agent_types
+            .iter()
+            .map(|at| at.0.clone())
+            .collect::<Vec<_>>()
     );
 
     for agent_type_name in &agent_types {
@@ -259,7 +262,12 @@ pub async fn get_agent_tool_and_handlers(
                     agent_type_name.0,
                     domain.0,
                     registered_agent_type.implemented_by.component_id.0,
-                    registered_agent_type.agent_type.methods.iter().map(|m| m.name.clone()).collect::<Vec<_>>()
+                    registered_agent_type
+                        .agent_type
+                        .methods
+                        .iter()
+                        .map(|m| m.name.clone())
+                        .collect::<Vec<_>>()
                 );
 
                 let agent_type = &registered_agent_type.agent_type;

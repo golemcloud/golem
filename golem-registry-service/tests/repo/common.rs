@@ -1166,7 +1166,9 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         domain: domain.to_string(),
-        data: Blob::new(McpDeploymentData { agents: Default::default() }),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
 
@@ -1201,7 +1203,9 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         revision_id: 1,
         hash: SqlBlake3Hash::empty(),
         domain: new_domain.to_string(),
-        data: Blob::new(McpDeploymentData { agents: Default::default() }),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
 
@@ -1245,7 +1249,9 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         domain: domain.to_string(),
-        data: Blob::new(McpDeploymentData { agents: Default::default() }),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
 
@@ -1269,7 +1275,9 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         revision_id: 1,
         hash: SqlBlake3Hash::empty(),
         domain: domain.to_string(),
-        data: Blob::new(McpDeploymentData { agents: Default::default() }),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
 
@@ -1295,7 +1303,9 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         domain: other_domain.to_string(),
-        data: Blob::new(McpDeploymentData { agents: Default::default() }),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
 

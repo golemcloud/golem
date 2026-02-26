@@ -54,7 +54,9 @@ use crate::model::GuestLanguage;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient, McpDeploymentClient};
+use golem_client::api::{
+    ApplicationClient, ComponentClient, EnvironmentClient, McpDeploymentClient,
+};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -999,13 +1001,8 @@ impl AppCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.0.clone(), v.to_diffable()))
                     .collect();
-                diffable_local_mcp_deployments.insert(
-                    domain.0.clone(),
-                    diff::McpDeployment {
-                        agents,
-                    }
-                    .into(),
-                );
+                diffable_local_mcp_deployments
+                    .insert(domain.0.clone(), diff::McpDeployment { agents }.into());
             }
             diffable_local_mcp_deployments
         };
@@ -1534,7 +1531,10 @@ impl AppCommandHandler {
                     let create = async || {
                         clients
                             .mcp_deployment
-                            .create_mcp_deployment(&deploy_diff.environment.environment_id.0, &mcp_creation)
+                            .create_mcp_deployment(
+                                &deploy_diff.environment.environment_id.0,
+                                &mcp_creation,
+                            )
                             .await
                             .map_err(|e| anyhow::anyhow!(e))
                     };
@@ -1546,7 +1546,10 @@ impl AppCommandHandler {
                             if err_str.contains("not registered") {
                                 self.ctx
                                     .api_domain_handler()
-                                    .register_missing_domain(&deploy_diff.environment.environment_id, &domain)
+                                    .register_missing_domain(
+                                        &deploy_diff.environment.environment_id,
+                                        &domain,
+                                    )
                                     .await?;
                                 create().await
                             } else {

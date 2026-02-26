@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::model::diff::{hash_from_serialized_value, BTreeMapDiff, Diffable, Hash, Hashable};
+use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use desert_rust::BinaryCodec;
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, BinaryCodec)]
 #[serde(rename_all = "camelCase")]
