@@ -1384,7 +1384,7 @@ function formatRemoteMethodArgs(
     if (!tupleElements.length) return '';
     return tupleElements
       .map((elementType, index) => {
-        const name = parameterNames?.[index] ?? argNameForIndex(index);
+        const name = parameterNames?.[index] ?? parameterNameForIndex(index);
         const typeText = checker
           .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
           .replace(IMPORT_TYPE_PREFIX, '')
@@ -1441,7 +1441,7 @@ function getRemoteMethodScheduleParam(
   return 'scheduleAt: string';
 }
 
-function argNameForIndex(index: number): string {
+function parameterNameForIndex(index: number): string {
   if (index >= 0 && index < 26) {
     return String.fromCharCode('a'.charCodeAt(0) + index);
   }
