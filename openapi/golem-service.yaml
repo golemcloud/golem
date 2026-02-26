@@ -7812,6 +7812,9 @@ components:
           format: date-time
         idempotencyKey:
           type: string
+        deploymentRevision:
+          type: integer
+          format: int64
       required:
       - appName
       - envName

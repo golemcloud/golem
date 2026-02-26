@@ -687,13 +687,13 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
         async move {
             let route = Router::new()
                 .route(
-                    "/fork-test/step1/:name/:input",
+                    "/fork-test/step1/{name}/{input}",
                     get(move |args: Path<(String, String)>| async move {
                         Json(format!("{}-{}", args.0 .0, args.0 .1))
                     }),
                 )
                 .route(
-                    "/fork-test/step2/:name/:fork/:phantom_id",
+                    "/fork-test/step2/{name}/{fork}/{phantom_id}",
                     get(move |args: Path<(String, String, String)>| {
                         let fork_phantom_id_tx = fork_phantom_id_tx.clone();
                         async move {
