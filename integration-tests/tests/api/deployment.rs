@@ -229,8 +229,8 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .await?;
 
     let component = user
-        .component(&env.id, "golem_it_agent_http_routes_ts")
-        .name("golem-it:agent-http-routes-ts")
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
         .store()
         .await?;
 
@@ -254,7 +254,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     assert_eq!(plan.components.len(), 1);
     assert_eq!(
         plan.components[0].name,
-        ComponentName("golem-it:agent-http-routes-ts".to_string())
+        ComponentName("golem-it:agent-sdk-ts".to_string())
     );
     assert_eq!(plan.components[0].id, component.id);
     assert_eq!(plan.components[0].revision, component.revision);

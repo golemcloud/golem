@@ -426,8 +426,8 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     let client = deps.registry_service().client(&user.token).await;
 
-    user.component(&env.id, "golem_it_agent_http_routes_ts")
-        .name("golem-it:agent-http-routes-ts")
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
         .store()
         .await?;
 

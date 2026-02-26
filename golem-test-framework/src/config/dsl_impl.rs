@@ -46,6 +46,7 @@ use golem_common::model::component::{
     ComponentRevision, PluginInstallation,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -70,9 +71,6 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::{debug, trace};
 use uuid::Uuid;
-use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentCreation, DeploymentVersion,
-};
 
 pub struct NameResolutionCache {
     app_names: Cache<ApplicationId, (), ApplicationName, String>,

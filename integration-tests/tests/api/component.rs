@@ -18,11 +18,12 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
-    DeployedRegisteredAgentType, ElementSchema, NamedElementSchema, NamedElementSchemas,
-    RegisteredAgentTypeImplementer, Snapshotting,
+    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
+    ComponentModelElementSchema, DataSchema, DeployedRegisteredAgentType, ElementSchema,
+    NamedElementSchema, NamedElementSchemas, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use golem_common::model::base64::Base64;
+use golem_common::model::component::LocalAgentConfigEntry;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
@@ -37,6 +38,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 use pretty_assertions::{assert_eq, assert_ne};
+use serde_json::json;
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
@@ -975,6 +977,203 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
         Err(golem_client::Error::Item(
             RegistryServiceUpdateComponentError::Error409(_)
         ))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_with_local_agent_config(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["foo".to_string()],
+                value: json!(1),
+            },
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["nested".to_string(), "a".to_string()],
+                value: json!(true),
+            },
+        ])
+        .store()
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn local_agent_config_with_invalid_type_fails_with_400(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let result = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["foo".to_string()],
+            value: json!(true),
+        }])
+        .store()
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceCreateComponentError> =
+        error.downcast().unwrap();
+
+    assert!(matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceCreateComponentError::Error400(_))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn local_agent_config_with_undeclared_path_fails_with_400(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let result = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["undeclared".to_string()],
+            value: json!(true),
+        }])
+        .store()
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceCreateComponentError> =
+        error.downcast().unwrap();
+
+    assert!(matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceCreateComponentError::Error400(_))
+    ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn add_new_local_agent_config_entry_during_update(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["foo".to_string()],
+            value: json!(1),
+        }])
+        .store()
+        .await?;
+
+    user.update_component_with(
+        &component.id,
+        component.revision,
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(vec![
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["foo".to_string()],
+                value: json!(2),
+            },
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["bar".to_string()],
+                value: json!("value"),
+            },
+        ]),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn updating_agent_with_invalid_config_entry_fails_with_409(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["foo".to_string()],
+            value: json!(1),
+        }])
+        .store()
+        .await?;
+
+    let result = user
+        .update_component_with(
+            &component.id,
+            component.revision,
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(vec![
+                LocalAgentConfigEntry {
+                    agent: AgentTypeName("ConfigAgent".to_string()),
+                    key: vec!["foo".to_string()],
+                    value: json!(2),
+                },
+                LocalAgentConfigEntry {
+                    agent: AgentTypeName("ConfigAgent".to_string()),
+                    key: vec!["bar".to_string()],
+                    value: json!(1),
+                },
+            ]),
+        )
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceUpdateComponentError> =
+        error.downcast().unwrap();
+
+    assert!(matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceUpdateComponentError::Error400(_))
     ));
 
     Ok(())

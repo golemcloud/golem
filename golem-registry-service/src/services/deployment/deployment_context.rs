@@ -33,6 +33,7 @@ use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_service_base::model::Component;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
     pub agent_type: AgentType,
     pub implemented_by: RegisteredAgentTypeImplementer,

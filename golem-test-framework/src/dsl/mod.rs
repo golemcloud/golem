@@ -37,9 +37,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component::{LocalAgentConfigEntry, PluginPriority};
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentRevision,
-};
+use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
