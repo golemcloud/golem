@@ -141,6 +141,18 @@ pub fn set_scalar(source: &str, path: &[&str], value_literal: &str) -> anyhow::R
     apply_edits(source, edits)
 }
 
+pub fn merge_documents(base: &str, update: &str) -> anyhow::Result<String> {
+    let base_tree = parse_yaml(base)?;
+    let update_tree = parse_yaml(update)?;
+
+    let base_root = root_mapping(&base_tree, base)?;
+    let update_root = root_mapping(&update_tree, update)?;
+
+    let mut edits = Vec::new();
+    merge_mapping_nodes(base, base_root, update, update_root, &mut edits)?;
+    apply_edits(base, edits)
+}
+
 fn parse_yaml(source: &str) -> anyhow::Result<Tree> {
     let mut parser = Parser::new();
     parser
@@ -355,4 +367,208 @@ fn line_end_at(source: &str, pos: usize) -> usize {
         .find('\n')
         .map(|idx| pos + idx + 1)
         .unwrap_or_else(|| source.len())
+}
+
+fn merge_mapping_nodes(
+    base_source: &str,
+    base_mapping: Node<'_>,
+    update_source: &str,
+    update_mapping: Node<'_>,
+    edits: &mut Vec<TextEdit>,
+) -> anyhow::Result<()> {
+    let base_pairs = mapping_pairs(base_mapping, base_source)?;
+    let update_pairs = mapping_pairs(update_mapping, update_source)?;
+    let mut base_index = std::collections::HashMap::new();
+    for (idx, (key, pair_node, value_node)) in base_pairs.iter().enumerate() {
+        base_index.insert(key.clone(), (idx, *pair_node, *value_node));
+    }
+
+    for (key, update_pair, update_value) in update_pairs {
+        if let Some((_, _base_pair, base_value)) = base_index.get(&key) {
+            merge_value_nodes(
+                base_source,
+                *base_value,
+                update_source,
+                update_value,
+                edits,
+            )?;
+            continue;
+        }
+
+        let mut insertion = reindent_block(
+            update_source,
+            update_pair.start_byte(),
+            update_pair.end_byte(),
+            mapping_child_indent(base_source, base_mapping)?,
+        );
+        if !insertion.ends_with('\n') {
+            insertion.push('\n');
+        }
+        let insert_pos = if let Some((_, pair_node, _)) = base_pairs.last() {
+            pair_node.end_byte()
+        } else {
+            base_mapping.end_byte()
+        };
+        let prefix = if base_source[..insert_pos].ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        edits.push(TextEdit::new(
+            insert_pos,
+            insert_pos,
+            format!("{prefix}{insertion}"),
+        ));
+    }
+    Ok(())
+}
+
+fn merge_value_nodes(
+    base_source: &str,
+    base_value: Node<'_>,
+    update_source: &str,
+    update_value: Node<'_>,
+    edits: &mut Vec<TextEdit>,
+) -> anyhow::Result<()> {
+    if let (Some(base_map), Some(update_map)) =
+        (as_block_mapping(base_value), as_block_mapping(update_value))
+    {
+        return merge_mapping_nodes(base_source, base_map, update_source, update_map, edits);
+    }
+    if let (Some(base_seq), Some(update_seq)) =
+        (as_block_sequence(base_value), as_block_sequence(update_value))
+    {
+        return merge_sequence_nodes(base_source, base_seq, update_source, update_seq, edits);
+    }
+
+    let replacement = update_source[update_value.start_byte()..update_value.end_byte()]
+        .trim()
+        .to_string();
+    edits.push(TextEdit::new(
+        base_value.start_byte(),
+        base_value.end_byte(),
+        replacement,
+    ));
+    Ok(())
+}
+
+fn merge_sequence_nodes(
+    base_source: &str,
+    base_seq: Node<'_>,
+    update_source: &str,
+    update_seq: Node<'_>,
+    edits: &mut Vec<TextEdit>,
+) -> anyhow::Result<()> {
+    let base_items = sequence_items(base_seq);
+    let update_items = sequence_items(update_seq);
+    let mut existing = std::collections::HashSet::new();
+    for item in &base_items {
+        let text = normalize_block_text(base_source, item.start_byte(), item.end_byte());
+        existing.insert(text);
+    }
+
+    let indent = sequence_item_indent(base_source, base_seq)?;
+    let insert_pos = if let Some(last) = base_items.last() {
+        last.end_byte()
+    } else {
+        base_seq.end_byte()
+    };
+
+    let mut inserts = String::new();
+    for item in update_items {
+        let text = normalize_block_text(update_source, item.start_byte(), item.end_byte());
+        if existing.contains(&text) {
+            continue;
+        }
+        existing.insert(text);
+        let reindented = reindent_block(update_source, item.start_byte(), item.end_byte(), indent);
+        if !inserts.is_empty() || base_source[..insert_pos].ends_with('\n') {
+            inserts.push('\n');
+        } else {
+            inserts.push('\n');
+        }
+        inserts.push_str(&reindented);
+    }
+
+    if !inserts.is_empty() {
+        edits.push(TextEdit::new(insert_pos, insert_pos, inserts));
+    }
+    Ok(())
+}
+
+fn sequence_items(sequence: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = sequence.walk();
+    sequence
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "block_sequence_item")
+        .collect()
+}
+
+fn as_block_sequence<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    if node.kind() == "block_sequence" {
+        return Some(node);
+    }
+    find_first_kind(node, "block_sequence")
+}
+
+fn mapping_child_indent(source: &str, mapping: Node<'_>) -> anyhow::Result<usize> {
+    let mut cursor = mapping.walk();
+    for child in mapping.named_children(&mut cursor) {
+        if child.kind() == "block_mapping_pair" {
+            return Ok(value_indent(source, child.start_byte()));
+        }
+    }
+    let line_start = line_start_at(source, mapping.start_byte());
+    Ok(mapping.start_byte() - line_start + 2)
+}
+
+fn sequence_item_indent(source: &str, sequence: Node<'_>) -> anyhow::Result<usize> {
+    let items = sequence_items(sequence);
+    if let Some(item) = items.first() {
+        return Ok(value_indent(source, item.start_byte()));
+    }
+    let line_start = line_start_at(source, sequence.start_byte());
+    Ok(sequence.start_byte() - line_start + 2)
+}
+
+fn value_indent(source: &str, pos: usize) -> usize {
+    pos - line_start_at(source, pos)
+}
+
+fn reindent_block(source: &str, start: usize, end: usize, new_indent: usize) -> String {
+    let text = &source[start..end];
+    let old_indent = line_indent_at(source, start);
+    let new_indent_str = " ".repeat(new_indent);
+    let mut out = String::new();
+    for (idx, line) in text.lines().enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        if line.starts_with(&old_indent) {
+            out.push_str(&new_indent_str);
+            out.push_str(&line[old_indent.len()..]);
+        } else if old_indent.trim().is_empty() {
+            let leading = line.chars().take_while(|ch| *ch == ' ').count();
+            let trimmed = &line[leading..];
+            out.push_str(&new_indent_str);
+            out.push_str(&" ".repeat(leading));
+            out.push_str(trimmed);
+        } else {
+            out.push_str(&new_indent_str);
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+fn normalize_block_text(source: &str, start: usize, end: usize) -> String {
+    source[start..end].trim().replace(['\r', '\n'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn line_indent_at(source: &str, pos: usize) -> String {
+    let line_start = line_start_at(source, pos);
+    source[line_start..pos]
+        .chars()
+        .take_while(|ch| *ch == ' ')
+        .collect()
 }

@@ -337,3 +337,69 @@ fn golem_yaml_preserves_formatting() {
     let expected = "app :\n  name  :demo\n\nother :  2\n";
     assert_eq!(updated, expected);
 }
+
+#[test]
+fn golem_yaml_merge_documents() {
+    let base = r#"app:
+  name: demo
+  tags:
+    - a
+    - b
+components:
+  alpha:
+    image: alpha
+  beta:
+    image: beta
+"#;
+    let update = r#"app:
+  name: demo2
+  tags:
+    - b
+    - c
+components:
+  beta:
+    image: beta2
+  gamma:
+    image: gamma
+other: 1
+"#;
+
+    let merged = golem_yaml::merge_documents(base, update).unwrap();
+    let merged_value: serde_yaml::Value = serde_yaml::from_str(&merged).unwrap();
+    let app = merged_value
+        .get("app")
+        .and_then(|value| value.as_mapping())
+        .unwrap();
+    let name = app
+        .get(&serde_yaml::Value::String("name".to_string()))
+        .and_then(|value| value.as_str())
+        .unwrap();
+    assert_eq!(name, "demo2");
+    let tags = app
+        .get(&serde_yaml::Value::String("tags".to_string()))
+        .and_then(|value| value.as_sequence())
+        .unwrap();
+    let tags = tags
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(tags, vec!["a", "b", "c"]);
+
+    let components = merged_value
+        .get("components")
+        .and_then(|value| value.as_mapping())
+        .unwrap();
+    let beta = components
+        .get(&serde_yaml::Value::String("beta".to_string()))
+        .and_then(|value| value.as_mapping())
+        .unwrap();
+    let beta_image = beta
+        .get(&serde_yaml::Value::String("image".to_string()))
+        .and_then(|value| value.as_str())
+        .unwrap();
+    assert_eq!(beta_image, "beta2");
+
+    assert!(components.contains_key(&serde_yaml::Value::String("alpha".to_string())));
+    assert!(components.contains_key(&serde_yaml::Value::String("gamma".to_string())));
+    assert!(merged_value.get("other").is_some());
+}
