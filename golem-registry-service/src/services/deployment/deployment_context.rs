@@ -284,7 +284,7 @@ impl DeploymentContext {
             let mut agent_type_implementers: golem_service_base::mcp::AgentTypeImplementers =
                 HashMap::new();
 
-            for agent_type in mcp_deployment.agents.keys() {
+            for (agent_type, _agent_options) in &mcp_deployment.agents {
                 let registered_agent_type = ok_or_continue!(
                     registered_agent_types.get(agent_type).ok_or(
                         DeployValidationError::McpDeploymentMissingAgentType {
@@ -305,8 +305,8 @@ impl DeploymentContext {
             }
 
             let compiled_mcp = golem_service_base::mcp::CompiledMcp {
-                account_id,
-                environment_id: self.environment.id,
+                account_id: account_id.clone(),
+                environment_id: self.environment.id.clone(),
                 deployment_revision,
                 domain: domain.clone(),
                 agent_type_implementers,

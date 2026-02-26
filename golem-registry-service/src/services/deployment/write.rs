@@ -280,7 +280,7 @@ impl DeploymentWriteService {
             mcp_deployments.len()
         );
 
-        let account_id = environment.owner_account_id;
+        let account_id = environment.owner_account_id.clone();
         let deployment_context = DeploymentContext::new(
             environment,
             components,
