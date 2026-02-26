@@ -250,7 +250,7 @@ pub async fn get_agent_tool_and_handlers(
 
     for agent_type_name in &agent_types {
         match mcp_definition_lookup
-            .resolve_agent_type(domain, &agent_type_name)
+            .resolve_agent_type(domain, agent_type_name)
             .await
         {
             Ok(registered_agent_type) => {
