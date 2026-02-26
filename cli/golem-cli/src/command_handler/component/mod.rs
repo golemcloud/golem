@@ -1072,6 +1072,8 @@ impl ComponentCommandHandler {
                         .unwrap_or_default(),
                     env: component_stager.env(),
                     config_vars: component_stager.config_vars(),
+                    // FIXME: agent-first-config
+                    local_agent_config: Vec::new(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1166,6 +1168,8 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
+                    // FIXME: local-agent-config
+                    local_agent_config: None,
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

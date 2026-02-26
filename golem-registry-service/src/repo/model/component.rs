@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::deployment::DeployRepoError;
-use crate::model::component::{Component, FinalizedComponentRevision};
+use crate::model::component::FinalizedComponentRevision;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
@@ -32,6 +32,7 @@ use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
+use golem_service_base::model::{Component, LocalAgentConfigEntry};
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use golem_service_base::repo::numeric::NumericU64;
@@ -163,6 +164,7 @@ pub struct ComponentRevisionRecord {
     pub env: Json<BTreeMap<String, String>>,
     pub original_config_vars: Json<BTreeMap<String, String>>,
     pub config_vars: Json<BTreeMap<String, String>>,
+    pub local_agent_config: Blob<Vec<LocalAgentConfigEntry>>,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
     pub transformed_object_store_key: String,
@@ -216,6 +218,7 @@ impl ComponentRevisionRecord {
             env: Default::default(),
             original_env: Default::default(),
             config_vars: Default::default(),
+            local_agent_config: Blob::new(Vec::new()),
             original_config_vars: Default::default(),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
@@ -328,6 +331,7 @@ impl ComponentRevisionRecord {
             env: Json(value.env),
             original_config_vars: Json(value.original_config_vars),
             config_vars: Json(value.config_vars),
+            local_agent_config: Blob::new(value.local_agent_config),
             audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
@@ -374,6 +378,7 @@ impl ComponentExtRevisionRecord {
                 .collect::<Result<_, _>>()?,
             env: self.revision.env.0,
             config_vars: self.revision.config_vars.0,
+            local_agent_config: self.revision.local_agent_config.into_value(),
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
             original_files: self

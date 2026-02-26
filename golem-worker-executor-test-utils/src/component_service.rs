@@ -19,10 +19,10 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_worker_executor::services::component::ComponentService;
 use std::collections::{HashMap, HashSet};
@@ -31,12 +31,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::spawn_blocking;
 use tracing::{debug, warn, Instrument};
-use wasmtime::component::Component;
 use wasmtime::Engine;
 
 pub struct ComponentServiceLocalFileSystem {
     root: PathBuf,
-    component_cache: Cache<CacheKey, (), Component, WorkerExecutorError>,
+    component_cache: Cache<CacheKey, (), wasmtime::component::Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     index: RwLock<ComponentMetadataIndex>,
     updating_index: Semaphore,
@@ -146,7 +145,7 @@ impl ComponentServiceLocalFileSystem {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<Component, WorkerExecutorError> {
+    ) -> Result<wasmtime::component::Component, WorkerExecutorError> {
         let key = CacheKey {
             component_id,
             component_revision,
@@ -179,13 +178,12 @@ impl ComponentServiceLocalFileSystem {
                             let component = spawn_blocking({
                                 let component_id = component_id;
                                 move || {
-                                    Component::from_binary(&engine, &bytes).map_err(|e| {
-                                        WorkerExecutorError::ComponentParseFailed {
+                                    wasmtime::component::Component::from_binary(&engine, &bytes)
+                                        .map_err(|e| WorkerExecutorError::ComponentParseFailed {
                                             component_id,
                                             component_revision,
                                             reason: format!("{e}"),
-                                        }
-                                    })
+                                        })
                                 }
                             })
                             .instrument(tracing::Span::current())
@@ -224,7 +222,7 @@ impl ComponentServiceLocalFileSystem {
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
+    ) -> Result<Component, WorkerExecutorError> {
         let key = CacheKey {
             component_id,
             component_revision,
@@ -247,7 +245,7 @@ impl ComponentServiceLocalFileSystem {
     async fn get_latest_metadata(
         &self,
         component_id: ComponentId,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
+    ) -> Result<Component, WorkerExecutorError> {
         self.refresh_index().await?;
 
         let index = self.index.read().await;
@@ -281,7 +279,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         engine: &Engine,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
+    ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
         let key = CacheKey {
             component_id,
             component_revision,
@@ -310,14 +308,14 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             )
             .await?;
 
-        Ok((component, ComponentDto::from(metadata)))
+        Ok((component, Component::from(metadata)))
     }
 
     async fn get_metadata(
         &self,
         component_id: ComponentId,
         forced_revision: Option<ComponentRevision>,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
+    ) -> Result<Component, WorkerExecutorError> {
         let result = match forced_revision {
             Some(version) => self.get_metadata_for_version(component_id, version).await?,
             None => self.get_latest_metadata(component_id).await?,
@@ -341,13 +339,13 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             .cloned())
     }
 
-    async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
+    async fn all_cached_metadata(&self) -> Vec<Component> {
         self.index
             .read()
             .await
             .metadata
             .values()
-            .map(|local_metadata| ComponentDto::from(local_metadata.clone()))
+            .map(|local_metadata| Component::from(local_metadata.clone()))
             .collect()
     }
 }
@@ -379,7 +377,7 @@ struct CacheKey {
 fn create_component_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<CacheKey, (), Component, WorkerExecutorError> {
+) -> Cache<CacheKey, (), wasmtime::component::Component, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),

@@ -264,6 +264,8 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidPluginScope { .. }
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. }
+            | ComponentError::AgentConfigDuplicateValue { .. }
+            | ComponentError::AgentConfigTypeMismatch { .. }
             | ComponentError::EnvironmentPluginNotFound(_) => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 cause: None,
@@ -273,6 +275,9 @@ impl From<ComponentError> for ApiError {
             | ComponentError::ComponentVersionAlreadyExists(_)
             | ComponentError::ConflictingPluginPriority(_)
             | ComponentError::ConflictingEnvironmentPluginGrantId(_)
+            | ComponentError::AgentConfigNotDeclared { .. }
+            | ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed { .. }
+            | ComponentError::AgentConfigOldConfigNotValid { .. }
             | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }

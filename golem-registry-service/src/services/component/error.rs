@@ -19,6 +19,7 @@ use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::plugin_registration::PluginRegistrationError;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{ComponentFileContentHash, ComponentFilePath};
 use golem_common::model::component::{ComponentId, ComponentName};
@@ -79,6 +80,36 @@ pub enum ComponentError {
     ConflictingEnvironmentPluginGrantId(EnvironmentPluginGrantId),
     #[error("agent type for name {0} not found in environment")]
     AgentTypeForNameNotFound(String),
+    #[error("Config for agent {agent} at key {rendered_key} is not declared", rendered_key = key.join("."))]
+    AgentConfigNotDeclared {
+        agent: AgentTypeName,
+        key: Vec<String>,
+    },
+    #[error(
+        "Config for agent {agent} at key {rendered_key} has the wrong type: [{rendered_errors}]",
+        rendered_key = key.join("."),
+        rendered_errors = errors.join(", ")
+    )]
+    AgentConfigTypeMismatch {
+        agent: AgentTypeName,
+        key: Vec<String>,
+        errors: Vec<String>,
+    },
+    #[error("Config for agent {agent} at key {rendered_key} is shared and cannot be provided here", rendered_key = key.join("."))]
+    AgentConfigProvidedSharedWhereOnlyLocalAllowed {
+        agent: AgentTypeName,
+        key: Vec<String>,
+    },
+    #[error("Multiple config values for agent {agent} at config key {rendered_key} provided", rendered_key = key.join("."))]
+    AgentConfigDuplicateValue {
+        agent: AgentTypeName,
+        key: Vec<String>,
+    },
+    #[error("Old config value for agent {agent} at config key {rendered_key} is no longer valid due to an updated agent.", rendered_key = key.join("."))]
+    AgentConfigOldConfigNotValid {
+        agent: AgentTypeName,
+        key: Vec<String>,
+    },
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -110,6 +141,11 @@ impl SafeDisplay for ComponentError {
             Self::ComponentNotFound(_) => self.to_string(),
             Self::ComponentByNameNotFound(_) => self.to_string(),
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
+            Self::AgentConfigNotDeclared { .. } => self.to_string(),
+            Self::AgentConfigTypeMismatch { .. } => self.to_string(),
+            Self::AgentConfigProvidedSharedWhereOnlyLocalAllowed { .. } => self.to_string(),
+            Self::AgentConfigDuplicateValue { .. } => self.to_string(),
+            Self::AgentConfigOldConfigNotValid { .. } => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

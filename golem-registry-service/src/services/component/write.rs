@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::ComponentError;
-use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
@@ -26,6 +25,8 @@ use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
 use anyhow::Context;
+use golem_common::base_model::component::LocalAgentConfigEntry as CommonLocalAgentConfigEntry;
+use golem_common::model::agent::{AgentType, ConfigValueType};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileContentHash, ComponentFileOptions, ComponentFilePath,
@@ -37,7 +38,11 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::{Component, LocalAgentConfigEntry};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_wasm::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
@@ -135,6 +140,11 @@ impl ComponentWriteService {
             .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;
 
+        let local_agent_config = validate_and_transform_local_agent_config_entries(
+            &component_creation.agent_types,
+            component_creation.local_agent_config,
+        )?;
+
         let new_revision = NewComponentRevision::new(
             component_id,
             ComponentRevision::INITIAL,
@@ -143,6 +153,7 @@ impl ComponentWriteService {
             initial_component_files,
             component_creation.env,
             component_creation.config_vars,
+            local_agent_config,
             wasm_hash,
             wasm_object_store_key,
             self.plugin_installations_for_new_component(
@@ -268,6 +279,20 @@ impl ComponentWriteService {
             )
         };
 
+        let agent_types = component_update
+            .agent_types
+            .unwrap_or(component.metadata.agent_types().to_vec());
+
+        let local_agent_config = if let Some(updated) = component_update.local_agent_config {
+            validate_and_transform_local_agent_config_entries(&agent_types, updated)?
+        } else {
+            check_transformed_local_agent_config_entries_match(
+                &agent_types,
+                &component.local_agent_config,
+            )?;
+            component.local_agent_config
+        };
+
         let new_revision = NewComponentRevision::new(
             component_id,
             component.revision.next()?,
@@ -285,6 +310,7 @@ impl ComponentWriteService {
             component_update
                 .config_vars
                 .unwrap_or(component.config_vars),
+            local_agent_config,
             wasm_hash,
             wasm_object_store_key,
             self.update_plugin_installations(
@@ -294,9 +320,7 @@ impl ComponentWriteService {
                 auth,
             )
             .await?,
-            component_update
-                .agent_types
-                .unwrap_or(component.metadata.agent_types().to_vec()),
+            agent_types,
         );
 
         let finalized_revision = self
@@ -691,4 +715,105 @@ impl ComponentWriteService {
 
         Ok(finalized_revision)
     }
+}
+
+fn validate_and_transform_local_agent_config_entries(
+    agent_types: &[AgentType],
+    mut agent_local_config: Vec<CommonLocalAgentConfigEntry>,
+) -> Result<Vec<LocalAgentConfigEntry>, ComponentError> {
+    let mut results = Vec::new();
+
+    for agent_type in agent_types {
+        let mut seen_agent_config_keys = HashSet::new();
+
+        let applicable_config_values =
+            agent_local_config.extract_if(.., |alc| alc.agent == agent_type.type_name);
+        for config_value in applicable_config_values {
+            let matching_declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.key == config_value.key)
+                .ok_or_else(|| ComponentError::AgentConfigNotDeclared {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                })?;
+
+            let analysed_type: AnalysedType = match &matching_declaration.value {
+                ConfigValueType::Local(inner) => inner.value.clone(),
+                ConfigValueType::Shared(_) => {
+                    return Err(
+                        ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed {
+                            agent: agent_type.type_name.clone(),
+                            key: config_value.key,
+                        },
+                    );
+                }
+            };
+
+            let value = ValueAndType::parse_with_type(&config_value.value, &analysed_type)
+                .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                    errors,
+                })?;
+
+            let result = LocalAgentConfigEntry {
+                agent: config_value.agent,
+                key: config_value.key,
+                value,
+            };
+
+            if !seen_agent_config_keys.insert(result.key.clone()) {
+                return Err(ComponentError::AgentConfigDuplicateValue {
+                    agent: agent_type.type_name.clone(),
+                    key: result.key.clone(),
+                });
+            }
+
+            results.push(result);
+        }
+    }
+
+    Ok(results)
+}
+
+fn check_transformed_local_agent_config_entries_match(
+    agent_types: &[AgentType],
+    agent_local_config: &[LocalAgentConfigEntry],
+) -> Result<(), ComponentError> {
+    for agent_type in agent_types {
+        let applicable_config_values = agent_local_config
+            .iter()
+            .filter(|alc| alc.agent == agent_type.type_name);
+        for config_value in applicable_config_values {
+            let matching_declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.key == config_value.key)
+                .ok_or_else(|| ComponentError::AgentConfigNotDeclared {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                })?;
+
+            let analysed_type: &AnalysedType = match &matching_declaration.value {
+                ConfigValueType::Local(inner) => &inner.value,
+                ConfigValueType::Shared(_) => {
+                    return Err(
+                        ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed {
+                            agent: agent_type.type_name.clone(),
+                            key: config_value.key.clone(),
+                        },
+                    );
+                }
+            };
+
+            if config_value.value.typ != *analysed_type {
+                return Err(ComponentError::AgentConfigOldConfigNotValid {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
