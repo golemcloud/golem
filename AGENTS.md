@@ -79,12 +79,17 @@ cargo build -p golem       # Build the golem binary
 
 Or build everything together with `cargo make build` and run the same binary.
 
+## Skills
+
+Load these skills for guided workflows on complex tasks:
+
+| Skill | When to Use |
+|-------|-------------|
+| `modifying-http-endpoints` | Adding or modifying REST API endpoints (covers OpenAPI regeneration, golem-client rebuild, type mappings) |
+
 ## Code Generation
 
-When modifying REST API endpoints:
-```shell
-cargo make generate-openapi   # Regenerate OpenAPI specs
-```
+When modifying REST API endpoints, load the `modifying-http-endpoints` skill.
 
 When modifying service configuration types:
 ```shell
