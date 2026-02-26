@@ -88,6 +88,12 @@ export type LiteTypeJSON =
     }
   | { kind: 'others'; name?: string; optional: boolean; recursive: boolean }
   | {
+      kind: 'config';
+      name?: string;
+      optional: boolean;
+      properties: { path: string[]; secret: boolean; type: LiteTypeJSON }[];
+    }
+  | {
       kind: 'unresolved-type';
       name?: string;
       optional: boolean;
