@@ -193,6 +193,9 @@ impl McpDeploymentService {
         if let Some(domain) = update.domain {
             mcp_deployment.domain = domain;
         };
+        if let Some(agents) = update.agents {
+            mcp_deployment.agents = agents;
+        };
 
         let record = McpDeploymentRevisionRecord::from_model(
             mcp_deployment,

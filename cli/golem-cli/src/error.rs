@@ -77,7 +77,8 @@ pub mod service {
         ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
         LoginCurrentLoginTokenError, LoginLoginOauth2Error, LoginPollOauth2WebflowError,
         LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
-        LoginSubmitOauth2WebflowCallbackError, PluginError, TokenError, WorkerError,
+        LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, TokenError,
+        WorkerError,
     };
     use golem_common::model::{PromiseId, WorkerId};
     use itertools::Itertools;
@@ -983,6 +984,47 @@ pub mod service {
                     message: error.error,
                 },
                 ApiDomainError::Error500(error) => ServiceErrorResponse {
+                    status_code: 500,
+                    message: error.error,
+                },
+            }
+        }
+    }
+
+    impl HasServiceName for McpDeploymentError {
+        fn service_name() -> &'static str {
+            "MCP Deployment"
+        }
+    }
+
+    impl From<McpDeploymentError> for ServiceErrorResponse {
+        fn from(value: McpDeploymentError) -> Self {
+            match value {
+                McpDeploymentError::Error400(errors) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: errors.errors.join("\n"),
+                },
+                McpDeploymentError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                McpDeploymentError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                McpDeploymentError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                McpDeploymentError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                McpDeploymentError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
+                McpDeploymentError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
                 },

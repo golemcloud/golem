@@ -21,7 +21,7 @@ use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdent
 use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
 use anyhow::{anyhow, bail};
-use golem_client::api::ApiDeploymentClient;
+use golem_client::api::{ApiDeploymentClient, McpDeploymentClient};
 use golem_common::cache::SimpleCache;
 use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
@@ -358,6 +358,91 @@ impl ApiDeploymentCommandHandler {
             "Created",
             format!(
                 "HTTP API deployment revision: {} {}",
+                deployment.domain.0.log_color_highlight(),
+                deployment.revision.to_string().log_color_highlight()
+            ),
+        );
+
+        Ok(())
+    }
+
+    pub async fn delete_staged_mcp_deployment(
+        &self,
+        mcp_deployment: &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Deleting",
+            format!(
+                "MCP deployment {}",
+                mcp_deployment.domain.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .mcp_deployment
+            .delete_mcp_deployment(&mcp_deployment.id.0, mcp_deployment.revision.into())
+            .await
+            .map_service_error()?;
+
+        log_action(
+            "Deleted",
+            format!(
+                "MCP deployment revision: {} {}",
+                mcp_deployment.domain.0.log_color_highlight(),
+                mcp_deployment.revision.to_string().log_color_highlight()
+            ),
+        );
+
+        Ok(())
+    }
+
+    pub async fn update_staged_mcp_deployment(
+        &self,
+        mcp_deployment: &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry,
+        update: &golem_common::model::mcp_deployment::McpDeploymentUpdate,
+        diff: &diff::DiffForHashOf<diff::McpDeployment>,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Updating",
+            format!(
+                "MCP deployment {}",
+                mcp_deployment.domain.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        let agents_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
+        };
+
+        let deployment = self
+            .ctx
+            .golem_clients()
+            .await?
+            .mcp_deployment
+            .update_mcp_deployment(
+                &mcp_deployment.id.0,
+                &golem_common::model::mcp_deployment::McpDeploymentUpdate {
+                    current_revision: update.current_revision,
+                    domain: update.domain.clone(),
+                    agents: if agents_changed {
+                        update.agents.clone()
+                    } else {
+                        None
+                    },
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        log_action(
+            "Updated",
+            format!(
+                "MCP deployment revision: {} {}",
                 deployment.domain.0.log_color_highlight(),
                 deployment.revision.to_string().log_color_highlight()
             ),

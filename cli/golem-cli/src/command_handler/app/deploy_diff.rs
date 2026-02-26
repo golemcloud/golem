@@ -277,6 +277,22 @@ impl DeployDiff {
             })
     }
 
+    pub fn staged_mcp_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
+        self.staged_deployment
+            .mcp_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in staged deployment",
+                    domain
+                )
+            })
+    }
+
     pub fn current_component_identity(
         &self,
         component_name: &ComponentName,

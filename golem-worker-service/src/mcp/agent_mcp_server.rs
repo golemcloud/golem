@@ -41,14 +41,12 @@ pub struct GolemAgentMcpServer {
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
     tools: Arc<DashMap<String, Tool>>,
     domain: Arc<RwLock<Option<Domain>>>,
-    agent_id: Option<AgentId>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
     worker_service: Arc<WorkerService>,
 }
 
 impl GolemAgentMcpServer {
     pub fn new(
-        agent_id: Option<AgentId>,
         mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
         worker_service: Arc<WorkerService>,
     ) -> Self {
@@ -57,7 +55,6 @@ impl GolemAgentMcpServer {
             tools: Arc::new(DashMap::new()),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
-            agent_id,
             mcp_definitions_lookup,
             worker_service,
         }
@@ -158,8 +155,7 @@ impl GolemAgentMcpServer {
     }
 
     async fn tool_router(&self, domain: &Domain) -> ToolRouter<GolemAgentMcpServer> {
-        let tool_handlers =
-            get_agent_tool_and_handlers(&self.agent_id, domain, &self.mcp_definitions_lookup).await;
+        let tool_handlers = get_agent_tool_and_handlers(domain, &self.mcp_definitions_lookup).await;
 
         let mut router = ToolRouter::<GolemAgentMcpServer>::new();
 
@@ -222,7 +218,6 @@ where
 }
 
 pub async fn get_agent_tool_and_handlers(
-    _agent_id: &Option<AgentId>,
     domain: &Domain,
     mcp_definition_lookup: &Arc<dyn McpCapabilityLookup>,
 ) -> Vec<AgentMcpTool> {

@@ -238,7 +238,6 @@ impl WorkerService {
         let service = StreamableHttpService::new(
             move || {
                 Ok(GolemAgentMcpServer::new(
-                    None,
                     lookup.clone(),
                     worker_service.clone(),
                 ))

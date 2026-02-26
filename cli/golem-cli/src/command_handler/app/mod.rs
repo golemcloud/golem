@@ -1568,16 +1568,35 @@ impl AppCommandHandler {
                     );
                 }
                 diff::BTreeMapDiffValue::Delete => {
-                    log_warn_action(
-                        "Deleting",
-                        format!("MCP deployment {}", domain.0.log_color_highlight()),
-                    );
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    mcp_deployment_handler
+                        .delete_staged_mcp_deployment(
+                            deploy_diff.staged_mcp_deployment_identity(&domain),
+                        )
+                        .await?
                 }
-                diff::BTreeMapDiffValue::Update(_mcp_deployment_diff) => {
-                    log_warn_action(
-                        "Updating",
-                        format!("MCP deployment {}", domain.0.log_color_highlight()),
-                    );
+                diff::BTreeMapDiffValue::Update(mcp_deployment_diff) => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
+                    let agents = mcp_deployment
+                        .agents
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_diffable()))
+                        .collect();
+
+                    mcp_deployment_handler
+                        .update_staged_mcp_deployment(
+                            deploy_diff.staged_mcp_deployment_identity(&domain),
+                            &golem_common::model::mcp_deployment::McpDeploymentUpdate {
+                                current_revision: deploy_diff
+                                    .staged_mcp_deployment_identity(&domain)
+                                    .revision,
+                                domain: Some(domain.clone()),
+                                agents: Some(agents),
+                            },
+                            mcp_deployment_diff,
+                        )
+                        .await?
                 }
             }
         }
