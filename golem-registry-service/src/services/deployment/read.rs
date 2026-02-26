@@ -389,4 +389,45 @@ impl DeploymentService {
         self.get_deployed_agent_type(environment.id, agent_type_name)
             .await
     }
+
+    pub async fn get_agent_type_by_names_at_deployment(
+        &self,
+        account_id: AccountId,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<DeployedRegisteredAgentType, DeploymentError> {
+        let application = self
+            .application_service
+            .get_in_account(account_id, app_name, auth)
+            .await?;
+
+        let environment = self
+            .environment_service
+            .get_in_application(application.id, environment_name, auth)
+            .await?;
+
+        // Validate that the deployment revision exists in this environment
+        self.deployment_repo
+            .get_deployment_revision(environment.id.0, deployment_revision.into())
+            .await?
+            .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?;
+
+        let agent_type = self
+            .deployment_repo
+            .get_deployment_agent_type(
+                environment.id.0,
+                deployment_revision.into(),
+                &agent_type_name.0,
+            )
+            .await?
+            .ok_or(DeploymentError::AgentTypeNotFound(
+                agent_type_name.0.clone(),
+            ))?
+            .try_into()?;
+
+        Ok(agent_type)
+    }
 }
