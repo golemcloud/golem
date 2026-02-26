@@ -30,6 +30,7 @@ use url::Url;
 pub mod blob_storage;
 pub mod component_compilation_service;
 mod docker;
+mod dynamic_span;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
@@ -103,22 +104,103 @@ fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
         return;
     };
 
-    let log_level = obj
+    let level = obj
         .get("level")
         .and_then(|v| v.as_str())
-        .and_then(parse_log_level)
-        .unwrap_or_else(|| tracing_to_log_level(fallback_level));
+        .and_then(parse_tracing_level)
+        .unwrap_or(fallback_level);
 
     let target = obj
         .get("target")
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+        .unwrap_or("child_process");
 
-    let message = obj.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    let file = obj
+        .get("filename")
+        .and_then(|v| v.as_str());
 
-    let context = extract_span_context(&obj);
+    let line = obj
+        .get("line_number")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
 
-    log::log!(target: target, log_level, "{prefix} {message}{context}");
+    let message = obj
+        .get("fields")
+        .and_then(|f| f.get("message"))
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("message").and_then(|v| v.as_str()))
+        .unwrap_or("");
+
+    let span_infos = parse_span_infos(&obj);
+    // Create and enter each span before creating the next, so each becomes
+    // a child of the previous one (proper nesting).
+    let _entered: Vec<tracing::span::EnteredSpan> = span_infos
+        .iter()
+        .map(|(name, fields)| dynamic_span::make_span(prefix, name, fields).entered())
+        .collect();
+
+    let event_fields = format_kv_fields(
+        obj.get("fields").and_then(|f| f.as_object()),
+        &["message"],
+    );
+
+    let msg = if event_fields.is_empty() {
+        format!("{prefix} {message}")
+    } else {
+        format!("{prefix} {message} {event_fields}")
+    };
+    dynamic_span::dispatch_event(target, level, &msg, file, line);
+}
+
+fn parse_span_infos(obj: &serde_json::Value) -> Vec<(String, Vec<(String, String)>)> {
+    obj.get("spans")
+        .and_then(|s| s.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|span_obj| {
+                    let name = span_obj.get("name")?.as_str()?.to_string();
+                    let fields =
+                        parse_kv_fields(span_obj.as_object(), &["name"]);
+                    Some((name, fields))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_kv_fields(
+    map: Option<&serde_json::Map<String, serde_json::Value>>,
+    skip: &[&str],
+) -> Vec<(String, String)> {
+    let Some(map) = map else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter(|(k, _)| !skip.contains(&k.as_str()))
+        .map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (k.clone(), val)
+        })
+        .collect()
+}
+
+fn format_kv_fields(
+    map: Option<&serde_json::Map<String, serde_json::Value>>,
+    skip: &[&str],
+) -> String {
+    let pairs = parse_kv_fields(map, skip);
+    if pairs.is_empty() {
+        String::new()
+    } else {
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 fn emit_at_level(level: Level, prefix: &str, line: &str) {
@@ -131,60 +213,19 @@ fn emit_at_level(level: Level, prefix: &str, line: &str) {
     }
 }
 
-fn parse_log_level(s: &str) -> Option<log::Level> {
+fn parse_tracing_level(s: &str) -> Option<Level> {
     let s = s.trim();
     let s = s
         .strip_prefix("Level(")
         .and_then(|s| s.strip_suffix(')'))
         .unwrap_or(s);
     match s.to_uppercase().as_str() {
-        "TRACE" => Some(log::Level::Trace),
-        "DEBUG" => Some(log::Level::Debug),
-        "INFO" => Some(log::Level::Info),
-        "WARN" => Some(log::Level::Warn),
-        "ERROR" => Some(log::Level::Error),
+        "TRACE" => Some(Level::TRACE),
+        "DEBUG" => Some(Level::DEBUG),
+        "INFO" => Some(Level::INFO),
+        "WARN" => Some(Level::WARN),
+        "ERROR" => Some(Level::ERROR),
         _ => None,
-    }
-}
-
-fn tracing_to_log_level(level: Level) -> log::Level {
-    match level {
-        Level::TRACE => log::Level::Trace,
-        Level::DEBUG => log::Level::Debug,
-        Level::INFO => log::Level::Info,
-        Level::WARN => log::Level::Warn,
-        Level::ERROR => log::Level::Error,
-    }
-}
-
-const RESERVED_KEYS: &[&str] = &["timestamp", "level", "target", "message"];
-
-fn extract_span_context(obj: &serde_json::Value) -> String {
-    let Some(map) = obj.as_object() else {
-        return String::new();
-    };
-    let mut pairs: Vec<String> = Vec::new();
-    for (k, v) in map.iter() {
-        if RESERVED_KEYS.contains(&k.as_str()) {
-            continue;
-        }
-        match v {
-            serde_json::Value::String(s) => pairs.push(format!("{k}={s}")),
-            serde_json::Value::Object(inner) => {
-                for (ik, iv) in inner {
-                    match iv {
-                        serde_json::Value::String(s) => pairs.push(format!("{ik}={s}")),
-                        other => pairs.push(format!("{ik}={other}")),
-                    }
-                }
-            }
-            other => pairs.push(format!("{k}={other}")),
-        }
-    }
-    if pairs.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", pairs.join(" "))
     }
 }
 
@@ -312,9 +353,13 @@ impl EnvVarBuilder {
             .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
             .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
             .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
-            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "true".to_string())
+            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "false".to_string())
             .with(
                 "GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN",
+                "false".to_string(),
+            )
+            .with(
+                "GOLEM__TRACING__STDOUT__JSON_SOURCE_LOCATION",
                 "true".to_string(),
             )
     }

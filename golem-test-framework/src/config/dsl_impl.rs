@@ -68,7 +68,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
-use tracing::debug;
+use tracing::{debug, trace};
 use uuid::Uuid;
 
 pub struct NameResolutionCache {
@@ -230,7 +230,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let agent_types = extract_agent_types(&source_path, false, true).await?;
 
-        debug!("Agent types in component {component_name}:\n{agent_types:#?}");
+        trace!("Agent types in component {component_name}:\n{agent_types:#?}");
 
         let component = client
             .create_component(

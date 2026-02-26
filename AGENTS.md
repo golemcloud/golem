@@ -110,6 +110,13 @@ Use `--nocapture` when debugging tests to allow debugger attachment:
 cargo test -p <crate> <test> -- --nocapture
 ```
 
+**Always save test output to a file** when running worker executor tests, integration tests, or CLI tests. These tests are slow and produce potentially thousands of lines of logs. Never pipe output directly to `grep`, `head`, `tail`, etc. — if you need to examine different parts of the output, you would have to re-run the entire slow test. Instead:
+```shell
+cargo test -p <crate> <test> -- --nocapture > tmp/test_output.txt 2>&1
+# Then search/inspect the saved file as needed
+grep -n "pattern" tmp/test_output.txt
+```
+
 **Handling hanging tests:** Load the `debugging-hanging-tests` skill for a step-by-step workflow.
 
 ## Project Structure

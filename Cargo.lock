@@ -4318,6 +4318,7 @@ dependencies = [
  "tokio-tungstenite 0.25.0",
  "tonic 0.14.2",
  "tracing",
+ "tracing-core",
  "tryhard",
  "url",
  "uuid",

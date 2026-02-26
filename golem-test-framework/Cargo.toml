@@ -49,6 +49,7 @@ tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
+tracing-core = { workspace = true }
 tryhard = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

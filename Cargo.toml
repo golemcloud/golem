@@ -257,6 +257,7 @@ tonic-prost-build = "0.14.2"
 tonic-reflection = "0.14.2"
 tonic-tracing-opentelemetry = "0.30.0"
 tracing = { version = "0.1.41", features = ["log"] }
+tracing-core = "0.1"
 tracing-futures = "0.2.5"
 tracing-opentelemetry = "0.31.0"
 tracing-serde = "0.2.0"
