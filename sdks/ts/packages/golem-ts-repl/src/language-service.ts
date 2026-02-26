@@ -45,6 +45,7 @@ export type SnippetCompletion = {
 const SNIPPET_FILE_NAME = '__snippet__.ts';
 
 export class LanguageService {
+  private readonly config: Config;
   private readonly snippetImports;
   private project: tsm.Project;
   private snippetHistory: string;
@@ -53,6 +54,7 @@ export class LanguageService {
   private snippetStartPos: number;
 
   constructor(config: Config, replCliFlags: ReplCliFlags) {
+    this.config = config;
     this.snippetImports = replCliFlags.disableAutoImports
       ? ''
       : Object.entries(config.agents)
@@ -138,10 +140,15 @@ export class LanguageService {
     const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
     if (typeInfo) {
       const checker = this.project.getTypeChecker();
+      const parameterNames = this.getRemoteMethodParameterNames(
+        typeInfo.fullExpressionNode,
+        checker,
+      );
       remoteMethodExpansion = getRemoteMethodExpansion(
         typeInfo.type,
         typeInfo.fullExpressionNode,
         checker,
+        parameterNames,
       );
     }
 
@@ -174,10 +181,15 @@ export class LanguageService {
     let typeText = typeAsLiteralType
       ? typeAsLiteralType
       : checker.getTypeText(typeInfo.type, typeInfo.fullExpressionNode);
+    const parameterNames = this.getRemoteMethodParameterNames(
+      typeInfo.fullExpressionNode,
+      checker,
+    );
     const remoteMethodExpansion = getRemoteMethodExpansion(
       typeInfo.type,
       typeInfo.fullExpressionNode,
       checker,
+      parameterNames,
     );
     if (remoteMethodExpansion) {
       typeText = REMOTE_METHOD_ALIAS;
@@ -346,7 +358,14 @@ export class LanguageService {
         if (signatures.length === 0) return;
         const rawTypeText = checker.getTypeText(propType, clientDecl);
         let typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
-        const remoteMethodSignature = getRemoteMethodClientSignature(propType, checker, clientDecl);
+        const methodParameterNames =
+          this.config.agents[agentTypeName]?.methodParameterNames?.[symbol.getName()];
+        const remoteMethodSignature = getRemoteMethodClientSignature(
+          propType,
+          checker,
+          clientDecl,
+          methodParameterNames,
+        );
         if (remoteMethodSignature) {
           typeText = remoteMethodSignature;
         }
@@ -400,6 +419,61 @@ export class LanguageService {
       replaceStart: replaceRange.replaceStart,
       replaceEnd: replaceRange.replaceEnd,
     };
+  }
+
+  private getRemoteMethodParameterNames(
+    fullExpressionNode: tsm.Node,
+    checker: tsm.TypeChecker,
+  ): string[] | undefined {
+    const access = getRemoteMethodAccessExpression(fullExpressionNode);
+    if (!access) return;
+
+    const methodName = getRemoteMethodName(access);
+    if (!methodName) return;
+
+    const agentTypeName = this.getAgentTypeNameForAccess(access, checker);
+    return this.lookupMethodParameterNames(methodName, agentTypeName);
+  }
+
+  private lookupMethodParameterNames(
+    methodName: string,
+    agentTypeName?: string,
+  ): string[] | undefined {
+    if (agentTypeName) {
+      return this.config.agents[agentTypeName]?.methodParameterNames?.[methodName];
+    }
+
+    let found: string[] | undefined;
+    for (const agentConfig of Object.values(this.config.agents)) {
+      const args = agentConfig.methodParameterNames?.[methodName];
+      if (!args) continue;
+      if (found) {
+        return undefined;
+      }
+      found = args;
+    }
+
+    return found;
+  }
+
+  private getAgentTypeNameForAccess(
+    access: tsm.PropertyAccessExpression | tsm.ElementAccessExpression,
+    checker: tsm.TypeChecker,
+  ): string | undefined {
+    const agentTypeNames = Object.keys(this.config.agents);
+    if (!agentTypeNames.length) return;
+
+    const receiver = access.getExpression();
+    const direct = getAgentTypeNameFromReceiver(receiver, agentTypeNames);
+    if (direct) return direct;
+
+    try {
+      const receiverType = receiver.getType();
+      const typeText = checker.getTypeText(receiverType, receiver);
+      return matchAgentTypeNameInTypeText(typeText, agentTypeNames);
+    } catch (e) {
+      return undefined;
+    }
   }
 }
 
@@ -1246,6 +1320,7 @@ function getRemoteMethodExpansion(
   type: tsm.Type,
   node: tsm.Node,
   checker: tsm.TypeChecker,
+  parameterNames?: string[],
 ): string | undefined {
   const aliasSymbol = type.getAliasSymbol();
   if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
@@ -1253,7 +1328,7 @@ function getRemoteMethodExpansion(
   const aliasArgs = type.getAliasTypeArguments();
   if (aliasArgs.length < 2) return;
 
-  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, node);
+  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, node, parameterNames);
   const returnText = checker
     .getTypeText(aliasArgs[1], node, ts.TypeFormatFlags.NoTruncation)
     .replace(IMPORT_TYPE_PREFIX, '')
@@ -1275,6 +1350,7 @@ function getRemoteMethodClientSignature(
   type: tsm.Type,
   checker: tsm.TypeChecker,
   location: tsm.Node,
+  parameterNames?: string[],
 ): string | undefined {
   const aliasSymbol = type.getAliasSymbol();
   if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
@@ -1282,7 +1358,7 @@ function getRemoteMethodClientSignature(
   const aliasArgs = type.getAliasTypeArguments();
   if (aliasArgs.length < 2) return;
 
-  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, location);
+  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, location, parameterNames);
   const returnText = checker
     .getTypeText(aliasArgs[1], location, ts.TypeFormatFlags.NoTruncation)
     .replace(IMPORT_TYPE_PREFIX, '')
@@ -1295,6 +1371,7 @@ function formatRemoteMethodArgs(
   argsType: tsm.Type,
   checker: tsm.TypeChecker,
   location: tsm.Node,
+  parameterNames?: string[],
 ): string {
   const tupleType = argsType.isTuple()
     ? argsType
@@ -1307,11 +1384,12 @@ function formatRemoteMethodArgs(
     if (!tupleElements.length) return '';
     return tupleElements
       .map((elementType, index) => {
+        const name = parameterNames?.[index] ?? argNameForIndex(index);
         const typeText = checker
           .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
           .replace(IMPORT_TYPE_PREFIX, '')
           .trim();
-        return `${argNameForIndex(index)}: ${typeText}`;
+        return `${name}: ${typeText}`;
       })
       .join(', ');
   }
@@ -1327,7 +1405,8 @@ function formatRemoteMethodArgs(
       .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
       .replace(IMPORT_TYPE_PREFIX, '')
       .trim();
-    return `...args: ${typeText}`;
+    const restName = parameterNames?.[0] ?? 'args';
+    return `...${restName}: ${typeText}`;
   }
 
   const fallbackTypeText = checker
@@ -1552,4 +1631,74 @@ function getTypeAtSnippetPosition(
     console.error(e);
     console.error();
   }
+}
+
+function getRemoteMethodAccessExpression(
+  node: tsm.Node,
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  const target = tsm.Node.isCallExpression(node) ? node.getExpression() : node;
+  if (tsm.Node.isPropertyAccessExpression(target) || tsm.Node.isElementAccessExpression(target)) {
+    return target;
+  }
+  return undefined;
+}
+
+function getRemoteMethodName(
+  access: tsm.PropertyAccessExpression | tsm.ElementAccessExpression,
+): string | undefined {
+  if (tsm.Node.isPropertyAccessExpression(access)) {
+    return access.getName();
+  }
+
+  const arg = access.getArgumentExpression();
+  if (!arg) return;
+  if (tsm.Node.isStringLiteral(arg) || tsm.Node.isNoSubstitutionTemplateLiteral(arg)) {
+    return arg.getLiteralText();
+  }
+  return undefined;
+}
+
+function getAgentTypeNameFromReceiver(
+  receiver: tsm.Expression,
+  agentTypeNames: string[],
+): string | undefined {
+  if (tsm.Node.isCallExpression(receiver)) {
+    const called = receiver.getExpression();
+    if (tsm.Node.isPropertyAccessExpression(called) && called.getName() === 'get') {
+      const base = called.getExpression();
+      if (tsm.Node.isIdentifier(base)) {
+        const name = base.getText();
+        if (agentTypeNames.includes(name)) {
+          return name;
+        }
+      }
+    }
+  }
+
+  if (tsm.Node.isIdentifier(receiver)) {
+    const name = receiver.getText();
+    if (agentTypeNames.includes(name)) {
+      return name;
+    }
+  }
+
+  return undefined;
+}
+
+function matchAgentTypeNameInTypeText(
+  typeText: string,
+  agentTypeNames: string[],
+): string | undefined {
+  const sorted = [...agentTypeNames].sort((a, b) => b.length - a.length);
+  for (const name of sorted) {
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`);
+    if (pattern.test(typeText)) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
