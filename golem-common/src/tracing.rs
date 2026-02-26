@@ -401,6 +401,7 @@ pub mod directive {
             warn("wasmtime_environ"),
             warn("wit_parser"),
             warn("golem_client"),
+            warn("bollard"),
         ]
     }
 }
