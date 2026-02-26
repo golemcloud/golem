@@ -9,7 +9,6 @@ componentTemplates:
         - command: cargo-component build
           sources:
           - src
-          - ../../common-rust
           - Cargo.toml
           - ../../Cargo.toml
           targets:
@@ -25,7 +24,6 @@ componentTemplates:
         - command: cargo-component build --release
           sources:
           - src
-          - ../../common-rust
           - Cargo.toml
           - ../../Cargo.toml
           targets:

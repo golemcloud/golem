@@ -34,6 +34,4 @@ pub trait Layer {
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError>;
-
-    fn root_id_to_context(id: &Self::Id) -> Self::ApplyContext;
 }
