@@ -20,7 +20,7 @@ macro_rules! roundtrip_test {
     ($name:ident, $type:ty, $strategy:expr) => {
         #[test]
         fn $name() {
-            use crate::value_and_type::{FromValueAndType, IntoValue};
+            use $crate::value_and_type::{FromValueAndType, IntoValue};
             use golem_wasm::golem_core_1_5_x::types::ValueAndType;
             use proptest::proptest;
             use proptest::prop_assert_eq;
@@ -45,7 +45,7 @@ macro_rules! roundtrip_test_map {
     ($name:ident, $type:ty, $strategy:expr, |$val:ident| $map_expr:expr) => {
         #[test]
         fn $name() {
-            use crate::value_and_type::{FromValueAndType, IntoValue};
+            use $crate::value_and_type::{FromValueAndType, IntoValue};
             use golem_wasm::golem_core_1_5_x::types::ValueAndType;
             use proptest::proptest;
             use proptest::prop_assert_eq;
@@ -71,7 +71,7 @@ macro_rules! roundtrip_test_deref {
     ($name:ident, $type:ty, $strategy:expr, |$val:ident| $map_expr:expr) => {
         #[test]
         fn $name() {
-            use crate::value_and_type::{FromValueAndType, IntoValue};
+            use $crate::value_and_type::{FromValueAndType, IntoValue};
             use golem_wasm::golem_core_1_5_x::types::ValueAndType;
             use proptest::proptest;
             use proptest::prop_assert_eq;
