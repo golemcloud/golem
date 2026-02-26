@@ -30,6 +30,7 @@ CREATE TABLE mcp_deployment_revisions
     deleted           BOOLEAN   NOT NULL,
 
     domain            TEXT      NOT NULL,
+    data              BLOB      NOT NULL,
 
     PRIMARY KEY (mcp_deployment_id, revision_id),
     FOREIGN KEY (mcp_deployment_id) REFERENCES mcp_deployments
