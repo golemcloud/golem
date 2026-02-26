@@ -23,14 +23,14 @@ mod tests {
         UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentMode, AgentType, ConfigKeyValueType, ConfigValueType, Snapshotting, SnapshottingConfig
+        AgentMode, AgentType, ConfigKeyValueType, ConfigValueType, Snapshotting, SnapshottingConfig,
     };
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, ConfigSchema, MultimodalSchema};
     use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
-    use wstd::wasi::clocks::wall_clock::Datetime;
     use test_r::test;
+    use wstd::wasi::clocks::wall_clock::Datetime;
 
     #[derive(Clone, Debug, Schema)]
     struct Config {
