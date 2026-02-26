@@ -287,7 +287,11 @@ async fn revert_auto_update(
 
     // Wait for the worker to finish initialization before reading the oplog
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, std::time::Duration::from_secs(10))
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Idle,
+            std::time::Duration::from_secs(10),
+        )
         .await?;
 
     let updated_component = executor
