@@ -175,9 +175,7 @@ export class BaseAgent {
     );
   }
 
-  static getPhantom<
-    T extends new (phantomId: Uuid | undefined, ...args: never[]) => BaseAgent,
-  >(
+  static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: never[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
@@ -227,9 +225,7 @@ type MethodKeys<T> = {
 }[keyof T];
 
 export type Client<T> = {
-  [K in MethodKeys<T>]: T[K] extends (
-    ...args: infer A
-  ) => infer R
+  [K in MethodKeys<T>]: T[K] extends (...args: infer A) => infer R
     ? RemoteMethod<GetArgs<A>, Awaited<R>>
     : never;
 };

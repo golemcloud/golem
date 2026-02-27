@@ -83,9 +83,7 @@ vi.mock('golem:core/types@1.5.0', () => ({
 globalThis.currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.2.3', () => ({
-  getEnvironment: () => [
-    ['GOLEM_AGENT_ID', globalThis.currentAgentId],
-  ],
+  getEnvironment: () => [['GOLEM_AGENT_ID', globalThis.currentAgentId]],
 }));
 
 await import('./agentsInit');

@@ -314,7 +314,9 @@ function _deserializeDataValue(
   }
 }
 
-function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<Record<string, unknown>> {
+function constructConfigType(
+  typeInfoInternal: TypeInfoInternal & { tag: 'config' },
+): Config<Record<string, unknown>> {
   // safe as the parent node is config
   const properties = (typeInfoInternal.tsType as Type.Type & { kind: 'config' }).properties;
 
@@ -491,13 +493,17 @@ function serializeMultimodalToDataValue(
 
         case 'unstructured-binary': {
           const isObjectBinary = typeof elemVal === 'object' && elemVal !== null;
-          isMatch = isObjectBinary && 'tag' in elemVal && (elemVal.tag === 'url' || elemVal.tag === 'inline');
+          isMatch =
+            isObjectBinary &&
+            'tag' in elemVal &&
+            (elemVal.tag === 'url' || elemVal.tag === 'inline');
           break;
         }
 
         case 'unstructured-text': {
           const isObjectText = typeof elemVal === 'object' && elemVal !== null;
-          isMatch = isObjectText && 'tag' in elemVal && (elemVal.tag === 'url' || elemVal.tag === 'inline');
+          isMatch =
+            isObjectText && 'tag' in elemVal && (elemVal.tag === 'url' || elemVal.tag === 'inline');
           break;
         }
 
