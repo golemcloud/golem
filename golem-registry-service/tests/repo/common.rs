@@ -16,9 +16,15 @@ use crate::repo::Deps;
 use assert2::{assert, check, let_assert};
 use chrono::Utc;
 use futures::future::join_all;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::base_model::Empty;
+use golem_common::model::agent::{
+    AgentConstructor, AgentMode, AgentType, AgentTypeName, DataSchema, NamedElementSchemas,
+    Snapshotting,
+};
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::environment_share::EnvironmentShareId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::account::{
@@ -35,7 +41,11 @@ use golem_registry_service::repo::model::component::{
     ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
+use golem_registry_service::repo::model::deployment::{
+    DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
+};
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
+use golem_registry_service::repo::model::environment_share::EnvironmentShareRevisionRecord;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
@@ -43,9 +53,10 @@ use golem_registry_service::repo::model::http_api_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_service_base::repo::blob::Blob;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use strum::IntoEnumIterator;
+use uuid::Uuid;
 // Common test cases -------------------------------------------------------------------------------
 
 pub async fn test_create_and_get_account(deps: &Deps) {
@@ -600,6 +611,7 @@ pub async fn test_component_stage(deps: &Deps) {
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
         original_config_vars: BTreeMap::from([("WC1".to_string(), "value1".to_string())]).into(),
         config_vars: BTreeMap::from([("WC".to_string(), "value".to_string())]).into(),
+        local_agent_config: Blob::new(Vec::new()),
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
         transformed_object_store_key: "xys-transformed".to_string(),
@@ -1117,6 +1129,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     original_env: Default::default(),
                     config_vars: Default::default(),
                     original_config_vars: Default::default(),
+                    local_agent_config: Blob::new(Vec::new()),
                     object_store_key: "".to_string(),
                     transformed_object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
@@ -1149,4 +1162,359 @@ fn compare_created_to_requested_account(
     assert!(created.revision.name == requested.name);
     assert!(created.revision.email == requested.email);
     assert!(created.revision.roles == requested.roles)
+}
+
+// resolve_agent_type_by_names tests ---------------------------------------------------------------
+
+fn make_test_agent_type(name: &str) -> AgentType {
+    AgentType {
+        type_name: AgentTypeName(name.to_string()),
+        description: format!("Test agent {name}"),
+        constructor: AgentConstructor {
+            name: None,
+            description: "constructor".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+    }
+}
+
+struct ResolveTestEnv {
+    owner_account_id: Uuid,
+    owner_email: String,
+    app_name: String,
+    env_name: String,
+    environment_id: Uuid,
+    deployment_revision_id: i64,
+    agent_type_name: String,
+}
+
+/// Sets up: owner account → application → environment → deployment with one agent type.
+/// Returns the environment context for use in resolve_agent_type_by_names tests.
+async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
+    let email = format!("resolve-test-{}@golem.test", new_repo_uuid());
+    let owner = deps.create_account_with_email(&email).await;
+    let owner_account_id = owner.revision.account_id;
+    let app_name = format!("resolve-app-{}", new_repo_uuid());
+    let env_name = format!("resolve-env-{}", new_repo_uuid());
+
+    let app = deps
+        .application_repo
+        .create(
+            owner_account_id,
+            ApplicationRevisionRecord {
+                application_id: new_repo_uuid(),
+                revision_id: 0,
+                name: app_name.clone(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+            },
+        )
+        .await
+        .unwrap();
+
+    let env = deps
+        .environment_repo
+        .create(
+            app.revision.application_id,
+            EnvironmentRevisionRecord {
+                environment_id: new_repo_uuid(),
+                revision_id: 0,
+                name: env_name.clone(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+                hash: SqlBlake3Hash::empty(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let environment_id = env.revision.environment_id;
+
+    // Create a component (required by FK on deployment_registered_agent_types)
+    let component_name = format!("test-component-{}", new_repo_uuid());
+    let component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: 0,
+                version: "0.1.0".to_string(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    vec![],
+                    vec![],
+                    None,
+                    None,
+                    vec![],
+                )),
+                env: Default::default(),
+                original_env: Default::default(),
+                config_vars: Default::default(),
+                original_config_vars: Default::default(),
+                object_store_key: "".to_string(),
+                transformed_object_store_key: "".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+                original_files: vec![],
+                plugins: vec![],
+                files: vec![],
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
+    let component_id = component.revision.component_id;
+    let component_revision_id = component.revision.revision_id;
+
+    let agent_type_name = format!("TestAgent{}", new_repo_uuid().simple());
+    let agent_type = make_test_agent_type(&agent_type_name);
+    let wrapper_type_name = agent_type.wrapper_type_name();
+    let deployment_revision_id: i64 = 1;
+
+    let agent_type_record = DeploymentRegisteredAgentTypeRecord {
+        environment_id,
+        deployment_revision_id,
+        agent_type_name: agent_type_name.clone(),
+        agent_wrapper_type_name: wrapper_type_name,
+        component_id,
+        component_revision_id,
+        webhook_prefix_authority_and_path: None,
+        agent_type: Blob::new(agent_type),
+    };
+
+    let deployment_creation = DeploymentRevisionCreationRecord {
+        environment_id,
+        deployment_revision_id,
+        version: "1.0.0".to_string(),
+        hash: SqlBlake3Hash::empty(),
+        components: vec![],
+        http_api_deployments: vec![],
+        compiled_routes: vec![],
+        registered_agent_types: vec![agent_type_record],
+    };
+
+    deps.full_deployment_repo
+        .deploy(owner_account_id, deployment_creation, false)
+        .await
+        .unwrap();
+
+    ResolveTestEnv {
+        owner_account_id,
+        owner_email: email,
+        app_name,
+        env_name,
+        environment_id,
+        deployment_revision_id,
+        agent_type_name,
+    }
+}
+
+/// Caller owns env → works (no email)
+pub async fn test_resolve_agent_type_owner_no_email(deps: &Deps) {
+    let env = setup_resolve_env(deps).await;
+
+    let result = deps
+        .full_deployment_repo
+        .resolve_agent_type_by_names(
+            env.owner_account_id,
+            &env.app_name,
+            &env.env_name,
+            &env.agent_type_name,
+            None, // latest deployment
+            None, // no owner email → use caller's own account
+        )
+        .await
+        .unwrap();
+
+    let_assert!(Some(record) = result);
+    check!(record.agent_type_name == env.agent_type_name);
+    check!(record.environment_id == env.environment_id);
+    check!(record.deployment_revision_id == env.deployment_revision_id);
+    check!(record.owner_account_id == env.owner_account_id);
+}
+
+/// Caller has share (Viewer role) + email → works
+pub async fn test_resolve_agent_type_shared_with_email(deps: &Deps) {
+    let env = setup_resolve_env(deps).await;
+
+    // Create a grantee account
+    let grantee = deps.create_account().await;
+    let grantee_account_id = grantee.revision.account_id;
+
+    // Grant Viewer role to the grantee
+    let share_id = EnvironmentShareId(new_repo_uuid());
+    let mut roles = BTreeSet::new();
+    roles.insert(EnvironmentRole::Viewer);
+
+    deps.environment_share_repo
+        .create(
+            env.environment_id,
+            EnvironmentShareRevisionRecord::creation(
+                share_id,
+                roles,
+                golem_common::model::account::AccountId(env.owner_account_id),
+            ),
+            grantee_account_id,
+        )
+        .await
+        .unwrap();
+
+    // Grantee resolves using owner's email
+    let result = deps
+        .full_deployment_repo
+        .resolve_agent_type_by_names(
+            grantee_account_id,
+            &env.app_name,
+            &env.env_name,
+            &env.agent_type_name,
+            None,
+            Some(&env.owner_email),
+        )
+        .await
+        .unwrap();
+
+    let_assert!(Some(record) = result);
+    check!(record.agent_type_name == env.agent_type_name);
+    check!(record.owner_account_id == env.owner_account_id);
+    // roles_bitmask should include Viewer (bit 2 = 4)
+    check!(record.environment_roles_from_shares & 4 != 0);
+}
+
+/// Caller has no share + email → row returned with roles_bitmask=0
+/// (service layer maps auth failure to NotFound to prevent enumeration)
+pub async fn test_resolve_agent_type_no_share_returns_zero_roles(deps: &Deps) {
+    let env = setup_resolve_env(deps).await;
+
+    // Create a stranger account with no share
+    let stranger = deps.create_account().await;
+
+    let result = deps
+        .full_deployment_repo
+        .resolve_agent_type_by_names(
+            stranger.revision.account_id,
+            &env.app_name,
+            &env.env_name,
+            &env.agent_type_name,
+            None,
+            Some(&env.owner_email),
+        )
+        .await
+        .unwrap();
+
+    // Record returned but roles_bitmask = 0 (no share)
+    // The service layer maps this to NotFound via auth check;
+    // at repo level we still get the row back with roles_bitmask = 0
+    let_assert!(Some(record) = result);
+    check!(record.environment_roles_from_shares == 0);
+    check!(record.owner_account_id == env.owner_account_id);
+    check!(record.agent_type_name == env.agent_type_name);
+}
+
+/// Env exists but no current deployment (latest) → None
+pub async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
+    let email = format!("no-deploy-{}@golem.test", new_repo_uuid());
+    let owner = deps.create_account_with_email(&email).await;
+    let owner_account_id = owner.revision.account_id;
+    let app_name = format!("no-deploy-app-{}", new_repo_uuid());
+    let env_name = format!("no-deploy-env-{}", new_repo_uuid());
+
+    let app = deps
+        .application_repo
+        .create(
+            owner_account_id,
+            ApplicationRevisionRecord {
+                application_id: new_repo_uuid(),
+                revision_id: 0,
+                name: app_name.clone(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+            },
+        )
+        .await
+        .unwrap();
+
+    deps.environment_repo
+        .create(
+            app.revision.application_id,
+            EnvironmentRevisionRecord {
+                environment_id: new_repo_uuid(),
+                revision_id: 0,
+                name: env_name.clone(),
+                audit: DeletableRevisionAuditFields::new(owner_account_id),
+                compatibility_check: false,
+                version_check: false,
+                security_overrides: false,
+                hash: SqlBlake3Hash::empty(),
+            },
+        )
+        .await
+        .unwrap();
+
+    // No deployment created — resolve latest should return None
+    let result = deps
+        .full_deployment_repo
+        .resolve_agent_type_by_names(
+            owner_account_id,
+            &app_name,
+            &env_name,
+            "SomeAgent",
+            None, // latest
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_none());
+}
+
+/// Specific deployment revision not present → None
+pub async fn test_resolve_agent_type_nonexistent_revision_returns_none(deps: &Deps) {
+    let env = setup_resolve_env(deps).await;
+
+    let result = deps
+        .full_deployment_repo
+        .resolve_agent_type_by_names(
+            env.owner_account_id,
+            &env.app_name,
+            &env.env_name,
+            &env.agent_type_name,
+            Some(9999), // non-existent revision
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_none());
+}
+
+/// Email doesn't exist → None (no existence leak)
+pub async fn test_resolve_agent_type_unknown_email_returns_none(deps: &Deps) {
+    let env = setup_resolve_env(deps).await;
+
+    let grantee = deps.create_account().await;
+
+    let result = deps
+        .full_deployment_repo
+        .resolve_agent_type_by_names(
+            grantee.revision.account_id,
+            &env.app_name,
+            &env.env_name,
+            &env.agent_type_name,
+            None,
+            Some("nonexistent-user@nowhere.example"),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_none());
 }

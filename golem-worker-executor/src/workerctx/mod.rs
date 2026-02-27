@@ -39,9 +39,7 @@ use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
-};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -51,7 +49,7 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::GetFileSystemNodeResult;
+use golem_service_base::model::{Component, GetFileSystemNodeResult};
 use golem_wasm::wasmtime::ResourceStore;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -171,7 +169,7 @@ pub trait WorkerCtx:
     /// Gets the account created this worker
     fn created_by(&self) -> AccountId;
 
-    fn component_metadata(&self) -> &ComponentDto;
+    fn component_metadata(&self) -> &Component;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to

@@ -46,6 +46,16 @@ impl AgentsApi {
             request.idempotency_key = idempotency_key.0;
         }
 
+        if let Some(ref mut email) = request.owner_account_email {
+            let trimmed = email.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(ApiEndpointError::bad_request(golem_common::safe(
+                    "owner_account_email cannot be empty".to_string(),
+                )));
+            }
+            *email = trimmed;
+        }
+
         let record = recorded_http_api_request!(
             "invoke_agent",
             app = %request.app_name,
@@ -89,6 +99,7 @@ pub struct AgentInvocationRequest {
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub deployment_revision: Option<i64>,
+    pub owner_account_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

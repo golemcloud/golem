@@ -50,9 +50,7 @@ use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
-};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -64,7 +62,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::GetFileSystemNodeResult;
+use golem_service_base::model::{Component, GetFileSystemNodeResult};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
 use std::collections::{BTreeMap, HashSet};
@@ -729,7 +727,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &ComponentDto {
+    fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
     }
 

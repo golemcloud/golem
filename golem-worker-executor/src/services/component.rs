@@ -19,11 +19,12 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_service_base::storage::blob::BlobStorage;
@@ -32,7 +33,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
 use tracing::{debug, info_span, warn};
-use wasmtime::component::Component;
 use wasmtime::Engine;
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -43,7 +43,7 @@ pub trait ComponentService: Send + Sync {
         engine: &Engine,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
+    ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError>;
 
     // If a version is provided, deleted components will also be returned.
     // If no version is provided, only the latest non-deleted version is returned.
@@ -51,7 +51,7 @@ pub trait ComponentService: Send + Sync {
         &self,
         component_id: ComponentId,
         forced_revision: Option<ComponentRevision>,
-    ) -> Result<ComponentDto, WorkerExecutorError>;
+    ) -> Result<Component, WorkerExecutorError>;
 
     /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
     /// Resolving component is the component in whose context the resolution is being performed
@@ -65,7 +65,7 @@ pub trait ComponentService: Send + Sync {
 
     /// Returns all the component metadata the implementation has cached.
     /// This is useful for some mock/local implementations.
-    async fn all_cached_metadata(&self) -> Vec<ComponentDto>;
+    async fn all_cached_metadata(&self) -> Vec<Component>;
 }
 
 pub fn configured(
@@ -87,8 +87,8 @@ pub fn configured(
 }
 
 pub struct ComponentServiceDefault {
-    component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-    component_metadata_cache: Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
+    component_cache: Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError>,
+    component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
 }
@@ -120,7 +120,7 @@ impl ComponentService for ComponentServiceDefault {
         engine: &Engine,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
+    ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
         let key = ComponentKey {
             component_id,
             component_revision,
@@ -165,13 +165,12 @@ impl ComponentService for ComponentServiceDefault {
                             let span = info_span!("Loading WASM component");
                             let component = spawn_blocking(move || {
                                 let _enter = span.enter();
-                                Component::from_binary(&engine, &bytes).map_err(|e| {
-                                    WorkerExecutorError::ComponentParseFailed {
+                                wasmtime::component::Component::from_binary(&engine, &bytes)
+                                    .map_err(|e| WorkerExecutorError::ComponentParseFailed {
                                         component_id,
                                         component_revision,
                                         reason: format!("{e}"),
-                                    }
-                                })
+                                    })
                             })
                             .await
                             .map_err(|join_err| {
@@ -211,7 +210,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: ComponentId,
         forced_revision: Option<ComponentRevision>,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
+    ) -> Result<Component, WorkerExecutorError> {
         match forced_revision {
             Some(component_revision) => {
                 let client = self.registry_client.clone();
@@ -293,7 +292,7 @@ impl ComponentService for ComponentServiceDefault {
         }
     }
 
-    async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
+    async fn all_cached_metadata(&self) -> Vec<Component> {
         self.component_metadata_cache
             .iter()
             .await
@@ -312,7 +311,7 @@ struct ComponentKey {
 fn create_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentKey, (), ComponentDto, WorkerExecutorError> {
+) -> Cache<ComponentKey, (), Component, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -327,7 +326,7 @@ fn create_component_metadata_cache(
 fn create_component_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentKey, (), Component, WorkerExecutorError> {
+) -> Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),

@@ -17,9 +17,10 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::component::ComponentId;
-use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::model::Component;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -43,13 +44,13 @@ error_forwarding!(ComponentServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
-    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<ComponentDto>;
+    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component>;
 
     // Might be outdated. Use get_latest_by_id_uncached if you always need the latest version
     async fn get_latest_by_id(
         &self,
         component_id: ComponentId,
-    ) -> Result<ComponentDto, ComponentServiceError> {
+    ) -> Result<Component, ComponentServiceError> {
         match self.get_latest_by_id_in_cache(component_id).await {
             Some(cached) => Ok(cached),
             None => self.get_latest_by_id_uncached(component_id).await,
@@ -59,18 +60,18 @@ pub trait ComponentService: Send + Sync {
     async fn get_latest_by_id_uncached(
         &self,
         component_id: ComponentId,
-    ) -> Result<ComponentDto, ComponentServiceError>;
+    ) -> Result<Component, ComponentServiceError>;
 
     async fn get_revision(
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<ComponentDto, ComponentServiceError>;
+    ) -> Result<Component, ComponentServiceError>;
 
     async fn get_all_revisions(
         &self,
         component_id: ComponentId,
-    ) -> Result<Vec<ComponentDto>, ComponentServiceError>;
+    ) -> Result<Vec<Component>, ComponentServiceError>;
 }
 
 // The error is not actually cached, just something that can be cloned and returned
@@ -95,7 +96,7 @@ impl From<CacheError> for ComponentServiceError {
 
 pub struct RemoteComponentService {
     client: Arc<dyn RegistryService>,
-    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, CacheError>,
+    cache: Cache<(ComponentId, ComponentRevision), (), Component, CacheError>,
 }
 
 impl RemoteComponentService {
@@ -111,7 +112,7 @@ impl RemoteComponentService {
         }
     }
 
-    async fn store_component_in_cache(&self, component: ComponentDto) {
+    async fn store_component_in_cache(&self, component: Component) {
         let _ = self
             .cache
             .get_or_insert_simple(&(component.id, component.revision), async move || {
@@ -123,7 +124,7 @@ impl RemoteComponentService {
 
 #[async_trait]
 impl ComponentService for RemoteComponentService {
-    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<ComponentDto> {
+    async fn get_latest_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         let mut keys = self.cache.keys().await;
         keys.retain(|(id, _)| *id == component_id);
         keys.sort_by_key(|(_, revision)| *revision);
@@ -140,7 +141,7 @@ impl ComponentService for RemoteComponentService {
     async fn get_latest_by_id_uncached(
         &self,
         component_id: ComponentId,
-    ) -> Result<ComponentDto, ComponentServiceError> {
+    ) -> Result<Component, ComponentServiceError> {
         let component = self
             .client
             .get_deployed_component_metadata(component_id)
@@ -159,7 +160,7 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<ComponentDto, ComponentServiceError> {
+    ) -> Result<Component, ComponentServiceError> {
         let component = self
             .cache
             .get_or_insert_simple(&(component_id, component_revision), async move || {
@@ -181,7 +182,7 @@ impl ComponentService for RemoteComponentService {
     async fn get_all_revisions(
         &self,
         component_id: ComponentId,
-    ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
+    ) -> Result<Vec<Component>, ComponentServiceError> {
         let results = self
             .client
             .get_all_deployed_component_revisions(component_id)

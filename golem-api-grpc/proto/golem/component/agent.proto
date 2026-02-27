@@ -49,6 +49,7 @@ message AgentType {
   AgentMode mode = 6;
   optional HttpMountDetails http_mount = 7;
   optional Snapshotting snapshotting = 8;
+  repeated ConfigKeyValueType config = 9;
 }
 
 message BinaryDescriptor {
@@ -349,4 +350,24 @@ message LoadSnapshotInvocation {
 
 message ProcessOplogEntriesInvocation {
   golem.worker.IdempotencyKey idempotency_key = 1;
+}
+
+message ConfigKeyValueType {
+  repeated string key = 1;
+  ConfigValueType value = 2;
+}
+
+message ConfigValueType {
+  oneof kind {
+    Local local = 1;
+    Shared shared = 2;
+  }
+
+  message Local {
+    wasm.rpc.Type value = 1;
+  }
+
+  message Shared {
+    wasm.rpc.Type value = 2;
+  }
 }

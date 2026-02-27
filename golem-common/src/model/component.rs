@@ -16,6 +16,7 @@ use crate::model::diff;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
+use itertools::Itertools;
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
@@ -65,6 +66,16 @@ impl ComponentDto {
                     )
                 })
                 .collect(),
+            local_agent_config_ordered_by_agent_and_key: self
+                .local_agent_config
+                .iter()
+                .map(|lac| diff::LocalAgentConfigEntry {
+                    agent: lac.agent.0.clone(),
+                    key: lac.key.clone(),
+                    value: lac.value.clone(),
+                })
+                .sorted_by_key(|lac| (lac.agent.clone(), lac.key.clone()))
+                .collect(),
         }
     }
 }
@@ -98,11 +109,8 @@ impl From<ComponentId> for golem_wasm::ComponentId {
 }
 
 mod protobuf {
-    use super::{ComponentDto, InstalledPlugin};
-    use super::{ComponentName, ComponentRevision, PluginPriority};
-    use applying::Apply;
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
+    use super::InstalledPlugin;
+    use super::{ComponentRevision, PluginPriority};
 
     impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
         fn from(value: InstalledPlugin) -> Self {
@@ -151,144 +159,6 @@ mod protobuf {
                     .oplog_processor_component_revision
                     .map(ComponentRevision),
             })
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::Component> for ComponentDto {
-        type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::Component,
-        ) -> Result<Self, Self::Error> {
-            let id = value
-                .component_id
-                .ok_or("Missing component id")?
-                .try_into()
-                .map_err(|e| format!("Invalid component id: {}", e))?;
-
-            let revision = ComponentRevision(value.revision);
-
-            let environment_id = value
-                .environment_id
-                .ok_or("Missing environment id")?
-                .try_into()
-                .map_err(|e| format!("Invalid environment id: {}", e))?;
-
-            let application_id = value
-                .application_id
-                .ok_or("Missing application id")?
-                .try_into()
-                .map_err(|e| format!("Invalid application id: {}", e))?;
-
-            let account_id = value
-                .account_id
-                .ok_or("Missing account id")?
-                .try_into()
-                .map_err(|e| format!("Invalid account id: {}", e))?;
-
-            let component_name = ComponentName(value.component_name);
-            let component_size = value.component_size;
-            let metadata = value
-                .metadata
-                .ok_or("Missing metadata")?
-                .try_into()
-                .map_err(|e| format!("Invalid metadata: {}", e))?;
-
-            let created_at = value
-                .created_at
-                .ok_or("missing created_at")?
-                .apply(SystemTime::try_from)
-                .map_err(|_| "Failed to convert timestamp".to_string())?
-                .into();
-
-            let original_files = value
-                .original_files
-                .into_iter()
-                .map(|f| f.try_into())
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let files = value
-                .files
-                .into_iter()
-                .map(|f| f.try_into())
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let installed_plugins = value
-                .installed_plugins
-                .into_iter()
-                .map(|p| p.try_into())
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let original_env = value.original_env.into_iter().collect::<BTreeMap<_, _>>();
-            let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
-
-            let original_config_vars = value
-                .original_config_vars
-                .into_iter()
-                .collect::<BTreeMap<_, _>>();
-            let config_vars = value.config_vars.into_iter().collect::<BTreeMap<_, _>>();
-
-            let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
-
-            let wasm_hash = value
-                .wasm_hash
-                .ok_or("Missing wasm hash field")?
-                .try_into()?;
-
-            Ok(Self {
-                id,
-                revision,
-                environment_id,
-                application_id,
-                account_id,
-                component_name,
-                component_size,
-                metadata,
-                created_at,
-                original_files,
-                files,
-                installed_plugins,
-                original_env,
-                env,
-                original_config_vars,
-                config_vars,
-                wasm_hash,
-                hash,
-            })
-        }
-    }
-
-    impl From<ComponentDto> for golem_api_grpc::proto::golem::component::Component {
-        fn from(value: ComponentDto) -> Self {
-            Self {
-                component_id: Some(value.id.into()),
-                revision: value.revision.0,
-                component_name: value.component_name.0,
-                component_size: value.component_size,
-                metadata: Some(value.metadata.into()),
-                account_id: Some(value.account_id.into()),
-                application_id: Some(value.application_id.into()),
-                environment_id: Some(value.environment_id.into()),
-                created_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                    value.created_at,
-                ))),
-                original_files: value
-                    .original_files
-                    .into_iter()
-                    .map(|file| file.into())
-                    .collect(),
-                files: value.files.into_iter().map(|file| file.into()).collect(),
-                installed_plugins: value
-                    .installed_plugins
-                    .into_iter()
-                    .map(|plugin| plugin.into())
-                    .collect(),
-                original_env: value.original_env.into_iter().collect(),
-                env: value.env.into_iter().collect(),
-                original_config_vars: value.original_config_vars.into_iter().collect(),
-                config_vars: value.config_vars.into_iter().collect(),
-                wasm_hash: Some(value.wasm_hash.into()),
-                hash: Some(value.hash.into()),
-            }
         }
     }
 }
