@@ -732,7 +732,6 @@ fn normalized_diff_deployment(
                         Some(component) => diff::Component {
                             metadata: match component.metadata.as_value() {
                                 Some(metadata) => diff::ComponentMetadata {
-                                    version: metadata.version.clone(),
                                     env: safe_env(&metadata.env),
                                     config_vars: metadata.config_vars.clone(),
                                 }

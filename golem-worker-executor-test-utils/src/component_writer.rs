@@ -539,18 +539,14 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.agent_types,
             ),
             created_at: Default::default(),
-            original_files: value.files.clone(),
             files: value.files,
             installed_plugins: vec![],
-            original_env: value.env.clone(),
             env: value.env,
-            original_config_vars: value.config_vars.clone(),
             local_agent_config: Vec::new(),
             config_vars: value.config_vars,
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,
             object_store_key: "".to_string(),
-            transformed_object_store_key: "".to_string(),
         }
     }
 }

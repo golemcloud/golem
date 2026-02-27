@@ -1306,7 +1306,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>> {
         tx.fetch_all_as(
             sqlx::query_as(indoc! { r#"
-                SELECT c.component_id, c.name, cr.revision_id, cr.version, cr.hash
+                SELECT c.component_id, c.name, cr.revision_id, cr.hash
                 FROM components c
                 JOIN component_revisions cr
                     ON cr.component_id = c.component_id
@@ -1488,7 +1488,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         self.with_ro("get_deployed_components")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT c.component_id, c.name, cr.revision_id, cr.version, cr.hash
+                    SELECT c.component_id, c.name, cr.revision_id, cr.hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
                     JOIN deployment_component_revisions dcr

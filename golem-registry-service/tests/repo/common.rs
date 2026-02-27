@@ -596,7 +596,6 @@ pub async fn test_component_stage(deps: &Deps) {
     let revision_0 = ComponentRevisionRecord {
         component_id,
         revision_id: 0,
-        version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         size: 10.into(),
@@ -607,22 +606,11 @@ pub async fn test_component_stage(deps: &Deps) {
             Some("1.0".to_string()),
             vec![],
         )),
-        original_env: BTreeMap::from([("X1".to_string(), "value1".to_string())]).into(),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-        original_config_vars: BTreeMap::from([("WC1".to_string(), "value1".to_string())]).into(),
         config_vars: BTreeMap::from([("WC".to_string(), "value".to_string())]).into(),
         local_agent_config: Blob::new(Vec::new()),
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
-        transformed_object_store_key: "xys-transformed".to_string(),
-        original_files: vec![ComponentFileRecord {
-            component_id,
-            revision_id: 0,
-            file_path: "file1".to_string(),
-            file_content_hash: blake3::hash("test-2".as_bytes()).into(),
-            audit: RevisionAuditFields::new(user.revision.account_id),
-            file_permissions: ComponentFilePermissions::ReadWrite.into(),
-        }],
         plugins: vec![],
         files: vec![ComponentFileRecord {
             component_id,
@@ -641,7 +629,6 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             component_name,
             revision_0.clone(),
-            true,
         )
         .await
         .unwrap();
@@ -656,7 +643,6 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             component_name,
             revision_0.clone(),
-            true,
         )
         .await;
     let_assert!(Err(ComponentRepoError::ComponentViolatesUniqueness) = recreate);
@@ -696,15 +682,6 @@ pub async fn test_component_stage(deps: &Deps) {
         size: 12345.into(),
         env: Default::default(),
         binary_hash: SqlBlake3Hash::empty(),
-        transformed_object_store_key: "xys-transformed".to_string(),
-        original_files: revision_0
-            .original_files
-            .iter()
-            .map(|file| ComponentFileRecord {
-                revision_id: 1,
-                ..file.clone()
-            })
-            .collect(),
         files: revision_0
             .files
             .iter()
@@ -719,7 +696,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let created_revision_1 = deps
         .component_repo
-        .update(revision_1.clone(), true)
+        .update(revision_1.clone())
         .await
         .unwrap();
     let_assert!(created_revision_1 = created_revision_1);
@@ -727,7 +704,7 @@ pub async fn test_component_stage(deps: &Deps) {
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.name == component_name);
 
-    let recreated_revision_1 = deps.component_repo.update(revision_1.clone(), true).await;
+    let recreated_revision_1 = deps.component_repo.update(revision_1.clone()).await;
     let_assert!(Err(ComponentRepoError::ConcurrentModification) = recreated_revision_1);
 
     let components = deps
@@ -742,7 +719,6 @@ pub async fn test_component_stage(deps: &Deps) {
     let other_component_name = "test-component-other";
     let other_component_revision_0 = ComponentRevisionRecord {
         component_id: other_component_id,
-        original_files: Default::default(),
         plugins: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
@@ -755,7 +731,6 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             other_component_name,
             other_component_revision_0.clone(),
-            true,
         )
         .await
         .unwrap();
@@ -793,7 +768,6 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
-        original_files: Default::default(),
         plugins: Default::default(),
         files: Default::default(),
         ..revision_0.clone()
@@ -804,7 +778,6 @@ pub async fn test_component_stage(deps: &Deps) {
             env.revision.environment_id,
             component_name,
             revision_after_delete.clone(),
-            true,
         )
         .await
         .unwrap();
@@ -1114,7 +1087,6 @@ pub async fn test_account_usage(deps: &Deps) {
                 ComponentRevisionRecord {
                     component_id: Default::default(),
                     revision_id: 0,
-                    version: "".to_string(),
                     hash: SqlBlake3Hash::empty(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     size: 0.into(),
@@ -1126,18 +1098,13 @@ pub async fn test_account_usage(deps: &Deps) {
                         vec![],
                     )),
                     env: Default::default(),
-                    original_env: Default::default(),
                     config_vars: Default::default(),
-                    original_config_vars: Default::default(),
                     local_agent_config: Blob::new(Vec::new()),
                     object_store_key: "".to_string(),
-                    transformed_object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
-                    original_files: vec![],
                     plugins: vec![],
                     files: vec![],
                 },
-                true,
             )
             .await
             .unwrap();

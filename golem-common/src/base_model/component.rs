@@ -131,12 +131,9 @@ declare_structs! {
         pub metadata: ComponentMetadata,
         pub created_at: chrono::DateTime<chrono::Utc>,
         pub files: Vec<InitialComponentFile>,
-        pub original_files: Vec<InitialComponentFile>,
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
-        pub original_env: BTreeMap<String, String>,
         pub config_vars: BTreeMap<String, String>,
-        pub original_config_vars: BTreeMap<String, String>,
         pub local_agent_config: Vec<LocalAgentConfigEntry>,
         pub wasm_hash: diff::Hash,
     }
