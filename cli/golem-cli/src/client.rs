@@ -16,6 +16,11 @@ use crate::auth::{Auth, Authentication};
 use crate::config::{AuthenticationConfigWithSource, ClientConfig, HttpClientConfig};
 use anyhow::bail;
 use golem_client::api::{
+    AccountClientLive, AccountSummaryClientLive, AgentClientLive, AgentTypesClientLive,
+    ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
+    ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, GrantClientLive,
+    HealthCheckClientLive, HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive,
+    PluginClientLive, TokenClientLive, WorkerClientLive,
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiDeploymentClientLive,
     ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive, ComponentClientLive,
     DeploymentClientLive, EnvironmentClientLive, GrantClientLive, HealthCheckClientLive,
@@ -33,6 +38,7 @@ pub struct GolemClients {
 
     pub account: AccountClientLive,
     pub account_summary: AccountSummaryClientLive,
+    pub agent: AgentClientLive,
     pub agent_types: AgentTypesClientLive,
     pub api_definition: HttpApiDefinitionClientLive,
     pub api_deployment: ApiDeploymentClientLive,
@@ -116,6 +122,9 @@ impl GolemClients {
             },
             account_summary: AccountSummaryClientLive {
                 context: registry_context(),
+            },
+            agent: AgentClientLive {
+                context: worker_invoke_context(),
             },
             agent_types: AgentTypesClientLive {
                 context: registry_context(),

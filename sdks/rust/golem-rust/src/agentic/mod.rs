@@ -14,9 +14,11 @@
 
 pub use crate::golem_agentic::golem::agent::common::Principal;
 pub use agent::*;
+pub use agent_config::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use async_utils::*;
+pub use autoinject::*;
 pub use errors::*;
 pub use extended_agent_type::*;
 pub use golem_wasm::agentic::unstructured_binary::*;
@@ -29,10 +31,12 @@ pub use webhook::*;
 pub use wit_utils::*;
 
 mod agent;
+mod agent_config;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
 mod async_utils;
+mod autoinject;
 mod errors;
 mod extended_agent_type;
 mod http;

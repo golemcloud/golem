@@ -652,7 +652,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
-                    .add_imported_function_invoked(
+                    .add_host_call(
                         HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
                         &HostRequest::HttpRequest(request),
                         &HostResponse::HttpResponse(HostResponseHttpResponse {
@@ -687,10 +687,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             )
             .into())
         } else {
-            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
+            let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::HostCall).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
             let serialized_response = match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                OplogEntry::HostCall { response, .. } => {
                     let response = self
                         .state
                         .oplog

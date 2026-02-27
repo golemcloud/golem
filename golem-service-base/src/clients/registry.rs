@@ -25,7 +25,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentDeploymentsRequest,
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
-    GetDeployedComponentMetadataRequest, GetResourceLimitsRequest, ResolveComponentRequest,
+    GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
+    ResolveAgentTypeAtDeploymentRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
@@ -33,6 +34,13 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_deployed_component_metadata_response,
     get_resource_limits_response, resolve_component_response,
+    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
+    get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response,
+    get_all_agent_types_response, get_all_deployed_component_revisions_response,
+    get_auth_details_for_environment_response, get_component_metadata_response,
+    get_deployed_component_metadata_response, get_resource_limits_response,
+    resolve_agent_type_at_deployment_response, resolve_component_response,
     resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
     update_worker_limit_response,
 };
@@ -44,6 +52,7 @@ use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
@@ -156,6 +165,15 @@ pub trait RegistryService: Send + Sync {
         app_name: &ApplicationName,
         environment_name: &EnvironmentName,
         agent_type_name: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, RegistryServiceError>;
+
+    async fn resolve_agent_type_at_deployment(
+        &self,
+        account_id: &AccountId,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: DeploymentRevision,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
     async fn get_active_routes_for_domain(
@@ -681,6 +699,43 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?)
             }
             Some(resolve_latest_agent_type_by_names_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+        }
+    }
+
+    async fn resolve_agent_type_at_deployment(
+        &self,
+        account_id: &AccountId,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+        let response = self
+            .client
+            .call("resolve_agent_type_at_deployment", move |client| {
+                let request = ResolveAgentTypeAtDeploymentRequest {
+                    account_id: Some((*account_id).into()),
+                    app_name: app_name.0.clone(),
+                    environment_name: environment_name.0.clone(),
+                    agent_type_name: agent_type_name.0.clone(),
+                    deployment_revision: deployment_revision.get(),
+                };
+                Box::pin(client.resolve_agent_type_at_deployment(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_agent_type_at_deployment_response::Result::Success(payload)) => {
+                Ok(payload
+                    .agent_type
+                    .ok_or("missing agent_type field")?
+                    .try_into()?)
+            }
+            Some(resolve_agent_type_at_deployment_response::Result::Error(error)) => {
                 Err(error.into())
             }
         }

@@ -34,7 +34,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.auth_service.clone(),
             ),
             AgentsApi::new(
-                services.agents_service.clone(),
+                services.worker_service.clone(),
                 services.auth_service.clone(),
             ),
         ),

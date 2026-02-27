@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::log::{logln, LogColorize};
-use crate::model::component::{agent_interface_name, render_type, show_exported_functions};
+use crate::model::component::render_type;
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
@@ -21,7 +21,8 @@ use crate::model::text::fmt::{
 use cli_table::Table;
 use colored::Colorize;
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{AgentId, AgentType};
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
@@ -210,21 +211,15 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new(component: &ComponentDto, agent_id: Option<&AgentId>) -> Self {
+    pub fn new_agent(component: &ComponentDto, agent_id: &AgentId, agent_type: &AgentType) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
-            agent_name: agent_id
-                .as_ref()
-                .map(|a| a.wrapper_agent_type().to_string()),
-            function_names: show_exported_functions(
-                component.metadata.exports(),
-                false,
-                agent_id
-                    .and_then(|agent_id| {
-                        agent_interface_name(component, agent_id.wrapper_agent_type())
-                    })
-                    .as_deref(),
-            ),
+            agent_name: Some(agent_id.wrapper_agent_type().to_string()),
+            function_names: agent_type
+                .methods
+                .iter()
+                .map(|m| m.name.to_wit_naming())
+                .collect(),
         }
     }
 }

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
@@ -27,21 +26,20 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::Principal;
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload,
+    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
+    AgentInvocation, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
     WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -59,7 +57,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
         worker_metadata: WorkerMetadata,
         plugin: &InstalledPlugin,
         initial_oplog_index: OplogIndex,
-        entries: Vec<PublicOplogEntry>,
+        entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
 
     async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError>;
@@ -199,7 +197,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         worker_metadata: WorkerMetadata,
         plugin: &InstalledPlugin,
         initial_oplog_index: OplogIndex,
-        entries: Vec<PublicOplogEntry>,
+        entries: Vec<OplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
         let running_plugin = self
             .resolve_plugin_worker(worker_metadata.environment_id, plugin)
@@ -215,51 +213,26 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 Some(running_plugin.component_revision),
                 None,
                 &InvocationContextStack::fresh(),
+                Principal::anonymous(),
             )
             .await?;
 
         let idempotency_key = IdempotencyKey::fresh();
 
-        let val_account_info = Value::Record(vec![worker_metadata.created_by.into_value()]);
-        let val_component_id = worker_metadata.worker_id.component_id.into_value();
-        let mut config_pairs = Vec::new();
-        for (key, value) in running_plugin.configuration.iter() {
-            config_pairs.push(Value::Tuple(vec![
-                key.clone().into_value(),
-                value.clone().into_value(),
-            ]));
-        }
-        let val_config = Value::List(config_pairs);
-        let function_name = "golem:api/oplog-processor@1.3.0.{process}".to_string();
-
-        let val_worker_id = worker_metadata.worker_id.clone().into_value();
-        let agent_metadata_for_guests: AgentMetadataForGuests = worker_metadata.into();
-        let val_metadata = agent_metadata_for_guests.into_value();
-        let val_first_entry_index = initial_oplog_index.into_value();
-        let val_entries = Value::List(
-            entries
-                .into_iter()
-                .map(|entry| entry.into_value())
-                .collect(),
-        );
-
-        let function_input = vec![
-            val_account_info,
-            val_config,
-            val_component_id,
-            val_worker_id,
-            val_metadata,
-            val_first_entry_index,
-            val_entries,
-        ];
-
+        let account_id = worker_metadata.created_by;
         worker
-            .invoke(
+            .invoke(AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
-                function_name,
-                function_input,
-                InvocationContextStack::fresh(),
-            )
+                account_id,
+                config: running_plugin
+                    .configuration
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                metadata: worker_metadata.into(),
+                first_entry_index: initial_oplog_index,
+                entries,
+            })
             .await?;
 
         Ok(())
@@ -397,7 +370,6 @@ impl OplogConstructor for CreateOplogConstructor {
         Arc::new(ForwardingOplog::new(
             inner,
             self.oplog_plugins,
-            self.inner,
             self.components,
             self.initial_worker_metadata,
             self.last_known_status,
@@ -557,7 +529,6 @@ impl ForwardingOplog {
     pub fn new(
         inner: Arc<dyn Oplog>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
-        oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
@@ -572,7 +543,6 @@ impl ForwardingOplog {
             initial_worker_metadata,
             last_known_status,
             last_oplog_idx,
-            oplog_service,
             components,
         }));
 
@@ -688,7 +658,6 @@ struct ForwardingOplogState {
     initial_worker_metadata: WorkerMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
     last_oplog_idx: OplogIndex,
-    oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
 }
 
@@ -735,28 +704,6 @@ impl ForwardingOplogState {
         initial_oplog_index: OplogIndex,
         entries: &[OplogEntry],
     ) -> Result<(), WorkerExecutorError> {
-        let mut public_entries = Vec::new();
-
-        for (delta, entry) in entries.iter().enumerate() {
-            let idx = initial_oplog_index.range_end(delta as u64 + 1);
-            let public_entry = PublicOplogEntry::from_oplog_entry(
-                idx,
-                entry.clone(),
-                self.oplog_service.clone(),
-                self.components.clone(),
-                &metadata.owned_worker_id(),
-                metadata.last_known_status.component_revision, // NOTE: this is only safe if the component revision is not changing within one batch
-            )
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to enrich oplog entry for oplog processors: {err}"
-                ))
-            })?;
-
-            public_entries.push(public_entry);
-        }
-
         if !metadata.last_known_status.active_plugins.is_empty() {
             let component_metadata = self
                 .components
@@ -782,7 +729,7 @@ impl ForwardingOplogState {
                         metadata.clone(),
                         &plugin,
                         initial_oplog_index,
-                        public_entries.clone(),
+                        entries.to_vec(),
                     )
                     .await?;
             }

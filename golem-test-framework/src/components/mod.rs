@@ -30,6 +30,7 @@ use url::Url;
 pub mod blob_storage;
 pub mod component_compilation_service;
 mod docker;
+mod dynamic_span;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
@@ -66,12 +67,12 @@ impl ChildProcessLogger {
         let stdout_handle = std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
-                match out_level {
-                    Level::TRACE => trace!("{} {}", prefix_clone, line.unwrap()),
-                    Level::DEBUG => debug!("{} {}", prefix_clone, line.unwrap()),
-                    Level::INFO => info!("{} {}", prefix_clone, line.unwrap()),
-                    Level::WARN => warn!("{} {}", prefix_clone, line.unwrap()),
-                    Level::ERROR => error!("{} {}", prefix_clone, line.unwrap()),
+                match line {
+                    Ok(line) => relay_line(&prefix_clone, &line, out_level),
+                    Err(e) => {
+                        warn!("{} failed to read stdout: {e}", prefix_clone);
+                        break;
+                    }
                 }
             }
         });
@@ -80,12 +81,12 @@ impl ChildProcessLogger {
         let stderr_handle = std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
-                match err_level {
-                    Level::TRACE => trace!("{} {}", prefix_clone, line.unwrap()),
-                    Level::DEBUG => debug!("{} {}", prefix_clone, line.unwrap()),
-                    Level::INFO => info!("{} {}", prefix_clone, line.unwrap()),
-                    Level::WARN => warn!("{} {}", prefix_clone, line.unwrap()),
-                    Level::ERROR => error!("{} {}", prefix_clone, line.unwrap()),
+                match line {
+                    Ok(line) => relay_line(&prefix_clone, &line, err_level),
+                    Err(e) => {
+                        warn!("{} failed to read stderr: {e}", prefix_clone);
+                        break;
+                    }
                 }
             }
         });
@@ -94,6 +95,132 @@ impl ChildProcessLogger {
             _out_handle: stdout_handle,
             _err_handle: stderr_handle,
         }
+    }
+}
+
+fn relay_line(prefix: &str, line: &str, fallback_level: Level) {
+    let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) else {
+        emit_at_level(fallback_level, prefix, line);
+        return;
+    };
+
+    let level = obj
+        .get("level")
+        .and_then(|v| v.as_str())
+        .and_then(parse_tracing_level)
+        .unwrap_or(fallback_level);
+
+    let target = obj
+        .get("target")
+        .and_then(|v| v.as_str())
+        .unwrap_or("child_process");
+
+    let file = obj.get("filename").and_then(|v| v.as_str());
+
+    let line = obj
+        .get("line_number")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+
+    let message = obj
+        .get("fields")
+        .and_then(|f| f.get("message"))
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("message").and_then(|v| v.as_str()))
+        .unwrap_or("");
+
+    let span_infos = parse_span_infos(&obj);
+    // Create and enter each span before creating the next, so each becomes
+    // a child of the previous one (proper nesting).
+    let _entered: Vec<tracing::span::EnteredSpan> = span_infos
+        .iter()
+        .map(|(name, fields)| dynamic_span::make_span(prefix, name, fields).entered())
+        .collect();
+
+    let event_fields =
+        format_kv_fields(obj.get("fields").and_then(|f| f.as_object()), &["message"]);
+
+    let msg = if event_fields.is_empty() {
+        format!("{prefix} {message}")
+    } else {
+        format!("{prefix} {message} {event_fields}")
+    };
+    dynamic_span::dispatch_event(target, level, &msg, file, line);
+}
+
+fn parse_span_infos(obj: &serde_json::Value) -> Vec<(String, Vec<(String, String)>)> {
+    obj.get("spans")
+        .and_then(|s| s.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|span_obj| {
+                    let name = span_obj.get("name")?.as_str()?.to_string();
+                    let fields = parse_kv_fields(span_obj.as_object(), &["name"]);
+                    Some((name, fields))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_kv_fields(
+    map: Option<&serde_json::Map<String, serde_json::Value>>,
+    skip: &[&str],
+) -> Vec<(String, String)> {
+    let Some(map) = map else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter(|(k, _)| !skip.contains(&k.as_str()))
+        .map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            (k.clone(), val)
+        })
+        .collect()
+}
+
+fn format_kv_fields(
+    map: Option<&serde_json::Map<String, serde_json::Value>>,
+    skip: &[&str],
+) -> String {
+    let pairs = parse_kv_fields(map, skip);
+    if pairs.is_empty() {
+        String::new()
+    } else {
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn emit_at_level(level: Level, prefix: &str, line: &str) {
+    match level {
+        Level::TRACE => trace!("{prefix} {line}"),
+        Level::DEBUG => debug!("{prefix} {line}"),
+        Level::INFO => info!("{prefix} {line}"),
+        Level::WARN => warn!("{prefix} {line}"),
+        Level::ERROR => error!("{prefix} {line}"),
+    }
+}
+
+fn parse_tracing_level(s: &str) -> Option<Level> {
+    let s = s.trim();
+    let s = s
+        .strip_prefix("Level(")
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(s);
+    match s.to_uppercase().as_str() {
+        "TRACE" => Some(Level::TRACE),
+        "DEBUG" => Some(Level::DEBUG),
+        "INFO" => Some(Level::INFO),
+        "WARN" => Some(Level::WARN),
+        "ERROR" => Some(Level::ERROR),
+        _ => None,
     }
 }
 
@@ -219,6 +346,17 @@ impl EnvVarBuilder {
             .with_rust_back_log()
             .with_tracing_from_env()
             .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
+            .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
+            .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
+            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "false".to_string())
+            .with(
+                "GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN",
+                "false".to_string(),
+            )
+            .with(
+                "GOLEM__TRACING__STDOUT__JSON_SOURCE_LOCATION",
+                "true".to_string(),
+            )
     }
 
     fn with(mut self, name: &str, value: String) -> Self {

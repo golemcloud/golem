@@ -30,6 +30,7 @@ use std::ops::RangeInclusive;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "oplog-region", owner = "golem:api@1.5.0/oplog")]
 pub struct OplogRegion {
     pub start: OplogIndex,
     pub end: OplogIndex,

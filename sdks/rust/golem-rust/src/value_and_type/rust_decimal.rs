@@ -53,7 +53,7 @@ impl FromValueAndType for rust_decimal::Decimal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+    use golem_wasm::golem_core_1_5_x::types::ValueAndType;
     use proptest::prop_assert_eq;
     use proptest::proptest;
     use test_r::test;
@@ -64,7 +64,7 @@ mod tests {
             let value = rust_decimal::Decimal::from(i);
             let typ = rust_decimal::Decimal::get_type();
             let value_and_type = ValueAndType {
-                value: value.clone().into_value(),
+                value: value.into_value(),
                 typ,
             };
             let recovered = rust_decimal::Decimal::from_value_and_type(value_and_type)

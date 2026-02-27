@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { TypeInfoInternal } from '../typeInfoInternal';
-import { HttpEndpointDetails } from 'golem:agent/common';
+import { HttpEndpointDetails } from 'golem:agent/common@1.5.0';
 
 export interface AgentMethodMetadata {
   prompt?: string;

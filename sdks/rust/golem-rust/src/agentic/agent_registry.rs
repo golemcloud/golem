@@ -18,7 +18,7 @@ use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::exports::golem::agent::guest::AgentType,
 };
-use golem_wasm::golem_rpc_0_2_x::types::parse_uuid;
+use golem_wasm::golem_core_1_5_x::types::parse_uuid;
 use golem_wasm::{AgentId, ComponentId};
 use std::rc::Rc;
 use std::{cell::RefCell, future::Future};

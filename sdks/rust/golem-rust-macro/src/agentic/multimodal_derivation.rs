@@ -33,8 +33,8 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     let mut serialize_match_arms = Vec::new();
     let mut get_name_match_arms = Vec::new();
     let mut from_element_value_match_arms = Vec::new();
-    let mut to_wit_value_match_arms = Vec::new();
-    let mut from_wit_value_match_arms = Vec::new();
+    let mut to_untyped_element_match_arms = Vec::new();
+    let mut from_untyped_element_match_arms = Vec::new();
 
     for variant in data_enum.variants.iter() {
         let variant_ident = &variant.ident;
@@ -57,9 +57,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     }
                 });
 
-                to_wit_value_match_arms.push(quote! {
+                to_untyped_element_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        <#field_type as golem_rust::agentic::Schema>::to_wit_value(inner)
+                        <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)
                     }
                 });
 
@@ -74,9 +74,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     }
                 });
 
-                from_wit_value_match_arms.push(quote! {
+                from_untyped_element_match_arms.push(quote! {
                     #variant_name => {
-                        let val = <#field_type as golem_rust::agentic::Schema>::from_wit_value(wit_value.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(value.clone())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });
@@ -113,9 +113,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn to_wit_value(self) -> Result<golem_rust::golem_wasm::WitValue, String> {
+            fn to_raw_element_value(self) -> Result<golem_rust::golem_agentic::golem::agent::common::ElementValue, String> {
                 match self {
-                    #(#to_wit_value_match_arms),*
+                    #(#to_untyped_element_match_arms),*
                 }
             }
 
@@ -128,11 +128,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                  }
             }
 
-            fn from_wit_value(wit_value: (String, golem_rust::golem_wasm::WitValue)) -> Result<Self, String> {
-                let (name, wit_value) = wit_value;
-
+            fn from_raw_element_value(name: String, value: golem_rust::golem_agentic::golem::agent::common::ElementValue) -> Result<Self, String> {
                  match name.as_str() {
-                    #(#from_wit_value_match_arms),*,
+                    #(#from_untyped_element_match_arms),*,
                     _ => return Err(format!("Unknown modality: {}", name))
                  }
             }

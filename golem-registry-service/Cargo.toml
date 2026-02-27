@@ -65,12 +65,9 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 rayon = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-rusoto_acm = { workspace = true }
-rusoto_core = { workspace = true }
-rusoto_credential = { workspace = true }
-rusoto_elbv2 = { workspace = true }
-rusoto_route53 = { workspace = true }
-rusoto_sts = { workspace = true }
+aws-sdk-acm = { workspace = true }
+aws-sdk-elasticloadbalancingv2 = { workspace = true }
+aws-sdk-route53 = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 sanitize-filename = { workspace = true }
 serde = { workspace = true }

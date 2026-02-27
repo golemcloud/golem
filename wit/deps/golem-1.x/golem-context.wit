@@ -1,4 +1,4 @@
-package golem:api@1.3.0;
+package golem:api@1.5.0;
 
 /// Invocation context support
 interface context {

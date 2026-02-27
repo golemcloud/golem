@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::dsl_impl::TestUserContext;
+use self::dsl_impl::{NameResolutionCache, TestUserContext};
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
@@ -32,6 +32,7 @@ use golem_common::model::account::{AccountCreation, AccountEmail};
 use golem_common::model::auth::AccountRole;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -66,6 +67,8 @@ pub trait TestDependencies: Send + Sync + Clone {
             token: registry_service.admin_account_token(),
             deps: self.clone(),
             auto_deploy_enabled: true,
+            name_cache: Arc::new(NameResolutionCache::new()),
+            last_deployments: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -102,6 +105,8 @@ pub trait TestDependencies: Send + Sync + Clone {
             token: token.secret,
             deps: self.clone(),
             auto_deploy_enabled: true,
+            name_cache: Arc::new(NameResolutionCache::new()),
+            last_deployments: Arc::new(std::sync::RwLock::new(HashMap::new())),
         })
     }
 
@@ -148,6 +153,8 @@ pub trait TestDependencies: Send + Sync + Clone {
             token: token.secret,
             deps: self.clone(),
             auto_deploy_enabled: true,
+            name_cache: Arc::new(NameResolutionCache::new()),
+            last_deployments: Arc::new(std::sync::RwLock::new(HashMap::new())),
         })
     }
 

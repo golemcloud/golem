@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::ElementValue;
-use crate::golem_agentic::golem::agent::common::{ElementSchema, Principal};
-use crate::golem_wasm::WitValue;
+use crate::golem_agentic::golem::agent::common::{
+    DataValue, ElementSchema, ElementValue, Principal,
+};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 
 pub trait Schema {
     fn get_type() -> StructuredSchema;
@@ -29,13 +29,35 @@ pub trait Schema {
     where
         Self: Sized;
 
-    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String>
+    fn to_element_value(self) -> Result<ElementValue, String>
     where
         Self: Sized;
 
-    fn to_wit_value(self) -> Result<WitValue, String>
+    fn from_element_value(value: ElementValue) -> Result<Self, String>
     where
         Self: Sized;
+
+    fn to_data_value(self) -> Result<DataValue, String>
+    where
+        Self: Sized,
+    {
+        Ok(DataValue::Tuple(vec![self.to_element_value()?]))
+    }
+
+    fn from_data_value(value: DataValue) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            DataValue::Tuple(mut elements) if elements.len() == 1 => {
+                Self::from_element_value(elements.remove(0))
+            }
+            other => Err(format!(
+                "Expected single-element Tuple DataValue, got: {:?}",
+                other
+            )),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -126,18 +148,12 @@ impl Schema for Principal {
         }
     }
 
-    fn from_wit_value(_wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        Err("Principal is not expected to be converted from Wit Value".to_string())
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Err("Principal is not expected to be converted to ElementValue".to_string())
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String>
-    where
-        Self: Sized,
-    {
-        Err("Principal is not expected to be converted to Wit Value".to_string())
+    fn from_element_value(_value: ElementValue) -> Result<Self, String> {
+        Err("Principal is not expected to be converted from ElementValue".to_string())
     }
 }
 
@@ -161,48 +177,42 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
     ) -> Result<Self, String> {
         match value {
             StructuredValue::Default(ElementValue::ComponentModel(wit_value)) => {
-                T::from_wit_value(wit_value, schema)
+                let value_and_type = ValueAndType {
+                    value: wit_value,
+                    typ: match schema {
+                        StructuredSchema::Default(ElementSchema::ComponentModel(wit_type)) => {
+                            wit_type
+                        }
+                        _ => {
+                            return Err(format!(
+                                "Expected ComponentModel schema, got: {:?}",
+                                schema
+                            ))
+                        }
+                    },
+                };
+                T::from_value_and_type(value_and_type)
             }
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String> {
-        let value_and_type = ValueAndType {
-            value: wit_value,
-            typ: match schema {
-                StructuredSchema::Default(ElementSchema::ComponentModel(wit_type)) => wit_type,
-                _ => return Err(format!("Expected ComponentModel schema, got: {:?}", schema)),
-            },
-        };
-
-        T::from_value_and_type(value_and_type)
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        Ok(ElementValue::ComponentModel(self.into_value()))
     }
 
-    fn to_wit_value(self) -> Result<WitValue, String> {
-        let value_out = self.to_structured_value()?;
-
-        let element_value_result = match value_out {
-            StructuredValue::Default(element_value) => Ok(element_value),
-            StructuredValue::Multimodal(_) => {
-                Err("Expected element value but found multimodal".to_string())
+    fn from_element_value(value: ElementValue) -> Result<Self, String> {
+        match value {
+            ElementValue::ComponentModel(wv) => {
+                let value_and_type = ValueAndType {
+                    value: wv,
+                    typ: T::get_type(),
+                };
+                T::from_value_and_type(value_and_type)
             }
-            StructuredValue::AutoInjected(_) => {
-                Err("Expected element value but found auto-injected".to_string())
-            }
-        };
-
-        let element_value = element_value_result?;
-
-        match element_value {
-            ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-            ElementValue::UnstructuredBinary(binary_reference) => Err(format!(
-                "Expected ComponentModel value, got UnstructuredBinary: {:?}",
-                binary_reference
-            )),
-            ElementValue::UnstructuredText(text_reference) => Err(format!(
-                "Expected ComponentModel value, got UnstructuredText: {:?}",
-                text_reference
+            other => Err(format!(
+                "Expected ComponentModel ElementValue, got: {:?}",
+                other
             )),
         }
     }
@@ -221,11 +231,11 @@ pub trait MultimodalSchema {
     where
         Self: Sized;
 
-    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
+    fn to_raw_element_value(self) -> Result<ElementValue, String>
     where
         Self: Sized;
 
-    fn to_wit_value(self) -> Result<WitValue, String>
+    fn from_raw_element_value(name: String, value: ElementValue) -> Result<Self, String>
     where
         Self: Sized;
 }

@@ -27,9 +27,7 @@ use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
-use crate::service::worker::{
-    AgentsService, WorkerClient, WorkerExecutorWorkerClient, WorkerService,
-};
+use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient, WorkerService};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
@@ -89,6 +87,7 @@ impl Services {
         ));
 
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
+            registry_service_client.clone(),
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),
@@ -157,20 +156,13 @@ impl Services {
             webhook_callback_handler.clone(),
         ));
 
-        let agents_service: Arc<AgentsService> = Arc::new(AgentsService::new(
-            registry_service_client.clone(),
-            component_service.clone(),
-            worker_service.clone(),
-        ));
-
         Ok(Self {
             auth_service,
             limit_service,
             component_service,
             worker_service,
             request_handler,
-            agents_service,
-            mcp_capability_lookup,
+            mcp_capability_lookup
         })
     }
 }

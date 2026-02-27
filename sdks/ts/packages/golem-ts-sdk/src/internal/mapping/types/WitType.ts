@@ -15,12 +15,12 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { WitTypeBuilder } from './witTypeBuilder';
 import * as Either from '../../../newTypes/either';
-import { WitType } from 'golem:agent/common';
+import { WitType } from 'golem:agent/common@1.5.0';
 import { TypeScope } from './scope';
 import { AnalysedType } from './analysedType';
 import { typeMapper } from './typeMapperImpl';
 
-export { WitType } from 'golem:rpc/types@0.2.2';
+export { WitType } from 'golem:core/types@1.5.0';
 
 /**
  * Creates a WitType from a TypeScript Type

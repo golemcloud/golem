@@ -15,7 +15,7 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
-use crate::{virtual_exports, SafeDisplay};
+use crate::SafeDisplay;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -74,10 +74,6 @@ impl ComponentMetadata {
         }
     }
 
-    pub fn exports(&self) -> &[AnalysedExport] {
-        &self.data.exports
-    }
-
     pub fn producers(&self) -> &[Producers] {
         &self.data.producers
     }
@@ -112,6 +108,18 @@ impl ComponentMetadata {
 
     pub fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
         self.cache.lock().unwrap().save_snapshot(&self.data)
+    }
+
+    pub fn agent_initialize(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().agent_initialize(&self.data)
+    }
+
+    pub fn agent_invoke(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().agent_invoke(&self.data)
+    }
+
+    pub fn oplog_processor(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().oplog_processor(&self.data)
     }
 
     pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
@@ -267,6 +275,48 @@ impl ComponentMetadataInnerData {
             },
             ParsedFunctionReference::Function {
                 function: "save".to_string(),
+            },
+        ))
+    }
+
+    pub fn agent_initialize(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "agent".to_string(),
+                interface: "guest".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "initialize".to_string(),
+            },
+        ))
+    }
+
+    pub fn agent_invoke(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "agent".to_string(),
+                interface: "guest".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "invoke".to_string(),
+            },
+        ))
+    }
+
+    pub fn oplog_processor(&self) -> Result<Option<InvokableFunction>, String> {
+        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: "golem".to_string(),
+                package: "api".to_string(),
+                interface: "oplog-processor".to_string(),
+                version: None,
+            },
+            ParsedFunctionReference::Function {
+                function: "process".to_string(),
             },
         ))
     }
@@ -506,6 +556,9 @@ impl ComponentMetadataInnerData {
 pub(crate) struct ComponentMetadataInnerCache {
     load_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
+    agent_initialize: Option<Result<Option<InvokableFunction>, String>>,
+    agent_invoke: Option<Result<Option<InvokableFunction>, String>>,
+    oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
     agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
@@ -537,6 +590,45 @@ impl ComponentMetadataInnerCache {
         } else {
             let result = data.save_snapshot();
             self.save_snapshot = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn agent_initialize(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.agent_initialize {
+            cached.clone()
+        } else {
+            let result = data.agent_initialize();
+            self.agent_initialize = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn agent_invoke(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.agent_invoke {
+            cached.clone()
+        } else {
+            let result = data.agent_invoke();
+            self.agent_invoke = Some(result.clone());
+            result
+        }
+    }
+
+    pub fn oplog_processor(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = &self.oplog_processor {
+            cached.clone()
+        } else {
+            let result = data.oplog_processor();
+            self.oplog_processor = Some(result.clone());
             result
         }
     }
@@ -657,7 +749,6 @@ impl RawComponentMetadata {
         }
 
         add_resource_drops(&mut exports);
-        add_virtual_exports(&mut exports);
 
         let memories = wit_analysis
             .linear_memories()
@@ -893,17 +984,6 @@ fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
             result: None,
         }
     }
-}
-
-fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
-    // Some interfaces like the golem/http:incoming-handler do not exist on the component
-    // but are dynamically created by the worker executor based on other existing interfaces.
-
-    if virtual_exports::http_incoming_handler::implements_required_interfaces(exports) {
-        exports.extend(vec![
-            virtual_exports::http_incoming_handler::ANALYZED_EXPORT.clone(),
-        ]);
-    };
 }
 
 mod protobuf {

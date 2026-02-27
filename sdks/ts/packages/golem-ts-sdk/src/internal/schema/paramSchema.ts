@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DataSchema, ElementSchema } from 'golem:agent/common';
+import { DataSchema, ElementSchema } from 'golem:agent/common@1.5.0';
 
 // Collection of parameter schemas for agent constructor or method.
 // It can contain both principal and component model parameters.
@@ -22,6 +22,10 @@ export class ParameterSchemaCollection {
 
   addPrincipalParameter(name: string): void {
     this.parameterSchemas.push({ tag: 'principal', name });
+  }
+
+  addConfigParameter(name: string): void {
+    this.parameterSchemas.push({ tag: 'config', name });
   }
 
   addComponentModelParameter(name: string, schema: ElementSchema): void {
@@ -39,6 +43,7 @@ export class ParameterSchemaCollection {
 
 export type ParameterSchema =
   | { tag: 'principal'; name: string }
+  | { tag: 'config'; name: string }
   | { tag: 'component-model'; name: string; schema: ElementSchema };
 
 // Remove principal parameters
@@ -46,11 +51,14 @@ function getDataSchema(parameterSchemaCollection: ParameterSchema[]): DataSchema
   let nameAndSchema: [string, ElementSchema][] = [];
 
   for (const paramSchema of parameterSchemaCollection) {
-    if (paramSchema.tag === 'principal') {
-    }
-
-    if (paramSchema.tag === 'component-model') {
-      nameAndSchema.push([paramSchema.name, paramSchema.schema]);
+    switch (paramSchema.tag) {
+      case 'config':
+        break;
+      case 'principal':
+        break;
+      case 'component-model':
+        nameAndSchema.push([paramSchema.name, paramSchema.schema]);
+        break;
     }
   }
   return {

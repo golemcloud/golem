@@ -12,19 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::{ComponentModelElementValue, DataValue, ElementValue, ElementValues};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
-    BeginAtomicRegionParams, BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams,
-    CreateResourceParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
-    ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
-    FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
-    RestartParams, SuccessfulUpdateParams, SuspendParams,
+    AgentInvocationFinishedParams, AgentInvocationStartedParams, BeginAtomicRegionParams,
+    BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams, CreateResourceParams,
+    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
+    NoOpParams, PendingAgentInvocationParams, PendingUpdateParams, RestartParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    ExportedFunctionParameters, LogLevel, PluginInstallationDescription, PublicAttribute,
-    PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData, PublicOplogEntry,
-    PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    AgentInvocationOutputParameters, AgentMethodInvocationParameters, LogLevel,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
+    PublicOplogEntry, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
     SnapshotBasedUpdateParameters, StringAttributeValue, WorkerResourceId,
 };
 use crate::model::regions::OplogRegion;
@@ -34,6 +36,7 @@ use crate::model::{
 use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
 use poem_openapi::types::ToJSON;
+use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
 use test_r::test;
 use uuid::Uuid;
@@ -80,8 +83,8 @@ fn create_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn imported_function_invoked_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
+fn host_call_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::HostCall(HostCallParams {
         timestamp: Timestamp::now_utc().rounded(),
         function_name: "test".to_string(),
         request: ValueAndType {
@@ -100,36 +103,44 @@ fn imported_function_invoked_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn exported_function_invoked_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParams {
+fn agent_invocation_started_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        function_name: "test".to_string(),
-        request: vec![
-            ValueAndType {
-                value: Value::String("test".to_string()),
-                typ: str(),
-            },
-            ValueAndType {
-                value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                typ: record(vec![field("x", s16()), field("y", s16())]),
-            },
-        ],
-        idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-        trace_id: TraceId::generate(),
-        trace_states: vec!["a".to_string(), "b".to_string()],
-        invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
-            span_id: SpanId::generate(),
-            start: Timestamp::now_utc().rounded(),
-            parent_id: None,
-            linked_context: None,
-            attributes: vec![PublicAttribute {
-                key: "a".to_string(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "b".to_string(),
-                }),
-            }],
-            inherited: true,
-        })]],
+        invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            method_name: "test".to_string(),
+            function_input: DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::String("test".to_string()),
+                            typ: str(),
+                        },
+                    }),
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                            typ: record(vec![field("x", s16()), field("y", s16())]),
+                        },
+                    }),
+                ],
+            }),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["a".to_string(), "b".to_string()],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: Timestamp::now_utc().rounded(),
+                parent_id: None,
+                linked_context: None,
+                attributes: vec![PublicAttribute {
+                    key: "a".to_string(),
+                    value: PublicAttributeValue::String(StringAttributeValue {
+                        value: "b".to_string(),
+                    }),
+                }],
+                inherited: true,
+            })]],
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -137,14 +148,23 @@ fn exported_function_invoked_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn exported_function_completed_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+fn agent_invocation_finished_serialization_poem_serde_equivalence() {
+    use crate::model::component::ComponentRevision;
+
+    let entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
         timestamp: Timestamp::now_utc().rounded(),
-        response: Some(ValueAndType {
-            value: Value::Enum(1),
-            typ: r#enum(&["red", "green", "blue"]),
+        result: PublicAgentInvocationResult::AgentMethod(AgentInvocationOutputParameters {
+            output: DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType {
+                        value: Value::Enum(1),
+                        typ: r#enum(&["red", "green", "blue"]),
+                    },
+                })],
+            }),
         }),
         consumed_fuel: 100,
+        component_revision: ComponentRevision::INITIAL,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -278,21 +298,27 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
 
 #[test]
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
+    let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
         timestamp: Timestamp::now_utc().rounded(),
-        invocation: PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
+        invocation: PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
-            full_function_name: "test".to_string(),
-            function_input: Some(vec![
-                ValueAndType {
-                    value: Value::String("test".to_string()),
-                    typ: str(),
-                },
-                ValueAndType {
-                    value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                    typ: record(vec![field("x", s16()), field("y", s16())]),
-                },
-            ]),
+            method_name: "test".to_string(),
+            function_input: DataValue::Tuple(ElementValues {
+                elements: vec![
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::String("test".to_string()),
+                            typ: str(),
+                        },
+                    }),
+                    ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType {
+                            value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                            typ: record(vec![field("x", s16()), field("y", s16())]),
+                        },
+                    }),
+                ],
+            }),
             trace_id: TraceId::generate(),
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
@@ -454,4 +480,31 @@ fn restart_serialization_poem_serde_equivalence() {
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn oplog_entry_type_matches_wit() {
+    use crate::model::oplog::OplogEntry;
+    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
+    use golem_wasm::IntoValue;
+    use std::path::PathBuf;
+
+    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
+    let mut resolver =
+        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
+
+    let wit_type = resolver
+        .analysed_type(&TypeName {
+            package: Some("golem:api@1.5.0".to_string()),
+            owner: TypeOwner::Interface("oplog".to_string()),
+            name: Some("oplog-entry".to_string()),
+        })
+        .expect("Failed to find oplog-entry type in WIT");
+
+    let rust_type = OplogEntry::get_type();
+
+    assert_eq!(
+        rust_type, wit_type,
+        "OplogEntry::get_type() does not match the WIT oplog-entry definition"
+    );
 }

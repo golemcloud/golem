@@ -47,12 +47,12 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord,
+    AgentInvocation, AgentInvocationOutput, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId,
+    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
-use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
@@ -266,14 +266,9 @@ pub trait StatusManagement {
 #[async_trait]
 pub trait InvocationHooks {
     /// Called when a worker is about to be invoked
-    /// Arguments:
-    /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
-    /// - `function_input`: The input of the function being invoked
-    #[allow(clippy::ptr_arg)]
-    async fn on_exported_function_invoked(
+    async fn on_agent_invocation_started(
         &mut self,
-        full_function_name: &str,
-        function_input: &Vec<Value>,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when a worker invocation fails
@@ -283,19 +278,12 @@ pub trait InvocationHooks {
         trap_type: &TrapType,
     ) -> RetryDecision;
 
-    /// Called when a worker invocation succeeds
-    /// Arguments:
-    /// - `full_function_name`: The full name of the function being invoked (including the exported interface name if any)
-    /// - `function_input`: The input of the function being invoked
-    /// - `consumed_fuel`: The amount of fuel consumed by the invocation
-    /// - `output`: The output of the function being invoked
-    #[allow(clippy::ptr_arg)]
-    async fn on_invocation_success(
+    /// Called when an agent invocation succeeds, with the typed result directly.
+    async fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
-        function_input: &Vec<Value>,
         consumed_fuel: u64,
-        output: Option<ValueAndType>,
+        output: &AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Gets the retry point that should be associated with a current error. Errors are grouped

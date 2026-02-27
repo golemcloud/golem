@@ -19,7 +19,6 @@ use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     Evolution, SerializationContext,
 };
-use golem_wasm_derive::{FromValue, IntoValue};
 use lazy_static::lazy_static;
 use nonempty_collections::NEVec;
 use std::collections::{HashMap, HashSet};
@@ -145,10 +144,48 @@ impl poem_openapi::types::ToJSON for SpanId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum AttributeValue {
     String(String),
+}
+
+impl golem_wasm::IntoValue for AttributeValue {
+    fn into_value(self) -> golem_wasm::Value {
+        match self {
+            AttributeValue::String(s) => golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(golem_wasm::Value::String(s))),
+            },
+        }
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        variant(vec![case("string", str())])
+            .named("attribute-value")
+            .owned("golem:api@1.5.0/context")
+    }
+}
+
+impl golem_wasm::FromValue for AttributeValue {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Variant {
+                case_idx: 0,
+                case_value,
+            } => {
+                let s = String::from_value(*case_value.ok_or("Expected case_value for string")?)?;
+                Ok(AttributeValue::String(s))
+            }
+            golem_wasm::Value::Variant { case_idx, .. } => {
+                Err(format!("Invalid case_idx for AttributeValue: {case_idx}"))
+            }
+            other => Err(format!(
+                "Expected Variant for AttributeValue, got {other:?}"
+            )),
+        }
+    }
 }
 
 impl Display for AttributeValue {

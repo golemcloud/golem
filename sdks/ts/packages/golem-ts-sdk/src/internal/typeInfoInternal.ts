@@ -18,7 +18,7 @@ import {
   ElementSchema,
   TextDescriptor,
   WitType,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { ParameterDetail } from './mapping/values/dataValue';
 import * as Either from '../newTypes/either';
@@ -34,6 +34,7 @@ export type TypeInfoInternal =
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
   | { tag: 'principal'; tsType: Type.Type }
+  | { tag: 'config'; tsType: Type.Type }
   | {
       tag: 'multimodal';
       types: ParameterDetail[];
@@ -52,6 +53,12 @@ export function isOptionalWithQuestionMark(typeInfoInternal: TypeInfoInternal): 
 
 export function isPrincipal(typeInfoInternal: TypeInfoInternal): boolean {
   return typeInfoInternal.tag === 'principal';
+}
+
+export function isConfig(
+  typeInfoInternal: TypeInfoInternal,
+): typeInfoInternal is TypeInfoInternal & { tag: 'config' } {
+  return typeInfoInternal.tag === 'config';
 }
 
 export function isEmptyType(typeInfoInternal: TypeInfoInternal): boolean {
@@ -87,6 +94,8 @@ export function convertTypeInfoToElementSchema(
       });
     case 'principal':
       return Either.left('Cannot convert `Principal` type information to ElementSchema');
+    case 'config':
+      return Either.left('Cannot convert `Principal` type information to ElementSchema');
     case 'multimodal':
       return Either.left('Cannot convert multimodal type information to ElementSchema');
   }
@@ -110,6 +119,8 @@ export function getMultimodalDataSchemaFromTypeInternal(
       return Either.left('cannot get multimodal DataSchema from unstructured-binary type info');
     case 'principal':
       return Either.left('cannot get multimodal DataSchema from principal type info');
+    case 'config':
+      return Either.left('cannot get multimodal DataSchema from config type info');
     case 'multimodal':
       const parameterDetails = typeInfoInternal.types;
 
@@ -191,6 +202,8 @@ export function getReturnTypeDataSchemaFromTypeInternal(
       });
     case 'principal':
       return Either.left('Principal cannot be used as a method return type');
+    case 'config':
+      return Either.left('Config cannot be used as a method return type');
     case 'multimodal':
       return getMultimodalDataSchemaFromTypeInternal(typeInfoInternal);
   }

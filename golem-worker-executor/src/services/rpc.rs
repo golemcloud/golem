@@ -34,12 +34,15 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{
+    AgentInvocationMode, AgentPrincipal, Principal, UntypedDataValue,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionSite};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{ValueAndType, WitValue};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -62,21 +65,21 @@ pub trait Rpc: Send + Sync {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, RpcError>;
+    ) -> Result<UntypedDataValue, RpcError>;
 
     async fn invoke(
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
@@ -184,15 +187,28 @@ impl From<WorkerProxyError> for RpcError {
     }
 }
 
-impl From<golem_wasm::RpcError> for RpcError {
-    fn from(value: golem_wasm::RpcError) -> Self {
+impl From<crate::preview2::golem::agent::host::RpcError> for RpcError {
+    fn from(value: crate::preview2::golem::agent::host::RpcError) -> Self {
+        use crate::preview2::golem::agent::host::RpcError as WitRpcError;
         match value {
-            golem_wasm::RpcError::ProtocolError(details) => Self::ProtocolError { details },
-            golem_wasm::RpcError::Denied(details) => Self::Denied { details },
-            golem_wasm::RpcError::NotFound(details) => Self::NotFound { details },
-            golem_wasm::RpcError::RemoteInternalError(details) => {
-                Self::RemoteInternalError { details }
-            }
+            WitRpcError::ProtocolError(details) => Self::ProtocolError { details },
+            WitRpcError::Denied(details) => Self::Denied { details },
+            WitRpcError::NotFound(details) => Self::NotFound { details },
+            WitRpcError::RemoteInternalError(details) => Self::RemoteInternalError { details },
+            WitRpcError::RemoteAgentError(err) => Self::RemoteInternalError {
+                details: format!("{err:?}"),
+            },
+        }
+    }
+}
+
+impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
+    fn from(value: RpcError) -> Self {
+        match value {
+            RpcError::ProtocolError { details } => Self::ProtocolError(details),
+            RpcError::Denied { details } => Self::Denied(details),
+            RpcError::NotFound { details } => Self::NotFound(details),
+            RpcError::RemoteInternalError { details } => Self::RemoteInternalError(details),
         }
     }
 }
@@ -239,21 +255,25 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         owned_worker_id: &OwnedWorkerId,
         self_created_by: AccountId,
-        _self_worker_id: &WorkerId,
+        self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
-        _self_stack: InvocationContextStack, // TODO: make invocation context propagating through the worker start API
+        self_stack: InvocationContextStack,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
+        let principal = caller_agent_principal(self_worker_id);
         let demand = LoggingDemand::new(owned_worker_id.worker_id());
 
         self.worker_proxy
             .start(
                 owned_worker_id,
+                self_worker_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
+                self_stack,
                 self_created_by,
+                principal,
             )
             .await?;
 
@@ -264,57 +284,83 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, RpcError> {
-        Ok(self
+    ) -> Result<UntypedDataValue, RpcError> {
+        let principal = caller_agent_principal(self_worker_id);
+
+        let output = self
             .worker_proxy
-            .invoke_and_await(
-                owned_worker_id,
+            .invoke_agent(
+                &owned_worker_id.worker_id(),
+                method_name,
+                method_parameters,
+                AgentInvocationMode::Await,
+                None,
                 idempotency_key,
-                function_name,
-                function_params,
                 self_worker_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
                 self_created_by,
+                principal,
             )
-            .await?)
+            .await?;
+
+        match output.result {
+            golem_common::model::AgentInvocationResult::AgentMethod { output } => Ok(output),
+            _ => Err(RpcError::RemoteInternalError {
+                details:
+                    "Expected a result from agent invoke_and_await but got a non-method result"
+                        .to_string(),
+            }),
+        }
     }
 
     async fn invoke(
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        Ok(self
-            .worker_proxy
-            .invoke(
-                owned_worker_id,
+        let principal = caller_agent_principal(self_worker_id);
+
+        self.worker_proxy
+            .invoke_agent(
+                &owned_worker_id.worker_id(),
+                method_name,
+                method_parameters,
+                AgentInvocationMode::Schedule,
+                None,
                 idempotency_key,
-                function_name,
-                function_params,
                 self_worker_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
                 self_created_by,
+                principal,
             )
-            .await?)
+            .await?;
+
+        Ok(())
     }
+}
+
+fn caller_agent_principal(self_worker_id: &WorkerId) -> Principal {
+    Principal::Agent(AgentPrincipal {
+        agent_id: self_worker_id.clone(),
+    })
 }
 
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
@@ -612,103 +658,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             extra_deps,
         }
     }
-
-    async fn enrich_function_name(
-        &self,
-        target_worker_id: &OwnedWorkerId,
-        function_name: String,
-    ) -> String {
-        enrich_function_name(&self.component_service, target_worker_id, function_name).await
-    }
-}
-
-/// As we know the target component's metadata, and it includes the root package name, we can
-/// accept function names which are not fully qualified by falling back to use this root package
-/// when the package part is missing.
-pub(crate) async fn enrich_function_name(
-    component_service: &Arc<dyn component::ComponentService>,
-    target_worker_id: &OwnedWorkerId,
-    function_name: String,
-) -> String {
-    let parsed_function_name: Option<ParsedFunctionName> =
-        ParsedFunctionName::parse(&function_name).ok();
-    if matches!(
-        parsed_function_name,
-        Some(ParsedFunctionName {
-            site: ParsedFunctionSite::Global,
-            function: _
-        }) | Some(ParsedFunctionName {
-            site: ParsedFunctionSite::PackagedInterface { .. },
-            function: _
-        })
-    ) {
-        // already valid function name, doing nothing
-        function_name
-    } else if let Ok(target_component) = component_service
-        .get_metadata(target_worker_id.worker_id.component_id, None)
-        .await
-    {
-        enrich_function_name_by_target_information(
-            function_name,
-            target_component.metadata.root_package_name().clone(),
-            target_component.metadata.root_package_version().clone(),
-        )
-    } else {
-        // If we cannot get the target metadata, we just go with the original function name
-        // and let it fail on that.
-        function_name
-    }
-}
-
-fn enrich_function_name_by_target_information(
-    function_name: String,
-    root_package_name: Option<String>,
-    root_package_version: Option<String>,
-) -> String {
-    if let Some(root_package_name) = root_package_name {
-        // Hack for supporting the 'unique' name generation of golem-test-framework. Stripping everything after '---'
-        let root_package_name = strip_unique_suffix(&root_package_name);
-
-        if let Some(root_package_version) = root_package_version {
-            // The target root package is versioned, and the version has to be put _after_ the interface
-            // name which we assume to be the first section (before a dot) of the provided string:
-
-            if let Some((interface_name, rest)) = function_name.split_once('.') {
-                let enriched_function_name =
-                    format!("{root_package_name}/{interface_name}@{root_package_version}.{rest}");
-                if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
-                    enriched_function_name
-                } else {
-                    // If the enriched function name is still not valid, we just return the original function name
-                    function_name
-                }
-            } else {
-                // Unexpected format, we just return the original function name
-                function_name
-            }
-        } else {
-            // The target root package is not versioned, so we can just simply prefix the root package name
-            // to the provided function name and see if it is valid:
-            let enriched_function_name = format!("{root_package_name}/{function_name}");
-            if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
-                enriched_function_name
-            } else {
-                // If the enriched function name is still not valid, we just return the original function name
-                function_name
-            }
-        }
-    } else {
-        // No root package information in the target, we can't do anything
-        function_name
-    }
-}
-
-fn strip_unique_suffix(root_package_name: &str) -> String {
-    if let Some(index) = root_package_name.rfind("---") {
-        root_package_name[..index].to_string()
-    } else {
-        root_package_name.to_string()
-    }
 }
 
 #[async_trait]
@@ -738,6 +687,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 None,
                 Some(self_worker_id.clone()),
                 &self_stack,
+                Principal::Agent(AgentPrincipal {
+                    agent_id: self_worker_id.clone(),
+                }),
             )
             .await?;
 
@@ -761,31 +713,22 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-    ) -> Result<Option<ValueAndType>, RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-        let function_name = self
-            .enrich_function_name(owned_worker_id, function_name)
-            .await;
-
+    ) -> Result<UntypedDataValue, RpcError> {
         if self
             .shard_service()
             .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            debug!("Invoking local worker function {function_name} with parameters {function_params:?}");
+            debug!(target_worker_id = %owned_worker_id, "Local direct agent invoke_and_await");
 
-            let input_values = function_params
-                .into_iter()
-                .map(|wit_value| wit_value.into())
-                .collect();
-
+            let principal = caller_agent_principal(self_worker_id);
             let worker = Worker::get_or_create_running(
                 self,
                 self_created_by,
@@ -795,21 +738,35 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 None,
                 Some(self_worker_id.clone()),
                 &self_stack,
+                principal.clone(),
             )
             .await?;
 
-            let result_value = worker
-                .invoke_and_await(idempotency_key, function_name, input_values, self_stack)
-                .await?;
+            let invocation = AgentInvocation::AgentMethod {
+                idempotency_key: idempotency_key.unwrap_or(IdempotencyKey::fresh()),
+                method_name,
+                input: method_parameters,
+                invocation_context: self_stack,
+                principal,
+            };
 
-            Ok(result_value)
+            let output = worker.invoke_and_await(invocation).await?;
+
+            match output.result {
+                AgentInvocationResult::AgentMethod { output } => Ok(output),
+                _ => Err(RpcError::RemoteInternalError {
+                    details:
+                        "Expected a result from agent invoke_and_await but got a non-method result"
+                            .to_string(),
+                }),
+            }
         } else {
             self.remote_rpc
                 .invoke_and_await(
                     owned_worker_id,
-                    Some(idempotency_key),
-                    function_name,
-                    function_params,
+                    Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
+                    method_name,
+                    method_parameters,
                     self_created_by,
                     self_worker_id,
                     self_env,
@@ -824,31 +781,22 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         owned_worker_id: &OwnedWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        function_params: Vec<WitValue>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
         self_created_by: AccountId,
         self_worker_id: &WorkerId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
-        let function_name = self
-            .enrich_function_name(owned_worker_id, function_name)
-            .await;
-
         if self
             .shard_service()
-            .check_worker(&owned_worker_id.worker_id())
+            .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            debug!("Invoking local worker function {function_name} with parameters {function_params:?} without awaiting for the result");
+            debug!(target_worker_id = %owned_worker_id, "Local direct agent invoke (fire-and-forget)");
 
-            let input_values = function_params
-                .into_iter()
-                .map(|wit_value| wit_value.into())
-                .collect();
-
+            let principal = caller_agent_principal(self_worker_id);
             let worker = Worker::get_or_create_running(
                 self,
                 self_created_by,
@@ -858,20 +806,29 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 None,
                 Some(self_worker_id.clone()),
                 &self_stack,
+                principal.clone(),
             )
             .await?;
 
-            worker
-                .invoke(idempotency_key, function_name, input_values, self_stack)
-                .await?;
-            Ok(())
+            let invocation = AgentInvocation::AgentMethod {
+                idempotency_key: idempotency_key.unwrap_or(IdempotencyKey::fresh()),
+                method_name,
+                input: method_parameters,
+                invocation_context: self_stack,
+                principal,
+            };
+
+            match worker.invoke(invocation).await? {
+                crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
+                _ => Ok(()),
+            }
         } else {
             self.remote_rpc
                 .invoke(
                     owned_worker_id,
-                    Some(idempotency_key),
-                    function_name,
-                    function_params,
+                    Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
+                    method_name,
+                    method_parameters,
                     self_created_by,
                     self_worker_id,
                     self_env,
@@ -884,41 +841,3 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl RpcDemand for () {}
-
-#[cfg(test)]
-mod tests {
-    use crate::services::rpc::enrich_function_name_by_target_information;
-    use test_r::test;
-
-    #[test]
-    fn test_enrich_function_name_by_target_information() {
-        assert_eq!(
-            enrich_function_name_by_target_information("api.{x}".to_string(), None, None),
-            "api.{x}".to_string()
-        );
-        assert_eq!(
-            enrich_function_name_by_target_information(
-                "api.{x}".to_string(),
-                Some("test:pkg".to_string()),
-                None
-            ),
-            "test:pkg/api.{x}".to_string()
-        );
-        assert_eq!(
-            enrich_function_name_by_target_information(
-                "api.{x}".to_string(),
-                Some("test:pkg".to_string()),
-                Some("1.0.0".to_string())
-            ),
-            "test:pkg/api@1.0.0.{x}".to_string()
-        );
-        assert_eq!(
-            enrich_function_name_by_target_information(
-                "run".to_string(),
-                Some("test:pkg".to_string()),
-                Some("1.0.0".to_string())
-            ),
-            "run".to_string()
-        );
-    }
-}

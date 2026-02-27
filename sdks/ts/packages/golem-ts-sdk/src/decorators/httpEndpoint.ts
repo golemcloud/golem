@@ -20,7 +20,7 @@ import {
   HttpEndpointDetails,
   PathSegment,
   QueryVariable,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../internal/registry/agentMethodRegistry';
 import { parsePath } from '../internal/http/path';
 import { parseQuery } from '../internal/http/query';

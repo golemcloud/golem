@@ -14,12 +14,14 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentType, Principal, DataValue } from 'golem:agent/common';
+import { AgentType, Principal, DataValue } from 'golem:agent/common@1.5.0';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
+import { TypeInfoInternal } from './internal/typeInfoInternal';
+import { loadConfigKey } from './internal/mapping/values/dataValue';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -32,7 +34,7 @@ export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
-export { Principal } from 'golem:agent/common';
+export { Principal } from 'golem:agent/common@1.5.0';
 
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
@@ -229,3 +231,26 @@ export const saveSnapshot: typeof bindings.saveSnapshot = {
 export const loadSnapshot: typeof bindings.loadSnapshot = {
   load,
 };
+
+export class Secret<T> {
+  private readonly path: string[];
+  private readonly typeInfoInternal: TypeInfoInternal;
+
+  constructor(path: string[], typeInfoInternal: TypeInfoInternal) {
+    this.path = path;
+    this.typeInfoInternal = typeInfoInternal;
+  }
+
+  /** Lazily loads or reloads the secret value */
+  get(): T {
+    return loadConfigKey(this.path, this.typeInfoInternal);
+  }
+}
+
+export class Config<T> {
+  readonly value: T;
+
+  constructor(value: T) {
+    this.value = value;
+  }
+}

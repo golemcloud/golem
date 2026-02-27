@@ -41,8 +41,9 @@ use std::time::Duration;
 use tempfile::{TempDir, tempdir};
 use test_r::{define_matrix_dimension, test, test_dep};
 use testcontainers::ContainerAsync;
+use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::minio::MinIO;
+use testcontainers::{GenericImage, ImageExt};
 use uuid::Uuid;
 
 #[async_trait]
@@ -112,12 +113,19 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let container = tryhard::retry_fn(|| MinIO::default().start())
-            .retries(5)
-            .exponential_backoff(Duration::from_millis(10))
-            .max_delay(Duration::from_secs(10))
-            .await
-            .expect("Failed to start MinIO");
+        let container = tryhard::retry_fn(|| {
+            GenericImage::new("minio/minio", "RELEASE.2025-01-20T14-49-07Z")
+                .with_exposed_port(9000.tcp())
+                .with_wait_for(WaitFor::message_on_stderr("API:"))
+                .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
+                .with_cmd(["server", "/data"])
+                .start()
+        })
+        .retries(5)
+        .exponential_backoff(Duration::from_millis(10))
+        .max_delay(Duration::from_secs(10))
+        .await
+        .expect("Failed to start MinIO");
         let host_port = container
             .get_host_port_ipv4(9000)
             .await
@@ -181,7 +189,7 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
 
 struct S3BlobStorageWithContainer {
     storage: s3::S3BlobStorage,
-    _container: ContainerAsync<MinIO>,
+    _container: ContainerAsync<GenericImage>,
 }
 
 impl Debug for S3BlobStorageWithContainer {

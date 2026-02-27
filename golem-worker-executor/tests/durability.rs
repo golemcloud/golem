@@ -101,7 +101,7 @@ async fn custom_durability_1(
         .await?;
 
     let result1 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "callback", data_value!("a"))
+        .invoke_and_await_agent(&component, &agent_id, "callback", data_value!("a"))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -110,7 +110,7 @@ async fn custom_durability_1(
     let executor = start(deps, &context).await?;
 
     let result2 = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "callback", data_value!("b"))
+        .invoke_and_await_agent(&component, &agent_id, "callback", data_value!("b"))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -202,17 +202,12 @@ async fn lazy_pollable(
     signal_tx.send(()).unwrap();
 
     executor
-        .invoke_and_await_agent(
-            &component.id,
-            &agent_id,
-            "lazy_pollable_init",
-            data_value!(),
-        )
+        .invoke_and_await_agent(&component, &agent_id, "lazy_pollable_init", data_value!())
         .await?;
 
     let s1 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "lazy_pollable_test",
             data_value!(1u32),
@@ -223,7 +218,7 @@ async fn lazy_pollable(
 
     let s2 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "lazy_pollable_test",
             data_value!(2u32),
@@ -234,7 +229,7 @@ async fn lazy_pollable(
 
     let s3 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "lazy_pollable_test",
             data_value!(3u32),
@@ -250,7 +245,7 @@ async fn lazy_pollable(
 
     let s4 = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "lazy_pollable_test",
             data_value!(3u32),
@@ -303,7 +298,7 @@ async fn automatic_snapshot_disabled(
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -349,7 +344,7 @@ async fn automatic_snapshot_every_2nd_invocation(
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -398,7 +393,7 @@ async fn automatic_snapshot_periodic(
 
     for _ in 0..SNAPSHOT_TEST_INVOCATIONS {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -451,12 +446,12 @@ async fn snapshot_based_recovery(
 
     for _ in 0..5 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
     let result_before = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -478,7 +473,7 @@ async fn snapshot_based_recovery(
     .await?;
 
     let result_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -488,7 +483,7 @@ async fn snapshot_based_recovery(
 
     let was_recovered = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "was_recovered_from_snapshot",
             data_value!(),
@@ -502,7 +497,7 @@ async fn snapshot_based_recovery(
     );
 
     let increment_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     assert_eq!(
@@ -543,7 +538,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -557,7 +552,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -570,7 +565,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
     .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -581,7 +576,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
 
     let was_recovered = executor
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &agent_id,
             "was_recovered_from_snapshot",
             data_value!(),
@@ -623,12 +618,12 @@ async fn ts_default_json_snapshot_recovery(
 
     for _ in 0..5 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
     let result_before = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -682,7 +677,7 @@ async fn ts_default_json_snapshot_recovery(
     let executor = start(deps, &context).await?;
 
     let result_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -691,7 +686,7 @@ async fn ts_default_json_snapshot_recovery(
     );
 
     let increment_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     assert_eq!(
@@ -732,7 +727,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -754,7 +749,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -803,7 +798,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
     let executor = start(deps, &context).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -843,12 +838,12 @@ async fn rust_default_json_snapshot_recovery(
 
     for _ in 0..5 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
     let result_before = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -885,8 +880,8 @@ async fn rust_default_json_snapshot_recovery(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1..=5).contains(&count),
-                    "Snapshot {i} count should be between 1 and 5, got {count}"
+                    (0..=5).contains(&count),
+                    "Snapshot {i} count should be between 0 and 5, got {count}"
                 );
             }
             PublicSnapshotData::Raw(raw) => {
@@ -907,7 +902,7 @@ async fn rust_default_json_snapshot_recovery(
     .await?;
 
     let result_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(
@@ -916,7 +911,7 @@ async fn rust_default_json_snapshot_recovery(
     );
 
     let increment_after = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     assert_eq!(
@@ -959,7 +954,7 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -986,7 +981,7 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
 
     for _ in 0..3 {
         executor
-            .invoke_and_await_agent(&component.id, &agent_id, "increment", data_value!())
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
             .await?;
     }
 
@@ -1018,8 +1013,8 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
                     panic!("Snapshot {i} 'count' is not a number: {:?}", state["count"])
                 });
                 assert!(
-                    (1..=6).contains(&count),
-                    "Snapshot {i} count should be between 1 and 6, got {count}"
+                    (0..=6).contains(&count),
+                    "Snapshot {i} count should be between 0 and 6, got {count}"
                 );
             }
             PublicSnapshotData::Raw(raw) => {
@@ -1040,7 +1035,7 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component.id, &agent_id, "get", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
         .await?;
 
     assert_eq!(

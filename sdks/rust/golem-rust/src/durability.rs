@@ -19,7 +19,7 @@ use crate::bindings::golem::durability::durability::{
     OplogEntryVersion, OplogIndex, PersistedDurableFunctionInvocation, PersistenceLevel,
 };
 use crate::value_and_type::{FromValueAndType, IntoValueAndType};
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 
@@ -139,7 +139,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     {
         let (value_and_type, _) = self.replay_raw();
         let result: Result<SOk, SErr> = FromValueAndType::from_value_and_type(value_and_type)
-            .unwrap_or_else(|err| panic!("Unexpected ImportedFunctionInvoked payload: {err}"));
+            .unwrap_or_else(|err| panic!("Unexpected HostCall payload: {err}"));
         result
     }
 

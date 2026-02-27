@@ -14,54 +14,29 @@
 
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::{ResponseBody, RouteExecutionResult};
-use anyhow::anyhow;
 use golem_common::model::agent::{
-    AgentError, BinaryReference, DataSchema, DataValue, ElementValue, ElementValues,
-    UntypedDataValue,
+    BinaryReference, ComponentModelElementValue, DataSchema, DataValue, ElementValue,
+    ElementValues, UnstructuredBinaryElementValue, UntypedDataValue,
 };
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, ValueAndType};
 use http::StatusCode;
 use std::collections::HashMap;
 use tracing::debug;
 
 pub fn interpret_agent_response(
-    invoke_result: Option<ValueAndType>,
+    invoke_result: Option<UntypedDataValue>,
     expected_type: &DataSchema,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    match invoke_result.map(|ir| ir.value) {
-        Some(golem_wasm::Value::Result(Ok(Some(data_value_value)))) => {
-            let untyped_data_value = UntypedDataValue::from_value(*data_value_value)
-                .map_err(|err| anyhow!("UntypedDataValue conversion error: {err}"))?;
-            debug!("converted");
+    match invoke_result {
+        Some(untyped_data_value) => {
             let mapped_response = map_successful_agent_response(untyped_data_value, expected_type)?;
             Ok(mapped_response)
         }
-        Some(golem_wasm::Value::Result(Err(Some(agent_error_value)))) => {
-            let agent_error = AgentError::from_value(*agent_error_value)
-                .map_err(|err| anyhow!("AgentError conversion error: {err}"))?;
-
-            debug!("Received agent error: {agent_error}");
-
-            let mapped_error = map_agent_error(agent_error)?;
-            Ok(mapped_error)
-        }
-        _ => Err(anyhow!("Unexpected invoke result type").into()),
-    }
-}
-
-fn map_agent_error(agent_error: AgentError) -> Result<RouteExecutionResult, RequestHandlerError> {
-    match agent_error {
-        AgentError::InvalidAgentId(_)
-        | AgentError::InvalidMethod(_)
-        | AgentError::InvalidInput(_)
-        | AgentError::InvalidType(_) => Err(RequestHandlerError::invariant_violated(
-            "unexpected agent error type",
-        )),
-        AgentError::CustomError(inner) => Ok(RouteExecutionResult {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
+        None => Ok(RouteExecutionResult {
+            status: StatusCode::NO_CONTENT,
             headers: HashMap::new(),
-            body: ResponseBody::ComponentModelJsonBody { body: inner },
+            body: ResponseBody::NoBody,
         }),
     }
 }
@@ -97,17 +72,18 @@ fn map_single_element_agent_response(
     element: ElementValue,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     match element {
-        ElementValue::ComponentModel(value_and_type) => {
-            map_component_model_agent_response(value_and_type)
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
+            map_component_model_agent_response(value)
         }
 
-        ElementValue::UnstructuredBinary(BinaryReference::Inline(binary)) => {
-            Ok(RouteExecutionResult {
-                status: StatusCode::OK,
-                headers: HashMap::new(),
-                body: ResponseBody::UnstructuredBinaryBody { body: binary },
-            })
-        }
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            value: BinaryReference::Inline(binary),
+            ..
+        }) => Ok(RouteExecutionResult {
+            status: StatusCode::OK,
+            headers: HashMap::new(),
+            body: ResponseBody::UnstructuredBinaryBody { body: binary },
+        }),
 
         _ => Err(RequestHandlerError::invariant_violated(
             "Unexpected response type",

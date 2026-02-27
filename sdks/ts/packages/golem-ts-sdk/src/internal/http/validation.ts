@@ -18,7 +18,7 @@ import {
   DataSchema,
   HttpEndpointDetails,
   HttpMountDetails,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import { AgentMethodParamRegistry } from '../registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../registry/agentConstructorParamRegistry';
 import { TypeInfoInternal } from '../typeInfoInternal';

@@ -30,13 +30,10 @@ use crate::log::{
     LogColorize, LogIndent,
 };
 use crate::model::app::ApplicationComponentSelectMode;
-use crate::model::component::{
-    agent_interface_name, function_params_types, show_exported_agent_constructors,
-    ComponentNameMatchKind,
-};
+use crate::model::component::{show_exported_agent_constructors, ComponentNameMatchKind};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
-use crate::model::text::fmt::{format_export, log_fuzzy_match, log_text_view};
+use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
@@ -46,29 +43,36 @@ use crate::model::text::worker::{
     WorkerGetView,
 };
 use anyhow::{anyhow, bail, Context as AnyhowContext};
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
-    fuzzy_match_function_name, AgentUpdateMode, WorkerMetadata, WorkerMetadataView, WorkerName,
-    WorkerNameMatch, WorkersMetadataResponseView,
+    AgentUpdateMode, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
+    WorkersMetadataResponseView,
 };
-use golem_client::api::{ComponentClient, EnvironmentClient, WorkerClient};
+use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};
+use golem_client::model::ScanCursor;
 use golem_client::model::{
-    ComponentDto, InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
+    AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
+    UpdateWorkerRequest, WorkerCreationRequest,
 };
-use golem_client::model::{InvokeResult, ScanCursor};
-use golem_common::model::agent::{AgentId, DataValue, UntypedJsonDataValue};
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{
+    AgentId, AgentType, ComponentModelElementValue, DataSchema, DataValue, ElementSchema,
+    ElementValue, ElementValues, UntypedJsonDataValue,
+};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ParsedFunctionSite;
+use golem_common::model::component_metadata::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
+};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
 use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{parse_value_and_type, ValueAndType};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
@@ -108,6 +112,7 @@ impl WorkerCommandHandler {
                 no_stream,
                 stream_args,
                 post_deploy_args,
+                schedule_at,
             } => {
                 self.cmd_invoke(
                     worker_name,
@@ -118,6 +123,7 @@ impl WorkerCommandHandler {
                     no_stream,
                     stream_args,
                     post_deploy_args,
+                    schedule_at,
                 )
                 .await
             }
@@ -277,6 +283,7 @@ impl WorkerCommandHandler {
         no_stream: bool,
         stream_args: StreamArgs,
         post_deploy_args: Option<PostDeployArgs>,
+        schedule_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -330,15 +337,15 @@ impl WorkerCommandHandler {
             None,
         )?;
 
-        let matched_function_name = fuzzy_match_function_name(
-            function_name,
-            component.metadata.exports(),
-            agent_id_and_type
-                .as_ref()
-                .and_then(|a| agent_interface_name(&component, a.wrapper_agent_type()))
-                .as_deref(),
-        );
-        let function_name = match matched_function_name {
+        let (agent_id, agent_type) =
+            agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
+
+        // If the function name is fully qualified (e.g., "rust:agent/foo-agent.{fun-string}"),
+        // extract the simple method name for fuzzy matching.
+        let method_pattern = extract_simple_method_name(function_name);
+
+        let matched_method_name = resolve_agent_method_name(&method_pattern, &agent_type);
+        let method_name = match matched_method_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
                 match_.option
@@ -350,7 +357,7 @@ impl WorkerCommandHandler {
                 } => {
                     logln("");
                     log_error(format!(
-                        "The requested function name ({}) is ambiguous.",
+                        "The requested method name ({}) is ambiguous.",
                         function_name.log_color_error_highlight()
                     ));
                     logln("");
@@ -360,9 +367,10 @@ impl WorkerCommandHandler {
                     }
                     logln("?");
                     logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new(
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
                         &component,
-                        agent_id_and_type.as_ref(),
+                        &agent_id,
+                        &agent_type,
                     ));
 
                     bail!(NonSuccessfulExit);
@@ -370,13 +378,14 @@ impl WorkerCommandHandler {
                 Error::NotFound { .. } => {
                     logln("");
                     log_error(format!(
-                        "The requested function name ({}) was not found.",
+                        "The requested method name ({}) was not found.",
                         function_name.log_color_error_highlight()
                     ));
                     logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new(
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
                         &component,
-                        agent_id_and_type.as_ref(),
+                        &agent_id,
+                        &agent_type,
                     ));
 
                     bail!(NonSuccessfulExit);
@@ -384,77 +393,102 @@ impl WorkerCommandHandler {
             },
         };
 
-        // Re-validate with function-name
-        let agent_id = self.validate_worker_and_function_names(
-            &component,
-            &worker_name_match.worker_name,
-            Some(&function_name),
-        )?;
-
-        // Update worker_name with normalized agent id if needed
-        let worker_name_match = {
-            if let Some(agent_id) = agent_id {
-                WorkerNameMatch {
-                    worker_name: agent_id.to_string().into(),
-                    ..worker_name_match
-                }
-            } else {
-                worker_name_match
-            }
+        // Update worker_name with normalized agent id
+        let worker_name_match = WorkerNameMatch {
+            worker_name: agent_id.to_string().into(),
+            ..worker_name_match
         };
 
-        if trigger {
+        let mode = if trigger {
             log_action(
                 "Triggering",
                 format!(
                     "invocation for agent {}/{}",
                     format_worker_name_match(&worker_name_match),
-                    format_export(&function_name)
+                    method_name.log_color_highlight()
                 ),
             );
+            AgentInvocationMode::Schedule
         } else {
             log_action(
                 "Invoking",
                 format!(
                     "agent {}/{} ",
                     format_worker_name_match(&worker_name_match),
-                    format_export(&function_name)
+                    method_name.log_color_highlight()
                 ),
             );
-        }
+            AgentInvocationMode::Await
+        };
 
-        let arguments = wave_args_to_invoke_args(&component, &function_name, arguments)?;
+        let method_parameters =
+            wave_args_to_agent_method_parameters(&agent_type, &method_name, arguments)?;
 
-        let result = self
-            .invoke_worker(
-                &component,
-                &worker_name_match.worker_name,
-                &function_name,
-                arguments,
-                idempotency_key.clone(),
-                trigger,
-                (!no_stream).then_some(stream_args),
+        let mut connect_handle = if !no_stream {
+            let connection = WorkerConnection::new(
+                self.ctx.worker_service_url().clone(),
+                self.ctx.auth_token().await?,
+                &component.id,
+                agent_id.to_string(),
+                stream_args.into(),
+                self.ctx.allow_insecure(),
+                self.ctx.format(),
+                if trigger {
+                    None
+                } else {
+                    Some(idempotency_key.clone())
+                },
             )
             .await?;
+            Some(tokio::task::spawn(
+                async move { connection.run_forever().await },
+            ))
+        } else {
+            None
+        };
 
-        match result {
-            Some(result) => {
-                logln("");
-                self.ctx
-                    .log_handler()
-                    .log_view(&InvokeResultView::new_invoke(
-                        idempotency_key,
-                        result,
-                        &component,
-                        &function_name,
-                    ));
-            }
-            None => {
-                log_action("Triggered", "invocation");
-                self.ctx
-                    .log_handler()
-                    .log_view(&InvokeResultView::new_trigger(idempotency_key));
-            }
+        let environment = &worker_name_match.environment;
+
+        let request = AgentInvocationRequest {
+            app_name: environment.application_name.to_string(),
+            env_name: environment.environment_name.to_string(),
+            agent_type_name: agent_id.agent_type.to_wit_naming().0,
+            parameters: UntypedJsonDataValue::from(agent_id.parameters.clone()),
+            phantom_id: agent_id.phantom_id,
+            method_name: method_name.clone(),
+            method_parameters,
+            mode,
+            schedule_at,
+            idempotency_key: Some(idempotency_key.value.clone()),
+            deployment_revision: None,
+        };
+
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .agent
+            .invoke_agent(Some(&idempotency_key.value), &request)
+            .await
+            .map_service_error()?;
+
+        if let Some(handle) = connect_handle.take() {
+            let _ = timeout(Duration::from_secs(3), handle).await;
+        }
+
+        if trigger {
+            log_action("Triggered", "invocation");
+            self.ctx
+                .log_handler()
+                .log_view(&InvokeResultView::new_trigger(idempotency_key));
+        } else {
+            logln("");
+            self.ctx
+                .log_handler()
+                .log_view(&InvokeResultView::new_agent_invoke(
+                    idempotency_key,
+                    result,
+                    &agent_type,
+                    &method_name,
+                ));
         }
 
         Ok(())
@@ -1216,88 +1250,6 @@ impl WorkerCommandHandler {
             .await
             .map(|_| ())
             .map_service_error()
-    }
-
-    pub async fn invoke_worker(
-        &self,
-        component: &ComponentDto,
-        worker_name: &WorkerName,
-        function_name: &str,
-        arguments: Vec<OptionallyValueAndTypeJson>,
-        idempotency_key: IdempotencyKey,
-        enqueue: bool,
-        stream_args: Option<StreamArgs>,
-    ) -> anyhow::Result<Option<InvokeResult>> {
-        let mut connect_handle = match stream_args {
-            Some(stream_args) => {
-                let connection = WorkerConnection::new(
-                    self.ctx.worker_service_url().clone(),
-                    self.ctx.auth_token().await?,
-                    &component.id,
-                    worker_name.0.clone(),
-                    stream_args.into(),
-                    self.ctx.allow_insecure(),
-                    self.ctx.format(),
-                    if enqueue {
-                        None
-                    } else {
-                        Some(idempotency_key.clone())
-                    },
-                )
-                .await?;
-                Some(tokio::task::spawn(
-                    async move { connection.run_forever().await },
-                ))
-            }
-            None => None,
-        };
-
-        let clients = self.ctx.golem_clients().await?;
-
-        let result = if enqueue {
-            clients
-                .worker
-                .invoke_function(
-                    &component.id.0,
-                    &worker_name.0,
-                    Some(&idempotency_key.value),
-                    function_name,
-                    &InvokeParameters { params: arguments },
-                )
-                .await
-                .map_service_error()?;
-            None
-        } else {
-            Some(
-                clients
-                    .worker_invoke
-                    .invoke_and_await_function(
-                        &component.id.0,
-                        &worker_name.0,
-                        Some(&idempotency_key.value),
-                        function_name,
-                        &InvokeParameters { params: arguments },
-                    )
-                    .await
-                    .map_service_error()?,
-            )
-        };
-
-        if enqueue && connect_handle.is_some() {
-            // When 'enqueue' is used together with 'stream' we switch to infinite worker streaming here
-            if let Some(handle) = connect_handle.take() {
-                let _ = handle.await;
-            }
-        } else {
-            // When a result is returned, we wait a few seconds to make sure we get all the log lines
-            // but the worker stream task will quit as soon as the invocation end marker is reached
-
-            if let Some(handle) = connect_handle.take() {
-                let _ = timeout(Duration::from_secs(3), handle).await;
-            }
-        }
-
-        Ok(result)
     }
 
     pub async fn worker_metadata(
@@ -2084,13 +2036,13 @@ impl WorkerCommandHandler {
         component: &ComponentDto,
         worker_name: &WorkerName,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<AgentId>> {
+    ) -> anyhow::Result<Option<(AgentId, AgentType)>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
-        match AgentId::parse(&worker_name.0, &component.metadata) {
-            Ok(agent_id) => match function_name {
+        match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata) {
+            Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
                     if let Some((namespace, package, interface)) = component
                         .metadata
@@ -2112,7 +2064,7 @@ impl WorkerCommandHandler {
                         if interface == agent_id.wrapper_agent_type()
                             && component.component_name.0 == component_name
                         {
-                            return Ok(Some(agent_id));
+                            return Ok(Some((agent_id, agent_type.clone())));
                         }
                     }
 
@@ -2123,11 +2075,15 @@ impl WorkerCommandHandler {
                         function_name.log_color_error_highlight()
                     ));
                     logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new(component, Some(&agent_id)));
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                        component,
+                        &agent_id,
+                        &agent_type,
+                    ));
                     bail!(NonSuccessfulExit);
                 }
 
-                None => Ok(Some(agent_id)),
+                None => Ok(Some((agent_id, agent_type.clone()))),
             },
             Err(err) => {
                 logln("");
@@ -2161,88 +2117,167 @@ impl WorkerCommandHandler {
     }
 }
 
-fn wave_args_to_invoke_args(
-    component: &ComponentDto,
-    function_name: &str,
-    wave_args: Vec<String>,
-) -> anyhow::Result<Vec<OptionallyValueAndTypeJson>> {
-    let types = function_params_types(component, function_name)?;
+/// Extracts the simple method name from a potentially fully qualified function name.
+///
+/// For example, `rust:agent/foo-agent.{fun-string}` → `fun-string`.
+/// Returns the input unchanged if it is already a simple name.
+fn extract_simple_method_name(function_name: &str) -> String {
+    if let Ok(parsed) = ParsedFunctionName::parse(function_name) {
+        if let ParsedFunctionReference::Function { function } = &parsed.function {
+            return function.clone();
+        }
+    }
+    function_name.to_string()
+}
 
-    if types.len() != wave_args.len() {
+/// Fuzzy-matches a method name pattern against both original and WIT-named (kebab-case)
+/// method names, returning the **original** method name on success.
+fn resolve_agent_method_name(
+    provided_method_name: &str,
+    agent_type: &AgentType,
+) -> crate::fuzzy::Result {
+    let mut alias_to_original: HashMap<String, String> = HashMap::new();
+    let mut aliases: Vec<String> = Vec::new();
+
+    for m in &agent_type.methods {
+        let original = m.name.clone();
+        let wit = original.to_wit_naming();
+        for alias in [original.clone(), wit] {
+            if !alias_to_original.contains_key(&alias) {
+                alias_to_original.insert(alias.clone(), original.clone());
+                aliases.push(alias);
+            }
+        }
+    }
+
+    let fuzzy_search = FuzzySearch::new(aliases.iter().map(|s| s.as_str()));
+    fuzzy_search.find(provided_method_name).map(|m| {
+        let original = alias_to_original
+            .get(&m.option)
+            .cloned()
+            .unwrap_or(m.option.clone());
+        crate::fuzzy::Match {
+            option: original,
+            ..m
+        }
+    })
+}
+
+fn wave_args_to_agent_method_parameters(
+    agent_type: &AgentType,
+    method_name: &str,
+    wave_args: Vec<String>,
+) -> anyhow::Result<UntypedJsonDataValue> {
+    let method = agent_type
+        .methods
+        .iter()
+        .find(|m| m.name == method_name)
+        .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
+    let element_schemas = match &method.input_schema {
+        DataSchema::Tuple(schemas) => &schemas.elements,
+        DataSchema::Multimodal(_) => {
+            bail!("Multimodal method parameters are not supported via CLI WAVE arguments")
+        }
+    };
+    if element_schemas.len() != wave_args.len() {
         logln("");
         log_error(format!(
             "Wrong number of parameters: expected {}, got {}",
-            types.len(),
+            element_schemas.len(),
             wave_args.len()
         ));
         logln("");
-        log_text_view(&ParameterErrorTableView(
-            types
-                .into_iter()
-                .zip_longest(wave_args)
-                .map(|zipped| match zipped {
-                    EitherOrBoth::Both(typ, value) => ArgumentError {
-                        type_: Some(typ.clone()),
-                        value: Some(value),
-                        error: None,
+        let types_and_args: Vec<ArgumentError> = element_schemas
+            .iter()
+            .zip_longest(wave_args.iter())
+            .map(|zipped| match zipped {
+                EitherOrBoth::Both(schema, value) => ArgumentError {
+                    type_: match &schema.schema {
+                        ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
+                        _ => None,
                     },
-                    EitherOrBoth::Left(typ) => ArgumentError {
-                        type_: Some(typ.clone()),
-                        value: None,
-                        error: Some("missing argument".log_color_error().to_string()),
+                    value: Some(value.clone()),
+                    error: None,
+                },
+                EitherOrBoth::Left(schema) => ArgumentError {
+                    type_: match &schema.schema {
+                        ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
+                        _ => None,
                     },
-                    EitherOrBoth::Right(value) => ArgumentError {
-                        type_: None,
-                        value: Some(value),
-                        error: Some("extra argument".log_color_error().to_string()),
-                    },
-                })
-                .collect::<Vec<_>>(),
-        ));
+                    value: None,
+                    error: Some("missing argument".log_color_error().to_string()),
+                },
+                EitherOrBoth::Right(value) => ArgumentError {
+                    type_: None,
+                    value: Some(value.clone()),
+                    error: Some("extra argument".log_color_error().to_string()),
+                },
+            })
+            .collect();
+        log_text_view(&ParameterErrorTableView(types_and_args));
         logln("");
         bail!(NonSuccessfulExit);
     }
-
-    let type_annotated_values = wave_args
-        .iter()
-        .zip(types.iter())
-        .map(|(wave, typ)| lenient_parse_type_annotated_value(typ, wave))
-        .collect::<Vec<_>>();
-
-    if type_annotated_values
-        .iter()
-        .any(|parse_result| parse_result.is_err())
-    {
+    let mut element_values = Vec::with_capacity(element_schemas.len());
+    let mut has_errors = false;
+    let mut error_entries = Vec::new();
+    for (schema, wave_arg) in element_schemas.iter().zip(wave_args.iter()) {
+        match &schema.schema {
+            ElementSchema::ComponentModel(cm) => {
+                match lenient_parse_type_annotated_value(&cm.element_type.to_wit_naming(), wave_arg)
+                {
+                    Ok(mut vt) => {
+                        vt.typ = cm.element_type.clone();
+                        element_values.push(ElementValue::ComponentModel(
+                            ComponentModelElementValue { value: vt },
+                        ));
+                        error_entries.push(None);
+                    }
+                    Err(err) => {
+                        has_errors = true;
+                        element_values.push(ElementValue::ComponentModel(
+                            ComponentModelElementValue {
+                                value: golem_wasm::ValueAndType::new(
+                                    golem_wasm::Value::Bool(false),
+                                    golem_wasm::analysis::analysed_type::bool(),
+                                ),
+                            },
+                        ));
+                        error_entries.push(Some(err));
+                    }
+                }
+            }
+            _ => bail!("Non-ComponentModel element schema is not supported via CLI WAVE arguments"),
+        }
+    }
+    if has_errors {
         logln("");
         log_error("Argument WAVE parse error(s)!");
         logln("");
-        log_text_view(&ParameterErrorTableView(
-            type_annotated_values
-                .into_iter()
-                .zip(types)
-                .zip(wave_args)
-                .map(|((parsed, typ), value)| (parsed, typ, value))
-                .map(|(parsed, typ, value)| ArgumentError {
-                    type_: Some(typ.clone()),
-                    value: Some(value),
-                    error: parsed
-                        .err()
-                        .map(|err| err.log_color_error_highlight().to_string()),
-                })
-                .collect::<Vec<_>>(),
-        ));
+        let error_table: Vec<ArgumentError> = element_schemas
+            .iter()
+            .zip(wave_args.iter())
+            .zip(error_entries.iter())
+            .map(|((schema, value), err)| ArgumentError {
+                type_: match &schema.schema {
+                    ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
+                    _ => None,
+                },
+                value: Some(value.clone()),
+                error: err
+                    .as_ref()
+                    .map(|e| e.log_color_error_highlight().to_string()),
+            })
+            .collect();
+        log_text_view(&ParameterErrorTableView(error_table));
         logln("");
         bail!(NonSuccessfulExit);
     }
-
-    type_annotated_values
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| anyhow!(err))?
-        .into_iter()
-        .map(|tav| tav.try_into())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| anyhow!("Failed to convert type annotated value: {err}"))
+    Ok(UntypedJsonDataValue::from(DataValue::Tuple(
+        ElementValues {
+            elements: element_values,
+        },
+    )))
 }
 
 pub fn lenient_parse_type_annotated_value(

@@ -49,7 +49,7 @@ impl FromValueAndType for url::Url {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+    use golem_wasm::golem_core_1_5_x::types::ValueAndType;
     use proptest::prop_assert_eq;
     use proptest::proptest;
     use test_r::test;

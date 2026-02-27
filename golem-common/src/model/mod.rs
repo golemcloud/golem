@@ -55,10 +55,14 @@ use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
 use crate::base_model::agent::AgentId;
+use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
-use crate::model::agent::AgentTypeResolver;
+use crate::model::agent::{AgentTypeResolver, UntypedDataValue, UntypedElementValue};
 use crate::model::invocation_context::InvocationContextStack;
-use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
+use crate::model::oplog::types::AgentMetadataForGuests;
+use crate::model::oplog::{
+    OplogEntry, RawSnapshotData, TimestampedUpdateDescription, WorkerResourceId,
+};
 use crate::model::regions::DeletedRegions;
 use crate::{grpc_uri, SafeDisplay};
 use desert_rust::{
@@ -317,10 +321,7 @@ pub enum ScheduledAction {
     Invoke {
         account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
+        invocation: Box<AgentInvocation>,
     },
 }
 
@@ -487,7 +488,8 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
     pub env: Vec<(String, String)>,
@@ -606,6 +608,56 @@ pub struct RetryConfig {
     pub max_jitter_factor: Option<f64>,
 }
 
+impl golem_wasm::IntoValue for RetryConfig {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::Record(vec![
+            self.max_attempts.into_value(),
+            (self.min_delay.as_nanos() as u64).into_value(),
+            (self.max_delay.as_nanos() as u64).into_value(),
+            self.multiplier.into_value(),
+            self.max_jitter_factor.into_value(),
+        ])
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::*;
+        record(vec![
+            field("max-attempts", u32()),
+            field("min-delay", u64()),
+            field("max-delay", u64()),
+            field("multiplier", f64()),
+            field("max-jitter-factor", option(f64())),
+        ])
+        .named("retry-policy")
+        .owned("golem:api@1.5.0/host")
+    }
+}
+
+impl golem_wasm::FromValue for RetryConfig {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        match value {
+            golem_wasm::Value::Record(fields) if fields.len() == 5 => {
+                let mut iter = fields.into_iter();
+                let max_attempts = u32::from_value(iter.next().unwrap())?;
+                let min_delay_ns = u64::from_value(iter.next().unwrap())?;
+                let max_delay_ns = u64::from_value(iter.next().unwrap())?;
+                let multiplier = f64::from_value(iter.next().unwrap())?;
+                let max_jitter_factor = Option::<f64>::from_value(iter.next().unwrap())?;
+                Ok(RetryConfig {
+                    max_attempts,
+                    min_delay: Duration::from_nanos(min_delay_ns),
+                    max_delay: Duration::from_nanos(max_delay_ns),
+                    multiplier,
+                    max_jitter_factor,
+                })
+            }
+            other => Err(format!(
+                "Expected Record with 5 fields for RetryConfig, got {other:?}"
+            )),
+        }
+    }
+}
+
 impl SafeDisplay for RetryConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
@@ -633,7 +685,7 @@ pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
-    pub pending_invocations: Vec<TimestampedWorkerInvocation>,
+    pub pending_invocations: Vec<TimestampedAgentInvocation>,
     pub pending_updates: VecDeque<TimestampedUpdateDescription>,
     pub failed_updates: Vec<FailedUpdateRecord>,
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
@@ -696,24 +748,332 @@ pub struct SuccessfulUpdateRecord {
     pub target_revision: ComponentRevision,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentInvocationKind {
+    AgentInitialization,
+    AgentMethod,
+    ManualUpdate,
+    LoadSnapshot,
+    SaveSnapshot,
+    ProcessOplogEntries,
+}
+
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub enum WorkerInvocation {
+pub enum AgentInvocation {
     ManualUpdate {
         target_revision: ComponentRevision,
     },
-    ExportedFunction {
+    AgentInitialization {
         idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
+        input: UntypedDataValue,
         invocation_context: InvocationContextStack,
+        principal: Principal,
+    },
+    AgentMethod {
+        idempotency_key: IdempotencyKey,
+        method_name: String,
+        input: UntypedDataValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+    },
+    LoadSnapshot {
+        idempotency_key: IdempotencyKey,
+        snapshot: RawSnapshotData, // TODO
+    },
+    SaveSnapshot {
+        idempotency_key: IdempotencyKey,
+        // TODO
+    },
+    ProcessOplogEntries {
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: AgentMetadataForGuests,
+        first_entry_index: OplogIndex,
+        entries: Vec<OplogEntry>,
     },
 }
 
-impl WorkerInvocation {
-    pub fn is_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AgentInvocationPayload {
+    ManualUpdate {
+        target_revision: ComponentRevision,
+    },
+    AgentInitialization {
+        input: UntypedDataValue,
+        principal: Principal,
+    },
+    AgentMethod {
+        method_name: String,
+        input: UntypedDataValue,
+        principal: Principal,
+    },
+    LoadSnapshot {
+        snapshot: RawSnapshotData,
+    },
+    SaveSnapshot,
+    ProcessOplogEntries {
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: AgentMetadataForGuests,
+        first_entry_index: OplogIndex,
+        entries: Vec<crate::model::oplog::OplogEntry>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AgentInvocationResult {
+    AgentInitialization,
+    AgentMethod { output: UntypedDataValue },
+    ManualUpdate,
+    LoadSnapshot { error: Option<String> },
+    SaveSnapshot { snapshot: RawSnapshotData },
+    ProcessOplogEntries { error: Option<String> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentInvocationOutput {
+    pub result: AgentInvocationResult,
+    pub consumed_fuel: Option<u64>,
+    pub component_revision: Option<ComponentRevision>,
+}
+
+fn value_replay_equivalent(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::F32(x), Value::F32(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (Value::F64(x), Value::F64(y)) => (x.is_nan() && y.is_nan()) || x == y,
+        (Value::List(xs), Value::List(ys))
+        | (Value::Tuple(xs), Value::Tuple(ys))
+        | (Value::Record(xs), Value::Record(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .zip(ys.iter())
+                    .all(|(x, y)| value_replay_equivalent(x, y))
+        }
+        (
+            Value::Variant {
+                case_idx: ai,
+                case_value: av,
+            },
+            Value::Variant {
+                case_idx: bi,
+                case_value: bv,
+            },
+        ) => {
+            ai == bi
+                && match (av, bv) {
+                    (Some(a), Some(b)) => value_replay_equivalent(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        (Value::Option(a), Value::Option(b)) => match (a, b) {
+            (Some(a), Some(b)) => value_replay_equivalent(a, b),
+            (None, None) => true,
+            _ => false,
+        },
+        (Value::Result(a), Value::Result(b)) => match (a, b) {
+            (Ok(a), Ok(b)) | (Err(a), Err(b)) => match (a, b) {
+                (Some(a), Some(b)) => value_replay_equivalent(a, b),
+                (None, None) => true,
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => a == b,
+    }
+}
+
+fn untyped_element_replay_equivalent(a: &UntypedElementValue, b: &UntypedElementValue) -> bool {
+    match (a, b) {
+        (UntypedElementValue::ComponentModel(a), UntypedElementValue::ComponentModel(b)) => {
+            value_replay_equivalent(a, b)
+        }
+        _ => a == b,
+    }
+}
+
+fn untyped_data_replay_equivalent(a: &UntypedDataValue, b: &UntypedDataValue) -> bool {
+    match (a, b) {
+        (UntypedDataValue::Tuple(xs), UntypedDataValue::Tuple(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .zip(ys.iter())
+                    .all(|(x, y)| untyped_element_replay_equivalent(x, y))
+        }
+        (UntypedDataValue::Multimodal(xs), UntypedDataValue::Multimodal(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().zip(ys.iter()).all(|(x, y)| {
+                    x.name == y.name && untyped_element_replay_equivalent(&x.value, &y.value)
+                })
+        }
+        _ => false,
+    }
+}
+
+impl AgentInvocationResult {
+    pub fn replay_equivalent(&self, other: &AgentInvocationResult) -> bool {
+        match (self, other) {
+            (
+                AgentInvocationResult::AgentInitialization,
+                AgentInvocationResult::AgentInitialization,
+            ) => true,
+            (
+                AgentInvocationResult::AgentMethod { output: a },
+                AgentInvocationResult::AgentMethod { output: b },
+            ) => untyped_data_replay_equivalent(a, b),
+            (AgentInvocationResult::ManualUpdate, AgentInvocationResult::ManualUpdate) => true,
+            (
+                AgentInvocationResult::LoadSnapshot { error: a },
+                AgentInvocationResult::LoadSnapshot { error: b },
+            ) => a == b,
+            (
+                AgentInvocationResult::SaveSnapshot { snapshot: a },
+                AgentInvocationResult::SaveSnapshot { snapshot: b },
+            ) => a == b,
+            (
+                AgentInvocationResult::ProcessOplogEntries { error: a },
+                AgentInvocationResult::ProcessOplogEntries { error: b },
+            ) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl AgentInvocation {
+    pub fn from_parts(
+        idempotency_key: IdempotencyKey,
+        payload: AgentInvocationPayload,
+        invocation_context: InvocationContextStack,
+    ) -> Self {
+        match payload {
+            AgentInvocationPayload::ManualUpdate { target_revision } => {
+                Self::ManualUpdate { target_revision }
+            }
+            AgentInvocationPayload::AgentInitialization { input, principal } => {
+                Self::AgentInitialization {
+                    idempotency_key,
+                    input,
+                    invocation_context,
+                    principal,
+                }
+            }
+            AgentInvocationPayload::AgentMethod {
+                method_name,
+                input,
+                principal,
+            } => Self::AgentMethod {
+                idempotency_key,
+                method_name,
+                input,
+                invocation_context,
+                principal,
+            },
+            AgentInvocationPayload::LoadSnapshot { snapshot } => Self::LoadSnapshot {
+                idempotency_key,
+                snapshot,
+            },
+            AgentInvocationPayload::SaveSnapshot => Self::SaveSnapshot { idempotency_key },
+            AgentInvocationPayload::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                ..
+            } => Self::ProcessOplogEntries {
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries: Vec::new(), // Entries are pre-converted to PublicOplogEntry before enqueuing; replay does not reconstruct them
+            },
+        }
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        IdempotencyKey,
+        AgentInvocationPayload,
+        InvocationContextStack,
+    ) {
         match self {
-            Self::ExportedFunction {
+            Self::ManualUpdate { target_revision } => (
+                IdempotencyKey::fresh(),
+                AgentInvocationPayload::ManualUpdate { target_revision },
+                InvocationContextStack::fresh(),
+            ),
+            Self::AgentInitialization {
+                idempotency_key,
+                input,
+                invocation_context,
+                principal,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::AgentInitialization { input, principal },
+                invocation_context,
+            ),
+            Self::AgentMethod {
+                idempotency_key,
+                method_name,
+                input,
+                invocation_context,
+                principal,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::AgentMethod {
+                    method_name,
+                    input,
+                    principal,
+                },
+                invocation_context,
+            ),
+            Self::LoadSnapshot {
+                idempotency_key,
+                snapshot,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::LoadSnapshot { snapshot },
+                InvocationContextStack::fresh(),
+            ),
+            Self::SaveSnapshot { idempotency_key } => (
+                idempotency_key,
+                AgentInvocationPayload::SaveSnapshot,
+                InvocationContextStack::fresh(),
+            ),
+            Self::ProcessOplogEntries {
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                },
+                InvocationContextStack::fresh(),
+            ),
+        }
+    }
+
+    pub fn has_idempotency_key(&self, key: &IdempotencyKey) -> bool {
+        match self {
+            Self::AgentMethod {
+                idempotency_key, ..
+            } => idempotency_key == key,
+            Self::AgentInitialization {
                 idempotency_key, ..
             } => idempotency_key == key,
             _ => false,
@@ -722,7 +1082,10 @@ impl WorkerInvocation {
 
     pub fn idempotency_key(&self) -> Option<&IdempotencyKey> {
         match self {
-            Self::ExportedFunction {
+            Self::AgentMethod {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::AgentInitialization {
                 idempotency_key, ..
             } => Some(idempotency_key),
             _ => None,
@@ -731,19 +1094,44 @@ impl WorkerInvocation {
 
     pub fn invocation_context(&self) -> InvocationContextStack {
         match self {
-            Self::ExportedFunction {
+            Self::AgentInitialization {
+                invocation_context, ..
+            } => invocation_context.clone(),
+            Self::AgentMethod {
                 invocation_context, ..
             } => invocation_context.clone(),
             _ => InvocationContextStack::fresh(),
+        }
+    }
+
+    pub fn kind(&self) -> AgentInvocationKind {
+        match self {
+            Self::ManualUpdate { .. } => AgentInvocationKind::ManualUpdate,
+            Self::AgentInitialization { .. } => AgentInvocationKind::AgentInitialization,
+            Self::AgentMethod { .. } => AgentInvocationKind::AgentMethod,
+            Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
+            Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
+            Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
+        }
+    }
+
+    pub fn display_name(&self) -> String {
+        match self {
+            Self::ManualUpdate { .. } => String::new(),
+            Self::AgentInitialization { .. } => "initialize".to_string(),
+            Self::AgentMethod { method_name, .. } => method_name.clone(),
+            Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
+            Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
+            Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-pub struct TimestampedWorkerInvocation {
+pub struct TimestampedAgentInvocation {
     pub timestamp: Timestamp,
-    pub invocation: WorkerInvocation,
+    pub invocation: AgentInvocation,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize)]

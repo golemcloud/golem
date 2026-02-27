@@ -12,22 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod agents;
 mod client;
 mod connect;
 mod connect_proxy;
 mod error;
-mod invocation_parameters;
 mod routing_logic;
 mod service;
 mod worker_stream;
 
-pub use agents::*;
 pub use client::*;
 pub use connect::*;
 pub use connect_proxy::*;
 pub use error::*;
-pub use invocation_parameters::*;
 pub use routing_logic::*;
 pub use service::*;
 pub use worker_stream::*;

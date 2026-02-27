@@ -27,7 +27,7 @@ use test_r::test;
 
 use crate::value_and_type::{FromValueAndType, IntoValue};
 use golem_rust_macro::{FromValueAndType, IntoValue};
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_core_1_5_x::types::ValueAndType;
 use golem_wasm::{Value, WitValue};
 
 #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]

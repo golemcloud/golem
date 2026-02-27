@@ -43,6 +43,7 @@ service RegistryService {
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
   rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
+  rpc ResolveAgentTypeAtDeployment (ResolveAgentTypeAtDeploymentRequest) returns (ResolveAgentTypeAtDeploymentResponse);
 
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
@@ -264,6 +265,25 @@ message ResolveLatestAgentTypeByNamesResponse {
 }
 
 message ResolveLatestAgentTypeByNamesSuccessResponse {
+  RegisteredAgentType agent_type = 1;
+}
+
+message ResolveAgentTypeAtDeploymentRequest {
+  golem.common.AccountId accountId = 1;
+  string app_name = 2;
+  string environment_name = 3;
+  string agent_type_name = 4;
+  uint64 deployment_revision = 5;
+}
+
+message ResolveAgentTypeAtDeploymentResponse {
+  oneof result {
+    ResolveAgentTypeAtDeploymentSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveAgentTypeAtDeploymentSuccessResponse {
   RegisteredAgentType agent_type = 1;
 }
 

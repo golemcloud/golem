@@ -1,20 +1,23 @@
 use super::{
-    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentMethod, AgentMode,
-    AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference, BinarySource,
-    BinaryType, ComponentModelElementSchema, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
+    AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentInvocationMode, AgentMethod,
+    AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
+    BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
+    ComponentModelElementValue, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
     ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
     HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
     NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
     PathVariable, Principal, QueryVariable, RegisteredAgentType, RegisteredAgentTypeImplementer,
     Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
-    SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextSource, TextType,
-    Url,
+    SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextReferenceValue,
+    TextSource, TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue, Url,
 };
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{
-    binary_reference, data_value, element_value, text_reference,
+    binary_reference, data_value, element_value, text_reference, untyped_data_value,
+    untyped_element_value,
 };
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
@@ -31,6 +34,66 @@ impl From<AgentMode> for golem_api_grpc::proto::golem::component::AgentMode {
         match value {
             AgentMode::Durable => golem_api_grpc::proto::golem::component::AgentMode::Durable,
             AgentMode::Ephemeral => golem_api_grpc::proto::golem::component::AgentMode::Ephemeral,
+        }
+    }
+}
+
+// worker_service proto AgentInvocationMode conversions
+
+impl From<golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode> for AgentInvocationMode {
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Await => {
+                AgentInvocationMode::Await
+            }
+            golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Schedule => {
+                AgentInvocationMode::Schedule
+            }
+        }
+    }
+}
+
+impl From<AgentInvocationMode> for golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode {
+    fn from(value: AgentInvocationMode) -> Self {
+        match value {
+            AgentInvocationMode::Await => {
+                golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Await
+            }
+            AgentInvocationMode::Schedule => {
+                golem_api_grpc::proto::golem::worker::v1::AgentInvocationMode::Schedule
+            }
+        }
+    }
+}
+
+// workerexecutor proto AgentInvocationMode conversions
+
+impl From<golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode>
+    for AgentInvocationMode
+{
+    fn from(value: golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await => {
+                AgentInvocationMode::Await
+            }
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule => {
+                AgentInvocationMode::Schedule
+            }
+        }
+    }
+}
+
+impl From<AgentInvocationMode>
+    for golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode
+{
+    fn from(value: AgentInvocationMode) -> Self {
+        match value {
+            AgentInvocationMode::Await => {
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await
+            }
+            AgentInvocationMode::Schedule => {
+                golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Schedule
+            }
         }
     }
 }
@@ -561,14 +624,22 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementValue> for ElementV
             None => Err("Missing field: value".to_string()),
             Some(v) => match v {
                 element_value::Value::ComponentModel(val) => {
-                    Ok(ElementValue::ComponentModel(val.try_into()?))
+                    Ok(ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: val.try_into()?,
+                    }))
                 }
-                element_value::Value::UnstructuredText(text_ref) => {
-                    Ok(ElementValue::UnstructuredText(text_ref.try_into()?))
-                }
-                element_value::Value::UnstructuredBinary(bin_ref) => {
-                    Ok(ElementValue::UnstructuredBinary(bin_ref.try_into()?))
-                }
+                element_value::Value::UnstructuredText(text_ref) => Ok(
+                    ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                        value: text_ref.try_into()?,
+                        descriptor: TextDescriptor::default(),
+                    }),
+                ),
+                element_value::Value::UnstructuredBinary(bin_ref) => Ok(
+                    ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                        value: bin_ref.try_into()?,
+                        descriptor: BinaryDescriptor::default(),
+                    }),
+                ),
             },
         }
     }
@@ -577,19 +648,19 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ElementValue> for ElementV
 impl From<ElementValue> for golem_api_grpc::proto::golem::component::ElementValue {
     fn from(value: ElementValue) -> Self {
         match value {
-            ElementValue::ComponentModel(val) => {
+            ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
                 golem_api_grpc::proto::golem::component::ElementValue {
-                    value: Some(element_value::Value::ComponentModel(val.into())),
+                    value: Some(element_value::Value::ComponentModel(value.into())),
                 }
             }
-            ElementValue::UnstructuredText(text_ref) => {
+            ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
                 golem_api_grpc::proto::golem::component::ElementValue {
-                    value: Some(element_value::Value::UnstructuredText(text_ref.into())),
+                    value: Some(element_value::Value::UnstructuredText(value.into())),
                 }
             }
-            ElementValue::UnstructuredBinary(bin_ref) => {
+            ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
                 golem_api_grpc::proto::golem::component::ElementValue {
-                    value: Some(element_value::Value::UnstructuredBinary(bin_ref.into())),
+                    value: Some(element_value::Value::UnstructuredBinary(value.into())),
                 }
             }
         }
@@ -676,6 +747,150 @@ impl From<DataValue> for golem_api_grpc::proto::golem::component::DataValue {
                     },
                 )),
             },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::UntypedElementValue> for UntypedElementValue {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::UntypedElementValue,
+    ) -> Result<Self, Self::Error> {
+        match value.value {
+            None => Err("Missing field: value".to_string()),
+            Some(v) => match v {
+                untyped_element_value::Value::ComponentModel(val) => {
+                    Ok(UntypedElementValue::ComponentModel(val.try_into()?))
+                }
+                untyped_element_value::Value::UnstructuredText(text_ref) => {
+                    Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
+                        value: text_ref.try_into()?,
+                    }))
+                }
+                untyped_element_value::Value::UnstructuredBinary(bin_ref) => Ok(
+                    UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                        value: bin_ref.try_into()?,
+                    }),
+                ),
+            },
+        }
+    }
+}
+
+impl From<UntypedElementValue> for golem_api_grpc::proto::golem::component::UntypedElementValue {
+    fn from(value: UntypedElementValue) -> Self {
+        match value {
+            UntypedElementValue::ComponentModel(val) => {
+                golem_api_grpc::proto::golem::component::UntypedElementValue {
+                    value: Some(untyped_element_value::Value::ComponentModel(val.into())),
+                }
+            }
+            UntypedElementValue::UnstructuredText(text_ref) => {
+                golem_api_grpc::proto::golem::component::UntypedElementValue {
+                    value: Some(untyped_element_value::Value::UnstructuredText(
+                        text_ref.value.into(),
+                    )),
+                }
+            }
+            UntypedElementValue::UnstructuredBinary(bin_ref) => {
+                golem_api_grpc::proto::golem::component::UntypedElementValue {
+                    value: Some(untyped_element_value::Value::UnstructuredBinary(
+                        bin_ref.value.into(),
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::UntypedNamedElementValue>
+    for UntypedNamedElementValue
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::UntypedNamedElementValue,
+    ) -> Result<Self, Self::Error> {
+        Ok(UntypedNamedElementValue {
+            name: value.name,
+            value: value
+                .value
+                .ok_or_else(|| "Missing field: value".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<UntypedNamedElementValue>
+    for golem_api_grpc::proto::golem::component::UntypedNamedElementValue
+{
+    fn from(value: UntypedNamedElementValue) -> Self {
+        golem_api_grpc::proto::golem::component::UntypedNamedElementValue {
+            name: value.name,
+            value: Some(value.value.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::UntypedDataValue> for UntypedDataValue {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::UntypedDataValue,
+    ) -> Result<Self, Self::Error> {
+        match value.value {
+            None => Err("Missing field: value".to_string()),
+            Some(v) => match v {
+                untyped_data_value::Value::Tuple(tuple) => Ok(UntypedDataValue::Tuple(
+                    tuple
+                        .elements
+                        .into_iter()
+                        .map(UntypedElementValue::try_from)
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                untyped_data_value::Value::Multimodal(mm) => Ok(UntypedDataValue::Multimodal(
+                    mm.elements
+                        .into_iter()
+                        .map(UntypedNamedElementValue::try_from)
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+            },
+        }
+    }
+}
+
+impl From<UntypedDataValue> for golem_api_grpc::proto::golem::component::UntypedDataValue {
+    fn from(value: UntypedDataValue) -> Self {
+        match value {
+            UntypedDataValue::Tuple(elements) => {
+                golem_api_grpc::proto::golem::component::UntypedDataValue {
+                    value: Some(untyped_data_value::Value::Tuple(
+                        golem_api_grpc::proto::golem::component::UntypedTupleValue {
+                            elements: elements
+                                .into_iter()
+                                .map(
+                                    golem_api_grpc::proto::golem::component::UntypedElementValue::from,
+                                )
+                                .collect(),
+                        },
+                    )),
+                }
+            }
+            UntypedDataValue::Multimodal(elements) => {
+                golem_api_grpc::proto::golem::component::UntypedDataValue {
+                    value: Some(untyped_data_value::Value::Multimodal(
+                        golem_api_grpc::proto::golem::component::UntypedMultimodalValue {
+                            elements: elements
+                                .into_iter()
+                                .map(
+                                    golem_api_grpc::proto::golem::component::UntypedNamedElementValue::from,
+                                )
+                                .collect(),
+                        },
+                    )),
+                }
+            }
         }
     }
 }

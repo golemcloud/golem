@@ -35,14 +35,9 @@ componentTemplates:
       module: ../../golem-temp/ts-dist/{{ component_name | to_kebab_case }}/main.js
       moduleWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.module.wasm
       into: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-    - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-      basedOnCompiledWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-    - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-      withAgent: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
-      to: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
     sourceWit: ../../node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
     generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-    componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+    componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
     outputWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
     customCommands:
       copy:

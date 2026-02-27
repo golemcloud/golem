@@ -133,6 +133,8 @@ impl IntoValue for Timestamp {
 
     fn get_type() -> AnalysedType {
         record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+            .named("datetime")
+            .owned("wasi:clocks@0.2.3/wall-clock")
     }
 }
 
@@ -152,6 +154,17 @@ impl FromValue for Timestamp {
             other => Err(format!(
                 "Expected a record with two fields for Timestamp, got {other:?}"
             )),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
+    fn from(value: Timestamp) -> Self {
+        let ms = value.to_millis();
+        Self {
+            seconds: ms / 1000,
+            nanoseconds: ((ms % 1000) * 1_000_000) as u32,
         }
     }
 }
@@ -253,6 +266,7 @@ impl golem_wasm::IntoValue for ShardId {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "agent-id", owner = "golem:core@1.5.0/types")]
 pub struct WorkerId {
     pub component_id: ComponentId,
     #[wit_field(rename = "agent-id")]
