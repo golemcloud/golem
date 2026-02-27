@@ -44,7 +44,6 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
-    pub agents_service: Arc<AgentsService>,
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
 }
 

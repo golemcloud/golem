@@ -16,15 +16,13 @@ use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::service::worker::WorkerService;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
-use golem_common::model::agent::AgentError;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::{FromValue, IntoValue, Value, ValueAndType};
+use golem_wasm::ValueAndType;
 use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
-use tracing::debug;
 
 pub async fn agent_invoke(
     worker_service: &Arc<WorkerService>,
@@ -34,7 +32,9 @@ pub async fn agent_invoke(
     let constructor_params = extract_parameters_by_schema(
         &args_map,
         &mcp_tool.constructor.input_schema,
-        |value_and_type| value_and_type,
+        |value_and_type| ComponentModelElementValue {
+            value: value_and_type,
+        },
     )
     .map_err(|e| {
         tracing::error!("Failed to extract constructor parameters: {}", e);
@@ -66,31 +66,31 @@ pub async fn agent_invoke(
 
     let method_params_data_value = UntypedDataValue::Tuple(method_params);
 
-    let principal = Principal::anonymous();
+    let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
+        method_params_data_value.into();
 
-    let method_params = vec![
-        golem_wasm::protobuf::Val::from(mcp_tool.raw_method.name.clone().into_value()),
-        golem_wasm::protobuf::Val::from(method_params_data_value.into_value()),
-        golem_wasm::protobuf::Val::from(principal.into_value()),
-    ];
+    let principal = Principal::anonymous();
+    let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
 
     let worker_id = WorkerId {
         component_id: mcp_tool.component_id,
         worker_name: agent_id.to_string(),
     };
 
-    let function_name = "golem:agent/guest.{invoke}".to_string();
+    let auth_ctx =
+        golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id);
 
-    let result = worker_service
-        .invoke_and_await_owned_agent(
+    let agent_output = worker_service
+        .invoke_agent(
             &worker_id,
+            mcp_tool.raw_method.name.clone(),
+            proto_method_parameters,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
             None,
-            function_name.clone(),
-            method_params,
             None,
-            mcp_tool.environment_id,
-            mcp_tool.account_id,
-            golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id),
+            None,
+            auth_ctx,
+            proto_principal,
         )
         .await
         .map_err(|e| {
@@ -98,31 +98,21 @@ pub async fn agent_invoke(
             ErrorData::internal_error(format!("Failed to invoke worker: {:?}", e), None)
         })?;
 
-    interpret_agent_response(result.clone(), &mcp_tool.raw_method.output_schema)
+    let agent_result = match agent_output.result {
+        golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
+        _ => None,
+    };
+
+    interpret_agent_response(agent_result, &mcp_tool.raw_method.output_schema)
         .map(CallToolResult::structured)
 }
 
 pub fn interpret_agent_response(
-    invoke_result: Option<ValueAndType>,
+    invoke_result: Option<UntypedDataValue>,
     expected_type: &DataSchema,
 ) -> Result<serde_json::Value, ErrorData> {
-    match invoke_result.map(|ir| ir.value) {
-        Some(Value::Result(Ok(Some(data_value_value)))) => {
-            let untyped_data_value =
-                UntypedDataValue::from_value(*data_value_value).map_err(|err| {
-                    tracing::error!(
-                        "Failed to convert agent response to untyped data value: {}",
-                        err
-                    );
-                    ErrorData::internal_error(
-                        format!(
-                            "Failed to convert agent response to untyped data value: {}",
-                            err
-                        ),
-                        None,
-                    )
-                })?;
-
+    match invoke_result {
+        Some(untyped_data_value) => {
             map_successful_agent_response(untyped_data_value, expected_type)
                 .map(|json_value| {
                     json!({
@@ -131,49 +121,13 @@ pub fn interpret_agent_response(
                 })
                 .map_err(|e| {
                     tracing::error!("Failed to map successful agent response: {}", e);
-
                     ErrorData::internal_error(
                         format!("Failed to map successful agent response: {}", e),
                         None,
                     )
                 })
         }
-        Some(Value::Result(Err(Some(agent_error_value)))) => {
-            let agent_error = AgentError::from_value(*agent_error_value).map_err(|err| {
-                tracing::error!("Failed to convert agent error to AgentError type: {}", err);
-                ErrorData::internal_error(
-                    format!("Failed to convert agent error to AgentError type: {}", err),
-                    None,
-                )
-            })?;
-
-            debug!("Received agent error: {agent_error}");
-
-            Err(map_agent_error(agent_error))
-        }
-        _ => Err(ErrorData::internal_error(
-            "Unexpected invoke result type".to_string(),
-            None,
-        )),
-    }
-}
-
-fn map_agent_error(agent_error: AgentError) -> ErrorData {
-    match agent_error {
-        AgentError::InvalidAgentId(_)
-        | AgentError::InvalidMethod(_)
-        | AgentError::InvalidInput(_)
-        | AgentError::InvalidType(_) => {
-            ErrorData::internal_error("unexpected agent error type".to_string(), None)
-        }
-        AgentError::CustomError(inner) => ErrorData::internal_error(
-            "internal error",
-            Some(inner.to_json_value().unwrap_or_else(|e| {
-                serde_json::Value::String(format!(
-                    "Failed to convert agent error details to JSON: {e}"
-                ))
-            })),
-        ),
+        None => Ok(json!({})),
     }
 }
 
@@ -212,7 +166,9 @@ fn map_successful_agent_response(
 
 fn map_single_element_agent_response(element: ElementValue) -> Result<serde_json::Value, String> {
     match element {
-        ElementValue::ComponentModel(value_and_type) => value_and_type.to_json_value(),
+        ElementValue::ComponentModel(component_model_value) => {
+            component_model_value.value.to_json_value()
+        }
 
         ElementValue::UnstructuredBinary(_) => Err(
             "Received unstructured binary response, which is not supported in this context"

@@ -33,16 +33,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_deployed_component_metadata_response,
-    get_resource_limits_response, resolve_component_response,
-    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
-    get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response,
-    get_all_agent_types_response, get_all_deployed_component_revisions_response,
-    get_auth_details_for_environment_response, get_component_metadata_response,
-    get_deployed_component_metadata_response, get_resource_limits_response,
-    resolve_agent_type_at_deployment_response, resolve_component_response,
-    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_resource_limits_response, resolve_agent_type_at_deployment_response,
+    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;

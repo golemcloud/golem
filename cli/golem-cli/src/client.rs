@@ -20,12 +20,7 @@ use golem_client::api::{
     ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
     ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, GrantClientLive,
     HealthCheckClientLive, HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive,
-    PluginClientLive, TokenClientLive, WorkerClientLive,
-    AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiDeploymentClientLive,
-    ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive, ComponentClientLive,
-    DeploymentClientLive, EnvironmentClientLive, GrantClientLive, HealthCheckClientLive,
-    HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive, McpDeploymentClientLive,
-    PluginClientLive, TokenClientLive, WorkerClientLive,
+    McpDeploymentClientLive, PluginClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
