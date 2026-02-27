@@ -181,10 +181,7 @@ export class LanguageService {
     let typeText = typeAsLiteralType
       ? typeAsLiteralType
       : checker.getTypeText(typeInfo.type, typeInfo.fullExpressionNode);
-    const parameterNames = this.getRemoteMethodParameterNames(
-      typeInfo.fullExpressionNode,
-      checker,
-    );
+    const parameterNames = this.getRemoteMethodParameterNames(typeInfo.fullExpressionNode, checker);
     const remoteMethodExpansion = getRemoteMethodExpansion(
       typeInfo.type,
       typeInfo.fullExpressionNode,
@@ -471,7 +468,7 @@ export class LanguageService {
       const receiverType = receiver.getType();
       const typeText = checker.getTypeText(receiverType, receiver);
       return matchAgentTypeNameInTypeText(typeText, agentTypeNames);
-    } catch (e) {
+    } catch {
       return undefined;
     }
   }
