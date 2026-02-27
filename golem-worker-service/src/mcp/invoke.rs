@@ -98,8 +98,19 @@ pub async fn agent_invoke(
             ErrorData::internal_error(format!("Failed to invoke worker: {:?}", e), None)
         })?;
 
-    interpret_agent_response(result, &mcp_tool.raw_method.output_schema)
-        .map(|json_value| CallToolResult::structured(json_value))
+    match result {
+        Some(value_and_type) => match value_and_type.to_json_value() {
+            Ok(json_value) => Ok(CallToolResult::structured(json_value)),
+            Err(e) => {
+                tracing::error!("Failed to convert result to JSON: {}", e);
+                Err(ErrorData::internal_error(
+                    format!("Failed to convert result to JSON: {}", e),
+                    None,
+                ))
+            }
+        },
+        None => Ok(CallToolResult::structured(json!(null))),
+    }
 }
 
 pub fn interpret_agent_response(
