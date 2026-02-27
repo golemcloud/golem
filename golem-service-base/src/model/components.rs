@@ -96,15 +96,9 @@ pub struct Component {
     pub env: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
     pub local_agent_config: Vec<LocalAgentConfigEntry>,
-
     /// Hash of the wasm before any transformations
     pub wasm_hash: diff::Hash,
-
-    pub original_files: Vec<InitialComponentFile>,
-    pub original_env: BTreeMap<String, String>,
-    pub original_config_vars: BTreeMap<String, String>,
     pub object_store_key: String,
-    pub transformed_object_store_key: String,
 }
 
 impl From<Component> for golem_common::model::component::ComponentDto {
@@ -119,12 +113,9 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             component_size: value.component_size,
             metadata: value.metadata,
             created_at: value.created_at,
-            original_files: value.original_files,
             files: value.files,
             installed_plugins: value.installed_plugins,
-            original_env: value.original_env,
             env: value.env,
-            original_config_vars: value.original_config_vars,
             config_vars: value.config_vars,
             local_agent_config: value
                 .local_agent_config
@@ -183,12 +174,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .map_err(|_| "Failed to convert timestamp".to_string())?
             .into();
 
-        let original_files = value
-            .original_files
-            .into_iter()
-            .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
         let files = value
             .files
             .into_iter()
@@ -201,13 +186,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .map(|p| p.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let original_env = value.original_env.into_iter().collect::<BTreeMap<_, _>>();
         let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
 
-        let original_config_vars = value
-            .original_config_vars
-            .into_iter()
-            .collect::<BTreeMap<_, _>>();
         let config_vars = value.config_vars.into_iter().collect::<BTreeMap<_, _>>();
 
         let local_agent_config = value
@@ -233,18 +213,14 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_size,
             metadata,
             created_at,
-            original_files,
             files,
             installed_plugins,
-            original_env,
             env,
-            original_config_vars,
             config_vars,
             local_agent_config,
             wasm_hash,
             hash,
             object_store_key: value.object_store_key,
-            transformed_object_store_key: value.transformed_object_store_key,
         })
     }
 }
@@ -263,20 +239,13 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                 value.created_at,
             ))),
-            original_files: value
-                .original_files
-                .into_iter()
-                .map(|file| file.into())
-                .collect(),
             files: value.files.into_iter().map(|file| file.into()).collect(),
             installed_plugins: value
                 .installed_plugins
                 .into_iter()
                 .map(|plugin| plugin.into())
                 .collect(),
-            original_env: value.original_env.into_iter().collect(),
             env: value.env.into_iter().collect(),
-            original_config_vars: value.original_config_vars.into_iter().collect(),
             config_vars: value.config_vars.into_iter().collect(),
             local_agent_config: value
                 .local_agent_config
@@ -286,7 +255,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             wasm_hash: Some(value.wasm_hash.into()),
             hash: Some(value.hash.into()),
             object_store_key: value.object_store_key,
-            transformed_object_store_key: value.transformed_object_store_key,
         }
     }
 }

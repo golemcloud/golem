@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::deployment::DeployRepoError;
-use crate::model::component::FinalizedComponentRevision;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
@@ -156,23 +155,17 @@ pub struct ComponentRecord {
 pub struct ComponentRevisionRecord {
     pub component_id: Uuid,
     pub revision_id: i64,
-    pub version: String,
     pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub size: NumericU64,
     pub metadata: Blob<ComponentMetadata>,
-    pub original_env: Json<BTreeMap<String, String>>,
     pub env: Json<BTreeMap<String, String>>,
-    pub original_config_vars: Json<BTreeMap<String, String>>,
     pub config_vars: Json<BTreeMap<String, String>>,
     pub local_agent_config: Blob<Vec<LocalAgentConfigEntry>>,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
-    pub transformed_object_store_key: String,
 
-    #[sqlx(skip)]
-    pub original_files: Vec<ComponentFileRecord>,
     #[sqlx(skip)]
     pub files: Vec<ComponentFileRecord>,
 
@@ -181,7 +174,7 @@ pub struct ComponentRevisionRecord {
 }
 
 impl ComponentRevisionRecord {
-    pub fn for_recreation(
+    pub(in crate::repo) fn for_recreation(
         mut self,
         component_id: Uuid,
         revision_id: i64,
@@ -189,10 +182,6 @@ impl ComponentRevisionRecord {
         let revision: ComponentRevision = revision_id.try_into()?;
         let next_revision_id = revision.next()?.into();
 
-        for file in &mut self.original_files {
-            file.component_id = component_id;
-            file.revision_id = next_revision_id;
-        }
         for file in &mut self.files {
             file.component_id = component_id;
             file.revision_id = next_revision_id;
@@ -208,24 +197,101 @@ impl ComponentRevisionRecord {
         Ok(self)
     }
 
+    pub fn creation(
+        component_id: ComponentId,
+        component_size: u64,
+        metadata: ComponentMetadata,
+        files: Vec<InitialComponentFile>,
+        installed_plugins: Vec<InstalledPlugin>,
+        env: BTreeMap<String, String>,
+        config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
+        wasm_hash: diff::Hash,
+        object_store_key: String,
+        actor: AccountId,
+    ) -> Self {
+        let component_id = component_id.0;
+        let revision_id: i64 = ComponentRevision::INITIAL.into();
+
+        Self {
+            component_id,
+            revision_id,
+            hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::new(actor.0),
+            files: files
+                .into_iter()
+                .map(|f| ComponentFileRecord::from_model(f, component_id, revision_id, actor))
+                .collect(),
+            plugins: installed_plugins
+                .into_iter()
+                .map(|p| {
+                    ComponentPluginInstallationRecord::from_model(
+                        p,
+                        component_id,
+                        revision_id,
+                        actor,
+                    )
+                })
+                .collect(),
+            size: component_size.into(),
+            metadata: Blob::new(metadata),
+            env: Json(env),
+            config_vars: Json(config_vars),
+            local_agent_config: Blob::new(local_agent_config),
+            object_store_key,
+            binary_hash: wasm_hash.into(),
+        }
+    }
+
+    pub fn from_model(value: Component, actor: AccountId) -> Self {
+        let component_id = value.id.0;
+        let revision_id: i64 = value.revision.into();
+
+        Self {
+            files: value
+                .files
+                .into_iter()
+                .map(|f| ComponentFileRecord::from_model(f, component_id, revision_id, actor))
+                .collect(),
+            plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(|p| {
+                    ComponentPluginInstallationRecord::from_model(
+                        p,
+                        component_id,
+                        revision_id,
+                        actor,
+                    )
+                })
+                .collect(),
+            component_id,
+            revision_id,
+            size: value.component_size.into(),
+            metadata: Blob::new(value.metadata),
+            hash: SqlBlake3Hash::empty(),
+            env: Json(value.env),
+            config_vars: Json(value.config_vars),
+            local_agent_config: Blob::new(value.local_agent_config),
+            audit: DeletableRevisionAuditFields::new(actor.0),
+            object_store_key: value.object_store_key,
+            binary_hash: value.wasm_hash.into(),
+        }
+    }
+
     pub fn deletion(created_by: Uuid, component_id: Uuid, revision_id: i64) -> Self {
         let mut value = Self {
             component_id,
             revision_id,
-            version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             size: 0.into(),
             metadata: Blob::new(ComponentMetadata::default()),
             env: Default::default(),
-            original_env: Default::default(),
             config_vars: Default::default(),
             local_agent_config: Blob::new(Vec::new()),
-            original_config_vars: Default::default(),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
-            transformed_object_store_key: "".to_string(),
-            original_files: vec![],
             plugins: vec![],
             files: vec![],
         };
@@ -236,7 +302,6 @@ impl ComponentRevisionRecord {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some("".to_string()), // TODO: atomic: Some(self.version.clone()),
                 env: self
                     .env
                     .iter()
@@ -251,7 +316,7 @@ impl ComponentRevisionRecord {
             .into(),
             wasm_hash: self.binary_hash.into(),
             files_by_path: self
-                .original_files
+                .files
                 .iter()
                 .map(|file| {
                     (
@@ -309,51 +374,6 @@ impl ComponentRevisionRecord {
         self.update_hash();
         self
     }
-
-    pub fn from_model(value: FinalizedComponentRevision, actor: AccountId) -> Self {
-        let component_id = value.component_id.0;
-        let revision_id: i64 = value.component_revision.into();
-
-        Self {
-            files: value
-                .files
-                .into_iter()
-                .map(|f| ComponentFileRecord::from_model(f, component_id, revision_id, actor))
-                .collect(),
-            plugins: value
-                .installed_plugins
-                .into_iter()
-                .map(|p| {
-                    ComponentPluginInstallationRecord::from_model(
-                        p,
-                        component_id,
-                        revision_id,
-                        actor,
-                    )
-                })
-                .collect(),
-            original_files: value
-                .original_files
-                .into_iter()
-                .map(|f| ComponentFileRecord::from_model(f, component_id, revision_id, actor))
-                .collect(),
-            component_id,
-            revision_id,
-            version: "".to_string(), // TODO: atomic
-            size: value.component_size.into(),
-            metadata: Blob::new(value.metadata),
-            hash: SqlBlake3Hash::empty(),
-            original_env: Json(value.original_env),
-            env: Json(value.env),
-            original_config_vars: Json(value.original_config_vars),
-            config_vars: Json(value.config_vars),
-            local_agent_config: Blob::new(value.local_agent_config),
-            audit: DeletableRevisionAuditFields::new(actor.0),
-            object_store_key: value.object_store_key,
-            transformed_object_store_key: value.transformed_object_store_key,
-            binary_hash: value.wasm_hash.into(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -397,15 +417,6 @@ impl ComponentExtRevisionRecord {
             local_agent_config: self.revision.local_agent_config.into_value(),
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
-            original_files: self
-                .revision
-                .original_files
-                .into_iter()
-                .map(|f| f.try_into())
-                .collect::<Result<_, _>>()?,
-            original_env: self.revision.original_env.0,
-            original_config_vars: self.revision.original_config_vars.0,
-            transformed_object_store_key: self.revision.transformed_object_store_key,
             hash: self.revision.hash.into(),
         })
     }
@@ -530,7 +541,6 @@ pub struct ComponentRevisionIdentityRecord {
     pub component_id: Uuid,
     pub name: String,
     pub revision_id: i64,
-    pub version: String,
     pub hash: SqlBlake3Hash,
 }
 
