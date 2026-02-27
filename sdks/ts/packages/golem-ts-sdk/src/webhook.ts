@@ -45,7 +45,8 @@ export class WebhookHandler implements PromiseLike<WebhookRequestPayload> {
 
   then<TResult1 = WebhookRequestPayload, TResult2 = never>(
     onfulfilled?: ((value: WebhookRequestPayload) => TResult1 | PromiseLike<TResult1>) | null,
-    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+    // @fixme can we use a string here?
+    onrejected?: ((_reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2> {
     return this.wait().then(onfulfilled, onrejected);
   }

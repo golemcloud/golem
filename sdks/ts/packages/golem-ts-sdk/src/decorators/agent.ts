@@ -218,7 +218,8 @@ function resolveSnapshotting(option?: SnapshottingOption): Snapshotting {
  * The first parameter is the phantom ID. If undefined, a new phantom ID will be generated.
  */
 export function agent(options?: AgentDecoratorOptions) {
-  return function <T extends new (...args: any[]) => any>(ctor: T) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
+  return function <T extends new (...args: any[]) => BaseAgent>(ctor: T) {
     if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
       throw new Error(
         `Invalid agent declaration: \`${ctor.name}\` must extend \`BaseAgent\` to be decorated with @agent()`,
@@ -315,10 +316,11 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
-    (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
+    const c = ctor as unknown as Record<string, unknown>;
+    c.get = getRemoteClient(agentClassName, agentType, ctor);
+    c.newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
 
-    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
+    c.getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {

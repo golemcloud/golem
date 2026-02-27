@@ -26,7 +26,7 @@ import { AnalysedType } from '../types/analysedType';
 export { WitValue } from 'golem:rpc/types@0.2.2';
 
 export const fromTsValueDefault = (
-  tsValue: any,
+  tsValue: unknown,
   analysedType: AnalysedType,
 ): Either.Either<WitValue, string> => {
   const valueEither = serializeDefaultTsValue(tsValue, analysedType);
@@ -34,20 +34,20 @@ export const fromTsValueDefault = (
 };
 
 // For RPC calls, we need wit-value representation of the binary reference (and not DataValue)
-export const fromTsValueTextReference = (tsValue: any): WitValue => {
+export const fromTsValueTextReference = (tsValue: unknown): WitValue => {
   const value = serializeTextReferenceTsValue(tsValue);
 
   return Value.toWitValue(value);
 };
 
 // For RPC calls, we need wit-value representation of the binary reference (and not DataValue)
-export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
+export const fromTsValueBinaryReference = (tsValue: unknown): WitValue => {
   const value = serializeBinaryReferenceTsValue(tsValue);
 
   return Value.toWitValue(value);
 };
 
-export const toTsValue = (witValue: WitValue, expectedType: AnalysedType): any => {
+export const toTsValue = <T = unknown>(witValue: WitValue, expectedType: AnalysedType): T => {
   const value: Value.Value = Value.fromWitValue(witValue);
-  return deserialize(value, expectedType);
+  return deserialize<T>(value, expectedType);
 };

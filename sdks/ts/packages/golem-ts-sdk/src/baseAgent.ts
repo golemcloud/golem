@@ -102,11 +102,11 @@ export class BaseAgent {
    */
   async loadSnapshot(bytes: Uint8Array): Promise<void> {
     const text = new TextDecoder().decode(bytes);
-    const state = JSON.parse(text);
+    const state = JSON.parse(text) as Partial<this>;
 
     for (const [k, v] of Object.entries(state)) {
       if (k === 'cachedAgentType' || k === 'agentClassName') continue;
-      (this as any)[k] = v;
+      this[k as keyof this] = v;
     }
   }
 
@@ -166,6 +166,7 @@ export class BaseAgent {
    * such as `trigger` and `schedule`. See `Client` documentation for details.
    *
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: GetArgs<ConstructorParameters<T>>
@@ -175,6 +176,7 @@ export class BaseAgent {
     );
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
   static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
@@ -184,6 +186,7 @@ export class BaseAgent {
     );
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
   static newPhantom<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
@@ -221,6 +224,7 @@ export class BaseAgent {
  * ```
  */
 export type Client<T> = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any required for contravariant function type matching
   [K in keyof T as T[K] extends (...args: any[]) => any ? K : never]: T[K] extends (
     ...args: infer A
   ) => infer R
@@ -228,7 +232,7 @@ export type Client<T> = {
     : never;
 };
 
-export type RemoteMethod<Args extends any[], R> = {
+export type RemoteMethod<Args extends unknown[], R> = {
   (...args: Args): Promise<R>;
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
@@ -254,8 +258,8 @@ type GetArgs<T extends readonly unknown[]> =
 type IsOptional<T extends readonly unknown[], K extends keyof T> =
   {} extends Pick<T, K> ? true : false;
 
-type AllOptional<T extends readonly unknown[], I extends any[] = []> = T extends readonly [
-  any,
+type AllOptional<T extends readonly unknown[], I extends unknown[] = []> = T extends readonly [
+  unknown,
   ...infer R,
 ]
   ? IsOptional<T, I['length']> extends true

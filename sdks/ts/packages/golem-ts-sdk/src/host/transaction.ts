@@ -233,6 +233,6 @@ export function fallibleTransaction<Out, Err>(
  * ```
  *
  */
-export type OperationErrors<T extends Operation<any, any, any>[]> = {
-  [K in keyof T]: T[K] extends Operation<any, any, infer Err> ? Err : never;
+export type OperationErrors<T extends Operation<unknown, unknown, unknown>[]> = {
+  [K in keyof T]: T[K] extends Operation<unknown, unknown, infer Err> ? Err : unknown;
 }[number];

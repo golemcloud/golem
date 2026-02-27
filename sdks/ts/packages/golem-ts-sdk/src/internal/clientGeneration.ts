@@ -26,7 +26,7 @@ import {
   TextReference,
 } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
-import { RemoteMethod } from '../baseAgent';
+import { BaseAgent, RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -50,7 +50,8 @@ import { convertAgentMethodNameToKebab } from './mapping/types/stringFormat';
 import { AgentId } from '../agentId';
 import * as util from 'node:util';
 
-export function getRemoteClient<T extends new (...args: any[]) => any>(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getRemoteClient<T extends new (...args: any[]) => BaseAgent>(
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
@@ -64,7 +65,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   }
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (...args: any[]) => {
+  return (...args: unknown[]) => {
     const instance = Object.create(ctor.prototype);
 
     const witAgentId = shared.constructAgentId(args);
@@ -73,11 +74,10 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   };
 }
 
-export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: any[]) => any>(
-  agentClassName: AgentClassName,
-  agentType: AgentType,
-  ctor: T,
-) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getPhantomRemoteClient<
+  T extends new (phantomId: Uuid, ...args: any[]) => BaseAgent,
+>(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
   const metadata = TypeMetadata.get(ctor.name);
 
   if (!metadata) {
@@ -88,7 +88,7 @@ export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: 
 
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (finalPhantomId: Uuid, ...args: any[]) => {
+  return (finalPhantomId: Uuid, ...args: unknown[]) => {
     const instance = Object.create(ctor.prototype);
 
     const witAgentId = shared.constructAgentId(args, finalPhantomId);
@@ -97,7 +97,8 @@ export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: 
   };
 }
 
-export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getNewPhantomRemoteClient<T extends new (...args: any[]) => BaseAgent>(
   agentClassName: AgentClassName,
   agentType: AgentType,
   ctor: T,
@@ -111,7 +112,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   }
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (...args: any[]) => {
+  return (...args: unknown[]) => {
     const instance = Object.create(ctor.prototype);
 
     const finalPhantomId = randomUuid();
@@ -163,7 +164,7 @@ class WasmRpxProxyHandlerShared {
     }
   }
 
-  constructAgentId(args: any[], phantomId?: Uuid): wasmRpc.AgentId {
+  constructAgentId(args: unknown[], phantomId?: Uuid): wasmRpc.AgentId {
     const registeredAgentType = this.getRegisteredAgentType();
 
     if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
@@ -308,13 +309,13 @@ class WasmRpxProxyHandlerShared {
   }
 }
 
-class WasmRpcProxyHandler implements ProxyHandler<any> {
+class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
   private readonly shared: WasmRpxProxyHandlerShared;
   private readonly agentId: AgentId;
   private readonly witAgentId: wasmRpc.AgentId;
   private readonly wasmRpc: wasmRpc.WasmRpc;
 
-  private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
+  private readonly methodProxyCache = new Map<string, RemoteMethod<unknown[], unknown>>();
 
   private readonly getIdMethod: () => AgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
@@ -331,8 +332,8 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     this.wasmRpc = new wasmRpc.WasmRpc(witAgentId);
   }
 
-  get(target: any, prop: string | symbol) {
-    const val = target[prop];
+  get(target: Record<string, unknown>, prop: string | symbol) {
+    const val = target[prop.toString()];
     const propString = prop.toString();
 
     if (typeof val === 'function') {
@@ -366,12 +367,12 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     return undefined;
   }
 
-  private createMethodProxy(prop: string): RemoteMethod<any[], any> {
+  private createMethodProxy(prop: string): RemoteMethod<unknown[], unknown> {
     const methodInfo = this.shared.getMethodInfo(prop);
     const agentId = this.witAgentId;
     const wasmRpc = this.wasmRpc;
 
-    async function invokeAndAwait(...fnArgs: any[]) {
+    async function invokeAndAwait(...fnArgs: unknown[]) {
       const parameterWitValues = serializeArgs(methodInfo.params, fnArgs);
 
       const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(
@@ -405,27 +406,30 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       return deserializeRpcResult(rpcValueUnwrapped, methodInfo.returnType);
     }
 
-    function invokeFireAndForget(...fnArgs: any[]) {
+    function invokeFireAndForget(...fnArgs: unknown[]) {
       const parameterWitValues = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.invoke(methodInfo.witFunctionName, parameterWitValues);
     }
 
-    function invokeSchedule(ts: wasmRpc.Datetime, ...fnArgs: any[]) {
+    function invokeSchedule(ts: wasmRpc.Datetime, ...fnArgs: unknown[]) {
       const parameterWitValues = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.scheduleInvocation(ts, methodInfo.witFunctionName, parameterWitValues);
     }
 
-    const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
+    const methodFn = ((...args: unknown[]) => invokeAndAwait(...args)) as unknown as RemoteMethod<
+      unknown[],
+      unknown
+    >;
 
-    methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
-    methodFn.schedule = (ts: wasmRpc.Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
+    methodFn.trigger = (...args: unknown[]) => invokeFireAndForget(...args);
+    methodFn.schedule = (ts: wasmRpc.Datetime, ...args: unknown[]) => invokeSchedule(ts, ...args);
 
-    return methodFn as RemoteMethod<any[], any>;
+    return methodFn;
   }
 }
 
 function convertToValue(
-  arg: any,
+  arg: unknown,
   typeInfoInternal: TypeInfoInternal,
 ): Either.Either<Value.Value, string> {
   switch (typeInfoInternal.tag) {
@@ -443,14 +447,15 @@ function convertToValue(
         'Internal error: Value of `Principal` should not be serialized at any point during RPC call',
       );
 
-    case 'multimodal':
+    case 'multimodal': {
       const types = typeInfoInternal.types;
 
       const values: Value.Value[] = [];
 
       if (Array.isArray(arg)) {
         for (const elem of arg) {
-          const index = types.findIndex((paramDetail) => elem.tag === paramDetail.name);
+          const multimodalElem = elem as { tag: string; val: unknown };
+          const index = types.findIndex((paramDetail) => multimodalElem.tag === paramDetail.name);
 
           if (index === -1) {
             return Either.left(
@@ -458,7 +463,7 @@ function convertToValue(
             );
           }
 
-          const result = convertToValue(arg[index].val, types[index].type);
+          const result = convertToValue(multimodalElem.val, types[index].type);
 
           if (Either.isLeft(result)) {
             return Either.left(`Failed to serialize multimodal element: ${result.val}`);
@@ -478,10 +483,11 @@ function convertToValue(
         kind: 'list',
         value: values,
       });
+    }
   }
 }
 
-function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): WitValue.WitValue[] {
+function serializeArgs(params: CachedParamInfo[], fnArgs: unknown[]): WitValue.WitValue[] {
   const result: WitValue.WitValue[] = [];
   for (const [index, fnArg] of fnArgs.entries()) {
     const param = params[index];
@@ -501,7 +507,17 @@ function unwrapResult(witValue: WitValue.WitValue): Value.Value {
   return value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
 }
 
-function deserializeRpcResult(rpcResult: Value.Value, typeInfoInternal: TypeInfoInternal): any {
+function deserializeRpcResult<T = unknown>(
+  rpcResult: Value.Value,
+  typeInfoInternal: TypeInfoInternal,
+): T {
+  return _deserializeRpcResult(rpcResult, typeInfoInternal) as T;
+}
+
+function _deserializeRpcResult(
+  rpcResult: Value.Value,
+  typeInfoInternal: TypeInfoInternal,
+): unknown {
   switch (typeInfoInternal.tag) {
     case 'analysed':
       const dataValue = createSingleElementTupleDataValue({

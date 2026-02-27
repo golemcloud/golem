@@ -316,25 +316,25 @@ function flatten<T, E, E2>(this: Result<Result<T, E>, E2>): Result<T, E | E2> {
   else return this.val;
 }
 
-function assertErrorInstanceOf<T, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<T, C extends abstract new (..._: unknown[]) => unknown>(
   this: Result.Ok<T>,
   constructor: C,
 ): Result.Ok<T>;
-function assertErrorInstanceOf<E, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<E, C extends abstract new (..._: unknown[]) => unknown>(
   this: Result.Err<E>,
   constructor: C,
 ): Result.Err<E & InstanceType<C>>;
-function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<T, E, C extends abstract new (..._: unknown[]) => unknown>(
   this: Result<T, E>,
   constructor: C,
 ): Result<T, E & InstanceType<C>>;
-function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<T, E, C extends abstract new (..._: unknown[]) => unknown>(
   this: Result<T, E>,
   constructor: C,
 ): Result<T, E & InstanceType<C>> {
   if (this.isOk()) return this;
 
-  if (this.val instanceof constructor) return this as any;
+  if (this.val instanceof constructor) return this as Result<T, E & InstanceType<C>>;
 
   throw new TypeError(`Assertion failed: Expected error to be an instance of ${constructor.name}.`);
 }
