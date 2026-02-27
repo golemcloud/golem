@@ -21,12 +21,6 @@ pub struct McpToolSchema {
     pub output_schema: Option<McpSchema>,
 }
 
-impl McpToolSchema {
-    pub fn prepend_input_schema(&mut self, input_schema: McpSchema) {
-        self.input_schema.prepend_schema(input_schema);
-    }
-}
-
 pub trait GetMcpToolSchema {
     fn get_mcp_tool_schema(&self) -> McpToolSchema;
 }

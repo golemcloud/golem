@@ -49,16 +49,15 @@ impl McpAgentCapability {
                         agent_type_name.0
                     );
 
-                    let constructor_schema = constructor.input_schema.get_mcp_schema();
-
-                    let mut tool_schema = method.get_mcp_tool_schema();
-
-                    tool_schema.prepend_input_schema(constructor_schema);
-
+                    let constructor_schema = 
+                        constructor.input_schema.get_mcp_schema();
+                    
                     let McpToolSchema {
-                        input_schema,
+                        mut input_schema,
                         output_schema,
                     } = method.get_mcp_tool_schema();
+
+                    input_schema.prepend_schema(constructor_schema);
 
                     let tool = Tool {
                         name: Cow::from(get_tool_name(agent_type_name, method)),
