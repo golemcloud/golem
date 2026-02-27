@@ -381,7 +381,9 @@ impl ApiDeploymentCommandHandler {
         let _indent = LogIndent::new();
 
         let agents = deployable_mcp_deployment
-            .agents.keys().map(|k| {
+            .agents
+            .keys()
+            .map(|k| {
                 (
                     k.clone(),
                     golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default(),

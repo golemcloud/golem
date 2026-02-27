@@ -19,7 +19,9 @@ impl McpDeployment {
     pub fn to_diffable(&self) -> diff::McpDeployment {
         diff::McpDeployment {
             agents: self
-                .agents.keys().map(|k| (k.0.clone(), diff::McpDeploymentAgentOptions::default()))
+                .agents
+                .keys()
+                .map(|k| (k.0.clone(), diff::McpDeploymentAgentOptions::default()))
                 .collect(),
         }
     }
