@@ -1148,6 +1148,7 @@ fn make_test_agent_type(name: &str) -> AgentType {
         mode: AgentMode::Durable,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![],
     }
 }
 
@@ -1214,7 +1215,6 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
             ComponentRevisionRecord {
                 component_id: new_repo_uuid(),
                 revision_id: 0,
-                version: "0.1.0".to_string(),
                 hash: SqlBlake3Hash::empty(),
                 audit: DeletableRevisionAuditFields::new(owner_account_id),
                 size: 0.into(),
@@ -1226,17 +1226,13 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                     vec![],
                 )),
                 env: Default::default(),
-                original_env: Default::default(),
                 config_vars: Default::default(),
-                original_config_vars: Default::default(),
                 object_store_key: "".to_string(),
-                transformed_object_store_key: "".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
-                original_files: vec![],
                 plugins: vec![],
                 files: vec![],
+                local_agent_config: Blob::new(vec![]),
             },
-            false,
         )
         .await
         .unwrap();
