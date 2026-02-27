@@ -13,13 +13,11 @@
 // limitations under the License.
 
 use crate::model::diff::{hash_from_serialized_value, BTreeMapDiff, Diffable, Hash, Hashable};
-use desert_rust::BinaryCodec;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 pub struct McpDeploymentAgentOptions {
     // TODO: MCP agent configuration options coming soon
 }

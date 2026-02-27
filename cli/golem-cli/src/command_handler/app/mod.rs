@@ -1529,7 +1529,7 @@ impl AppCommandHandler {
                     let agents = mcp_deployment
                         .agents
                         .iter()
-                        .map(|(k, v)| (k.clone(), v.to_diffable()))
+                        .map(|(k, _v)| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
                         .collect();
 
                     mcp_deployment_handler
