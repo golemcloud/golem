@@ -109,7 +109,7 @@ export function unwrapAlias(t: Type): Type {
     const decl = alias.getDeclarations()[0];
     if (!decl) break;
 
-    const target = (alias as any)._getAliasTarget?.() as Type | undefined;
+    const target = alias.getAliasTarget();
     if (!target || target === current) break;
 
     current = target;

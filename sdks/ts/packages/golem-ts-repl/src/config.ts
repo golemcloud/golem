@@ -33,10 +33,14 @@ export type ReplCliFlags = {
   streamLogs: boolean;
 };
 
-export type AgentConfig = {
+export type AgentModule = Record<string, unknown> & {
+  configure: ConfigureClient;
+};
+
+export type AgentConfig<T extends AgentModule = AgentModule> = {
   clientPackageName: string;
   clientPackageImportedName: string;
-  package: any;
+  package: T;
 };
 
 export type ConfigureClient = (config: base.Configuration) => void;

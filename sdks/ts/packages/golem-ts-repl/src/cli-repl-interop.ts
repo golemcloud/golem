@@ -13,12 +13,14 @@
 // limitations under the License.
 
 import childProcess, { ChildProcess } from 'node:child_process';
+import { Buffer } from 'buffer';
 import repl from 'node:repl';
 import pc from 'picocolors';
 import { CliArgMetadata, CliCommandMetadata, CliCommandsConfig } from './config';
 import { flushStdIO, writeChunk } from './process';
 import { writeFullLineSeparator } from './format';
 import * as base from './base';
+import { Worker } from './base';
 import * as uuid from 'uuid';
 
 const AGENT_STREAM_CLOSE_DELAY_MS = 100;
@@ -335,14 +337,15 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
   AGENT_ID: {
     complete: async (cli, currentToken) => {
       const result = await cli.runJson({ args: ['agent', 'list'] });
+      const json = result.json as { workers?: Partial<Worker>[] };
 
-      if (!result.ok || !result.json || !Array.isArray(result.json.workers)) {
+      if (!result.ok || !json || !Array.isArray(json.workers)) {
         return [];
       }
 
-      const values = result.json.workers
-        .map((worker: any) => worker.workerName)
-        .filter((value: unknown): value is string => typeof value === 'string');
+      const values = json.workers
+        .map((worker) => worker.workerName)
+        .filter((value): value is string => typeof value === 'string');
 
       return filterByPrefix(values, currentToken);
     },
@@ -355,12 +358,13 @@ const COMPLETION_HOOKS: Partial<Record<CompletionHookId, CompletionHook>> = {
         return [];
       }
 
-      if (!result.json || !Array.isArray(result.json)) {
+      const json = result.json as { componentName: string }[];
+      if (!json || !Array.isArray(json)) {
         return [];
       }
 
-      const values = result.json
-        .map((component: any) => component?.componentName)
+      const values = json
+        .map((component) => component?.componentName)
         .filter((value: unknown): value is string => typeof value === 'string');
 
       return filterByPrefix(values, currentToken);
@@ -415,11 +419,11 @@ class GolemCli {
       let stderr = '';
 
       if (opts.mode === 'collect') {
-        child.stdout?.on('data', (chunk) => {
+        child.stdout?.on('data', (chunk: Buffer) => {
           stdout += chunk.toString();
         });
 
-        child.stderr?.on('data', (chunk) => {
+        child.stderr?.on('data', (chunk: Buffer) => {
           stderr += chunk.toString();
         });
       }
@@ -432,7 +436,7 @@ class GolemCli {
 
   async runJson(opts: {
     args: string[];
-  }): Promise<{ ok: boolean; code: number | null; json: any }> {
+  }): Promise<{ ok: boolean; code: number | null; json: unknown }> {
     const result = await this.run({ args: ['--format', 'json', ...opts.args], mode: 'collect' });
     return { ok: result.ok, code: result.code, json: JSON.parse(result.stdout) };
   }

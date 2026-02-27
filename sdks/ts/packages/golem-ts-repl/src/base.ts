@@ -25,7 +25,7 @@ export type AroundInvokeHook = {
   beforeInvoke: (request: AgentInvocationRequest) => Promise<void>;
   afterInvoke: (
     request: AgentInvocationRequest,
-    result: JsonResult<AgentInvocationResult, any>,
+    result: JsonResult<AgentInvocationResult, unknown>,
   ) => Promise<void>;
 };
 
@@ -40,6 +40,52 @@ export type ApplicationName = string;
 export type EnvironmentName = string;
 export type AgentTypeName = string;
 export type IdempotencyKey = string;
+
+export type Timestamp = string; // ISO 8601
+
+export type WorkerStatus =
+  | 'Running'
+  | 'Idle'
+  | 'Suspended'
+  | 'Interrupted'
+  | 'Retrying'
+  | 'Failed'
+  | 'Exited';
+
+export type UpdateRecord =
+  | { type: 'PendingUpdate'; timestamp: Timestamp; targetRevision: number }
+  | { type: 'SuccessfulUpdate'; timestamp: Timestamp; targetRevision: number }
+  | {
+      type: 'FailedUpdate';
+      timestamp: Timestamp;
+      targetRevision: number;
+      details?: string;
+    };
+
+export type WorkerResourceDescription = {
+  createdAt: Timestamp;
+  resourceOwner: string;
+  resourceName: string;
+};
+
+export type Worker = {
+  componentName: string;
+  workerName: string;
+  createdBy: string;
+  environmentId: string;
+  env: Record<string, string>;
+  configVars: Record<string, string>;
+  status: WorkerStatus;
+  componentRevision: number;
+  retryCount: number;
+  pendingInvocationCount: number;
+  updates: UpdateRecord[];
+  createdAt: Timestamp;
+  lastError?: string;
+  componentSize: number;
+  totalLinearMemorySize: number;
+  exportedResourceInstances: Record<string, WorkerResourceDescription>;
+};
 
 export type UntypedDataValue =
   | { type: 'Tuple'; elements: UntypedElementValue[] }

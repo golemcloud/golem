@@ -7,8 +7,9 @@ export type GolemServer =
 
 export type AroundInvokeHook = {
     beforeInvoke: (request: AgentInvocationRequest) => Promise<void>;
-    afterInvoke: (request: AgentInvocationRequest, result: JsonResult<AgentInvocationResult, any>) => Promise<void>;
-};
+        afterInvoke: (request: AgentInvocationRequest, result: JsonResult<AgentInvocationResult, unknown>) => Promise<void>;
+    }
+    ;
 
 export type Configuration = {
     server: GolemServer,

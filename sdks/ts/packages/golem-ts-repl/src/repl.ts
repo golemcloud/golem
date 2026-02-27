@@ -16,7 +16,6 @@ import {
   cliCommandsConfigFromBaseConfig,
   clientConfigFromEnv,
   Config,
-  ConfigureClient,
   loadReplCliFlags,
   ReplCliFlags,
 } from './config';
@@ -25,13 +24,13 @@ import { LanguageService } from './language-service';
 import pc from 'picocolors';
 import repl, { type REPLEval } from 'node:repl';
 import process from 'node:process';
-import { AsyncCompleter } from 'readline';
+import { Completer, AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO, setOutput, writeln } from './process';
 import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
 import * as base from './base';
-import { AgentInvocationRequest, AgentInvocationResult, JsonResult } from './base';
+import { AgentInvocationRequest } from './base';
 
 const MAX_COMPLETION_ENTRIES = 50;
 
@@ -61,11 +60,7 @@ export class Repl {
         }
       },
 
-      async afterInvoke(
-        request: AgentInvocationRequest,
-        result: JsonResult<AgentInvocationResult, any>,
-      ): Promise<void> {
-        void result;
+      async afterInvoke(request: AgentInvocationRequest): Promise<void> {
         await cli.stopAgentStream(request);
       },
     };
@@ -80,11 +75,13 @@ export class Repl {
 
   private newBaseReplServer(options?: {
     input?: NodeJS.ReadableStream;
-    output?: NodeJS.WritableStream;
+    output?: NodeJS.WriteStream;
     terminal?: boolean;
+    eval?: REPLEval;
+    completer?: Completer | AsyncCompleter;
   }): repl.REPLServer {
     const output = options?.output ?? process.stdout;
-    const terminal = options?.terminal ?? Boolean((output as any).isTTY);
+    const terminal = options?.terminal ?? Boolean(output.isTTY);
     const prompt = this.replCliFlags.script
       ? ''
       : `${pc.cyan('golem-ts-repl')}` +
@@ -101,13 +98,13 @@ export class Repl {
       preview: false,
       ignoreUndefined: true,
       prompt,
+      eval: options?.eval,
+      completer: options?.completer,
     });
   }
 
   private async setupRepl(replServer: repl.REPLServer): Promise<void> {
     await this.setupReplHistory(replServer);
-    this.setupReplEval(replServer);
-    this.setupReplCompleter(replServer);
     this.setupReplContext(replServer);
     this.setupReplCommands(replServer);
   }
@@ -124,13 +121,12 @@ export class Repl {
     });
   }
 
-  private setupReplEval(replServer: repl.REPLServer): repl.REPLEval {
-    const tsxEval = replServer.eval;
+  private createCustomEval(tsxEval: REPLEval): REPLEval {
     const languageService = this.getLanguageService();
     const replCliFlags = this.replCliFlags;
     const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
-    const customEval: REPLEval = function (code, context, filename, callback) {
+    return function (this: repl.REPLServer, code, context, filename, callback) {
       const evalCode = (code: string) => {
         tsxEval.call(this, code, context, filename, (err, result) => {
           if (!err) {
@@ -179,16 +175,12 @@ export class Repl {
         callback(null, undefined);
       }
     };
-    (replServer.eval as any) = customEval;
-
-    return tsxEval;
   }
 
-  private setupReplCompleter(replServer: repl.REPLServer) {
-    const nodeCompleter = replServer.completer;
+  private createCustomCompleter(nodeCompleter: Completer | AsyncCompleter): AsyncCompleter {
     const languageService = this.getLanguageService();
     const cli = this.cli;
-    const customCompleter: AsyncCompleter = function (line, callback) {
+    return function (line, callback) {
       if (line.trimStart().startsWith('.')) {
         cli
           .complete(line)
@@ -216,7 +208,6 @@ export class Repl {
         }
       }
     };
-    (replServer.completer as any) = customCompleter;
   }
 
   private setupReplContext(replServer: repl.REPLServer) {
@@ -227,7 +218,7 @@ export class Repl {
     const context = replServer.context;
     for (let agentTypeName in this.config.agents) {
       const agentConfig = this.config.agents[agentTypeName];
-      let configure = agentConfig.package.configure as ConfigureClient;
+      let configure = agentConfig.package.configure;
       configure(this.clientConfig);
       context[agentTypeName] = agentConfig.package[agentTypeName];
       context[agentConfig.clientPackageImportedName] = agentConfig.package;
@@ -346,13 +337,25 @@ export class Repl {
     setOutput('stdout');
 
     const script = this.replCliFlags.script;
+
+    // We need to create a temporary repl server to get the default eval and completer
+    const tempRepl = repl.start({ input: new PassThrough(), output: new PassThrough() });
+    const customEval = this.createCustomEval(tempRepl.eval);
+    const customCompleter = this.createCustomCompleter(tempRepl.completer);
+    tempRepl.close();
+
     const replServer = script
       ? this.newBaseReplServer({
           input: new PassThrough(),
           output: process.stdout,
           terminal: false,
+          eval: customEval,
+          completer: customCompleter,
         })
-      : this.newBaseReplServer();
+      : this.newBaseReplServer({
+          eval: customEval,
+          completer: customCompleter,
+        });
 
     await this.setupRepl(replServer);
 

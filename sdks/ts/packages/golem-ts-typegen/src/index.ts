@@ -26,7 +26,9 @@ import {
 } from 'ts-morph';
 import {
   buildJSONFromType,
+  ClassMetadataJSON,
   LiteTypeJSON,
+  MethodMetadataJSON,
   Node,
   Symbol,
   Type,
@@ -613,7 +615,7 @@ export function saveAndClearInMemoryMetadata() {
     fs.mkdirSync(METADATA_DIR);
   }
 
-  const json: Record<string, any> = {};
+  const json: Record<string, ClassMetadataJSON> = {};
 
   for (const [className, meta] of TypeMetadata.getAll().entries()) {
     const constructorArgsJSON = meta.constructorArgs.map((arg) => ({
@@ -621,7 +623,7 @@ export function saveAndClearInMemoryMetadata() {
       type: buildJSONFromType(arg.type),
     }));
 
-    const methodsObj: Record<string, any> = {};
+    const methodsObj: Record<string, MethodMetadataJSON> = {};
     for (const [methodName, { methodParams, returnType }] of meta.methods) {
       const paramsJSON: Record<string, LiteTypeJSON> = {};
       for (const [paramName, paramType] of methodParams.entries()) {
