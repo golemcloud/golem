@@ -20,7 +20,7 @@
 
 const SampleAgentModuleName = './validAgents';
 
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata, MetadataJSON } from '@golemcloud/golem-ts-types-core';
 
 //  `pnpm run test` will generate metadata
 import { Metadata } from '../.metadata/generated-types';
@@ -29,7 +29,7 @@ import { TypescriptTypeRegistry } from '../src';
 
 // This setup is ran before every test suite (vitest worker)
 // and represents the entry point of any code-first user code
-TypescriptTypeRegistry.register(Metadata);
+TypescriptTypeRegistry.register(Metadata as MetadataJSON);
 
 // Only import the file with valid agents, as invalid agents
 // will break testSetup since their decorators fail

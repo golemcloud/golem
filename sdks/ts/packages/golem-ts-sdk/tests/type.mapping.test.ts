@@ -233,7 +233,7 @@ test('Union with literals to AnalysedType', () => {
   expect(unionWithLiterals).toEqual(expectedAnalysedType);
 });
 
-function checkPrimitiveFields(fields: any[]) {
+function checkPrimitiveFields(fields: NameTypePair[]) {
   const expected = {
     numberProp: {
       kind: 'f64',
@@ -258,7 +258,7 @@ function checkPrimitiveFields(fields: any[]) {
   for (const [name, expectedType] of Object.entries(expected)) {
     const field = fields.find((f) => f.name === name);
     expect(field).toBeDefined();
-    expect(field.typ).toMatchObject(expectedType);
+    expect(field!.typ).toMatchObject(expectedType);
   }
 }
 
@@ -801,7 +801,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
   expect(unionComplexFields).toEqual(expected);
 }
 
-function checkUnionFields(fields: any[]) {
+function checkUnionFields(fields: NameTypePair[]) {
   const unionField = fields.find((f) => f.name === 'unionProp');
 
   const expected = {
@@ -837,7 +837,7 @@ function checkUnionFields(fields: any[]) {
   expect(unionField).toEqual(expected);
 }
 
-function checkObjectFields(fields: any[]) {
+function checkObjectFields(fields: NameTypePair[]) {
   const objectFields = fields.filter((f) => f.name.startsWith('objectProp'));
   expect(objectFields.length).toBeGreaterThan(0);
 
@@ -858,33 +858,39 @@ function checkObjectFields(fields: any[]) {
 
   objectFields.forEach((field) => {
     expect(field.typ.kind).toBe('record');
-    expect(field.typ.value.fields).toEqual(expected);
+    if (field.typ.kind === 'record') {
+      expect(field.typ.value.fields).toEqual(expected);
+    }
   });
 }
 
-function checkListFields(fields: any[]) {
+function checkListFields(fields: NameTypePair[]) {
   const listFields = fields.filter((f) => f.name.startsWith('listProp'));
   expect(listFields.length).toBeGreaterThan(0);
 
   listFields.forEach((field) => {
     expect(field.typ.kind).toBe('list');
-    expect(field.typ.value.inner.kind).toBe('string'); // Assuming the inner type is string
+    if (field.typ.kind === 'list') {
+      expect(field.typ.value.inner.kind).toBe('string'); // Assuming the inner type is string
+    }
   });
 }
 
-function checkListObjectFields(fields: any[]) {
+function checkListObjectFields(fields: NameTypePair[]) {
   const listObjectFields = fields.filter((f) => f.name.startsWith('listObjectProp'));
   expect(listObjectFields.length).toBeGreaterThan(0);
 
   listObjectFields.forEach((field) => {
     expect(field.typ.kind).toBe('list');
-    expect(field.typ.value.inner.kind).toBe('record');
-    const innerFields = getRecordFieldsFromAnalysedType(field.typ.value.inner)!;
-    expect(innerFields.length).toBe(3); // Assuming 3 fields in the object type
+    if (field.typ.kind === 'list') {
+      expect(field.typ.value.inner.kind).toBe('record');
+      const innerFields = getRecordFieldsFromAnalysedType(field.typ.value.inner)!;
+      expect(innerFields.length).toBe(3); // Assuming 3 fields in the object type
+    }
   });
 }
 
-function checkTupleFields(fields: any[]) {
+function checkTupleFields(fields: NameTypePair[]) {
   const tupleFields = fields.filter((f) => f.name.startsWith('tupleProp'));
 
   tupleFields.forEach((field) => {
@@ -902,7 +908,7 @@ function checkTupleFields(fields: any[]) {
   });
 }
 
-function checkTupleWithObjectFields(fields: any[]) {
+function checkTupleWithObjectFields(fields: NameTypePair[]) {
   const tupleObjectFields = fields.filter((f) => f.name.startsWith('tupleObjectProp'));
   expect(tupleObjectFields.length).toBeGreaterThan(0);
 
@@ -947,24 +953,26 @@ function checkTupleWithObjectFields(fields: any[]) {
   });
 }
 
-function checkMapFields(fields: any[]) {
+function checkMapFields(fields: NameTypePair[]) {
   const mapFields = fields.filter((f) => f.name.startsWith('mapProp'));
   expect(mapFields.length).toBeGreaterThan(0);
 
   // list of tuples, where each tuple is a key-value pair
   mapFields.forEach((field) => {
     expect(field.typ.kind).toBe('list');
-    if (field.typ.kind == 'list') {
+    if (field.typ.kind === 'list') {
       expect(field.typ.value.inner.kind).toBe('tuple');
       const inner = field.typ.value.inner;
-      expect(inner.value.items.length).toBe(2);
-      expect(inner.value.items[0].kind).toBe('string');
-      expect(inner.value.items[1].kind).toBe('f64');
+      if (inner.kind === 'tuple') {
+        expect(inner.value.items.length).toBe(2);
+        expect(inner.value.items[0].kind).toBe('string');
+        expect(inner.value.items[1].kind).toBe('f64');
+      }
     }
   });
 }
 
-function checkObjectComplexFields(fields: any[]) {
+function checkObjectComplexFields(fields: NameTypePair[]) {
   const objectFields = fields.filter((f) => f.name.startsWith('objectComplexProp'));
   expect(objectFields.length).toBeGreaterThan(0);
 
@@ -1241,6 +1249,8 @@ function checkObjectComplexFields(fields: any[]) {
 
   objectFields.forEach((field) => {
     expect(field.typ.kind).toBe('record');
-    expect(field.typ.value.fields).toEqual(expected);
+    if (field.typ.kind === 'record') {
+      expect(field.typ.value.fields).toEqual(expected);
+    }
   });
 }

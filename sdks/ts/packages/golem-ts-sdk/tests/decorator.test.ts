@@ -804,7 +804,8 @@ describe('Annotated FooAgent class', () => {
       lowBits: BigInt(5678),
     };
 
-    (globalThis as any).currentAgentId = `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    (globalThis as unknown as { currentAgentId: string }).currentAgentId =
+      `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
     const fooResult = initiator.initiate(
       {
@@ -870,7 +871,8 @@ describe('Annotated SingletonAgent class', () => {
       val: [],
     };
 
-    (globalThis as any).currentAgentId = `singleton-agent(${JSON.stringify(params)})`;
+    (globalThis as unknown as { currentAgentId: string }).currentAgentId =
+      `singleton-agent(${JSON.stringify(params)})`;
 
     const singleton = initiator.initiate(params, { tag: 'anonymous' });
     expect(singleton.tag).toEqual('ok');

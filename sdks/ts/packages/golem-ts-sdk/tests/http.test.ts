@@ -16,7 +16,12 @@ import { describe, it } from 'vitest';
 import { getHttpMountDetails } from '../src/internal/http/mount';
 import { AgentDecoratorOptions } from '../src';
 import { parseQuery } from '../src/internal/http/query';
-import { AgentMethod, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common';
+import {
+  AgentConstructor,
+  AgentMethod,
+  HttpEndpointDetails,
+  HttpMountDetails,
+} from 'golem:agent/common';
 import { validateHttpEndpoint, validateHttpMount } from '../src/internal/http/validation';
 
 describe('getHttpMountDetails – basic behavior', () => {
@@ -165,7 +170,7 @@ describe('validateHttpMountWithConstructor', () => {
       inputSchema: {
         val: names.map((n) => [n, {}]),
       },
-    } as any;
+    } as Partial<AgentConstructor> as AgentConstructor;
   }
 
   it('passes when all constructor variables are provided via path variables', () => {
@@ -213,7 +218,7 @@ describe('validateHttpEndpoint', () => {
         headerName: `X-${v}`,
         variableName: v,
       })),
-    } as any;
+    } as Partial<HttpEndpointDetails> as HttpEndpointDetails;
   }
 
   function method(vars: string[], endpoints: HttpEndpointDetails[]): AgentMethod {
