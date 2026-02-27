@@ -42,8 +42,8 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ],
-        "http_rust_release",
-        "http:rust",
+        "golem_it_agent_sdk_rust_release",
+        "golem-it:agent-sdk-rust",
     )
     .await
     .unwrap()

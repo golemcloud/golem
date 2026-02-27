@@ -15,7 +15,7 @@
 use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
-use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
+use crate::model::{AccountResourceLimits, AgentDeploymentDetails, Component, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
@@ -42,7 +42,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
@@ -112,19 +111,19 @@ pub trait RegistryService: Send + Sync {
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<ComponentDto, RegistryServiceError>;
+    ) -> Result<Component, RegistryServiceError>;
 
     // will only return non-deleted components
     async fn get_deployed_component_metadata(
         &self,
         component_id: ComponentId,
-    ) -> Result<ComponentDto, RegistryServiceError>;
+    ) -> Result<Component, RegistryServiceError>;
 
     // will only return non-deleted components
     async fn get_all_deployed_component_revisions(
         &self,
         component_id: ComponentId,
-    ) -> Result<Vec<ComponentDto>, RegistryServiceError>;
+    ) -> Result<Vec<Component>, RegistryServiceError>;
 
     // will only return non-deleted components
     async fn resolve_component(
@@ -133,7 +132,7 @@ pub trait RegistryService: Send + Sync {
         resolving_application_id: ApplicationId,
         resolving_environment_id: EnvironmentId,
         component_slug: &str,
-    ) -> Result<ComponentDto, RegistryServiceError>;
+    ) -> Result<Component, RegistryServiceError>;
 
     // agent types api
     async fn get_all_agent_types(
@@ -473,7 +472,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<ComponentDto, RegistryServiceError> {
+    ) -> Result<Component, RegistryServiceError> {
         let response = self
             .client
             .call("get_component_metadata", move |client| {
@@ -503,7 +502,7 @@ impl RegistryService for GrpcRegistryService {
     async fn get_deployed_component_metadata(
         &self,
         component_id: ComponentId,
-    ) -> Result<ComponentDto, RegistryServiceError> {
+    ) -> Result<Component, RegistryServiceError> {
         let response = self
             .client
             .call("get_deployed_component_metadata", move |client| {
@@ -534,7 +533,7 @@ impl RegistryService for GrpcRegistryService {
     async fn get_all_deployed_component_revisions(
         &self,
         component_id: ComponentId,
-    ) -> Result<Vec<ComponentDto>, RegistryServiceError> {
+    ) -> Result<Vec<Component>, RegistryServiceError> {
         let response = self
             .client
             .call("get_all_deployed_component_revisions", move |client| {
@@ -553,7 +552,7 @@ impl RegistryService for GrpcRegistryService {
                 let converted = payload
                     .components
                     .into_iter()
-                    .map(ComponentDto::try_from)
+                    .map(Component::try_from)
                     .collect::<Result<_, _>>()?;
                 Ok(converted)
             }
@@ -569,7 +568,7 @@ impl RegistryService for GrpcRegistryService {
         resolving_application_id: ApplicationId,
         resolving_environment_id: EnvironmentId,
         component_slug: &str,
-    ) -> Result<ComponentDto, RegistryServiceError> {
+    ) -> Result<Component, RegistryServiceError> {
         let response = self
             .client
             .call("resolve_component", move |client| {

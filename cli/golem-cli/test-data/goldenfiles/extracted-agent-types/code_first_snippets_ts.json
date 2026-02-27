@@ -1,5 +1,6 @@
 [
   {
+    "config": [],
     "constructor": {
       "description": "TS Code First BarAgent",
       "inputSchema": {
@@ -5013,6 +5014,7 @@
     "typeName": "BarAgent"
   },
   {
+    "config": [],
     "constructor": {
       "description": "TS Code First FooAgent",
       "inputSchema": {

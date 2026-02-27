@@ -6266,6 +6266,7 @@ components:
       - dependencies
       - mode
       - snapshotting
+      - config
       properties:
         typeName:
           type: string
@@ -6287,6 +6288,10 @@ components:
           $ref: '#/components/schemas/HttpMountDetails'
         snapshotting:
           $ref: '#/components/schemas/Snapshotting'
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigKeyValueType'
     AnalysedExport:
       type: object
       oneOf:
@@ -6777,6 +6782,11 @@ components:
           default: {}
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/LocalAgentConfigEntry'
         agentTypes:
           type: array
           default: []
@@ -6808,6 +6818,7 @@ components:
       - originalEnv
       - configVars
       - originalConfigVars
+      - localAgentConfig
       - wasmHash
       properties:
         id:
@@ -6866,6 +6877,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalAgentConfigEntry'
         wasmHash:
           type: string
           format: hash
@@ -6954,6 +6969,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalAgentConfigEntry'
         agentTypes:
           type: array
           items:
@@ -6963,6 +6982,69 @@ components:
           default: []
           items:
             $ref: '#/components/schemas/PluginInstallationAction'
+    ConfigKeyValueType:
+      type: object
+      title: ConfigKeyValueType
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ConfigValueType'
+    ConfigValueType:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ConfigValueType_ConfigValueTypeLocal'
+      - $ref: '#/components/schemas/ConfigValueType_ConfigValueTypeShared'
+      discriminator:
+        propertyName: type
+        mapping:
+          Local: '#/components/schemas/ConfigValueType_ConfigValueTypeLocal'
+          Shared: '#/components/schemas/ConfigValueType_ConfigValueTypeShared'
+    ConfigValueTypeLocal:
+      type: object
+      title: ConfigValueTypeLocal
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/AnalysedType'
+    ConfigValueTypeShared:
+      type: object
+      title: ConfigValueTypeShared
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/AnalysedType'
+    ConfigValueType_ConfigValueTypeLocal:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Local
+            example: Local
+      - $ref: '#/components/schemas/ConfigValueTypeLocal'
+    ConfigValueType_ConfigValueTypeShared:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Shared
+            example: Shared
+      - $ref: '#/components/schemas/ConfigValueTypeShared'
     CorsOptions:
       type: object
       title: CorsOptions
@@ -7847,6 +7929,21 @@ components:
       properties:
         value:
           type: string
+    LocalAgentConfigEntry:
+      type: object
+      title: LocalAgentConfigEntry
+      required:
+      - agent
+      - key
+      - value
+      properties:
+        agent:
+          type: string
+        key:
+          type: array
+          items:
+            type: string
+        value: {}
     NameOptionTypePair:
       type: object
       title: NameOptionTypePair

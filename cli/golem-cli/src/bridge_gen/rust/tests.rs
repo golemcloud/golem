@@ -130,6 +130,7 @@ fn rust_counter_agent() -> GeneratedPackage {
         mode: AgentMode::Durable,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
     };
 
     GeneratedPackage::new(agent_type)

@@ -40,8 +40,8 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
                 )),
             },
         )],
-        "golem_it_agent_http_routes_ts",
-        "golem-it:agent-http-routes-ts",
+        "golem_it_agent_sdk_ts",
+        "golem-it:agent-sdk-ts",
     )
     .await
     .unwrap()

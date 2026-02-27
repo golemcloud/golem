@@ -26,7 +26,7 @@ use golem_common::model::agent::{
     AgentId, DataValue, GolemUserPrincipal, Principal, UntypedDataValue,
 };
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::oplog::OplogCursor;
@@ -36,7 +36,7 @@ use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{Component, ComponentFileSystemNode, GetOplogResponse};
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
@@ -98,7 +98,7 @@ impl WorkerService {
     pub async fn create_with_component(
         &self,
         worker_id: &WorkerId,
-        component: ComponentDto,
+        component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,

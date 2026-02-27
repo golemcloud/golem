@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
-use golem_common::model::application::ApplicationId;
 use golem_common::model::component::InitialComponentFile;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::diff::{self, Hash};
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::model::{Component, LocalAgentConfigEntry};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
@@ -35,10 +34,10 @@ pub struct NewComponentRevision {
     pub env: BTreeMap<String, String>,
     pub original_config_vars: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
+    pub local_agent_config: Vec<LocalAgentConfigEntry>,
     pub wasm_hash: Hash,
     pub object_store_key: String,
     pub installed_plugins: Vec<InstalledPlugin>,
-
     pub agent_types: Vec<AgentType>,
 }
 
@@ -51,6 +50,7 @@ impl NewComponentRevision {
         files: Vec<InitialComponentFile>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
         wasm_hash: Hash,
         object_store_key: String,
         installed_plugins: Vec<InstalledPlugin>,
@@ -67,11 +67,32 @@ impl NewComponentRevision {
             env,
             original_config_vars: config_vars.clone(),
             config_vars,
+            local_agent_config,
             wasm_hash,
             object_store_key,
             installed_plugins,
             agent_types,
         }
+    }
+
+    pub fn from_existing(value: Component) -> anyhow::Result<Self> {
+        Ok(Self {
+            component_id: value.id,
+            component_revision: value.revision.next()?,
+            environment_id: value.environment_id,
+            component_name: value.component_name,
+            original_files: value.original_files,
+            files: value.files,
+            original_env: value.original_env,
+            env: value.env,
+            original_config_vars: value.original_config_vars,
+            config_vars: value.config_vars,
+            local_agent_config: value.local_agent_config,
+            wasm_hash: value.wasm_hash,
+            object_store_key: value.object_store_key,
+            installed_plugins: value.installed_plugins,
+            agent_types: value.metadata.agent_types().to_vec(),
+        })
     }
 
     pub fn with_transformed_component(
@@ -92,10 +113,10 @@ impl NewComponentRevision {
             env: self.env,
             original_config_vars: self.original_config_vars,
             config_vars: self.config_vars,
+            local_agent_config: self.local_agent_config,
             wasm_hash: self.wasm_hash,
             object_store_key: self.object_store_key,
             installed_plugins: self.installed_plugins,
-
             transformed_object_store_key,
             metadata,
             component_size: transformed_data.len() as u64,
@@ -115,6 +136,7 @@ pub struct FinalizedComponentRevision {
     pub env: BTreeMap<String, String>,
     pub original_config_vars: BTreeMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
+    pub local_agent_config: Vec<LocalAgentConfigEntry>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub object_store_key: String,
     pub installed_plugins: Vec<InstalledPlugin>,
@@ -122,78 +144,4 @@ pub struct FinalizedComponentRevision {
     pub transformed_object_store_key: String,
     pub metadata: ComponentMetadata,
     pub component_size: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct Component {
-    pub id: ComponentId,
-    pub revision: ComponentRevision,
-    pub environment_id: EnvironmentId,
-    pub component_name: ComponentName,
-    pub hash: diff::Hash,
-    pub application_id: ApplicationId,
-    pub account_id: AccountId,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<InstalledPlugin>,
-    pub env: BTreeMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
-
-    /// Hash of the wasm before any transformations
-    pub wasm_hash: diff::Hash,
-
-    pub original_files: Vec<InitialComponentFile>,
-    pub original_env: BTreeMap<String, String>,
-    pub original_config_vars: BTreeMap<String, String>,
-    pub object_store_key: String,
-    pub transformed_object_store_key: String,
-}
-
-impl Component {
-    pub fn into_new_revision(self) -> anyhow::Result<NewComponentRevision> {
-        Ok(NewComponentRevision {
-            component_id: self.id,
-            component_revision: self.revision.next()?,
-            environment_id: self.environment_id,
-            component_name: self.component_name,
-            original_files: self.original_files,
-            files: self.files,
-            original_env: self.original_env,
-            env: self.env,
-            original_config_vars: self.original_config_vars,
-            config_vars: self.config_vars,
-            wasm_hash: self.wasm_hash,
-            object_store_key: self.object_store_key,
-            installed_plugins: self.installed_plugins,
-
-            agent_types: self.metadata.agent_types().to_vec(),
-        })
-    }
-}
-
-impl From<Component> for golem_common::model::component::ComponentDto {
-    fn from(value: Component) -> Self {
-        Self {
-            id: value.id,
-            revision: value.revision,
-            environment_id: value.environment_id,
-            application_id: value.application_id,
-            account_id: value.account_id,
-            component_name: value.component_name,
-            component_size: value.component_size,
-            metadata: value.metadata,
-            created_at: value.created_at,
-            original_files: value.original_files,
-            files: value.files,
-            installed_plugins: value.installed_plugins,
-            original_env: value.original_env,
-            env: value.env,
-            original_config_vars: value.original_config_vars,
-            config_vars: value.config_vars,
-            wasm_hash: value.wasm_hash,
-            hash: value.hash,
-        }
-    }
 }

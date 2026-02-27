@@ -60,7 +60,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
@@ -264,7 +264,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {
-            component: Some(ComponentDto::from(component).into()),
+            component: Some(component.into()),
         })
     }
 
@@ -283,7 +283,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetDeployedComponentMetadataSuccessResponse {
-            component: Some(ComponentDto::from(component).into()),
+            component: Some(component.into()),
         })
     }
 
@@ -302,10 +302,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(GetAllDeployedComponentRevisionsSuccessResponse {
-            components: components
-                .into_iter()
-                .map(|c| ComponentDto::from(c).into())
-                .collect(),
+            components: components.into_iter().map(|c| c.into()).collect(),
         })
     }
 
@@ -342,7 +339,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(ResolveComponentSuccessResponse {
-            component: Some(ComponentDto::from(component).into()),
+            component: Some(component.into()),
         })
     }
 

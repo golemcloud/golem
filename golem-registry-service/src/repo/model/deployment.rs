@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::model::api_definition::{BoundCompiledRoute, UnboundCompiledRoute};
-use crate::model::component::Component;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
@@ -32,6 +31,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::model::Component;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;

@@ -15,7 +15,6 @@
 use super::DeploymentWriteError;
 use super::http_parameter_conversion::build_http_agent_constructor_parameters;
 use crate::model::api_definition::UnboundCompiledRoute;
-use crate::model::component::Component;
 use crate::services::deployment::ok_or_continue;
 use crate::services::deployment::route_compilation::{
     add_agent_method_http_routes, add_cors_preflight_http_routes, add_openapi_spec_routes,
@@ -31,8 +30,10 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_service_base::model::Component;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
     pub agent_type: AgentType,
     pub implemented_by: RegisteredAgentTypeImplementer,
