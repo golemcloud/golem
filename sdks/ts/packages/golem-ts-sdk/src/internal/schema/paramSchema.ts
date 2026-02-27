@@ -24,6 +24,10 @@ export class ParameterSchemaCollection {
     this.parameterSchemas.push({ tag: 'principal', name });
   }
 
+  addConfigParameter(name: string): void {
+    this.parameterSchemas.push({ tag: 'config', name });
+  }
+
   addComponentModelParameter(name: string, schema: ElementSchema): void {
     this.parameterSchemas.push({
       tag: 'component-model',
@@ -39,6 +43,7 @@ export class ParameterSchemaCollection {
 
 export type ParameterSchema =
   | { tag: 'principal'; name: string }
+  | { tag: 'config'; name: string }
   | { tag: 'component-model'; name: string; schema: ElementSchema };
 
 // Remove principal parameters
@@ -46,11 +51,14 @@ function getDataSchema(parameterSchemaCollection: ParameterSchema[]): DataSchema
   let nameAndSchema: [string, ElementSchema][] = [];
 
   for (const paramSchema of parameterSchemaCollection) {
-    if (paramSchema.tag === 'principal') {
-    }
-
-    if (paramSchema.tag === 'component-model') {
-      nameAndSchema.push([paramSchema.name, paramSchema.schema]);
+    switch (paramSchema.tag) {
+      case 'config':
+        break;
+      case 'principal':
+        break;
+      case 'component-model':
+        nameAndSchema.push([paramSchema.name, paramSchema.schema]);
+        break;
     }
   }
   return {

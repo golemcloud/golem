@@ -190,5 +190,19 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         value: typeArgs[1],
         optional: json.optional,
       };
+
+    case 'config': {
+      const properties = json.properties.map(({ path, secret, type }) => ({
+        path,
+        secret,
+        type: buildTypeFromJSON(type),
+      }));
+      return {
+        kind: 'config',
+        name: json.name,
+        properties,
+        optional: json.optional,
+      };
+    }
   }
 }

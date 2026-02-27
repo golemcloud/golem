@@ -288,6 +288,7 @@ impl RustBridgeGenerator {
                             mode,
                             schedule_at,
                             idempotency_key: None,
+                            deployment_revision: None,
                         },
                     )
                     .await?;

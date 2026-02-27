@@ -116,9 +116,10 @@ jobs:
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
 
       - name: Install cargo-test-r
-        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+        run: cargo binstall --force --locked cargo-test-r@2.2.2
       #      - name: Restore binary archive
       #        uses: actions/download-artifact@v4
       #        with:
@@ -165,6 +166,7 @@ jobs:
           # pull-request-report: true
           flaky-report: true
           collapse-large-reports: true
+          exit-on-no-files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -189,6 +191,7 @@ jobs:
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
@@ -196,7 +199,7 @@ jobs:
           auto-start: false
 
       - name: Install cargo-test-r
-        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+        run: cargo binstall --force --locked cargo-test-r@2.2.2
       #      - name: Restore binary archive
       #        uses: actions/download-artifact@v4
       #        with:
@@ -235,6 +238,7 @@ jobs:
           # pull-request-report: true
           flaky-report: true
           collapse-large-reports: true
+          exit-on-no-files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -255,8 +259,6 @@ jobs:
             description: "IT #3"
           - name: integration-tests-group4
             description: "IT #4"
-          - name: api-tests
-            description: "API tests"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
@@ -281,7 +283,6 @@ jobs:
           auto-start: false
 
       - uses: cargo-bins/cargo-binstall@main
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
       - name: Install cargo-component
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force cargo-component@0.21.1
@@ -301,7 +302,7 @@ jobs:
         run: cargo install wasm-rquickjs-cli --version $WASM_RQUICKJS_VERSION
 
       - name: Install cargo-test-r
-        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+        run: cargo binstall --force --locked cargo-test-r@2.2.2
       #      - name: Restore binary archive
       #        uses: actions/download-artifact@v4
       #        with:
@@ -346,6 +347,7 @@ jobs:
           # pull-request-report: true
           flaky-report: true
           collapse-large-reports: true
+          exit-on-no-files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

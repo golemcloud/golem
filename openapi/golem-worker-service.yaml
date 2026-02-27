@@ -1754,6 +1754,9 @@ components:
           format: date-time
         idempotencyKey:
           type: string
+        deploymentRevision:
+          type: integer
+          format: int64
     AgentInvocationResult:
       type: object
       title: AgentInvocationResult

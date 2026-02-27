@@ -29,11 +29,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-signatures: 'signatures/v1.1/cla.json'
-          path-to-document: 'https://github.com/golemcloud/golem/blob/main/CLA.md'
-          branch: 'cla-signatures'
-          allowlist: 'dependabot[bot],renovate[bot],github-actions[bot]'
-          custom-notsigned-prcomment: 'Thank you for your contribution! Before we can merge this PR, we need you to sign our [Contributor License Agreement]($pathToCLADocument). Please read the CLA and post the comment below to sign.'
-          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
-          custom-allsigned-prcomment: '✅ All contributors have signed the CLA.'
+          path-to-signatures: "signatures/v1.1/cla.json"
+          path-to-document: "CLA.md"
+          branch: "cla-signatures"
+          allowlist: "dependabot[bot],renovate[bot],github-actions[bot]"
+          custom-notsigned-prcomment: "Thank you for your contribution! Before we can merge this PR, we need you to sign our [Contributor License Agreement]($pathToCLADocument). Please read the CLA and post the comment below to sign."
+          custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
+          custom-allsigned-prcomment: "✅ All contributors have signed the CLA."
           lock-pullrequest-aftermerge: true

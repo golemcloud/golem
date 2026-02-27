@@ -64,7 +64,7 @@ mod tests {
             let value = rust_decimal::Decimal::from(i);
             let typ = rust_decimal::Decimal::get_type();
             let value_and_type = ValueAndType {
-                value: value.clone().into_value(),
+                value: value.into_value(),
                 typ,
             };
             let recovered = rust_decimal::Decimal::from_value_and_type(value_and_type)

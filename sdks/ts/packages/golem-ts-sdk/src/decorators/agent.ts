@@ -19,9 +19,11 @@ import {
   AgentMode,
   Principal,
   Snapshotting,
+  ConfigKeyValueType,
+  ConfigValueType,
 } from 'golem:agent/common@1.5.0';
 import { ResolvedAgent } from '../internal/resolvedAgent';
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { ConstructorArg, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
   getNewPhantomRemoteClient,
   getPhantomRemoteClient,
@@ -42,6 +44,8 @@ import { validateHttpMount } from '../internal/http/validation';
 import { getAgentConstructorSchema } from '../internal/schema/constructor';
 import { getAgentMethodSchema } from '../internal/schema/method';
 import ms from 'ms';
+import { fromTsType } from '../internal/mapping/types/WitType';
+import { TypeScope } from '../internal/mapping/types/scope';
 
 export type SnapshottingOption = 'disabled' | 'enabled' | { periodic: string } | { every: number };
 
@@ -281,6 +285,11 @@ export function agent(options?: AgentDecoratorOptions) {
       validateHttpMount(agentClassName.value, httpMount, constructor);
     }
 
+    const agentConfigEntries = Either.getOrThrowWith(
+      getAgentConfigEntries(classMetadata.constructorArgs),
+      (err) => new Error(`Failed to describe agent config: ${err}`),
+    );
+
     const agentType: AgentType = {
       typeName: agentTypeName.value,
       description: agentTypeDescription,
@@ -290,7 +299,7 @@ export function agent(options?: AgentDecoratorOptions) {
       mode: options?.mode ?? 'durable',
       httpMount,
       snapshotting: resolveSnapshotting(options?.snapshotting),
-      config: [],
+      config: agentConfigEntries,
     };
 
     AgentTypeRegistry.register(agentClassName, agentType);
@@ -369,4 +378,36 @@ export function agent(options?: AgentDecoratorOptions) {
       },
     });
   };
+}
+
+function getAgentConfigEntries(
+  constructorParameters: ConstructorArg[],
+): Either.Either<ConfigKeyValueType[], string> {
+  const entries: ConfigKeyValueType[] = [];
+
+  for (const param of constructorParameters) {
+    if (param.type.kind !== 'config') continue;
+
+    for (const prop of param.type.properties) {
+      const witTypeEither = fromTsType(
+        prop.type,
+        TypeScope.object(param.name, prop.path[-1], prop.type.optional),
+      );
+      if (Either.isLeft(witTypeEither)) return witTypeEither;
+
+      let configValueType: ConfigValueType;
+      if (prop.secret) {
+        configValueType = { tag: 'shared', val: witTypeEither.val[0] };
+      } else {
+        configValueType = { tag: 'local', val: witTypeEither.val[0] };
+      }
+
+      entries.push({
+        key: prop.path,
+        value: configValueType,
+      });
+    }
+  }
+
+  return Either.right(entries);
 }

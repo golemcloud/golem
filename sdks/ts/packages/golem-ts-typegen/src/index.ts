@@ -23,6 +23,7 @@ import {
   ClassDeclaration,
   PropertyDeclaration,
   Symbol as TsMorphSymbol,
+  TypeLiteralNode,
 } from 'ts-morph';
 import {
   buildJSONFromType,
@@ -187,6 +188,14 @@ function getTypeFromTsMorphInternal(
         optional: isOptional,
       };
   }
+
+  // sdk config type
+  // because config type detection is unreliable currently, fall through to other detection if the node is malformed.
+  // Once we can reliably detect the node using symbols, we should surface an error to users here that they are using
+  // config in an unsupported way.
+  const sdkConfigType = getSdkConfigTypeFromTsMorph(type, rawName, aliasName, isOptional);
+  // eslint-disable-next-line eqeqeq
+  if (sdkConfigType != null) return sdkConfigType;
 
   // These will handle record types. However, record type is devoid
   // of details, and hence we don't support record type at the SDK level
@@ -380,6 +389,93 @@ function getTypeFromTsMorphInternal(
     optional: isOptional,
     recursive: false,
   };
+}
+
+function getSdkConfigTypeFromTsMorph(
+  type: TsMorphType,
+  rawName: string | undefined,
+  aliasName: string | undefined,
+  isOptional: boolean,
+): Type.Type | undefined {
+  if (rawName !== 'Config') return undefined;
+  if (type.getTypeArguments().length !== 1) return undefined;
+
+  const rawInner = type.getTypeArguments()[0];
+  const innerType = unwrapAlias(rawInner);
+
+  const typeLiteral = resolveStrictTypeLiteralNode(innerType);
+  if (!typeLiteral) return undefined;
+
+  const properties = extractConfigPropertiesFromTypeLiteral(typeLiteral, []);
+  if (!properties) return undefined;
+
+  return {
+    kind: 'config',
+    name: aliasName,
+    optional: isOptional,
+    properties,
+  };
+}
+
+// TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types
+function resolveStrictTypeLiteralNode(type: TsMorphType): TypeLiteralNode | undefined {
+  const symbol = type.getSymbol();
+  if (!symbol) return undefined;
+
+  const typeLiteralDecl = symbol.getDeclarations().find(TsMorphNode.isTypeLiteral);
+
+  return typeLiteralDecl;
+}
+
+function extractConfigPropertiesFromTypeLiteral(
+  node: TypeLiteralNode,
+  path: string[],
+): Type.ConfigProperty[] | undefined {
+  const members = node.getMembers();
+
+  if (!members.every(TsMorphNode.isPropertySignature)) {
+    return undefined;
+  }
+
+  const results: Type.ConfigProperty[] = [];
+
+  for (const member of members) {
+    const name = member.getName();
+    const nextPath = [...path, name];
+
+    const propType = unwrapAlias(member.getType());
+
+    // 1. secret wrapper
+    // TODO: switch to nominal matching using symbols instead of string
+    if (propType.getSymbol()?.getName() === 'Secret' && propType.getTypeArguments().length === 1) {
+      results.push({
+        path: nextPath,
+        secret: true,
+        type: getTypeFromTsMorph(propType.getTypeArguments()[0], member.hasQuestionToken()),
+      });
+      continue;
+    }
+
+    // 2. nested type literal
+    const nestedTypeLiteral = resolveStrictTypeLiteralNode(propType);
+    // eslint-disable-next-line eqeqeq
+    if (nestedTypeLiteral != null) {
+      const nested = extractConfigPropertiesFromTypeLiteral(nestedTypeLiteral, nextPath);
+      // eslint-disable-next-line eqeqeq
+      if (nested == null) return undefined;
+      results.push(...nested);
+      continue;
+    }
+
+    // 3. leaf node
+    results.push({
+      path: nextPath,
+      secret: false,
+      type: getTypeFromTsMorph(propType, member.hasQuestionToken()),
+    });
+  }
+
+  return results;
 }
 
 type RawName = string;

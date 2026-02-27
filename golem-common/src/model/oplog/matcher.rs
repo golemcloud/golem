@@ -108,6 +108,7 @@ impl PublicOplogEntry {
             }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 Self::string_match("agentinvocationstarted", &[], query_path, query)
+                    || Self::string_match("invoke", &[], query_path, query)
                     || Self::string_match("agent-invocation-started", &[], query_path, query)
                     || match &params.invocation {
                         PublicAgentInvocation::AgentInitialization(inv_params) => {
@@ -159,6 +160,7 @@ impl PublicOplogEntry {
             }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 Self::string_match("agentinvocationfinished", &[], query_path, query)
+                    || Self::string_match("invoke", &[], query_path, query)
                     || Self::string_match("agent-invocation-finished", &[], query_path, query)
                     || Self::string_match(&params.consumed_fuel.to_string(), &[], query_path, query)
             }
@@ -198,8 +200,9 @@ impl PublicOplogEntry {
                     || Self::string_match("end-remote-write", &[], query_path, query)
             }
             PublicOplogEntry::PendingAgentInvocation(params) => {
-                Self::string_match("pendingworkerinvocation", &[], query_path, query)
-                    || Self::string_match("pending-worker-invocation", &[], query_path, query)
+                Self::string_match("pendingagentinvocation", &[], query_path, query)
+                    || Self::string_match("invoke", &[], query_path, query)
+                    || Self::string_match("pending-agent-invocation", &[], query_path, query)
                     || match &params.invocation {
                         PublicAgentInvocation::AgentInitialization(params) => {
                             Self::string_match("agent-initialization", &[], query_path, query)
