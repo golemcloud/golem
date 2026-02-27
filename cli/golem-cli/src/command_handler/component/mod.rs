@@ -1026,6 +1026,8 @@ impl ComponentCommandHandler {
             wasm_hash: component_binary_hash.into(),
             files_by_path,
             plugins_by_grant_id,
+            // FIXME: agent-config
+            local_agent_config_ordered_by_agent_and_key: Vec::new(),
         })
     }
 
@@ -1072,7 +1074,7 @@ impl ComponentCommandHandler {
                         .unwrap_or_default(),
                     env: component_stager.env(),
                     config_vars: component_stager.config_vars(),
-                    // FIXME: agent-first-config
+                    // FIXME: agent-config
                     local_agent_config: Vec::new(),
                     agent_types,
                     plugins: component_stager.plugins(),

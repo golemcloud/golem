@@ -36,6 +36,8 @@ use golem_service_base::model::{Component, LocalAgentConfigEntry};
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use golem_service_base::repo::numeric::NumericU64;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use itertools::Itertools;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -281,6 +283,20 @@ impl ComponentRevisionRecord {
                         },
                     )
                 })
+                .collect(),
+            local_agent_config_ordered_by_agent_and_key: self
+                .local_agent_config
+                .value()
+                .iter()
+                .map(|lac| diff::LocalAgentConfigEntry {
+                    agent: lac.agent.0.clone(),
+                    key: lac.key.clone(),
+                    value: lac
+                        .value
+                        .to_json_value()
+                        .expect("ValueAndType produced by service must be valid JSON"),
+                })
+                .sorted_by_key(|lac| (lac.agent.clone(), lac.key.clone()))
                 .collect(),
         }
     }

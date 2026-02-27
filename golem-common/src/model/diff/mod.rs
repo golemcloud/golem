@@ -183,3 +183,50 @@ where
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VecDiffValue<ValueDiff> {
+    Create,
+    Delete,
+    Update(ValueDiff),
+}
+
+pub type VecDiff<V> = BTreeMap<String, VecDiffValue<<V as Diffable>::DiffResult>>;
+
+impl<V> Diffable for Vec<V>
+where
+    V: Diffable,
+    V::DiffResult: Serialize,
+{
+    type DiffResult = VecDiff<V>;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let mut diff = BTreeMap::new();
+
+        let max_len = std::cmp::max(new.len(), current.len());
+
+        for i in 0..max_len {
+            match (new.get(i), current.get(i)) {
+                (Some(n), Some(c)) => {
+                    if let Some(d) = n.diff_with_current(c) {
+                        diff.insert(i.to_string(), VecDiffValue::Update(d));
+                    }
+                }
+                (Some(_), None) => {
+                    diff.insert(i.to_string(), VecDiffValue::Create);
+                }
+                (None, Some(_)) => {
+                    diff.insert(i.to_string(), VecDiffValue::Delete);
+                }
+                (None, None) => {}
+            }
+        }
+
+        if diff.is_empty() {
+            None
+        } else {
+            Some(diff)
+        }
+    }
+}

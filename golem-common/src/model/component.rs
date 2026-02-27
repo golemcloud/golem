@@ -16,6 +16,7 @@ use crate::model::diff;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
+use itertools::Itertools;
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
@@ -64,6 +65,16 @@ impl ComponentDto {
                         },
                     )
                 })
+                .collect(),
+            local_agent_config_ordered_by_agent_and_key: self
+                .local_agent_config
+                .iter()
+                .map(|lac| diff::LocalAgentConfigEntry {
+                    agent: lac.agent.0.clone(),
+                    key: lac.key.clone(),
+                    value: lac.value.clone(),
+                })
+                .sorted_by_key(|lac| (lac.agent.clone(), lac.key.clone()))
                 .collect(),
         }
     }
