@@ -29,17 +29,13 @@ message Component {
   golem.common.EnvironmentId environment_id = 6;
   google.protobuf.Timestamp created_at = 7;
   repeated golem.component.InitialComponentFile files = 8;
-  repeated golem.component.InitialComponentFile original_files = 9;
   repeated golem.component.PluginInstallation installed_plugins = 10;
   golem.common.AccountId account_id = 11;
   map<string, string> env = 12;
-  map<string, string> original_env = 13;
-  map<string, string> config_vars = 14;
-  map<string, string> original_config_vars = 15;
-  repeated LocalAgentConfigEntry local_agent_config = 16;
-  golem.common.Hash wasm_hash = 17;
-  golem.common.ApplicationId application_id = 18;
-  golem.common.Hash hash = 19;
-  string transformed_object_store_key = 20;
-  string object_store_key = 21;
+  map<string, string> config_vars = 13;
+  repeated LocalAgentConfigEntry local_agent_config = 14;
+  golem.common.Hash wasm_hash = 15;
+  golem.common.ApplicationId application_id = 16;
+  golem.common.Hash hash = 17;
+  string object_store_key = 18;
 }

@@ -99,8 +99,6 @@ impl Diffable for ComponentFile {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]

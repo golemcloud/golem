@@ -444,10 +444,7 @@ impl ComponentService {
 
         let stream = self
             .object_store
-            .get_stream(
-                component.environment_id,
-                &component.transformed_object_store_key,
-            )
+            .get_stream(component.environment_id, &component.object_store_key)
             .await?;
 
         Ok(stream)
