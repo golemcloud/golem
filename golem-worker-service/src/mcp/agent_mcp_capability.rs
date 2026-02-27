@@ -14,7 +14,7 @@
 
 use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::schema::{GetMcpSchema, GetMcpToolSchema, McpSchema, McpToolSchema};
+use crate::mcp::schema::{GetMcpSchema, GetMcpToolSchema, McpToolSchema};
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::agent::{AgentMethod, AgentTypeName, DataSchema};
 use golem_common::base_model::component::ComponentId;
@@ -64,9 +64,9 @@ impl McpAgentCapability {
                         name: Cow::from(get_tool_name(agent_type_name, method)),
                         title: None,
                         description: Some(method.description.clone().into()),
-                        input_schema: Arc::new(McpSchema::from(input_schema)),
+                        input_schema: Arc::new(rmcp::model::JsonObject::from(input_schema)),
                         output_schema: output_schema
-                            .map(|internal| Arc::new(McpSchema::from(internal))),
+                            .map(|internal| Arc::new(rmcp::model::JsonObject::from(internal))),
                         annotations: None,
                         execution: None,
                         icons: None,

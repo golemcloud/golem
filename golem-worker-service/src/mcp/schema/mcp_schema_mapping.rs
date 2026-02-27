@@ -12,9 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use mcp_schema_mapping::*;
-pub use mcp_tool_schema::*;
+use crate::mcp::schema::mcp_schema::McpSchema;
+use golem_common::base_model::agent::DataSchema;
 
-mod mcp_schema;
-mod mcp_schema_mapping;
-mod mcp_tool_schema;
+pub trait GetMcpSchema {
+    fn get_mcp_schema(&self) -> McpSchema;
+}
+
+impl GetMcpSchema for DataSchema {
+    fn get_mcp_schema(&self) -> McpSchema {
+        match self {
+            DataSchema::Tuple(schemas) => McpSchema::from_named_element_schemas(&schemas.elements),
+            DataSchema::Multimodal(_) => {
+                todo!("Multimodal schema is not supported in this example")
+            }
+        }
+    }
+}

@@ -12,9 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::internal::McpSchemaInternal;
-use crate::mcp::schema::mcp_schema::GetMcpSchema;
+use crate::mcp::schema::mcp_schema::McpSchema;
+use crate::mcp::schema::mcp_schema_mapping::GetMcpSchema;
 use golem_common::base_model::agent::AgentMethod;
+
+pub struct McpToolSchema {
+    pub input_schema: McpSchema,
+    pub output_schema: Option<McpSchema>,
+}
+
+impl McpToolSchema {
+    pub fn prepend_input_schema(&mut self, input_schema: McpSchema) {
+        self.input_schema.prepend_schema(input_schema);
+    }
+}
 
 pub trait GetMcpToolSchema {
     fn get_mcp_tool_schema(&self) -> McpToolSchema;
@@ -22,23 +33,12 @@ pub trait GetMcpToolSchema {
 
 impl GetMcpToolSchema for AgentMethod {
     fn get_mcp_tool_schema(&self) -> McpToolSchema {
-        let input_schema: McpSchemaInternal = self.input_schema.get_mcp_schema();
-        let output_schema: McpSchemaInternal = self.output_schema.get_mcp_schema();
+        let input_schema: McpSchema = self.input_schema.get_mcp_schema();
+        let output_schema: McpSchema = self.output_schema.get_mcp_schema();
 
         McpToolSchema {
             input_schema,
             output_schema: Some(output_schema),
         }
-    }
-}
-
-pub struct McpToolSchema {
-    pub input_schema: McpSchemaInternal,
-    pub output_schema: Option<McpSchemaInternal>,
-}
-
-impl McpToolSchema {
-    pub fn prepend_input_schema(&mut self, input_schema: McpSchemaInternal) {
-        self.input_schema.prepend_schema(input_schema);
     }
 }
