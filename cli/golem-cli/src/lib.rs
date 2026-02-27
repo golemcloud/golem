@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
 use golem_common::tracing::directive::{debug, warn};
 use lenient_bool::LenientBool;
 use shadow_rs::shadow;
 use std::future::Future;
+use std::path::Path;
 use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
-pub mod app_template;
 pub mod auth;
 pub mod bridge_gen;
 pub mod client;
@@ -46,6 +47,83 @@ pub mod validation;
 test_r::enable!();
 
 shadow!(build);
+
+#[macro_export]
+macro_rules! app_manifest_version {
+    () => {
+        "1.5.0-dev.1"
+    };
+}
+static GOLEM_RUST_VERSION: &str = "2.0.0-dev.2";
+static GOLEM_TS_VERSION: &str = "0.1.0-dev.1";
+static GOLEM_AI_VERSION: &str = "v0.5.0-dev.1";
+static GOLEM_AI_SUFFIX: &str = "-dev.wasm";
+
+static APP_MANIFEST_JSON_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../schema.golem.cloud/app/golem/",
+    app_manifest_version!(),
+    "/golem.schema.json"
+));
+
+#[derive(Debug, Clone, Default)]
+pub struct SdkOverrides {
+    pub golem_rust_path: Option<String>,
+    pub golem_rust_version: Option<String>,
+    pub ts_packages_path: Option<String>,
+    pub ts_version: Option<String>,
+}
+
+impl SdkOverrides {
+    pub fn ts_package_dep(&self, package_name: &str) -> String {
+        match &self.ts_packages_path {
+            Some(ts_packages_path) => {
+                format!("{}/{}", ts_packages_path, package_name)
+            }
+            None => self
+                .ts_version
+                .as_deref()
+                .unwrap_or(GOLEM_TS_VERSION)
+                .to_string(),
+        }
+    }
+
+    pub fn golem_rust_dep(&self) -> String {
+        match &self.golem_rust_path {
+            Some(rust_path) => {
+                format!(r#"path = "{}""#, rust_path)
+            }
+            _ => {
+                format!(
+                    r#"version = "{}""#,
+                    self.golem_rust_version
+                        .as_deref()
+                        .unwrap_or(GOLEM_RUST_VERSION)
+                )
+            }
+        }
+    }
+
+    pub fn golem_client_dep(&self) -> anyhow::Result<String> {
+        if let Some(rust_path) = &self.golem_rust_path {
+            return Ok(format!(
+                r#"path = "{}/golem-client""#,
+                Self::golem_repo_path_from_golem_rust_path(rust_path)?
+            ));
+        }
+
+        todo!("No published version yet")
+    }
+
+    pub fn golem_repo_path_from_golem_rust_path(path: &str) -> anyhow::Result<String> {
+        let suffix = Path::new("sdks/rust/golem-rust");
+        let path = Path::new(path);
+        fs::path_to_str(path)?
+            .strip_suffix(fs::path_to_str(suffix)?)
+            .ok_or_else(|| anyhow!("Invalid Golem Rust path: {}", path.display()))
+            .map(|s| s.to_string())
+    }
+}
 
 pub fn command_name() -> String {
     std::env::current_exe()

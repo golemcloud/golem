@@ -1,5 +1,0 @@
-{
-  "description": "Composable App Common template for Rust",
-  "appCommonGroup": "default",
-  "appCommonSkipIfExists": "common-rust/golem.yaml"
-}

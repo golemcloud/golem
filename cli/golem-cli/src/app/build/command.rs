@@ -334,7 +334,7 @@ pub async fn execute_external_command(
                     let _ident = LogIndent::new();
                     for dir in &command.rmdirs {
                         let dir = build_dir.join(dir);
-                        fs::delete_path_logged("directory", &dir)?;
+                        fs::delete_logged("directory", &dir)?;
                     }
                 }
 

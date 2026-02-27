@@ -1,0 +1,13 @@
+# golem-app-manifest-header
+
+app: app-name
+
+includes:
+- components-*/*/golem.yaml
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

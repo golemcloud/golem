@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::app::context::ApplicationContext;
-use crate::app_template::model::{ComposableAppGroupName, SdkOverrides};
-use crate::app_template::{all_composable_app_templates, ComposableAppTemplate};
+use crate::app::template::AppTemplateRepo;
 use crate::client::{new_reqwest_client, GolemClients};
 use crate::command::shared_args::PostDeployArgs;
 use crate::command::GolemCliGlobalFlags;
@@ -39,7 +38,7 @@ use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::model::GuestLanguage;
+use crate::SdkOverrides;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;
@@ -80,16 +79,12 @@ pub struct Context {
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
-    template_sdk_overrides: SdkOverrides,
-    template_group: ComposableAppGroupName,
+    sdk_overrides: SdkOverrides,
 
     file_download_client: reqwest::Client,
 
     // Lazy initialized
     golem_clients: tokio::sync::OnceCell<GolemClients>,
-    templates: std::sync::OnceLock<
-        BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>,
-    >,
     selected_context_logging: std::sync::OnceLock<()>,
 
     // Directly mutable
@@ -109,6 +104,16 @@ impl Context {
         {
             bail!(ContextInitHintError::CannotUseShortEnvRefWithLocalOrCloudFlags);
         }
+
+        let sdk_overrides = SdkOverrides {
+            golem_rust_path: global_flags
+                .golem_rust_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            golem_rust_version: global_flags.golem_rust_version.clone(),
+            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
+            ts_version: global_flags.golem_ts_version.clone(),
+        };
 
         let (environment_reference, env_ref_can_be_builtin_profile) = {
             if let Some(environment) = &global_flags.environment {
@@ -132,8 +137,10 @@ impl Context {
             }
         };
 
-        let preloaded_app = ApplicationContext::preload_sources_and_get_environments(
+        let preloaded_app = ApplicationContext::preload_application(
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags),
+            global_flags.dev_mode,
+            &sdk_overrides,
         )?;
 
         if preloaded_app.loaded_with_warnings
@@ -310,21 +317,6 @@ impl Context {
                 )
         };
 
-        let template_sdk_overrides = SdkOverrides {
-            golem_rust_path: global_flags
-                .golem_rust_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            golem_rust_version: global_flags.golem_rust_version.clone(),
-            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
-            ts_version: global_flags.golem_ts_version.clone(),
-        };
-        let template_group = global_flags
-            .template_group
-            .clone()
-            .map(ComposableAppGroupName::from)
-            .unwrap_or_default();
-
         Ok(Self {
             config_dir: global_flags.config_dir(),
             format,
@@ -343,12 +335,10 @@ impl Context {
             show_sensitive: global_flags.show_sensitive,
             server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
-            template_sdk_overrides,
-            template_group,
+            sdk_overrides,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
-            templates: std::sync::OnceLock::new(),
             selected_context_logging: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
@@ -564,20 +554,12 @@ impl Context {
         Ok(app_ctx.application().task_result_marker_dir())
     }
 
-    pub fn templates(
-        &self,
-        dev_mode: bool,
-    ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
-        self.templates
-            .get_or_init(|| all_composable_app_templates(dev_mode))
+    pub fn app_template_repo(&self) -> anyhow::Result<&AppTemplateRepo> {
+        AppTemplateRepo::get(self.dev_mode)
     }
 
-    pub fn template_sdk_overrides(&self) -> &SdkOverrides {
-        &self.template_sdk_overrides
-    }
-
-    pub fn template_group(&self) -> &ComposableAppGroupName {
-        &self.template_group
+    pub fn sdk_overrides(&self) -> &SdkOverrides {
+        &self.sdk_overrides
     }
 
     fn log_context_selection_once(&self) {
