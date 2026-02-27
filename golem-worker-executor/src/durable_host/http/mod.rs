@@ -35,7 +35,10 @@ pub(crate) async fn end_http_request<Ctx: WorkerCtx>(
 
         ctx.finish_span(&state.span_id).await?;
     } else {
-        warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
+        warn!(
+            "No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}",
+            current_handle, ctx.state.open_http_requests
+        );
     }
 
     Ok(())
@@ -51,6 +54,9 @@ pub(crate) fn continue_http_request<Ctx: WorkerCtx>(
         state.close_owner = new_close_owner;
         ctx.state.open_http_requests.insert(new_handle, state);
     } else {
-        warn!("No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}", current_handle, ctx.state.open_http_requests);
+        warn!(
+            "No matching HTTP request is associated with resource handle. Handle: {}, open requests: {:?}",
+            current_handle, ctx.state.open_http_requests
+        );
     }
 }

@@ -29,6 +29,11 @@ fn env_vars(env_vars: HashMap<String, String>, verbosity: Level) -> HashMap<Stri
             &format!("{log_level},h2=warn,hyper=warn,tower=warn"),
         ),
         ("RUST_BACKTRACE", "1"),
+        ("GOLEM__TRACING__STDOUT__ANSI", "false"),
+        ("GOLEM__TRACING__STDOUT__ENABLED", "true"),
+        ("GOLEM__TRACING__STDOUT__JSON", "true"),
+        ("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "true"),
+        ("GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN", "true"),
     ];
 
     let mut vars: HashMap<String, String> =

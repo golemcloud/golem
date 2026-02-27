@@ -63,6 +63,8 @@ pub mod serde;
 #[cfg(feature = "host")]
 mod text;
 
+#[cfg(feature = "host")]
+mod validation;
 mod value_and_type;
 
 /// Conversion to/from wasmtime's value representation
@@ -89,13 +91,13 @@ pub use wstd::wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
+pub use bindings::golem::core as golem_core_1_5_x;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use golem_rpc_0_2_x::types::{
-    AccountId, AgentId, ComponentId, FutureInvokeResult, NodeIndex, PromiseId, ResourceMode,
-    RpcError, Uri, Uuid, WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
+pub use golem_core_1_5_x::types::{
+    AccountId, AgentId, ComponentId, NodeIndex, PromiseId, ResourceMode, Uri, Uuid, WitNode,
+    WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(not(feature = "host"))]
@@ -115,10 +117,8 @@ mod generated {
         async: true,
         trappable_imports: true,
         with: {
-            "golem:rpc/types/wasm-rpc": super::WasmRpcEntry,
-            "golem:rpc/types/future-invoke-result": super::FutureInvokeResultEntry,
-            "golem:rpc/types/cancellation-token": super::CancellationTokenEntry,
             "wasi:io/poll/pollable": super::DynPollable,
+            "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
         },
         wasmtime_crate: ::wasmtime,
     });
@@ -128,12 +128,12 @@ mod generated {
 pub use generated::wasi;
 
 #[cfg(feature = "host")]
-pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
+pub use generated::golem::core as golem_core_1_5_x;
 
 #[cfg(feature = "host")]
-pub use golem_rpc_0_2_x::types::{
-    AccountId, AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, PromiseId, ResourceMode,
-    RpcError, Uri, Uuid, WitNode, WitType, WitTypeNode, WitValue,
+pub use golem_core_1_5_x::types::{
+    AccountId, AgentId, ComponentId, Host, NodeIndex, PromiseId, ResourceMode, Uri, Uuid, WitNode,
+    WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(any(feature = "host", feature = "stub"))]
@@ -181,6 +181,13 @@ impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
 }
 
 #[cfg(feature = "host")]
+impl wasmtime_wasi::DynamicPollable for FutureInvokeResultEntry {
+    fn override_index(&self) -> Option<u32> {
+        None
+    }
+}
+
+#[cfg(feature = "host")]
 pub struct CancellationTokenEntry {
     pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
 }
@@ -188,6 +195,8 @@ pub struct CancellationTokenEntry {
 #[cfg(feature = "host")]
 pub use text::{parse_value_and_type, print_value_and_type};
 
+#[cfg(feature = "host")]
+pub use validation::validate_value_matches_type;
 pub use value_and_type::*;
 
 #[cfg(feature = "host")]

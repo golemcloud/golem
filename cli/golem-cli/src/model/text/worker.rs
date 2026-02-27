@@ -25,11 +25,14 @@ use base64::Engine;
 use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
-use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::agent::{
+    BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
-    PublicUpdateDescription, PublicWorkerInvocation, StringAttributeValue,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
+    PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
 use golem_common::model::Timestamp;
@@ -339,7 +342,7 @@ impl TextView for PublicOplogEntry {
                     log_plugin_description(&inner_pad, plugin);
                 }
             }
-            PublicOplogEntry::ImportedFunctionInvoked(params) => {
+            PublicOplogEntry::HostCall(params) => {
                 logln(format!(
                     "{} {}",
                     format_message_highlight("CALL"),
@@ -358,26 +361,37 @@ impl TextView for PublicOplogEntry {
                     value_to_string(&params.response)
                 ));
             }
-            PublicOplogEntry::ExportedFunctionInvoked(params) => {
-                logln(format!(
-                    "{} {}",
-                    format_message_highlight("INVOKE"),
-                    format_id(&params.function_name),
-                ));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}idempotency key:   {}",
-                    format_id(&params.idempotency_key),
-                ));
-                logln(format!("{pad}input:"));
-                for param in &params.request {
-                    logln(format!("{pad}  - {}", value_to_string(param)));
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(inner) => {
+                    logln(format!(
+                        "{} {}",
+                        format_message_highlight("INVOKE"),
+                        format_id(&inner.method_name),
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&inner.idempotency_key),
+                    ));
+                    logln(format!("{pad}input:"));
+                    log_data_value(pad, &inner.function_input);
                 }
-            }
-            PublicOplogEntry::ExportedFunctionCompleted(params) => {
+                other => {
+                    logln(format!(
+                        "{} {:?}",
+                        format_message_highlight("INVOKE"),
+                        other,
+                    ));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+            },
+            PublicOplogEntry::AgentInvocationFinished(params) => {
                 logln(format_message_highlight("INVOKE COMPLETED"));
                 logln(format!(
                     "{pad}at:                {}",
@@ -387,14 +401,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
-                logln(format!(
-                    "{pad}result:            {}",
-                    params
-                        .response
-                        .as_ref()
-                        .map(value_to_string)
-                        .unwrap_or_else(|| "()".to_string())
-                ));
+                logln(format!("{pad}result:            {:?}", params.result));
             }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
@@ -519,12 +526,23 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.begin_index)
                 ));
             }
-            PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
-                PublicWorkerInvocation::ExportedFunction(inner_params) => {
+            PublicOplogEntry::PendingAgentInvocation(params) => match &params.invocation {
+                PublicAgentInvocation::AgentInitialization(inner_params) => {
+                    logln(format_message_highlight("ENQUEUED AGENT INITIALIZATION"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                    logln(format!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&inner_params.idempotency_key),
+                    ));
+                }
+                PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
                     logln(format!(
                         "{} {}",
                         format_message_highlight("ENQUEUED INVOCATION"),
-                        format_id(&inner_params.full_function_name),
+                        format_id(&inner_params.method_name),
                     ));
                     logln(format!(
                         "{pad}at:                {}",
@@ -534,14 +552,29 @@ impl TextView for PublicOplogEntry {
                         "{pad}idempotency key:   {}",
                         format_id(&inner_params.idempotency_key),
                     ));
-                    if let Some(input) = &inner_params.function_input {
-                        logln(format!("{pad}input:"));
-                        for param in input {
-                            logln(format!("{pad}  - {}", value_to_string(param)));
-                        }
-                    }
                 }
-                PublicWorkerInvocation::ManualUpdate(inner_params) => {
+                PublicAgentInvocation::SaveSnapshot(_) => {
+                    logln(format_message_highlight("ENQUEUED SAVE SNAPSHOT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicAgentInvocation::LoadSnapshot(_) => {
+                    logln(format_message_highlight("ENQUEUED LOAD SNAPSHOT"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicAgentInvocation::ProcessOplogEntries(_) => {
+                    logln(format_message_highlight("ENQUEUED PROCESS OPLOG ENTRIES"));
+                    logln(format!(
+                        "{pad}at:                {}",
+                        format_id(&params.timestamp)
+                    ));
+                }
+                PublicAgentInvocation::ManualUpdate(inner_params) => {
                     logln(format_message_highlight("ENQUEUED MANUAL UPDATE"));
                     logln(format!(
                         "{pad}at:                {}",
@@ -892,7 +925,6 @@ fn format_worker_name(worker_name: &WorkerName) -> String {
     textwrap::wrap(&worker_name.to_string(), 80).join("\n")
 }
 
-#[allow(dead_code)]
 fn log_data_value(pad: &str, value: &DataValue) {
     match value {
         DataValue::Tuple(values) => {
@@ -913,10 +945,10 @@ fn log_data_value(pad: &str, value: &DataValue) {
 #[allow(dead_code)]
 fn log_element_value(pad: &str, value: &ElementValue) {
     match value {
-        ElementValue::ComponentModel(value) => {
+        ElementValue::ComponentModel(ComponentModelElementValue { value }) => {
             logln(format!("{pad}- {}", value_to_string(value)));
         }
-        ElementValue::UnstructuredText(value) => match value {
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
             TextReference::Url(url) => {
                 logln(format!("{pad}- URL: {}", format_id(&url.value)));
             }
@@ -930,21 +962,23 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                 }
             }
         },
-        ElementValue::UnstructuredBinary(value) => match value {
-            BinaryReference::Url(url) => {
-                logln(format!("{pad}- URL: {}", format_id(&url.value)));
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Url(url) => {
+                    logln(format!("{pad}- URL: {}", format_id(&url.value)));
+                }
+                BinaryReference::Inline(inline) => {
+                    logln(format!(
+                        "{pad}- Inline: {} bytes",
+                        format_id(&inline.data.len().to_string())
+                    ));
+                    logln(format!(
+                        "{pad}  MIME type: {}",
+                        format_id(&inline.binary_type.mime_type)
+                    ));
+                }
             }
-            BinaryReference::Inline(inline) => {
-                logln(format!(
-                    "{pad}- Inline: {} bytes",
-                    format_id(&inline.data.len().to_string())
-                ));
-                logln(format!(
-                    "{pad}  MIME type: {}",
-                    format_id(&inline.binary_type.mime_type)
-                ));
-            }
-        },
+        }
     }
 }
 

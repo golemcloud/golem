@@ -686,7 +686,6 @@ impl ComponentWriteService {
 
         debug!(
             environment_id = %environment_id,
-            exports = ?finalized_revision.metadata.exports(),
             "Finalized component",
         );
 

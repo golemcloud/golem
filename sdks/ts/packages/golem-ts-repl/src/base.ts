@@ -87,18 +87,18 @@ export type Worker = {
   exportedResourceInstances: Record<string, WorkerResourceDescription>;
 };
 
-export type UntypedDataValue =
-  | { type: 'Tuple'; elements: UntypedElementValue[] }
-  | { type: 'Multimodal'; elements: UntypedNamedElementValue[] };
+export type DataValue =
+  | { type: 'Tuple'; elements: ElementValue[] }
+  | { type: 'Multimodal'; elements: NamedElementValue[] };
 
-export type UntypedElementValue =
+export type ElementValue =
   | { type: 'ComponentModel'; value: unknown }
   | { type: 'UnstructuredText'; value: TextReference }
   | { type: 'UnstructuredBinary'; value: BinaryReference };
 
-export interface UntypedNamedElementValue {
+export interface NamedElementValue {
   name: string;
-  value: UntypedElementValue;
+  value: ElementValue;
 }
 
 export type Url = {
@@ -166,8 +166,6 @@ export const BinaryReference = {
 export interface BinaryType {
   mimeType: string;
 }
-
-export type DataValue = UntypedDataValue;
 
 export type AgentInvocationMode = 'await' | 'schedule';
 

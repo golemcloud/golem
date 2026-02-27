@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Result } from 'golem:rpc/types@0.2.2';
-import { AgentError, AgentType, DataValue, Principal } from 'golem:agent/common';
+import { Result } from 'golem:agent/host@1.5.0';
+import { AgentError, AgentType, DataValue, Principal } from 'golem:agent/common@1.5.0';
 import { AgentId } from '../agentId';
 import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
@@ -30,7 +30,7 @@ import * as Either from '../newTypes/either';
 import { AgentMethodMetadata, AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { createCustomError, invalidInput, invalidMethod, invalidType } from './agentError';
 import { TypeInfoInternal } from './typeInfoInternal';
-import { Uuid } from 'golem:agent/host';
+import { Uuid } from 'golem:agent/host@1.5.0';
 
 /**
  * An AgentInternal is an internal interface that represents the basic usage of an agent

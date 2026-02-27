@@ -1,6 +1,6 @@
 use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
-use crate::service::worker::AgentsService;
+use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
@@ -11,7 +11,6 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Header;
 use poem_openapi::payload::Json;
-use poem_openapi::types::Type;
 use poem_openapi_derive::{Enum, Object, OpenApi};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -21,15 +20,15 @@ use uuid::Uuid;
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
 pub struct AgentsApi {
-    agents_service: Arc<AgentsService>,
+    worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
 }
 
 #[OpenApi(prefix_path = "/v1/agents", tag = ApiTags::Agent)]
 impl AgentsApi {
-    pub fn new(agents_service: Arc<AgentsService>, auth_service: Arc<dyn AuthService>) -> Self {
+    pub fn new(worker_service: Arc<WorkerService>, auth_service: Arc<dyn AuthService>) -> Self {
         Self {
-            agents_service,
+            worker_service,
             auth_service,
         }
     }
@@ -43,7 +42,7 @@ impl AgentsApi {
     ) -> Result<Json<AgentInvocationResult>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        if request.idempotency_key.is_empty() {
+        if request.idempotency_key.is_none() {
             request.idempotency_key = idempotency_key.0;
         }
 
@@ -57,8 +56,8 @@ impl AgentsApi {
         );
 
         let response = self
-            .agents_service
-            .invoke_agent(request.0, auth)
+            .worker_service
+            .invoke_agent_rest(request.0, auth)
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
@@ -89,6 +88,7 @@ pub struct AgentInvocationRequest {
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
+    pub deployment_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

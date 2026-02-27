@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{is_unit_case, parse_wit_field_attribute, WitField};
+use crate::{is_unit_case, parse_wit_field_attribute, parse_wit_type_attrs, WitField};
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Fields, Type};
@@ -24,6 +24,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("wit_transparent"));
+    let wit = parse_wit_type_attrs(&ast.attrs);
 
     let from_value = match ast.data {
         Data::Struct(data) => {
@@ -63,7 +64,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                 .iter()
                 .all(|variant| variant.fields.is_empty());
 
-            if is_simple_enum {
+            if is_simple_enum && !wit.as_variant {
                 let case_branches = data
                     .variants
                     .iter()
@@ -84,6 +85,30 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                             _ => Err(format!("Invalid enum index: {}", idx)),
                         },
                         _ => Err(format!("Expected Enum value, got {:?}", value)),
+                    }
+                }
+            } else if is_simple_enum && wit.as_variant {
+                // as_variant: all-unit enum deserialized from WIT variant
+                let case_branches = data
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, variant)| {
+                        let case_ident = &variant.ident;
+                        let idx = idx as u32;
+                        quote! {
+                            #idx => Ok(#ident::#case_ident)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                quote! {
+                    match value {
+                        golem_wasm::Value::Variant { case_idx, case_value: _ } => match case_idx {
+                            #(#case_branches),*,
+                            _ => Err(format!("Invalid variant case index: {}", case_idx)),
+                        },
+                        _ => Err(format!("Expected Variant value, got {:?}", value)),
                     }
                 }
             } else {
@@ -133,7 +158,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                         } else if has_only_named_fields(&variant.fields) {
                             // record case
 
-
+                            let mut wit_idx = 0usize;
                             let field_values = variant.fields.iter().enumerate().map(|(field_idx, field)| {
                                 let field_ident = field.ident.as_ref().unwrap();
                                 let field_ty = &field.ty;
@@ -141,7 +166,9 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 let field_from_value = if wit_field.skip || has_from_value_skip_attribute(&field.attrs) {
                                     quote! { Default::default() }
                                 } else {
-                                    apply_from_conversions(field_ty, wit_field, quote! { fields[#field_idx].clone() })
+                                    let current_wit_idx = wit_idx;
+                                    wit_idx += 1;
+                                    apply_from_conversions(field_ty, wit_field, quote! { fields[#current_wit_idx].clone() })
                                 };
                                 quote! {
                                     #field_ident: #field_from_value
@@ -252,6 +279,7 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let mut wit_idx = 0usize;
         let field_values = fields.iter().enumerate().map(|(idx, field)| {
             let wit_field = &wit_fields[idx];
             let field_name = field.ident.as_ref().unwrap();
@@ -260,8 +288,13 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
                     #field_name: Default::default()
                 }
             } else {
-                let field_from_value =
-                    apply_from_conversions(&field.ty, wit_field, quote! { fields[#idx].clone() });
+                let current_wit_idx = wit_idx;
+                wit_idx += 1;
+                let field_from_value = apply_from_conversions(
+                    &field.ty,
+                    wit_field,
+                    quote! { fields[#current_wit_idx].clone() },
+                );
                 quote! {
                     #field_name: #field_from_value
                 }
@@ -326,16 +359,20 @@ fn apply_from_conversions(
 ) -> proc_macro2::TokenStream {
     match (
         &wit_field.convert,
+        &wit_field.try_convert,
         &wit_field.convert_vec,
         &wit_field.convert_option,
     ) {
-        (Some(convert_to), None, None) => {
+        (Some(convert_to), None, None, None) => {
             quote! { Into::<#ty>::into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?) }
         }
-        (None, Some(convert_to), None) => {
+        (None, Some(convert_to), None, None) => {
+            quote! { TryInto::<#ty>::try_into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?)? }
+        }
+        (None, None, Some(convert_to), None) => {
             quote! { Vec::<#convert_to>::from_value(#field_access)?.into_iter().map(|item| Into::into(item)).collect::<Vec<_>>() }
         }
-        (None, None, Some(convert_to)) => {
+        (None, None, None, Some(convert_to)) => {
             quote! { Option::<#convert_to>::from_value(#field_access)?.into_iter().map(Into::into) }
         }
         _ => quote! { <#ty as golem_wasm::FromValue>::from_value(#field_access)? },

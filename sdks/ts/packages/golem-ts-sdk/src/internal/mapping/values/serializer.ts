@@ -24,7 +24,7 @@ import {
 } from './errors';
 import { TaggedTypeMetadata } from '../types/taggedUnion';
 import { Value } from './Value';
-import { BinaryReference, TextReference } from 'golem:agent/common';
+import { BinaryReference, TextReference } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 
 /**

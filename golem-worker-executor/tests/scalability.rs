@@ -72,10 +72,11 @@ async fn spawning_many_workers_that_sleep(
         .await?;
 
     let executor_clone = executor.clone();
+    let component_clone = component.clone();
     let warmup_result = timed(async move {
         executor_clone
             .invoke_and_await_agent(
-                &component.id,
+                &component_clone,
                 &warmup_agent_id,
                 "use_std_time_apis",
                 data_value!(),
@@ -92,22 +93,22 @@ async fn spawning_many_workers_that_sleep(
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, _, _)> = (1..N)
-        .map(|i| (i, component.id, executor.clone()))
+        .map(|i| (i, component.clone(), executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
-        .map(|(n, component_id, executor_clone)| {
+        .map(|(n, component_clone, executor_clone)| {
             {
                 spawn(async move {
                     let agent_id = agent_id(n);
                     let _worker_id = executor_clone
-                        .start_agent(&component_id, agent_id.clone())
+                        .start_agent(&component_clone.id, agent_id.clone())
                         .await?;
 
                     let (result, duration) = timed(async move {
                         executor_clone
                             .invoke_and_await_agent(
-                                &component_id,
+                                &component_clone,
                                 &agent_id,
                                 "use_std_time_apis",
                                 data_value!(),
@@ -191,10 +192,11 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         .await?;
 
     let executor_clone = executor.clone();
+    let component_clone = component.clone();
     let warmup_result = timed(async move {
         executor_clone
             .invoke_and_await_agent(
-                &component.id,
+                &component_clone,
                 &warmup_agent_id,
                 "sleep_for",
                 data_value!(15.0),
@@ -210,22 +212,22 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, _, _)> = (1..N)
-        .map(|i| (i, component.id, executor.clone()))
+        .map(|i| (i, component.clone(), executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
-        .map(|(n, component_id, executor_clone)| {
+        .map(|(n, component_clone, executor_clone)| {
             spawn(
                 async move {
                     let agent_id = agent_id(n);
                     let _agent = executor_clone
-                        .start_agent(&component_id, agent_id.clone())
+                        .start_agent(&component_clone.id, agent_id.clone())
                         .await?;
 
                     let (result, duration) = timed(async move {
                         executor_clone
                             .invoke_and_await_agent(
-                                &component_id,
+                                &component_clone,
                                 &agent_id,
                                 "sleep_for",
                                 data_value!(15.0),
@@ -313,16 +315,16 @@ async fn initial_large_memory_allocation(
     const N: usize = 10;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id = component.id;
+        let component_clone = component.clone();
         let agent_id = agent_id!("large-initial-memory-agent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
-                    .start_agent(&component_id, agent_id.clone())
+                    .start_agent(&component_clone.id, agent_id.clone())
                     .await?;
 
                 let result = executor_clone
-                    .invoke_and_await_agent(&component_id, &agent_id, "run", data_value!())
+                    .invoke_and_await_agent(&component_clone, &agent_id, "run", data_value!())
                     .await?;
 
                 Ok::<_, anyhow::Error>(result)
@@ -368,16 +370,16 @@ async fn dynamic_large_memory_allocation(
     const N: usize = 3;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id = component.id;
+        let component_clone = component.clone();
         let agent_id = agent_id!("large-dynamic-memory-agent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
-                    .start_agent(&component_id, agent_id.clone())
+                    .start_agent(&component_clone.id, agent_id.clone())
                     .await?;
 
                 let result = executor_clone
-                    .invoke_and_await_agent(&component_id, &agent_id, "run", data_value!())
+                    .invoke_and_await_agent(&component_clone, &agent_id, "run", data_value!())
                     .await?;
 
                 Ok::<_, anyhow::Error>(result)

@@ -73,8 +73,8 @@ pub mod service {
 
     use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
-        AccountError, ApiDeploymentError, ApiDomainError, ApiSecurityError, ApplicationError,
-        ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
+        AccountError, AgentError, ApiDeploymentError, ApiDomainError, ApiSecurityError,
+        ApplicationError, ComponentError, EnvironmentError, LoginCompleteOauth2DeviceFlowError,
         LoginCurrentLoginTokenError, LoginLoginOauth2Error, LoginPollOauth2WebflowError,
         LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
         LoginSubmitOauth2WebflowCallbackError, PluginError, TokenError, WorkerError,
@@ -384,6 +384,67 @@ pub mod service {
                     status_code: 500,
                     message: error.error,
                 },
+            }
+        }
+    }
+
+    impl HasServiceName for AgentError {
+        fn service_name() -> &'static str {
+            "Agent"
+        }
+    }
+
+    impl From<AgentError> for ServiceErrorResponse {
+        fn from(value: AgentError) -> Self {
+            match value {
+                AgentError::Error400(errors) => ServiceErrorResponse {
+                    status_code: 400,
+                    message: errors.errors.join("\n"),
+                },
+                AgentError::Error401(error) => ServiceErrorResponse {
+                    status_code: 401,
+                    message: error.error,
+                },
+                AgentError::Error403(error) => ServiceErrorResponse {
+                    status_code: 403,
+                    message: error.error,
+                },
+                AgentError::Error404(error) => ServiceErrorResponse {
+                    status_code: 404,
+                    message: error.error,
+                },
+                AgentError::Error409(error) => ServiceErrorResponse {
+                    status_code: 409,
+                    message: error.error,
+                },
+                AgentError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
+                AgentError::Error500(error) => {
+                    let message = match error.worker_error {
+                        Some(worker_error) => {
+                            let error_logs = if !worker_error.stderr.is_empty() {
+                                format!("\n\nStderr:\n{}", format_stderr(&worker_error.stderr))
+                            } else {
+                                "".to_string()
+                            };
+
+                            format!(
+                                "{}:\n{}{}",
+                                error.error,
+                                format_stack(&worker_error.cause),
+                                error_logs
+                            )
+                        }
+                        _ => error.error,
+                    };
+
+                    ServiceErrorResponse {
+                        status_code: 500,
+                        message,
+                    }
+                }
             }
         }
     }

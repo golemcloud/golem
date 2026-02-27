@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {
+  isConfig,
   isEmptyType,
   isOptionalWithQuestionMark,
   isPrincipal,
@@ -27,7 +28,7 @@ import {
   ElementValue,
   Principal,
   TextReference,
-} from 'golem:agent/common';
+} from 'golem:agent/common@1.5.0';
 import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,
@@ -39,6 +40,9 @@ import * as util from 'node:util';
 
 import * as Value from '../values/Value';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
+import { Config, Secret } from '../../..';
+import { Type } from '@golemcloud/golem-ts-types-core';
+import { getConfigValue } from 'golem:agent/host@1.5.0';
 
 export type ParameterDetail = {
   name: string;
@@ -81,7 +85,7 @@ function _deserializeDataValue(
       const inputElementsLen = inputElements.length;
 
       // An index that's incremented corresponding to the schema
-      // The index is incremented for each type unless it is of type `Principal`
+      // The index is incremented for each type unless it is autoinjected
       let schemaBasedIndex = 0;
 
       return Either.all(
@@ -101,6 +105,10 @@ function _deserializeDataValue(
               return Either.right(principal);
             }
 
+            if (isConfig(parameterType)) {
+              return Either.right(constructConfigType(parameterType));
+            }
+
             throw new Error(
               `Internal error: Not enough elements in data value to deserialize parameter ${parameterDetail.name}`,
             );
@@ -115,9 +123,14 @@ function _deserializeDataValue(
               );
 
             case 'principal':
-              // If principal, we do not increment the data value elemnt index,
+              // If principal, we do not increment the data value element index,
               // because principal is not represented in data value
               return Either.right(principal);
+
+            case 'config':
+              // If config, we do not increment the data value element index,
+              // because config is not represented in data value
+              return Either.right(constructConfigType(parameterType));
 
             case 'unstructured-text':
               const unstructuredTextParamName = parameterDetail.name;
@@ -301,6 +314,61 @@ function _deserializeDataValue(
   }
 }
 
+function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<Record<string, unknown>> {
+  // safe as the parent node is config
+  const properties = (typeInfoInternal.tsType as Type.Type & { kind: 'config' }).properties;
+
+  const root: Record<string, unknown> = {};
+
+  for (const prop of properties) {
+    const { path } = prop;
+    if (!path.length) continue;
+
+    let current = root;
+
+    for (let i = 0; i < path.length - 1; i++) {
+      const key = path[i];
+      if (!(key in current)) current[key] = {};
+      current = current[key] as Record<string, unknown>;
+    }
+
+    const leafKey = path[path.length - 1];
+    let leafValue;
+    if (prop.secret) {
+      leafValue = new Secret(path, typeInfoInternal);
+    } else {
+      leafValue = loadConfigKey(path, typeInfoInternal);
+    }
+
+    current[leafKey] = leafValue;
+  }
+
+  return new Config(root);
+}
+
+export function loadConfigKey(path: string[], typeInfoInternal: TypeInfoInternal): unknown {
+  const witValue = getConfigValue(path);
+
+  const dataValue = createSingleElementTupleDataValue({
+    tag: 'component-model',
+    val: witValue,
+  });
+
+  return Either.getOrThrowWith(
+    deserializeDataValue(
+      dataValue,
+      [
+        {
+          name: 'config-type',
+          type: typeInfoInternal,
+        },
+      ],
+      { tag: 'anonymous' },
+    ),
+    (err) => new Error(`Failed to deserialize config: ${err}`),
+  );
+}
+
 // Used to serialize the return type of a method back to DataValue
 export function serializeToDataValue(
   tsValue: unknown,
@@ -330,6 +398,11 @@ export function serializeToDataValue(
     case 'principal':
       return Either.left(
         `Internal Error: Serialization of 'Principal' data should have never happened`,
+      );
+
+    case 'config':
+      return Either.left(
+        `Internal Error: Serialization of 'Config' data should have never happened`,
       );
 
     case 'unstructured-text':

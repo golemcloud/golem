@@ -72,7 +72,7 @@ async fn fork_interrupted_worker(
     user.log_output(&worker_id).await?;
 
     user.invoke_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "start_polling",
         data_value!("first"),
@@ -136,7 +136,7 @@ async fn fork_running_worker_1(
         .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "add",
         data_value!("G1002", "Mud Golem"),
@@ -158,8 +158,8 @@ async fn fork_running_worker_1(
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))
-        .expect("Expected ExportedFunctionInvoked in oplog");
+        .find(|(_, entry)| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .expect("Expected AgentInvocationStarted in oplog");
 
     let oplog_index_of_function_invoked = OplogIndex::from_u64((idx + 1) as u64);
 
@@ -224,7 +224,7 @@ async fn fork_running_worker_2(
     user.log_output(&source_worker_id).await?;
 
     user.invoke_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "start_polling",
         data_value!("first"),
@@ -303,7 +303,7 @@ async fn fork_idle_worker(
         .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "add",
         data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -311,7 +311,7 @@ async fn fork_idle_worker(
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "add",
         data_value!("G1002", "Mud Golem"),
@@ -335,7 +335,7 @@ async fn fork_idle_worker(
 
     assert!(matches!(
         &log_record.entry,
-        PublicOplogEntry::ExportedFunctionCompleted(_)
+        PublicOplogEntry::AgentInvocationFinished(_)
     ));
 
     user.fork_worker(
@@ -346,7 +346,7 @@ async fn fork_idle_worker(
     .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &target_agent_id,
         "add",
         data_value!("G1002", "Mud Golem"),
@@ -354,11 +354,11 @@ async fn fork_idle_worker(
     .await?;
 
     let original_contents = user
-        .invoke_and_await_agent(&component.id, &source_agent_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &source_agent_id, "list", data_value!())
         .await?;
 
     let forked_contents = user
-        .invoke_and_await_agent(&component.id, &target_agent_id, "list", data_value!())
+        .invoke_and_await_agent(&component, &target_agent_id, "list", data_value!())
         .await?;
 
     let original_value = original_contents
@@ -438,7 +438,7 @@ async fn fork_worker_when_target_already_exists(
         .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "add",
         data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -485,7 +485,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
         .await?;
 
     user.invoke_and_await_agent(
-        &component.id,
+        &component,
         &source_agent_id,
         "add",
         data_value!("G1001", "Golem Cloud Subscription 1y"),
@@ -575,7 +575,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
 
     let source_result = user
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &source_agent_id,
             "get_environment",
             data_value!(),
@@ -618,9 +618,9 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     assert!(
         matches!(
             &source_last.entry,
-            PublicOplogEntry::ExportedFunctionCompleted(_)
+            PublicOplogEntry::AgentInvocationFinished(_)
         ),
-        "Expected ExportedFunctionCompleted in source oplog"
+        "Expected AgentInvocationFinished in source oplog"
     );
 
     assert_eq!(
@@ -687,13 +687,13 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
         async move {
             let route = Router::new()
                 .route(
-                    "/fork-test/step1/:name/:input",
+                    "/fork-test/step1/{name}/{input}",
                     get(move |args: Path<(String, String)>| async move {
                         Json(format!("{}-{}", args.0 .0, args.0 .1))
                     }),
                 )
                 .route(
-                    "/fork-test/step2/:name/:fork/:phantom_id",
+                    "/fork-test/step2/{name}/{fork}/{phantom_id}",
                     get(move |args: Path<(String, String, String)>| {
                         let fork_phantom_id_tx = fork_phantom_id_tx.clone();
                         async move {
@@ -734,7 +734,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     let idempotency_key = IdempotencyKey::fresh();
     let source_result = user
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &source_agent_id,
             &idempotency_key,
             "fork_test",
@@ -754,7 +754,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     };
     let target_result = user
         .invoke_and_await_agent_with_key(
-            &component.id,
+            &component,
             &target_agent_id,
             &idempotency_key,
             "fork_test",
@@ -806,7 +806,7 @@ async fn fork_and_sync_with_promise(
 
     let result1 = user
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &promise_agent_id,
             "forkAndSyncWithPromise",
             data_value!(),
@@ -820,7 +820,7 @@ async fn fork_and_sync_with_promise(
 
     let result2 = user
         .invoke_and_await_agent(
-            &component.id,
+            &component,
             &promise_agent_id,
             "forkAndSyncWithPromise",
             data_value!(),

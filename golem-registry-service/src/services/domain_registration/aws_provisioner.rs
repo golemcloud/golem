@@ -15,21 +15,19 @@
 use super::aws_config::AwsConfig;
 use super::aws_load_balancer::AwsLoadBalancer;
 use super::provisioner::DomainProvisioner;
-use anyhow::anyhow;
 use async_trait::async_trait;
+use aws_sdk_route53::types::{
+    AliasTarget, Change, ChangeAction, ChangeBatch, ResourceRecordSet, RrType,
+};
 use golem_common::SafeDisplay;
 use golem_common::model::domain_registration::Domain;
-use rusoto_route53::{
-    AliasTarget, Change, ChangeBatch, ChangeResourceRecordSetsRequest, ListHostedZonesRequest,
-    ResourceRecordSet, Route53, Route53Client,
-};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
 pub struct AwsDomainProvisioner {
     domain_suffix: String,
     hosted_zone: AwsRoute53HostedZone,
-    client: Route53Client,
+    client: aws_sdk_route53::Client,
     load_balancer: AwsLoadBalancer,
 }
 
@@ -39,7 +37,7 @@ impl AwsDomainProvisioner {
         workspace: &str,
         config: &AwsDomainProvisionerConfig,
     ) -> anyhow::Result<Self> {
-        let aws_config = AwsConfig::from_k8s_env();
+        let aws_config = AwsConfig::from_k8s_env().await;
         Self::with_aws_config(environment, workspace, aws_config, config).await
     }
 
@@ -50,7 +48,7 @@ impl AwsDomainProvisioner {
         config: &AwsDomainProvisionerConfig,
     ) -> anyhow::Result<Self> {
         let load_balancer = AwsLoadBalancer::new(environment, workspace, &aws_config).await?;
-        let client: Route53Client = aws_config.clone().try_into()?;
+        let client = aws_config.route53_client();
         let hosted_zone =
             AwsRoute53HostedZone::with_client(&client, &config.managed_domain).await?;
 
@@ -70,57 +68,65 @@ impl DomainProvisioner for AwsDomainProvisioner {
     }
 
     async fn provision_domain(&self, domain: &Domain) -> anyhow::Result<()> {
-        let change_batch = ChangeBatch {
-            changes: vec![Change {
-                action: "UPSERT".to_string(),
-                resource_record_set: ResourceRecordSet {
-                    name: domain.0.clone(),
-                    type_: "A".to_string(),
-                    alias_target: Some(AliasTarget {
-                        dns_name: self.load_balancer.dns_name.clone(),
-                        evaluate_target_health: false,
-                        hosted_zone_id: self.load_balancer.hosted_zone.clone(),
-                    }),
-                    ..Default::default()
-                },
-            }],
-            ..Default::default()
-        };
+        let change_batch = ChangeBatch::builder()
+            .changes(
+                Change::builder()
+                    .action(ChangeAction::Upsert)
+                    .resource_record_set(
+                        ResourceRecordSet::builder()
+                            .name(&domain.0)
+                            .r#type(RrType::A)
+                            .alias_target(
+                                AliasTarget::builder()
+                                    .dns_name(&self.load_balancer.dns_name)
+                                    .evaluate_target_health(false)
+                                    .hosted_zone_id(&self.load_balancer.hosted_zone)
+                                    .build()?,
+                            )
+                            .build()?,
+                    )
+                    .build()?,
+            )
+            .build()?;
 
-        let request = ChangeResourceRecordSetsRequest {
-            hosted_zone_id: self.hosted_zone.id.clone(),
-            change_batch,
-        };
-
-        self.client.change_resource_record_sets(request).await?;
+        self.client
+            .change_resource_record_sets()
+            .hosted_zone_id(&self.hosted_zone.id)
+            .change_batch(change_batch)
+            .send()
+            .await?;
 
         Ok(())
     }
 
     async fn remove_domain(&self, domain: &Domain) -> anyhow::Result<()> {
-        let change_batch = ChangeBatch {
-            changes: vec![Change {
-                action: "DELETE".to_string(),
-                resource_record_set: ResourceRecordSet {
-                    name: domain.0.clone(),
-                    type_: "A".to_string(),
-                    alias_target: Some(AliasTarget {
-                        dns_name: self.load_balancer.dns_name.clone(),
-                        evaluate_target_health: false,
-                        hosted_zone_id: self.load_balancer.hosted_zone.clone(),
-                    }),
-                    ..Default::default()
-                },
-            }],
-            ..Default::default()
-        };
+        let change_batch = ChangeBatch::builder()
+            .changes(
+                Change::builder()
+                    .action(ChangeAction::Delete)
+                    .resource_record_set(
+                        ResourceRecordSet::builder()
+                            .name(&domain.0)
+                            .r#type(RrType::A)
+                            .alias_target(
+                                AliasTarget::builder()
+                                    .dns_name(&self.load_balancer.dns_name)
+                                    .evaluate_target_health(false)
+                                    .hosted_zone_id(&self.load_balancer.hosted_zone)
+                                    .build()?,
+                            )
+                            .build()?,
+                    )
+                    .build()?,
+            )
+            .build()?;
 
-        let request = ChangeResourceRecordSetsRequest {
-            hosted_zone_id: self.hosted_zone.id.clone(),
-            change_batch,
-        };
-
-        self.client.change_resource_record_sets(request).await?;
+        self.client
+            .change_resource_record_sets()
+            .hosted_zone_id(&self.hosted_zone.id)
+            .change_batch(change_batch)
+            .send()
+            .await?;
 
         Ok(())
     }
@@ -134,30 +140,23 @@ pub struct AwsRoute53HostedZone {
 
 impl AwsRoute53HostedZone {
     pub async fn with_client(
-        client: &Route53Client,
+        client: &aws_sdk_route53::Client,
         domain: &str,
     ) -> anyhow::Result<AwsRoute53HostedZone> {
-        let zones = client
-            .list_hosted_zones(ListHostedZonesRequest::default())
-            .await?;
+        let zones = client.list_hosted_zones().send().await?;
 
-        let target_zone_name = format!("{domain}."); // appends a dot
+        let target_zone_name = format!("{domain}.");
 
         let zone = zones
-            .hosted_zones
+            .hosted_zones()
             .iter()
-            .find(|x| x.name.clone() == target_zone_name)
+            .find(|x| x.name() == target_zone_name)
             .map(move |x| AwsRoute53HostedZone {
-                id: x
-                    .id
-                    .clone()
-                    .strip_prefix("/hostedzone/")
-                    .unwrap()
-                    .to_string(),
+                id: x.id().strip_prefix("/hostedzone/").unwrap().to_string(),
                 name: target_zone_name,
             });
 
-        zone.ok_or(anyhow!("hosted zone not found"))
+        zone.ok_or(anyhow::anyhow!("hosted zone not found"))
     }
 }
 
@@ -198,7 +197,7 @@ mod tests {
         let provisioner = AwsDomainProvisioner::with_aws_config(
             "dev",
             "release",
-            AwsConfig::new("TOKEN", "ARN"),
+            AwsConfig::new().await,
             &AwsDomainProvisionerConfig {
                 managed_domain: "dev-api.golem.cloud".to_string(),
             },

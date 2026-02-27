@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::base_model::agent::{AgentId, DataValue};
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
@@ -81,7 +81,7 @@ impl InvokeResult {
 
 pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    component_id: &ComponentId,
+    component: &ComponentDto,
     agent_id: &AgentId,
     method_name: &str,
     params: DataValue,
@@ -100,7 +100,7 @@ pub async fn invoke_and_await_agent(
         let result = tokio::time::timeout(
             TIMEOUT,
             user.invoke_and_await_agent_with_key(
-                component_id,
+                component,
                 agent_id,
                 &key,
                 method_name,

@@ -181,6 +181,18 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
     case 'boolean':
       return { kind: 'boolean', name: type.name, optional: type.optional };
 
+    case 'config':
+      return {
+        kind: 'config',
+        name: type.name,
+        properties: type.properties.map(({ path, secret, type }) => ({
+          path,
+          secret,
+          type: buildJSONFromType(type),
+        })),
+        optional: type.optional,
+      };
+
     case 'unresolved-type':
       return {
         kind: 'unresolved-type',

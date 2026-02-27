@@ -1,4 +1,4 @@
-package golem:rdbms@0.0.2;
+package golem:rdbms@1.5.0;
 
 world imports {
      import postgres;

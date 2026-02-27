@@ -22,18 +22,13 @@ import "golem/worker/worker_filter.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/filesystem.proto";
 import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
 import "golem/auth/auth_ctx.proto";
-import "wasm/rpc/val.proto";
-import "wasm/rpc/value_and_type.proto";
+import "golem/component/agent.proto";
+import "google/protobuf/timestamp.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
-
-  rpc InvokeAndAwaitWorker(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponse);
-  rpc InvokeAndAwaitWorkerTyped(InvokeAndAwaitWorkerRequest) returns (InvokeAndAwaitWorkerResponseTyped);
-  rpc InvokeWorker(InvokeWorkerRequest) returns (InvokeWorkerResponse);
-  rpc InvokeAndAwaitWorkerJson(InvokeAndAwaitWorkerJsonRequest) returns (InvokeAndAwaitWorkerResponseTyped);
-  rpc InvokeWorkerJson(InvokeJsonWorkerRequest) returns (InvokeWorkerResponse);
 
   rpc ConnectWorker(ConnectWorkerRequest) returns (stream golem.worker.LogEvent);
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
@@ -57,6 +52,8 @@ service WorkerExecutor {
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
   rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
+
+  rpc InvokeAgent(InvokeAgentRequest) returns (InvokeAgentResponse);
 }
 
 message ForkWorkerRequest {
@@ -66,16 +63,10 @@ message ForkWorkerRequest {
   uint64 oplog_index_cutoff = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  optional golem.component.Principal principal = 7;
 }
 
 message ForkWorkerResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    golem.worker.v1.WorkerExecutionError failure = 2;
-  }
-}
-
-message InvokeWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
@@ -86,6 +77,7 @@ message DeleteWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  optional golem.component.Principal principal = 4;
 }
 
 message DeleteWorkerResponse {
@@ -130,6 +122,8 @@ message CreateWorkerRequest {
   golem.common.EnvironmentId environment_id = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  optional golem.component.Principal principal = 8;
+  optional golem.worker.InvocationContext invocation_context = 9;
 }
 
 message CreateWorkerResponse {
@@ -140,82 +134,6 @@ message CreateWorkerResponse {
 }
 
 
-message InvokeAndAwaitWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string name = 2;
-  repeated wasm.rpc.Val input = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
-  // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 5;
-  // Component's owner project
-  golem.common.EnvironmentId environment_id = 6;
-  optional golem.worker.InvocationContext context = 7;
-  golem.auth.AuthCtx auth_ctx = 8;
-}
-
-
-message InvokeAndAwaitWorkerResponse {
-  oneof result {
-    InvokeAndAwaitWorkerSuccess success = 1;
-    golem.worker.v1.WorkerExecutionError failure = 2;
-  }
-}
-
-message InvokeAndAwaitWorkerResponseTyped {
-  oneof result {
-    InvokeAndAwaitWorkerSuccessTyped success = 1;
-    golem.worker.v1.WorkerExecutionError failure = 2;
-  }
-}
-
-message InvokeAndAwaitWorkerSuccess {
-  optional wasm.rpc.Val output = 1;
-}
-
-message InvokeAndAwaitWorkerSuccessTyped {
-  optional wasm.rpc.ValueAndType output = 1;
-}
-
-
-message InvokeWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string name = 2;
-  repeated wasm.rpc.Val input = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
-  // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 5;
-  // Component's owner project
-  golem.common.EnvironmentId environment_id = 6;
-  optional golem.worker.InvocationContext context = 7;
-  golem.auth.AuthCtx auth_ctx = 8;
-}
-
-message InvokeJsonWorkerRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string name = 2;
-  repeated string input = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
-  // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 5;
-  // Component's owner project
-  golem.common.EnvironmentId environment_id = 6;
-  optional golem.worker.InvocationContext context = 7;
-  golem.auth.AuthCtx auth_ctx = 8;
-}
-
-message InvokeAndAwaitWorkerJsonRequest {
-  golem.worker.WorkerId worker_id = 1;
-  string name = 2;
-  repeated string input = 3;
-  golem.worker.IdempotencyKey idempotency_key = 4;
-  // Account the component belongs to
-  golem.common.AccountId component_owner_account_id = 6;
-  // Component's owner project
-  golem.common.EnvironmentId environment_id = 7;
-  optional golem.worker.InvocationContext context = 8;
-  golem.auth.AuthCtx auth_ctx = 9;
-}
-
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   // Account the request belongs to
@@ -223,6 +141,7 @@ message ConnectWorkerRequest {
   // Component's owner project
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message InterruptWorkerRequest {
@@ -230,6 +149,7 @@ message InterruptWorkerRequest {
   bool recover_immediately = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message RevokeShardsRequest {
@@ -272,6 +192,7 @@ message ResumeWorkerRequest {
   optional bool force = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message ResumeWorkerResponse {
@@ -328,6 +249,7 @@ message UpdateWorkerRequest {
   golem.common.EnvironmentId environment_id = 4;
   golem.auth.AuthCtx auth_ctx = 5;
   bool disable_wakeup = 6;
+  optional golem.component.Principal principal = 7;
 }
 
 message UpdateWorkerResponse {
@@ -390,6 +312,7 @@ message GetFileSystemNodeRequest {
   golem.common.EnvironmentId environment_id = 3;
   string path = 4;
   golem.auth.AuthCtx auth_ctx = 5;
+  optional golem.component.Principal principal = 6;
 }
 
 message GetFileSystemNodeResponse {
@@ -417,6 +340,7 @@ message GetFileContentsRequest {
   golem.common.EnvironmentId environment_id = 3;
   string file_path = 4;
   golem.auth.AuthCtx auth_ctx = 5;
+  optional golem.component.Principal principal = 6;
 }
 
 message GetFileContentsResponse {
@@ -441,6 +365,7 @@ message ActivatePluginRequest {
   int32 plugin_priority = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message ActivatePluginResponse {
@@ -455,6 +380,7 @@ message DeactivatePluginRequest {
   int32 plugin_priority = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message DeactivatePluginResponse {
@@ -469,6 +395,7 @@ message RevertWorkerRequest {
   golem.common.RevertWorkerTarget target = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message RevertWorkerResponse {
@@ -483,6 +410,7 @@ message CancelInvocationRequest {
   golem.worker.IdempotencyKey idempotency_key = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
+  optional golem.component.Principal principal = 5;
 }
 
 message CancelInvocationResponse {
@@ -490,4 +418,36 @@ message CancelInvocationResponse {
     bool success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
+}
+
+enum AgentInvocationMode {
+  AGENT_INVOCATION_MODE_AWAIT = 0;
+  AGENT_INVOCATION_MODE_SCHEDULE = 1;
+}
+
+message InvokeAgentRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string method_name = 5;
+  golem.component.UntypedDataValue method_parameters = 6;
+  AgentInvocationMode mode = 7;
+  optional google.protobuf.Timestamp schedule_at = 8;
+  optional golem.worker.IdempotencyKey idempotency_key = 9;
+  golem.common.AccountId component_owner_account_id = 10;
+  golem.common.EnvironmentId environment_id = 11;
+  golem.auth.AuthCtx auth_ctx = 12;
+  optional golem.worker.InvocationContext context = 13;
+  golem.component.Principal principal = 14;
+}
+
+message InvokeAgentResponse {
+  oneof result {
+    InvokeAgentSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message InvokeAgentSuccess {
+  optional golem.component.UntypedDataValue result = 1;
+  optional uint64 fuel_consumed = 2;
+  optional uint64 component_revision = 3;
 }

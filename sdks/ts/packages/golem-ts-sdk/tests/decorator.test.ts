@@ -23,13 +23,13 @@ import {
   SnapshottingPeriodicAgentClassName,
   SnapshottingEveryNAgentClassName,
 } from './testUtils';
-import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common';
+import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
 import { FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { toWitValue, Value } from '../src/internal/mapping/values/Value';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import { Uuid } from 'golem:agent/host';
+import { Uuid } from 'golem:agent/host@1.5.0';
 import { AgentClassName } from '../src';
 
 // Test setup ensures loading agents prior to every test

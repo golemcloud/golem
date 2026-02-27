@@ -13,9 +13,7 @@
 // limitations under the License.
 
 pub mod extraction;
-pub mod moonbit;
 pub mod view;
-pub mod wit;
 
 #[cfg(test)]
 pub mod test;

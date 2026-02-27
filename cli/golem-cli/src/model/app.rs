@@ -1044,21 +1044,7 @@ impl<'a> Component<'a> {
     }
 
     pub fn agent_type_extraction_source_wasm(&self) -> PathBuf {
-        let custom_source = self.build_commands().iter().find_map(|step| match step {
-            app_raw::BuildCommand::AgentWrapper(app_raw::GenerateAgentWrapper {
-                based_on_compiled_wasm,
-                ..
-            }) => Some(based_on_compiled_wasm),
-            app_raw::BuildCommand::ComposeAgentWrapper(app_raw::ComposeAgentWrapper {
-                with_agent,
-                ..
-            }) => Some(with_agent),
-            _ => None,
-        });
-
-        custom_source
-            .map(|path| self.source_dir().join(path))
-            .unwrap_or_else(|| self.final_wasm())
+        self.final_wasm()
     }
 
     /// File for storing extracted agent types

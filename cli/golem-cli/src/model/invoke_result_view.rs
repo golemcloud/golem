@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use crate::log::log_error;
-use crate::model::component::function_result_types;
-use crate::model::wave::type_wave_compatible;
 use anyhow::{anyhow, bail};
-use golem_client::model::ComponentDto;
-use golem_client::model::InvokeResult;
+use golem_client::model::AgentInvocationResult;
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementSchema};
 use golem_common::model::IdempotencyKey;
 use golem_wasm::{print_value_and_type, ValueAndType};
 use serde::{Deserialize, Serialize};
@@ -32,13 +31,13 @@ pub struct InvokeResultView {
 }
 
 impl InvokeResultView {
-    pub fn new_invoke(
+    pub fn new_agent_invoke(
         idempotency_key: IdempotencyKey,
-        result: InvokeResult,
-        component: &ComponentDto,
-        function: &str,
+        result: AgentInvocationResult,
+        agent_type: &AgentType,
+        method_name: &str,
     ) -> Self {
-        let wave = match Self::try_parse_wave(&result.result, component, function) {
+        let wave = match Self::try_parse_agent_wave(&result, agent_type, method_name) {
             Ok(wave) => Some(wave),
             Err(err) => {
                 log_error(format!("{err}"));
@@ -46,9 +45,50 @@ impl InvokeResultView {
             }
         };
 
+        let result_json = result.result.and_then(|untyped| {
+            let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
+            let data_value =
+                match DataValue::try_from_untyped_json(untyped, method.output_schema.clone()) {
+                    Ok(dv) => dv,
+                    Err(err) => {
+                        log_error(format!("Failed to parse agent result: {err}"));
+                        return None;
+                    }
+                };
+            let value = match data_value.into_return_value() {
+                Some(v) => v,
+                None => {
+                    log_error("Agent result is not a single return value");
+                    return None;
+                }
+            };
+            let output_schemas = match &method.output_schema {
+                DataSchema::Tuple(schemas) => &schemas.elements,
+                _ => {
+                    log_error("Non-tuple output schema not supported for result display");
+                    return None;
+                }
+            };
+            let first_schema = match output_schemas.first() {
+                Some(s) => s,
+                None => {
+                    log_error("Empty output schema");
+                    return None;
+                }
+            };
+            let analysed_type = match &first_schema.schema {
+                ElementSchema::ComponentModel(cm) => cm.element_type.to_wit_naming(),
+                _ => {
+                    log_error("Non-ComponentModel output schema not supported for result display");
+                    return None;
+                }
+            };
+            Some(ValueAndType::new(value, analysed_type))
+        });
+
         Self {
             idempotency_key: idempotency_key.value,
-            result_json: result.result,
+            result_json,
             result_wave: wave,
         }
     }
@@ -61,28 +101,45 @@ impl InvokeResultView {
         }
     }
 
-    fn try_parse_wave(
-        result: &Option<ValueAndType>,
-        component: &ComponentDto,
-        function: &str,
+    fn try_parse_agent_wave(
+        result: &AgentInvocationResult,
+        agent_type: &AgentType,
+        method_name: &str,
     ) -> anyhow::Result<Vec<String>> {
-        let results: Vec<_> = result.iter().cloned().collect();
-        let result_types = function_result_types(component, function)?;
+        let Some(ref untyped) = result.result else {
+            return Ok(vec![]);
+        };
 
-        if results.len() != result_types.len() {
-            bail!("Unexpected number of results.".to_string());
-        }
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| anyhow!("Method '{method_name}' not found in agent type"))?;
 
-        if !result_types.iter().all(|typ| type_wave_compatible(typ)) {
-            bail!("Result type is not supported by wave".to_string(),);
-        }
+        let data_value =
+            DataValue::try_from_untyped_json(untyped.clone(), method.output_schema.clone())
+                .map_err(|e| anyhow!("Failed to parse agent result: {e}"))?;
 
-        let wave = results
-            .into_iter()
-            .map(Self::try_wave_format)
-            .collect::<Result<Vec<_>, _>>()?;
+        let Some(value) = data_value.into_return_value() else {
+            return Ok(vec![]);
+        };
 
-        Ok(wave)
+        let output_schemas = match &method.output_schema {
+            DataSchema::Tuple(schemas) => &schemas.elements,
+            _ => bail!("Non-tuple output schema not supported for WAVE formatting"),
+        };
+
+        let first_schema = output_schemas
+            .first()
+            .ok_or_else(|| anyhow!("Empty output schema"))?;
+
+        let analysed_type = match &first_schema.schema {
+            ElementSchema::ComponentModel(cm) => cm.element_type.to_wit_naming(),
+            _ => bail!("Non-ComponentModel output schema not supported for WAVE formatting"),
+        };
+
+        let vt = ValueAndType::new(value, analysed_type);
+        Ok(vec![Self::try_wave_format(vt)?])
     }
 
     fn try_wave_format(parsed: ValueAndType) -> anyhow::Result<String> {

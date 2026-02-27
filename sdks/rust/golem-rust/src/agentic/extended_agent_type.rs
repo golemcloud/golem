@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::ConfigEntry;
 use crate::agentic::AutoInjectedParamType;
 use crate::golem_agentic::golem::agent::common::{
     AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, DataSchema,
@@ -33,6 +34,7 @@ pub struct ExtendedAgentType {
     pub mode: AgentMode,
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
+    pub config: Vec<ConfigEntry>,
 }
 
 impl ExtendedAgentType {
@@ -60,8 +62,8 @@ impl ExtendedAgentType {
             dependencies: self.dependencies.clone(),
             mode: self.mode,
             http_mount: self.http_mount.clone(),
-            snapshotting: self.snapshotting.clone(),
-            config: Vec::new(),
+            snapshotting: self.snapshotting,
+            config: self.config.iter().map(|c| c.clone().into()).collect(),
         }
     }
 }
