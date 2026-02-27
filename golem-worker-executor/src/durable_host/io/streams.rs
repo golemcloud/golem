@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
@@ -98,8 +97,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             .await?;
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
-                let result =
-                    HostInputStream::blocking_read(self.table(), self_, len).await;
+                let result = HostInputStream::blocking_read(self.table(), self_, len).await;
 
                 durability
                     .try_trigger_retry(self, &ignore_closed_error(&result))
@@ -181,8 +179,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
-                let result =
-                    HostInputStream::blocking_skip(self.table(), self_, len).await;
+                let result = HostInputStream::blocking_skip(self.table(), self_, len).await;
                 durability
                     .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
@@ -304,8 +301,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             "io::streams::output_stream",
             "blocking_write_zeroes_and_flush",
         );
-        HostOutputStream::blocking_write_zeroes_and_flush(self.table(), self_, len)
-            .await
+        HostOutputStream::blocking_write_zeroes_and_flush(self.table(), self_, len).await
     }
 
     async fn splice(

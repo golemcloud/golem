@@ -831,7 +831,10 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            self.durable_ctx.increase_memory(delta).await.map_err(wasmtime::Error::from_anyhow)?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
             Ok(true)
@@ -1180,15 +1183,30 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(&mut linker, get_durable_ctx)?;
-        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(&mut linker, get_durable_ctx)?;
-        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
             &mut linker,
             get_durable_ctx,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<TestWorkerCtx>>,
+        >(&mut linker, get_durable_ctx)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<TestWorkerCtx>>,
+        >(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
 }

@@ -309,7 +309,10 @@ impl ResourceLimiterAsync for DebugContext {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            self.durable_ctx.increase_memory(delta).await.map_err(wasmtime::Error::from_anyhow)?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
             Ok(true)

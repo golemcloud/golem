@@ -139,7 +139,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!("Registered worker executor, waiting for shard assignment...");
 
-        Ctx::on_shard_assignment_changed(&worker_executor).await
+        Ctx::on_shard_assignment_changed(&worker_executor)
+            .await
             .map_err(wasmtime::Error::from_anyhow)?;
 
         Ok(worker_executor)

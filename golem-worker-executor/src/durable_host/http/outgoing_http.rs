@@ -16,7 +16,6 @@ use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
-use anyhow::anyhow;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
@@ -26,8 +25,8 @@ use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
 use wasmtime::component::Resource;
-use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::bindings::http::outgoing_handler::Host;
+use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
 
@@ -86,7 +85,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             for (key, value) in trace_context_headers.to_raw_headers_map() {
                 let header_name = HeaderName::from_str(&key).unwrap();
                 host_request.headers.remove_all(&header_name);
-                host_request.headers.append(&header_name, HeaderValue::from_str(&value).unwrap())
+                host_request
+                    .headers
+                    .append(&header_name, HeaderValue::from_str(&value).unwrap())
                     .map_err(HttpError::trap)?;
                 headers.insert(key, value);
             }
@@ -103,10 +104,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let host_request = self.table().get_mut(&request)?;
             if !host_request.headers.as_ref().contains_key(&header_name) {
-                host_request.headers.append(
-                    &header_name,
-                    HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
-                ).map_err(HttpError::trap)?;
+                host_request
+                    .headers
+                    .append(
+                        &header_name,
+                        HeaderValue::from_str(&idempotency_key.to_string()).unwrap(),
+                    )
+                    .map_err(HttpError::trap)?;
             }
         }
 

@@ -53,7 +53,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        result.result.map_err(|err| wasmtime::Error::msg(err))
+        result.result.map_err(wasmtime::Error::msg)
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<()> {
@@ -95,7 +95,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             if all_blocked {
                 debug!("Suspending worker until a promise gets completed");
-                return Err(wasmtime::Error::from_anyhow(InterruptKind::Suspend(Timestamp::now_utc()).into()));
+                return Err(wasmtime::Error::from_anyhow(
+                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
+                ));
             }
         };
 
@@ -144,10 +146,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         match result {
-            Ok(result) => result.result.map_err(|err| wasmtime::Error::msg(err)),
+            Ok(result) => result.result.map_err(wasmtime::Error::msg),
             Err(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
-                Err(wasmtime::Error::from_anyhow(InterruptKind::Suspend(Timestamp::now_utc()).into()))
+                Err(wasmtime::Error::from_anyhow(
+                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
+                ))
             }
         }
     }

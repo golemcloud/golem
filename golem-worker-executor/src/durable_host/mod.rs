@@ -126,7 +126,10 @@ use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::p2::FsResult;
-use wasmtime_wasi::{I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{
+    I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
+    WasiView,
+};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -312,13 +315,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             Ok(())
         }
-    }
-
-    fn ctx(&mut self) -> &mut WasiCtx {
-        Arc::get_mut(&mut self.wasi)
-            .expect("WasiCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("WasiCtx mutex must never fail")
     }
 
     fn io_ctx(&mut self) -> &mut IoCtx {

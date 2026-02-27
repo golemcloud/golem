@@ -14,6 +14,7 @@
 
 use self::config::GrpcApiConfig;
 use crate::config::RegistryServiceConfig;
+use anyhow::anyhow;
 use config::ServerConfig;
 use futures::TryFutureExt;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
@@ -35,7 +36,6 @@ use tonic::codec::CompressionEncoding;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{info, Instrument};
-use anyhow::anyhow;
 use wasmtime::WasmBacktraceDetails;
 
 pub mod config;
@@ -173,7 +173,6 @@ fn create_wasmtime_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::default();
 
     config.wasm_multi_value(true);
-    config.async_support(true);
     config.wasm_component_model(true);
     config.epoch_interruption(true);
     config.consume_fuel(true);

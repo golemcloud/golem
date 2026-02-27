@@ -45,7 +45,7 @@ use crate::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
@@ -251,7 +251,9 @@ impl ResourceLimiterAsync for Context {
 
         if delta > 0 {
             // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
-            self.durable_ctx.increase_memory(delta).await
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
                 .map_err(wasmtime::Error::from_anyhow)?;
             record_allocated_memory(desired);
         }

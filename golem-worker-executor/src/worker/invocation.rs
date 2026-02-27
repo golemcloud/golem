@@ -41,7 +41,7 @@ pub enum InvocationMode {
 use golem_wasm::validate_value_matches_type;
 use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm::{FromValue, IntoValue, Value};
-use tracing::{debug, error};
+use tracing::debug;
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContext, AsContextMut, StoreContextMut};
 
@@ -356,7 +356,9 @@ async fn invoke<Ctx: WorkerCtx>(
 
     for resource in resources_to_drop {
         debug!("Dropping passed owned resources {:?}", resource);
-        resource.resource_drop_async(&mut store).await
+        resource
+            .resource_drop_async(&mut store)
+            .await
             .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
     }
 
@@ -459,14 +461,6 @@ async fn call_exported_function<Ctx: WorkerCtx>(
         .collect();
 
     let result = function.call_async(&mut store, &params, &mut results).await;
-    let result = if result.is_ok() {
-        function.post_return_async(&mut store).await.map_err(|e| {
-            error!("Error in post_return_async for {raw_function_name}: {}", e);
-            e
-        })
-    } else {
-        result
-    };
 
     let consumed_fuel_for_call =
         finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name).await?;

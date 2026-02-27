@@ -235,7 +235,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let mut config = Config::default();
 
         config.wasm_multi_value(true);
-        config.async_support(true);
         config.wasm_component_model(true);
         config.epoch_interruption(true);
         config.consume_fuel(true);

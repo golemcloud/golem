@@ -62,7 +62,11 @@ impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
         HostFields::from_list(&mut self.as_wasi_http_view(), entries)
     }
 
-    fn get(&mut self, self_: Resource<Fields>, name: FieldKey) -> wasmtime::Result<Vec<FieldValue>> {
+    fn get(
+        &mut self,
+        self_: Resource<Fields>,
+        name: FieldKey,
+    ) -> wasmtime::Result<Vec<FieldValue>> {
         self.observe_function_call("http::types::fields", "get");
         HostFields::get(&mut self.as_wasi_http_view(), self_, name)
     }
@@ -101,7 +105,10 @@ impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
         HostFields::append(&mut self.as_wasi_http_view(), self_, name, value)
     }
 
-    fn entries(&mut self, self_: Resource<Fields>) -> wasmtime::Result<Vec<(FieldKey, FieldValue)>> {
+    fn entries(
+        &mut self,
+        self_: Resource<Fields>,
+    ) -> wasmtime::Result<Vec<(FieldKey, FieldValue)>> {
         self.observe_function_call("http::types::fields", "entries");
         HostFields::entries(&mut self.as_wasi_http_view(), self_)
     }
@@ -346,7 +353,10 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
         HostIncomingResponse::status(&mut self.as_wasi_http_view(), self_)
     }
 
-    fn headers(&mut self, self_: Resource<IncomingResponse>) -> wasmtime::Result<Resource<Headers>> {
+    fn headers(
+        &mut self,
+        self_: Resource<IncomingResponse>,
+    ) -> wasmtime::Result<Resource<Headers>> {
         self.observe_function_call("http::types::incoming_response", "headers");
         HostIncomingResponse::headers(&mut self.as_wasi_http_view(), self_)
     }
@@ -440,7 +450,10 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
-    fn subscribe(&mut self, self_: Resource<FutureTrailers>) -> wasmtime::Result<Resource<Pollable>> {
+    fn subscribe(
+        &mut self,
+        self_: Resource<FutureTrailers>,
+    ) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("http::types::future_trailers", "subscribe");
         HostFutureTrailers::subscribe(&mut self.as_wasi_http_view(), self_)
     }
@@ -483,7 +496,9 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(None) => (Ok(None), Ok(())),
                     Err(err) => (Err(err.to_string()), Err(err.to_string())),
                 };
-                durability.try_trigger_retry(self, &for_retry).await
+                durability
+                    .try_trigger_retry(self, &for_retry)
+                    .await
                     .map_err(wasmtime::Error::from_anyhow)?;
                 let _ = durability
                     .persist(
@@ -497,8 +512,11 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     .map_err(wasmtime::Error::from)?;
                 result
             } else {
-                let serialized: HostResponseHttpFutureTrailersGet = durability.replay(self).await
-                    .map_err(wasmtime::Error::from)?;
+                let serialized: HostResponseHttpFutureTrailersGet =
+                    durability
+                        .replay(self)
+                        .await
+                        .map_err(wasmtime::Error::from)?;
                 match serialized.result {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
@@ -556,7 +574,10 @@ impl<Ctx: WorkerCtx> HostOutgoingResponse for DurableWorkerCtx<Ctx> {
         HostOutgoingResponse::set_status_code(&mut self.as_wasi_http_view(), self_, status_code)
     }
 
-    fn headers(&mut self, self_: Resource<OutgoingResponse>) -> wasmtime::Result<Resource<Headers>> {
+    fn headers(
+        &mut self,
+        self_: Resource<OutgoingResponse>,
+    ) -> wasmtime::Result<Resource<Headers>> {
         self.observe_function_call("http::types::outgoing_response", "headers");
         HostOutgoingResponse::headers(&mut self.as_wasi_http_view(), self_)
     }
@@ -666,7 +687,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
             if let Err(err) = for_retry {
                 self.state.current_retry_point = begin_index;
-                self.try_trigger_retry(anyhow!(err)).await
+                self.try_trigger_retry(anyhow!(err))
+                    .await
                     .map_err(wasmtime::Error::from_anyhow)?;
             }
 
@@ -733,7 +755,8 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 SerializableHttpResponse::Pending => Ok(None),
                 SerializableHttpResponse::HeadersReceived(serializable_response_headers) => {
                     let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
-                        serializable_response_headers.try_into()
+                        serializable_response_headers
+                            .try_into()
                             .map_err(wasmtime::Error::from_anyhow)?;
 
                     let rep = self.table().push(incoming_response)?;

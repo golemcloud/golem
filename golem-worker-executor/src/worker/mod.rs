@@ -2161,7 +2161,8 @@ impl RunningWorker {
                 None => Ok(UpdateDeadline::Yield(1)),
             }
         });
-        store.set_fuel(u64::MAX)
+        store
+            .set_fuel(u64::MAX)
             .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
 
         store.limiter_async(|ctx| ctx.resource_limiter());

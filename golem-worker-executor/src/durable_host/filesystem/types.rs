@@ -18,6 +18,7 @@ use std::time::SystemTime;
 use fs_set_times::{set_symlink_times, SystemTimeSpec};
 use metrohash::MetroHash128;
 use wasmtime::component::Resource;
+use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime;
 use wasmtime_wasi::p2::bindings::filesystem::types::{
     Advice, Descriptor, DescriptorFlags, DescriptorStat, DescriptorType, DirectoryEntry,
@@ -25,7 +26,6 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
-use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
@@ -168,7 +168,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "read_directory");
         let mut view = self.as_wasi_view();
         let stream = HostDescriptor::read_directory(&mut view.filesystem(), self_).await?;
-        drop(view);
         // Iterating through the whole stream to make sure we have a stable order
         let mut entries = Vec::new();
         let iter = self.table().delete(stream)?;
@@ -211,7 +210,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         let mut view = self.as_wasi_view();
         let stat = HostDescriptor::stat(&mut view.filesystem(), self_).await;
-        drop(view);
+
         let stat = match stat {
             Ok(mut stat) => {
                 stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
@@ -294,7 +293,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         let mut view = self.as_wasi_view();
         let stat = HostDescriptor::stat_at(&mut view.filesystem(), self_, path_flags, path).await;
-        drop(view);
+
         let stat = match stat {
             Ok(mut stat) => {
                 stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
@@ -550,7 +549,10 @@ impl<Ctx: WorkerCtx> HostDirectoryEntryStream for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn filesystem_error_code(&mut self, err: Resource<Error>) -> wasmtime::Result<Option<ErrorCode>> {
+    fn filesystem_error_code(
+        &mut self,
+        err: Resource<Error>,
+    ) -> wasmtime::Result<Option<ErrorCode>> {
         Host::filesystem_error_code(&mut self.as_wasi_view().filesystem(), err)
     }
 

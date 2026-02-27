@@ -14,7 +14,7 @@
 
 use crate::model::agent::{AgentError, AgentType};
 use crate::model::parsed_function_name::ParsedFunctionName;
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
@@ -39,7 +39,6 @@ pub async fn extract_agent_types_with_streams(
     enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
-    config.async_support(true);
     config.wasm_component_model(true);
 
     if enable_fs_cache {
@@ -112,21 +111,23 @@ pub async fn extract_agent_types_with_streams(
         return Ok(Vec::new());
     };
 
-    let typed_func = func.typed::<(), (
-        Result<
-            Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
-            crate::model::agent::bindings::golem::agent::common::AgentError,
-        >,
-    )>(&mut store)
-    .map_err(|e| anyhow::anyhow!(
+    let typed_func = func
+        .typed::<(), (
+            Result<
+                Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
+                crate::model::agent::bindings::golem::agent::common::AgentError,
+            >,
+        )>(&mut store)
+        .map_err(|e| {
+            anyhow::anyhow!(
         "The component's golem:agent/guest interface does not match the expected type signature. \
          This usually means the golem-rust (or golem-ts) SDK version used to build the component \
          is incompatible with this version of golem-cli. \
          Try updating the SDK dependency or setting GOLEM_RUST_PATH / GOLEM_TS_PACKAGES_PATH \
          to point to a compatible local SDK: {e}"
-    ))?;
+    )
+        })?;
     let results = typed_func.call_async(&mut store, ()).await?;
-    typed_func.post_return_async(&mut store).await?;
 
     match results.0 {
         Ok(results) => {

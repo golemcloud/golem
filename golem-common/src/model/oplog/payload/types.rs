@@ -24,7 +24,6 @@ use crate::model::{
     AccountId, AgentInvocation, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId,
     ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
 };
-use anyhow::anyhow;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -470,7 +469,9 @@ impl From<SerializableSocketError> for SocketError {
             SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
                 error_code.into()
             }
-            SerializableSocketError::Generic(error) => SocketError::trap(wasmtime::Error::msg(error)),
+            SerializableSocketError::Generic(error) => {
+                SocketError::trap(wasmtime::Error::msg(error))
+            }
         }
     }
 }
