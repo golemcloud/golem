@@ -1181,6 +1181,7 @@ fn make_test_agent_type(name: &str) -> AgentType {
         mode: AgentMode::Durable,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![],
     }
 }
 
@@ -1268,6 +1269,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 original_files: vec![],
                 plugins: vec![],
                 files: vec![],
+                local_agent_config: Blob::new(Vec::new()),
             },
             false,
         )
