@@ -23,6 +23,7 @@ use golem_common::base_model::agent::{
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::model::WorkerId;
 use golem_common::model::agent::{NamedElementSchema, UntypedDataValue, UntypedElementValue};
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValue, ValueAndType};
 use poem::http;
@@ -186,12 +187,19 @@ where
             {
                 match elem_schema {
                     ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-                        let value = args_map
-                            .get(name)
-                            .ok_or_else(|| format!("Missing parameter: {}", name))?;
+                        let json_value = match args_map.get(name) {
+                            Some(value) => value.clone(),
+                            None => {
+                                if matches!(element_type, AnalysedType::Option(_)) {
+                                    serde_json::Value::Null
+                                } else {
+                                    return Err(format!("Missing parameter: {}", name));
+                                }
+                            }
+                        };
 
                         let value_and_type =
-                            golem_wasm::ValueAndType::parse_with_type(value, element_type)
+                            golem_wasm::ValueAndType::parse_with_type(&json_value, element_type)
                                 .map_err(|errs| {
                                     format!(
                                         "Failed to parse parameter '{}': {}",

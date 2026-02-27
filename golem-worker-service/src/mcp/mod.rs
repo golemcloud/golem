@@ -7,4 +7,4 @@ mod agent_mcp_resource;
 mod agent_mcp_server;
 mod agent_mcp_tool;
 mod mcp_capabilities_lookup;
-mod mcp_schema;
+mod schema;
