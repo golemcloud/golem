@@ -11697,10 +11697,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InitialComponentFile'
-        originalFiles:
-          type: array
-          items:
-            $ref: '#/components/schemas/InitialComponentFile'
         installedPlugins:
           type: array
           items:
@@ -11709,15 +11705,7 @@ components:
           type: object
           additionalProperties:
             type: string
-        originalEnv:
-          type: object
-          additionalProperties:
-            type: string
         configVars:
-          type: object
-          additionalProperties:
-            type: string
-        originalConfigVars:
           type: object
           additionalProperties:
             type: string
@@ -11740,12 +11728,9 @@ components:
       - metadata
       - createdAt
       - files
-      - originalFiles
       - installedPlugins
       - env
-      - originalEnv
       - configVars
-      - originalConfigVars
       - localAgentConfig
       - wasmHash
     ComponentFileOptions:
