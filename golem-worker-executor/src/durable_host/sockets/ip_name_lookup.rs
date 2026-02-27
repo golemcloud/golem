@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
@@ -27,9 +26,9 @@ use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::{
 };
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
 use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::sockets::WasiSocketsView as _;
 use wasmtime_wasi::{DynPollable, Pollable};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
     fn resolve_next_address(
         &mut self,
@@ -39,23 +38,23 @@ impl<Ctx: WorkerCtx> HostResolveAddressStream for DurableWorkerCtx<Ctx> {
             "sockets::ip_name_lookup::resolve_address_stream",
             "resolve_next_address",
         );
-        HostResolveAddressStream::resolve_next_address(&mut self.as_wasi_view(), self_)
+        HostResolveAddressStream::resolve_next_address(&mut self.as_wasi_view().sockets(), self_)
     }
 
     fn subscribe(
         &mut self,
         self_: Resource<ResolveAddressStream>,
-    ) -> anyhow::Result<Resource<DynPollable>> {
+    ) -> wasmtime::Result<Resource<DynPollable>> {
         self.observe_function_call(
             "sockets::ip_name_lookup::resolve_address_stream",
             "subscribe",
         );
-        HostResolveAddressStream::subscribe(&mut self.as_wasi_view(), self_)
+        HostResolveAddressStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<ResolveAddressStream>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::ip_name_lookup::resolve_address_stream", "drop");
-        HostResolveAddressStream::drop(&mut self.as_wasi_view(), rep)
+        HostResolveAddressStream::drop(&mut self.as_wasi_view().sockets(), rep)
     }
 }
 
@@ -76,7 +75,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability
                 .try_trigger_retry(self, &result)
                 .await
-                .map_err(SocketError::trap)?;
+                .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?;
 
             let serializable_result = match result {
                 Ok(addresses) => Ok(SerializableIpAddresses::from(addresses)),
@@ -111,7 +110,7 @@ async fn resolve_and_drain_addresses<Ctx: WorkerCtx>(
     network: Resource<Network>,
     name: String,
 ) -> Result<Vec<IpAddress>, SocketError> {
-    let stream = Host::resolve_addresses(&mut ctx.as_wasi_view(), network, name).await?;
+    let stream = Host::resolve_addresses(&mut ctx.as_wasi_view().sockets(), network, name).await?;
     let stream = ctx.table().delete(stream)?;
     let addresses = drain_resolve_address_stream(stream).await?;
     Ok(addresses)

@@ -14,7 +14,7 @@
 
 use crate::model::agent::{AgentError, AgentType};
 use crate::model::parsed_function_name::ParsedFunctionName;
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, trace};
@@ -23,8 +23,9 @@ use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
 };
 use wasmtime::{AsContextMut, Engine, Store};
-use wasmtime_wasi::p2::{pipe, StdoutStream, WasiCtx, WasiView};
-use wasmtime_wasi::{IoCtx, IoView};
+use wasmtime_wasi::cli::StdoutStream;
+use wasmtime_wasi::p2::pipe;
+use wasmtime_wasi::{IoCtx, IoData, IoView, WasiCtx, WasiCtxView, WasiView};
 const INTERFACE_NAME: &str = "golem:agent/guest@1.5.0";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
@@ -38,7 +39,6 @@ pub async fn extract_agent_types_with_streams(
     enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
-    config.async_support(true);
     config.wasm_component_model(true);
 
     if enable_fs_cache {
@@ -111,30 +111,32 @@ pub async fn extract_agent_types_with_streams(
         return Ok(Vec::new());
     };
 
-    let typed_func = func.typed::<(), (
-        Result<
-            Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
-            crate::model::agent::bindings::golem::agent::common::AgentError,
-        >,
-    )>(&mut store)
-    .context(
+    let typed_func = func
+        .typed::<(), (
+            Result<
+                Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
+                crate::model::agent::bindings::golem::agent::common::AgentError,
+            >,
+        )>(&mut store)
+        .map_err(|e| {
+            anyhow::anyhow!(
         "The component's golem:agent/guest interface does not match the expected type signature. \
          This usually means the golem-rust (or golem-ts) SDK version used to build the component \
          is incompatible with this version of golem-cli. \
          Try updating the SDK dependency or setting GOLEM_RUST_PATH / GOLEM_TS_PACKAGES_PATH \
-         to point to a compatible local SDK."
-    )?;
+         to point to a compatible local SDK: {e}"
+    )
+        })?;
     let results = typed_func.call_async(&mut store, ()).await?;
-    typed_func.post_return_async(&mut store).await?;
 
     match results.0 {
         Ok(results) => {
-            let agent_types = results.into_iter().map(AgentType::from).collect();
+            let agent_types: Vec<AgentType> = results.into_iter().map(AgentType::from).collect();
             trace!("Discovered agent types: {:#?}", agent_types);
             Ok(agent_types)
         }
         Err(agent_error) => {
-            let agent_error: AgentError = agent_error.into();
+            let agent_error: AgentError = AgentError::from(agent_error);
             error!("Error while discovering agent types: {agent_error}");
             Err(anyhow!(agent_error.to_string()))
         }
@@ -186,14 +188,37 @@ impl IoView for Host {
             .get_mut()
             .expect("IoCtx mutex must never fail")
     }
+
+    fn io_data(&mut self) -> IoData<'_> {
+        IoData {
+            table: Arc::get_mut(&mut self.table)
+                .expect("ResourceTable is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("ResourceTable mutex must never fail"),
+            io_ctx: Arc::get_mut(&mut self.io)
+                .expect("IoCtx is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("IoCtx mutex must never fail"),
+        }
+    }
 }
 
 impl WasiView for Host {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        Arc::get_mut(&mut self.wasi)
-            .expect("WasiCtx is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("WasiCtx mutex must never fail")
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: Arc::get_mut(&mut self.wasi)
+                .expect("WasiCtx is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("WasiCtx mutex must never fail"),
+            table: Arc::get_mut(&mut self.table)
+                .expect("ResourceTable is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("ResourceTable mutex must never fail"),
+            io_ctx: Arc::get_mut(&mut self.io)
+                .expect("IoCtx is shared and cannot be borrowed mutably")
+                .get_mut()
+                .expect("IoCtx mutex must never fail"),
+        }
     }
 }
 
@@ -263,15 +288,15 @@ fn dynamic_import(
         for function in functions {
             instance.func_new_async(
                 &function.name.function.function_name(),
-                move |_store, _params, _results| {
+                move |_store, _func_type, _params, _results| {
                     let function_name = function.name.clone();
                     Box::new(async move {
                         error!(
                             "External function called in get-agent-definitions: {function_name}",
                         );
-                        Err(anyhow!(
+                        Err(wasmtime::Error::msg(format!(
                             "External function called in get-agent-definitions: {function_name}"
-                        ))
+                        )))
                     })
                 },
             )?;

@@ -432,6 +432,9 @@ impl ToAnalysedType for TypeDef {
             TypeDefKind::Stream(_) => {
                 Err("to_analysed_type not implemented for stream type".to_string())
             }
+            TypeDefKind::Map(_, _) => {
+                Err("to_analysed_type not implemented for map type".to_string())
+            }
             TypeDefKind::Type(typ) => typ.to_analysed_type(resolve, resource_map),
             TypeDefKind::Unknown => Err("to_analysed_type unknown type".to_string()),
         }

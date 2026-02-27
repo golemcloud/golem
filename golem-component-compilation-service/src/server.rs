@@ -18,7 +18,6 @@ use golem_component_compilation_service::config::{make_config_loader, ServerConf
 use prometheus::Registry;
 use tokio::task::JoinSet;
 use tracing::info;
-use wasmtime::component::__internal::anyhow;
 
 pub fn main() -> anyhow::Result<()> {
     match make_config_loader().load_or_dump_config() {

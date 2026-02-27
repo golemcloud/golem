@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 
 /// `wasi:config/store` implementation
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get(&mut self, key: String) -> wasmtime::Result<Result<Option<String>, Error>> {
+    async fn get(&mut self, key: String) -> anyhow::Result<Result<Option<String>, Error>> {
         Ok(Ok(self
             .state
             .config_vars
@@ -28,7 +28,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .cloned()))
     }
 
-    async fn get_all(&mut self) -> wasmtime::Result<Result<Vec<(String, String)>, Error>> {
+    async fn get_all(&mut self) -> anyhow::Result<Result<Vec<(String, String)>, Error>> {
         Ok(Ok(self
             .state
             .config_vars

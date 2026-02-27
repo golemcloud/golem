@@ -16,11 +16,13 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::WorkerCtx;
+use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::{Descriptor, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_directories(&mut self) -> anyhow::Result<Vec<(Resource<Descriptor>, String)>> {
-        let current_dirs = Host::get_directories(&mut self.as_wasi_view()).await?;
+    async fn get_directories(&mut self) -> wasmtime::Result<Vec<(Resource<Descriptor>, String)>> {
+        let mut view = self.as_wasi_view();
+        let current_dirs = Host::get_directories(&mut view.filesystem()).await?;
         Ok(current_dirs)
     }
 }

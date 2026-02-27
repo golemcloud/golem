@@ -12,21 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use wasmtime_wasi::cli::WasiCliView as _;
 use wasmtime_wasi::p2::bindings::cli::exit::Host;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn exit(&mut self, status: Result<(), ()>) -> anyhow::Result<()> {
+    fn exit(&mut self, status: Result<(), ()>) -> wasmtime::Result<()> {
         self.observe_function_call("cli::exit", "exit");
-        Host::exit(&mut self.as_wasi_view(), status)
+        Host::exit(&mut self.as_wasi_view().cli(), status)
     }
 
-    fn exit_with_code(&mut self, status_code: u8) -> anyhow::Result<()> {
+    fn exit_with_code(&mut self, status_code: u8) -> wasmtime::Result<()> {
         self.observe_function_call("cli::exit", "exit_with_code");
-        Host::exit_with_code(&mut self.as_wasi_view(), status_code)
+        Host::exit_with_code(&mut self.as_wasi_view().cli(), status_code)
     }
 }

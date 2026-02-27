@@ -24,7 +24,6 @@ use crate::model::{
     AccountId, AgentInvocation, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId,
     ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
 };
-use anyhow::anyhow;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -60,6 +59,9 @@ use wasmtime_wasi_http::bindings::http::types::{
 };
 use wasmtime_wasi_http::body::HostIncomingBody;
 use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
+
+/// Must match `DEFAULT_FIELD_SIZE_LIMIT` in wasmtime-wasi-http's `WasiHttpCtx`
+const DEFAULT_FIELD_SIZE_LIMIT: usize = 128 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
@@ -138,7 +140,7 @@ impl From<FileSystemError> for FsError {
     fn from(value: FileSystemError) -> Self {
         match value {
             FileSystemError::ErrorCode(SerializableFsErrorCode(error_code)) => error_code.into(),
-            FileSystemError::Generic(error) => FsError::trap(anyhow!(error)),
+            FileSystemError::Generic(error) => FsError::trap(wasmtime::Error::msg(error)),
         }
     }
 }
@@ -467,7 +469,9 @@ impl From<SerializableSocketError> for SocketError {
             SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
                 error_code.into()
             }
-            SerializableSocketError::Generic(error) => SocketError::trap(anyhow!(error)),
+            SerializableSocketError::Generic(error) => {
+                SocketError::trap(wasmtime::Error::msg(error))
+            }
         }
     }
 }
@@ -716,7 +720,7 @@ impl TryFrom<&HostIncomingResponse> for SerializableResponseHeaders {
 
     fn try_from(response: &HostIncomingResponse) -> Result<Self, Self::Error> {
         let mut headers = HashMap::new();
-        for (key, value) in response.headers.iter() {
+        for (key, value) in response.headers.as_ref().iter() {
             headers.insert(key.as_str().to_string(), value.as_bytes().to_vec());
         }
 
@@ -731,10 +735,11 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     type Error = anyhow::Error;
 
     fn try_from(value: SerializableResponseHeaders) -> Result<Self, Self::Error> {
-        let mut headers = FieldMap::new();
+        let mut header_map = http::HeaderMap::new();
         for (key, value) in value.headers {
-            headers.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
+            header_map.insert(HeaderName::from_str(&key)?, HeaderValue::try_from(value)?);
         }
+        let headers = FieldMap::new(header_map, DEFAULT_FIELD_SIZE_LIMIT);
 
         Ok(Self {
             status: value.status,
@@ -1143,9 +1148,9 @@ impl From<SerializableStreamError> for StreamError {
         match value {
             SerializableStreamError::Closed => Self::Closed,
             SerializableStreamError::LastOperationFailed(e) => {
-                Self::LastOperationFailed(anyhow!(e))
+                Self::LastOperationFailed(wasmtime::Error::msg(e))
             }
-            SerializableStreamError::Trap(e) => Self::Trap(anyhow!(e)),
+            SerializableStreamError::Trap(e) => Self::Trap(wasmtime::Error::msg(e)),
         }
     }
 }

@@ -22,10 +22,11 @@ use golem_common::model::oplog::{
     host_functions, DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestNoInput,
     HostResponseMonotonicClockTimestamp,
 };
+use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn now(&mut self) -> anyhow::Result<Instant> {
+    async fn now(&mut self) -> wasmtime::Result<Instant> {
         let durability = Durability::<host_functions::MonotonicClockNow>::new(
             self,
             DurableFunctionType::ReadLocal,
@@ -33,7 +34,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let nanos = Host::now(&mut self.as_wasi_view()).await?;
+            let nanos = {
+                let mut view = self.as_wasi_view();
+                Host::now(&mut view.clocks()).await?
+            };
             durability
                 .persist(
                     self,
@@ -48,7 +52,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result.nanos)
     }
 
-    async fn resolution(&mut self) -> anyhow::Result<Instant> {
+    async fn resolution(&mut self) -> wasmtime::Result<Instant> {
         let durability = Durability::<host_functions::MonotonicClockResolution>::new(
             self,
             DurableFunctionType::ReadLocal,
@@ -56,7 +60,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let nanos = Host::resolution(&mut self.as_wasi_view()).await?;
+            let nanos = {
+                let mut view = self.as_wasi_view();
+                Host::resolution(&mut view.clocks()).await?
+            };
             durability
                 .persist(
                     self,
@@ -71,15 +78,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result.nanos)
     }
 
-    async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
+    async fn subscribe_instant(&mut self, when: Instant) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("monotonic_clock", "subscribe_instant");
-        Host::subscribe_instant(&mut self.as_wasi_view(), when).await
+        let mut view = self.as_wasi_view();
+        Host::subscribe_instant(&mut view.clocks(), when).await
     }
 
     async fn subscribe_duration(
         &mut self,
         duration_in_nanos: Duration,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> wasmtime::Result<Resource<Pollable>> {
         let durability = Durability::<host_functions::MonotonicClockSubscribeDuration>::new(
             self,
             DurableFunctionType::ReadLocal,
@@ -88,7 +96,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let now = {
             if durability.is_live() {
-                let nanos = Host::now(&mut self.as_wasi_view()).await?;
+                let nanos = {
+                    let mut view = self.as_wasi_view();
+                    Host::now(&mut view.clocks()).await?
+                };
                 durability
                     .persist(
                         self,
@@ -106,6 +117,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await;
         let when = now.nanos.saturating_add(duration_in_nanos);
-        Host::subscribe_instant(&mut self.as_wasi_view(), when).await
+        let mut view = self.as_wasi_view();
+        Host::subscribe_instant(&mut view.clocks(), when).await
     }
 }

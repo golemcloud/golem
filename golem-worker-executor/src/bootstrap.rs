@@ -48,6 +48,7 @@ use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
+use wasmtime::component::HasSelf;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -209,12 +210,30 @@ impl Bootstrap<Context> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        crate::preview2::golem::agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        crate::preview2::golem::agent::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
         Ok(linker)
     }
 }

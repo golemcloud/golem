@@ -71,7 +71,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{debug, info, Instrument};
-use wasmtime::component::Linker;
+use wasmtime::component::{HasSelf, Linker};
 use wasmtime::Engine;
 
 #[cfg(test)]
@@ -333,15 +333,30 @@ fn get_durable_ctx(ctx: &mut DebugContext) -> &mut DurableWorkerCtx<DebugContext
 
 pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
     let mut linker = create_linker(engine, get_durable_ctx)?;
-    golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-    golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-    golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-    golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-    golem_worker_executor::preview2::golem::agent::host::add_to_linker_get_host(
+    golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
         &mut linker,
         get_durable_ctx,
     )?;
-    golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
     Ok(linker)
 }
 

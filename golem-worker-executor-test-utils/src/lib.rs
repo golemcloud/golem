@@ -136,9 +136,9 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use uuid::Uuid;
-use wasmtime::component::{Instance, Linker, Resource, ResourceAny};
+use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 #[cfg(test)]
@@ -473,15 +473,15 @@ impl HasConfigVars for TestWorkerCtx {
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
@@ -821,7 +821,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "Memory growing for {}: current: {}, desired: {}",
             self.worker_id(),
@@ -831,7 +831,10 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
             Ok(true)
@@ -843,7 +846,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "Table growing for {}: current: {}, desired: {}",
             self.worker_id(),
@@ -1180,15 +1183,30 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_worker_executor::preview2::golem::agent::host::add_to_linker_get_host(
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
             &mut linker,
             get_durable_ctx,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<TestWorkerCtx>>,
+        >(&mut linker, get_durable_ctx)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<TestWorkerCtx>>,
+        >(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
 }
