@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::schema::McpSchema;
 use crate::mcp::schema::internal::McpSchemaInternal;
 use crate::mcp::schema::mcp_schema::GetMcpSchema;
 use golem_common::base_model::agent::AgentMethod;

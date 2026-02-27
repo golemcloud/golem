@@ -20,7 +20,6 @@ use golem_wasm::analysis::AnalysedType;
 use serde_json::{Map, Value, json};
 
 // A better internal representation of McpSchema for object types
-
 #[derive(Default)]
 pub struct McpSchemaInternal {
     pub properties: Map<FieldName, JsonTypeDescription>,
@@ -52,7 +51,7 @@ impl McpSchemaInternal {
         *self = new_schema;
     }
 
-    pub fn from_named_element_schemas(schemas: &Vec<NamedElementSchema>) -> McpSchemaInternal {
+    pub fn from_named_element_schemas(schemas: &[NamedElementSchema]) -> McpSchemaInternal {
         let named_types: Vec<(&str, &AnalysedType)> = schemas
             .iter()
             .map(|s| match &s.schema {
@@ -89,7 +88,7 @@ pub type FieldName = String;
 
 // Based on https://modelcontextprotocol.io/specification/2025-11-25/server/tools and
 // https://json-schema.org/draft/2020-12/json-schema-core (Example: oneOf)
-// while ensuring how golem-wasm treats json values
+// while ensuring how golem-wasm treats JSON values
 fn analysed_type_to_json_schema(analysed_type: &AnalysedType) -> JsonTypeDescription {
     match analysed_type {
         AnalysedType::Bool(_) => json!({"type": "boolean"}),
@@ -154,7 +153,6 @@ fn analysed_type_to_json_schema(analysed_type: &AnalysedType) -> JsonTypeDescrip
             json!({"type": "string", "enum": type_enum.cases})
         }
 
-        // Flags → JSON array of enabled flag name strings
         AnalysedType::Flags(type_flags) => {
             json!({
                 "type": "array",
@@ -163,8 +161,6 @@ fn analysed_type_to_json_schema(analysed_type: &AnalysedType) -> JsonTypeDescrip
             })
         }
 
-        // Variant → object with a single key being the case name
-        // Aligned with to_json_value: {"case_name": value} or {"case_name": null}
         AnalysedType::Variant(type_variant) => {
             let one_of: Vec<Value> = type_variant
                 .cases
