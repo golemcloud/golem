@@ -37,6 +37,7 @@ export type AgentConfig = {
   clientPackageName: string;
   clientPackageImportedName: string;
   package: any;
+  methodParameterNames?: Record<string, string[]>;
 };
 
 export type ConfigureClient = (config: base.Configuration) => void;

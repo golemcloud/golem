@@ -131,6 +131,10 @@ export class Repl {
     const getOverrideSnippet = () => this.overrideSnippetForNextEval;
 
     const customEval: REPLEval = function (code, context, filename, callback) {
+      if (tryHandleColonCommand(code, replServer, callback)) {
+        return;
+      }
+
       const evalCode = (code: string) => {
         tsxEval.call(this, code, context, filename, (err, result) => {
           if (!err) {
@@ -189,7 +193,7 @@ export class Repl {
     const languageService = this.getLanguageService();
     const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
-      if (line.trimStart().startsWith('.')) {
+      if (line.trimStart().startsWith('.') || line.trimStart().startsWith(':')) {
         cli
           .complete(line)
           .then((result) => {
@@ -249,10 +253,10 @@ export class Repl {
       },
     });
 
-    replServer.defineCommand('agentTypeInfo', {
+    replServer.defineCommand('agent-type-info', {
       help: 'Show auto-imported agent client info',
       action: () => {
-        this.showAutoImportClientInfo(replServer, true);
+        this.showAgentTypeInfo(replServer, true);
       },
     });
 
@@ -310,7 +314,7 @@ export class Repl {
     });
   }
 
-  private showAutoImportClientInfo(replServer: repl.REPLServer, manual = false) {
+  private showAgentTypeInfo(replServer: repl.REPLServer, manual = false) {
     if (this.replCliFlags.disableAutoImports) return;
 
     const agentNames = Object.keys(this.config.agents).sort((a, b) => a.localeCompare(b));
@@ -335,7 +339,7 @@ export class Repl {
     }
 
     if (!manual) {
-      lines.push(pc.dim('To see this message again, use the `.agentTypeInfo` command!'));
+      lines.push(pc.dim('To see this message again, use the `.agent-type-info` command!'));
       replServer.output.write('\n');
     }
     logSnippetInfo(lines);
@@ -357,7 +361,7 @@ export class Repl {
     await this.setupRepl(replServer);
 
     if (!script) {
-      this.showAutoImportClientInfo(replServer, false);
+      this.showAgentTypeInfo(replServer, false);
     }
 
     if (script) {
@@ -398,6 +402,45 @@ export class Repl {
     const rendered = replServer.writer(evalResult.result);
     process.stdout.write(rendered + '\n');
   }
+}
+
+function tryHandleColonCommand(
+  line: string,
+  replServer: repl.REPLServer,
+  callback: (err: Error | null, result?: any) => void,
+): boolean {
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith(':')) {
+    return false;
+  }
+  const commandLine = trimmed.slice(1).trimStart();
+  if (!commandLine) {
+    callback(null, undefined);
+    return true;
+  }
+  const whitespaceIndex = commandLine.search(/\s/);
+  const commandName = whitespaceIndex === -1 ? commandLine : commandLine.slice(0, whitespaceIndex);
+  const rawArgs = whitespaceIndex === -1 ? '' : commandLine.slice(whitespaceIndex + 1);
+  const command = (replServer as any).commands?.[commandName];
+  if (command?.action) {
+    try {
+      const result = command.action.call(replServer, rawArgs);
+      if (result && typeof (result as Promise<void>).then === 'function') {
+        Promise.resolve(result)
+          .then(() => callback(null, undefined))
+          .catch((err) => callback(err as Error, undefined));
+        return true;
+      }
+    } catch (err) {
+      callback(err as Error, undefined);
+      return true;
+    }
+    callback(null, undefined);
+    return true;
+  }
+  writeln(`Unknown command: ${commandName}`);
+  callback(null, undefined);
+  return true;
 }
 
 function tryJsonStringify(value: unknown): string | undefined {

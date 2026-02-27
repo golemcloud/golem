@@ -570,15 +570,10 @@ impl WorkerCommandHandler {
         let agent_id = AgentId::new(agent_type_name, typed_parameters, phantom_id);
         let worker_name = WorkerName(agent_id.to_string());
 
-        let worker_name_match = self.match_worker_name(worker_name).await?;
-        let (component, worker_name) = self
-            .component_by_worker_name_match(&worker_name_match)
-            .await?;
-
         let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
-            &component.id,
+            &agent_type.implemented_by.component_id,
             worker_name.0.clone(),
             stream_args.into(),
             self.ctx.allow_insecure(),
