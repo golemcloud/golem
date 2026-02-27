@@ -285,13 +285,7 @@ pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
     fs::read_to_string(source)
         .ok()
         .and_then(|source| app_raw::Application::from_yaml_str(source.as_str()).ok())
-        .map(|app| {
-            if app.includes.is_empty() {
-                vec!["**/golem.yaml".to_string()]
-            } else {
-                app.includes
-            }
-        })
+        .map(|app| app.includes)
         .unwrap_or_default()
 }
 
