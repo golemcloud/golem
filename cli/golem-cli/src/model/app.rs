@@ -117,13 +117,17 @@ pub struct ApplicationConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct LoadedRawApps {
+    pub app_root_dir: PathBuf,
+    pub calling_working_dir: PathBuf,
+    pub raw_apps: Vec<app_raw::ApplicationWithSource>,
+}
+
+#[derive(Debug, Clone)]
 pub enum ApplicationSourceMode {
     Automatic,
     ByRootManifest(PathBuf),
-    Preloaded {
-        raw_apps: Vec<app_raw::ApplicationWithSource>,
-        calling_working_dir: PathBuf,
-    },
+    Preloaded(LoadedRawApps),
     None,
 }
 
@@ -318,6 +322,7 @@ pub struct ApplicationNameAndEnvironments {
 
 #[derive(Clone, Debug)]
 pub struct Application {
+    app_root_dir: PathBuf,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     component_preset_selector: ComponentPresetSelector,
@@ -371,13 +376,24 @@ impl Application {
         &self.environments
     }
 
+    pub fn app_root_dir(&self) -> &Path {
+        &self.app_root_dir
+    }
+
     pub fn from_raw_apps(
+        root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Self> {
-        build_application(application_name, environments, component_presets, apps)
+        build_application(
+            root_dir,
+            application_name,
+            environments,
+            component_presets,
+            apps,
+        )
     }
 
     pub fn all_sources(&self) -> &BTreeSet<PathBuf> {
@@ -1471,7 +1487,6 @@ mod app_builder {
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
-    use anyhow::anyhow;
     use colored::Colorize;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -1489,12 +1504,19 @@ mod app_builder {
 
     // Load full manifest EXCEPT environments
     pub fn build_application(
+        root_dir: PathBuf,
         application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
         component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Application> {
-        AppBuilder::build_app(application_name, environments, component_presets, apps)
+        AppBuilder::build_app(
+            root_dir,
+            application_name,
+            environments,
+            component_presets,
+            apps,
+        )
     }
 
     // Load only environments
@@ -1592,6 +1614,7 @@ mod app_builder {
         //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
         //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
         fn build_app(
+            app_root_dir: PathBuf,
             application_name: WithSource<ApplicationName>,
             environments: BTreeMap<EnvironmentName, app_raw::Environment>,
             component_presets: ComponentPresetSelector,
@@ -1600,17 +1623,15 @@ mod app_builder {
             let mut validation = ValidationBuilder::default();
             let mut builder = Self::default();
 
-            match std::env::current_dir()
-                .map_err(|err| anyhow!(err))
-                .and_then(|path| {
-                    Ok((
-                        fs::path_to_str(&path).map(|path| path.to_string())?,
-                        fs::path_to_str(&path.join(TEMP_DIR)).map(|path| path.to_string())?,
-                    ))
-                }) {
-                Ok((app_root_dir, golem_temp_dir)) => {
-                    builder.app_root_dir_str = app_root_dir;
-                    builder.golem_temp_dir_str = golem_temp_dir;
+            match Ok::<&PathBuf, anyhow::Error>(&app_root_dir).and_then(|app_root_dir| {
+                Ok((
+                    fs::path_to_str(&app_root_dir).map(|path| path.to_string())?,
+                    fs::path_to_str(&app_root_dir.join(TEMP_DIR)).map(|path| path.to_string())?,
+                ))
+            }) {
+                Ok((app_root_dir_str, golem_temp_dir_str)) => {
+                    builder.app_root_dir_str = app_root_dir_str;
+                    builder.golem_temp_dir_str = golem_temp_dir_str;
                 }
                 Err(err) => {
                     return ValidatedResult::from_error(format!(
@@ -1631,6 +1652,7 @@ mod app_builder {
             builder.validate_http_api_deployments(&mut validation, &environments);
 
             validation.build(Application {
+                app_root_dir: app_root_dir,
                 environments,
                 component_preset_selector: component_presets,
                 application_name,
@@ -2377,9 +2399,14 @@ mod test {
             panic!("expected Some(ApplicationNameAndEnvironments)")
         };
 
-        let (app, warns, errors) =
-            Application::from_raw_apps(application_name, environments, selector.clone(), raw_apps)
-                .into_product();
+        let (app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            application_name,
+            environments,
+            selector.clone(),
+            raw_apps,
+        )
+        .into_product();
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         app.unwrap()
