@@ -49,9 +49,8 @@ impl McpAgentCapability {
                         agent_type_name.0
                     );
 
-                    let constructor_schema = 
-                        constructor.input_schema.get_mcp_schema();
-                    
+                    let constructor_schema = constructor.input_schema.get_mcp_schema();
+
                     let McpToolSchema {
                         mut input_schema,
                         output_schema,
