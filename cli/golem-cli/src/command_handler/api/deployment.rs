@@ -383,7 +383,7 @@ impl ApiDeploymentCommandHandler {
         let agents = deployable_mcp_deployment
             .agents
             .iter()
-            .map(|(k, v)| (k.clone(), v.to_diffable()))
+            .map(|(k, _v)| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
             .collect();
 
         let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {

@@ -21,11 +21,14 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry;
 use golem_common::model::diff::{
-    Hashable, McpDeployment as DiffMcpDeployment, McpDeploymentAgentOptions,
+    Hashable, McpDeployment as DiffMcpDeployment,
+    McpDeploymentAgentOptions as DiffMcpDeploymentAgentOptions,
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::mcp_deployment::{McpDeployment, McpDeploymentId, McpDeploymentRevision};
+use golem_common::model::mcp_deployment::{
+    McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
+};
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use serde::{Deserialize, Serialize};
@@ -122,7 +125,7 @@ impl McpDeploymentRevisionRecord {
                 .value()
                 .agents
                 .iter()
-                .map(|(k, v)| (k.0.clone(), v.clone()))
+                .map(|(k, _v)| (k.0.clone(), DiffMcpDeploymentAgentOptions::default()))
                 .collect(),
         }
     }

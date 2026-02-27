@@ -25,15 +25,21 @@ newtype_uuid!(McpDeploymentId);
 declare_revision!(McpDeploymentRevision);
 
 declare_structs! {
+    #[derive(Default)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct McpDeploymentAgentOptions {
+        // TODO: MCP agent configuration options coming soon
+    }
+
     pub struct McpDeploymentCreation {
         pub domain: Domain,
-        pub agents: BTreeMap<AgentTypeName, crate::model::diff::McpDeploymentAgentOptions>,
+        pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
     }
 
     pub struct McpDeploymentUpdate {
         pub current_revision: McpDeploymentRevision,
         pub domain: Option<Domain>,
-        pub agents: Option<BTreeMap<AgentTypeName, crate::model::diff::McpDeploymentAgentOptions>>,
+        pub agents: Option<BTreeMap<AgentTypeName, McpDeploymentAgentOptions>>,
     }
 
     pub struct McpDeployment {
@@ -42,19 +48,7 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub domain: Domain,
         pub hash: diff::Hash,
-        pub agents: BTreeMap<AgentTypeName, crate::model::diff::McpDeploymentAgentOptions>,
+        pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
         pub created_at: DateTime<chrono::Utc>,
-    }
-}
-
-impl McpDeployment {
-    pub fn to_diffable(&self) -> crate::model::diff::McpDeployment {
-        crate::model::diff::McpDeployment {
-            agents: self
-                .agents
-                .iter()
-                .map(|(k, v)| (k.0.clone(), v.clone()))
-                .collect(),
-        }
     }
 }
