@@ -80,8 +80,8 @@ bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
 camino = "1.1.10"
-cap-std = "3.4.2" # keep in sync with wasmtime
-cap-time-ext = "3.4.2"
+cap-std = "3.4.5" # keep in sync with wasmtime
+cap-time-ext = "3.4.5"
 cargo-component = "0.21.1"
 cargo-component-core = "0.21.1"
 cargo_metadata = "0.21.0"
@@ -276,31 +276,31 @@ version-compare = "0.2.0"
 wac-graph = "=0.7.0"
 walkdir = "2.5.0"
 warp = "0.3.7"
-wasm-encoder = "0.235.0"
-wasm-metadata = { version = "0.235.0", features = ["oci"] }
+wasm-encoder = "0.244.0"
+wasm-metadata = { version = "0.244.0", features = ["oci"] }
 wasm-rquickjs = "0.0.23"
-wasm-wave = "0.235"
-wasmparser = "0.229.0"
-wasmprinter = "0.229.0"
-wasmtime = { version = "=33.0.0", features = ["component-model"] }
-wasmtime-wasi = { version = "=33.0.0" }
-wasmtime-wasi-http = { version = "=33.0.0" }
+wasm-wave = "0.244"
+wasmparser = "0.244.0"
+wasmprinter = "0.244.0"
+wasmtime = { version = "=42.0.1", features = ["component-model", "anyhow"] }
+wasmtime-wasi = { version = "=42.0.1" }
+wasmtime-wasi-http = { version = "=42.0.1" }
 wax = "0.6.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
-wit-bindgen = "0.41.0"
-wit-bindgen-rt = "=0.40.0"
-wit-bindgen-rust = "0.41.0"
-wit-component = "0.235"
-wit-encoder = "0.235"
-wit-parser = "0.235"
+wit-bindgen = "0.51.0"
+wit-bindgen-rt = "=0.44.0"
+wit-bindgen-rust = "0.51.0"
+wit-component = "0.244"
+wit-encoder = "0.244"
+wit-parser = "0.244"
 x509-certificate = "0.23.1"
 zstd = "0.13"
 
 [patch.crates-io]
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
+wasmtime = { path = "../wasmtime/crates/wasmtime" }
+wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasmtime-wasi-http = { path = "../wasmtime/crates/wasi-http" }
 
 [profile.dev]
 panic = "abort"

@@ -41,6 +41,7 @@ use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
 use crate::workerctx::default::Context;
 use crate::{Bootstrap, RunDetails};
+use wasmtime::component::HasSelf;
 use async_trait::async_trait;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -209,12 +210,12 @@ impl Bootstrap<Context> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        crate::preview2::golem::agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(&mut linker, get_durable_ctx)?;
+        golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(&mut linker, get_durable_ctx)?;
+        crate::preview2::golem::agent::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(&mut linker, get_durable_ctx)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
 }

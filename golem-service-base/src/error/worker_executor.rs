@@ -948,11 +948,10 @@ impl Error for InterruptKind {}
 #[cfg(feature = "worker-executor")]
 mod service {
     use super::WorkerExecutorError;
-    use anyhow::anyhow;
 
     impl From<WorkerExecutorError> for wasmtime_wasi::p2::StreamError {
         fn from(value: WorkerExecutorError) -> Self {
-            Self::Trap(anyhow!(value))
+            Self::Trap(wasmtime::Error::msg(value.to_string()))
         }
     }
 

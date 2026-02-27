@@ -74,7 +74,7 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct Context {
@@ -235,7 +235,7 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         let limit = self.get_max_memory();
         debug!(
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
@@ -243,7 +243,7 @@ impl ResourceLimiterAsync for Context {
         );
 
         if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
-            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededMemoryLimit))?;
+            Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
         };
 
         let current_known = self.durable_ctx.total_linear_memory_size();
@@ -251,7 +251,8 @@ impl ResourceLimiterAsync for Context {
 
         if delta > 0 {
             // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx.increase_memory(delta).await
+                .map_err(wasmtime::Error::from_anyhow)?;
             record_allocated_memory(desired);
         }
 
@@ -263,7 +264,7 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "table_growing: current={}, desired={}, maximum={:?}",
             current, desired, maximum
@@ -548,15 +549,15 @@ impl AgentHost for Context {
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }

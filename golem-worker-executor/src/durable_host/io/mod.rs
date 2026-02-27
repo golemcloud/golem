@@ -17,10 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use wasmtime_wasi::p2::{Stderr, StdinStream, Stdout, StdoutStream};
-use wasmtime_wasi::{
-    DynInputStream, DynOutputStream, InputStream, OutputStream, Pollable, StreamError, StreamResult,
-};
+use tokio::io::{AsyncRead, AsyncWrite};
+use wasmtime_wasi::cli::{IsTerminal, Stderr, StdinStream, Stdout, StdoutStream};
+use wasmtime_wasi::{InputStream, OutputStream, Pollable, StreamError, StreamResult};
 
 pub mod error;
 pub mod poll;
@@ -35,13 +34,19 @@ impl ManagedStdIn {
     }
 }
 
+impl IsTerminal for ManagedStdIn {
+    fn is_terminal(&self) -> bool {
+        false
+    }
+}
+
 impl StdinStream for ManagedStdIn {
-    fn stream(&self) -> DynInputStream {
-        Box::new(self.clone())
+    fn async_stream(&self) -> Box<dyn AsyncRead + Send + Sync> {
+        Box::new(tokio::io::empty())
     }
 
-    fn isatty(&self) -> bool {
-        false
+    fn p2_stream(&self) -> Box<dyn InputStream> {
+        Box::new(self.clone())
     }
 }
 
@@ -78,35 +83,41 @@ impl ManagedStdOut {
     }
 }
 
+impl IsTerminal for ManagedStdOut {
+    fn is_terminal(&self) -> bool {
+        false
+    }
+}
+
 impl StdoutStream for ManagedStdOut {
-    fn stream(&self) -> DynOutputStream {
-        Box::new(self.clone())
+    fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
+        self.state.stdout.async_stream()
     }
 
-    fn isatty(&self) -> bool {
-        false
+    fn p2_stream(&self) -> Box<dyn OutputStream> {
+        Box::new(self.clone())
     }
 }
 
 #[async_trait]
 impl Pollable for ManagedStdOut {
     async fn ready(&mut self) {
-        self.state.stdout.stream().ready().await
+        self.state.stdout.p2_stream().ready().await
     }
 }
 
 #[async_trait]
 impl OutputStream for ManagedStdOut {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        self.state.stdout.stream().write(bytes.clone())
+        self.state.stdout.p2_stream().write(bytes)
     }
 
     fn flush(&mut self) -> StreamResult<()> {
-        self.state.stdout.stream().flush()
+        self.state.stdout.p2_stream().flush()
     }
 
     fn check_write(&mut self) -> StreamResult<usize> {
-        self.state.stdout.stream().check_write()
+        self.state.stdout.p2_stream().check_write()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -131,35 +142,41 @@ impl ManagedStdErr {
     }
 }
 
+impl IsTerminal for ManagedStdErr {
+    fn is_terminal(&self) -> bool {
+        false
+    }
+}
+
 impl StdoutStream for ManagedStdErr {
-    fn stream(&self) -> DynOutputStream {
-        Box::new(self.clone())
+    fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
+        self.state.stderr.async_stream()
     }
 
-    fn isatty(&self) -> bool {
-        false
+    fn p2_stream(&self) -> Box<dyn OutputStream> {
+        Box::new(self.clone())
     }
 }
 
 #[async_trait]
 impl Pollable for ManagedStdErr {
     async fn ready(&mut self) {
-        self.state.stderr.stream().ready().await
+        self.state.stderr.p2_stream().ready().await
     }
 }
 
 #[async_trait]
 impl OutputStream for ManagedStdErr {
     fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
-        self.state.stderr.stream().write(bytes.clone())
+        self.state.stderr.p2_stream().write(bytes)
     }
 
     fn flush(&mut self) -> StreamResult<()> {
-        self.state.stderr.stream().flush()
+        self.state.stderr.p2_stream().flush()
     }
 
     fn check_write(&mut self) -> StreamResult<usize> {
-        self.state.stderr.stream().check_write()
+        self.state.stderr.p2_stream().check_write()
     }
 
     fn as_any(&self) -> &dyn Any {

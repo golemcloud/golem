@@ -25,6 +25,7 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
+use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
@@ -48,7 +49,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<Resource<InputStream>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "read_via_stream");
-        HostDescriptor::read_via_stream(&mut self.as_wasi_view(), self_, offset)
+        HostDescriptor::read_via_stream(&mut self.as_wasi_view().filesystem(), self_, offset)
     }
 
     fn write_via_stream(
@@ -58,7 +59,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<OutputStream>, FsError> {
         self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
-        HostDescriptor::write_via_stream(&mut self.as_wasi_view(), fd, offset)
+        HostDescriptor::write_via_stream(&mut self.as_wasi_view().filesystem(), fd, offset)
     }
 
     fn append_via_stream(
@@ -66,7 +67,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
-        HostDescriptor::append_via_stream(&mut self.as_wasi_view(), self_)
+        HostDescriptor::append_via_stream(&mut self.as_wasi_view().filesystem(), self_)
     }
 
     async fn advise(
@@ -77,20 +78,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         advice: Advice,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "advise");
-        HostDescriptor::advise(&mut self.as_wasi_view(), self_, offset, length, advice).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::advise(&mut view.filesystem(), self_, offset, length, advice).await
     }
 
     async fn sync_data(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync_data");
-        HostDescriptor::sync_data(&mut self.as_wasi_view(), self_).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::sync_data(&mut view.filesystem(), self_).await
     }
 
     async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "get_flags");
 
         let read_only = self.check_if_file_is_readonly(&fd)?;
-        let wasi_view = &mut self.as_wasi_view();
-        let mut descriptor_flags = HostDescriptor::get_flags(wasi_view, fd).await?;
+        let mut view = self.as_wasi_view();
+        let mut descriptor_flags = HostDescriptor::get_flags(&mut view.filesystem(), fd).await?;
 
         if read_only {
             descriptor_flags &= !DescriptorFlags::WRITE
@@ -101,7 +104,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn get_type(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorType, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "get_type");
-        HostDescriptor::get_type(&mut self.as_wasi_view(), self_).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::get_type(&mut view.filesystem(), self_).await
     }
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
@@ -109,7 +113,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         self.observe_function_call("filesystem::types::descriptor", "set_size");
 
-        HostDescriptor::set_size(&mut self.as_wasi_view(), fd, size).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::set_size(&mut view.filesystem(), fd, size).await
     }
 
     async fn set_times(
@@ -122,8 +127,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         self.observe_function_call("filesystem::types::descriptor", "set_times");
 
+        let mut view = self.as_wasi_view();
         HostDescriptor::set_times(
-            &mut self.as_wasi_view(),
+            &mut view.filesystem(),
             fd,
             data_access_timestamp,
             data_modification_timestamp,
@@ -138,7 +144,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         offset: Filesize,
     ) -> Result<(Vec<u8>, bool), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "read");
-        HostDescriptor::read(&mut self.as_wasi_view(), self_, length, offset).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::read(&mut view.filesystem(), self_, length, offset).await
     }
 
     async fn write(
@@ -150,7 +157,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
 
         self.observe_function_call("filesystem::types::descriptor", "write");
-        HostDescriptor::write(&mut self.as_wasi_view(), fd, buffer, offset).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::write(&mut view.filesystem(), fd, buffer, offset).await
     }
 
     async fn read_directory(
@@ -158,7 +166,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
     ) -> Result<Resource<DirectoryEntryStream>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "read_directory");
-        let stream = HostDescriptor::read_directory(&mut self.as_wasi_view(), self_).await?;
+        let mut view = self.as_wasi_view();
+        let stream = HostDescriptor::read_directory(&mut view.filesystem(), self_).await?;
+        drop(view);
         // Iterating through the whole stream to make sure we have a stable order
         let mut entries = Vec::new();
         let iter = self.table().delete(stream)?;
@@ -174,7 +184,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync");
-        HostDescriptor::sync(&mut self.as_wasi_view(), self_).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::sync(&mut view.filesystem(), self_).await
     }
 
     async fn create_directory_at(
@@ -183,7 +194,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
-        HostDescriptor::create_directory_at(&mut self.as_wasi_view(), self_, path).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::create_directory_at(&mut view.filesystem(), self_, path).await
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
@@ -197,7 +209,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::Dir(d) => d.path.clone(),
         };
 
-        let stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await;
+        let mut view = self.as_wasi_view();
+        let stat = HostDescriptor::stat(&mut view.filesystem(), self_).await;
+        drop(view);
         let stat = match stat {
             Ok(mut stat) => {
                 stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
@@ -278,7 +292,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::Dir(d) => d.path.join(path.clone()),
         };
 
-        let stat = HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await;
+        let mut view = self.as_wasi_view();
+        let stat = HostDescriptor::stat_at(&mut view.filesystem(), self_, path_flags, path).await;
+        drop(view);
         let stat = match stat {
             Ok(mut stat) => {
                 stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
@@ -352,8 +368,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
 
         self.observe_function_call("filesystem::types::descriptor", "set_times_at");
+        let mut view = self.as_wasi_view();
         HostDescriptor::set_times_at(
-            &mut self.as_wasi_view(),
+            &mut view.filesystem(),
             fd,
             path_flags,
             path,
@@ -372,8 +389,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "link_at");
+        let mut view = self.as_wasi_view();
         HostDescriptor::link_at(
-            &mut self.as_wasi_view(),
+            &mut view.filesystem(),
             self_,
             old_path_flags,
             old_path,
@@ -392,8 +410,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "open_at");
+        let mut view = self.as_wasi_view();
         HostDescriptor::open_at(
-            &mut self.as_wasi_view(),
+            &mut view.filesystem(),
             self_,
             path_flags,
             path,
@@ -409,7 +428,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<String, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "readlink_at");
-        HostDescriptor::readlink_at(&mut self.as_wasi_view(), self_, path).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::readlink_at(&mut view.filesystem(), self_, path).await
     }
 
     async fn remove_directory_at(
@@ -418,7 +438,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
-        HostDescriptor::remove_directory_at(&mut self.as_wasi_view(), self_, path.clone()).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::remove_directory_at(&mut view.filesystem(), self_, path.clone()).await
     }
 
     async fn rename_at(
@@ -432,8 +453,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&new_fd)?;
 
         self.observe_function_call("filesystem::types::descriptor", "rename_at");
+        let mut view = self.as_wasi_view();
         HostDescriptor::rename_at(
-            &mut self.as_wasi_view(),
+            &mut view.filesystem(),
             old_fd,
             old_path.clone(),
             new_fd,
@@ -451,7 +473,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
 
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
-        HostDescriptor::symlink_at(&mut self.as_wasi_view(), fd, old_path, new_path.clone()).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::symlink_at(&mut view.filesystem(), fd, old_path, new_path.clone()).await
     }
 
     async fn unlink_file_at(
@@ -462,16 +485,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.fail_if_read_only(&fd)?;
 
         self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
-        HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), fd, path.clone()).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::unlink_file_at(&mut view.filesystem(), fd, path.clone()).await
     }
 
     async fn is_same_object(
         &mut self,
         self_: Resource<Descriptor>,
         other: Resource<Descriptor>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         self.observe_function_call("filesystem::types::descriptor", "is_same_object");
-        HostDescriptor::is_same_object(&mut self.as_wasi_view(), self_, other).await
+        let mut view = self.as_wasi_view();
+        HostDescriptor::is_same_object(&mut view.filesystem(), self_, other).await
     }
 
     async fn metadata_hash(
@@ -499,9 +524,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         Ok(calculate_metadata_hash(&metadata))
     }
 
-    fn drop(&mut self, rep: Resource<Descriptor>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<Descriptor>) -> wasmtime::Result<()> {
         self.observe_function_call("filesystem::types::descriptor", "drop");
-        HostDescriptor::drop(&mut self.as_wasi_view(), rep)
+        HostDescriptor::drop(&mut self.as_wasi_view().filesystem(), rep)
     }
 }
 
@@ -514,22 +539,23 @@ impl<Ctx: WorkerCtx> HostDirectoryEntryStream for DurableWorkerCtx<Ctx> {
             "filesystem::types::directory_entry_stream",
             "read_directory_entry",
         );
-        HostDirectoryEntryStream::read_directory_entry(&mut self.as_wasi_view(), self_).await
+        let mut view = self.as_wasi_view();
+        HostDirectoryEntryStream::read_directory_entry(&mut view.filesystem(), self_).await
     }
 
-    fn drop(&mut self, rep: Resource<DirectoryEntryStream>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<DirectoryEntryStream>) -> wasmtime::Result<()> {
         self.observe_function_call("filesystem::types::directory_entry_stream", "drop");
-        HostDirectoryEntryStream::drop(&mut self.as_wasi_view(), rep)
+        HostDirectoryEntryStream::drop(&mut self.as_wasi_view().filesystem(), rep)
     }
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn filesystem_error_code(&mut self, err: Resource<Error>) -> anyhow::Result<Option<ErrorCode>> {
-        Host::filesystem_error_code(&mut self.as_wasi_view(), err)
+    fn filesystem_error_code(&mut self, err: Resource<Error>) -> wasmtime::Result<Option<ErrorCode>> {
+        Host::filesystem_error_code(&mut self.as_wasi_view().filesystem(), err)
     }
 
-    fn convert_error_code(&mut self, err: FsError) -> anyhow::Result<ErrorCode> {
-        Host::convert_error_code(&mut self.as_wasi_view(), err)
+    fn convert_error_code(&mut self, err: FsError) -> wasmtime::Result<ErrorCode> {
+        Host::convert_error_code(&mut self.as_wasi_view().filesystem(), err)
     }
 }
 

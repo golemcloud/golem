@@ -35,8 +35,7 @@ use tonic::codec::CompressionEncoding;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{info, Instrument};
-use wasmtime::component::__internal::anyhow;
-use wasmtime::component::__internal::anyhow::anyhow;
+use anyhow::anyhow;
 use wasmtime::WasmBacktraceDetails;
 
 pub mod config;

@@ -18,14 +18,14 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::io::error::{Error, Host, HostError};
 
 impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
-    fn to_debug_string(&mut self, self_: Resource<Error>) -> anyhow::Result<String> {
+    fn to_debug_string(&mut self, self_: Resource<Error>) -> wasmtime::Result<String> {
         self.observe_function_call("io::error", "to_debug_string");
-        HostError::to_debug_string(&mut self.as_wasi_view().0, self_)
+        HostError::to_debug_string(self.table(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<Error>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<Error>) -> wasmtime::Result<()> {
         self.observe_function_call("io::error", "drop");
-        HostError::drop(&mut self.as_wasi_view().0, rep)
+        HostError::drop(self.table(), rep)
     }
 }
 

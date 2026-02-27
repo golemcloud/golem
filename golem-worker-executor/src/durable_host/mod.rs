@@ -125,8 +125,8 @@ use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
-use wasmtime_wasi::p2::{FsResult, Stderr, Stdout, WasiCtx, WasiImpl, WasiView};
-use wasmtime_wasi::{I32Exit, IoCtx, IoImpl, IoView, ResourceTable, ResourceTableError};
+use wasmtime_wasi::p2::FsResult;
+use wasmtime_wasi::{I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -215,8 +215,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
 
         let stdin = ManagedStdIn::disabled();
-        let stdout = ManagedStdOut::from_stdout(Stdout);
-        let stderr = ManagedStdErr::from_stderr(Stderr);
+        let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
+        let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
@@ -224,7 +224,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stdin,
             stdout,
             stderr,
-            |duration| anyhow!(SuspendForSleep(duration)),
+            |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             config.suspend.suspend_after,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
@@ -359,12 +359,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|exit| exit.0)
     }
 
-    pub fn as_wasi_view(&mut self) -> WasiImpl<DurableWorkerCtxWasiView<'_, Ctx>> {
-        WasiImpl(IoImpl(DurableWorkerCtxWasiView(self)))
+    pub fn as_wasi_view(&mut self) -> DurableWorkerCtxWasiView<'_, Ctx> {
+        DurableWorkerCtxWasiView(self)
     }
 
     pub fn as_wasi_http_view(&mut self) -> WasiHttpImpl<DurableWorkerCtxWasiHttpView<'_, Ctx>> {
-        WasiHttpImpl(IoImpl(DurableWorkerCtxWasiHttpView(self)))
+        WasiHttpImpl(DurableWorkerCtxWasiHttpView(self))
     }
 
     pub fn rpc(&self) -> Arc<dyn Rpc> {
@@ -3167,12 +3167,38 @@ impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiView<'_, Ctx> {
     fn io_ctx(&mut self) -> &mut IoCtx {
         self.0.io_ctx()
     }
+
+    fn io_data(&mut self) -> IoData<'_> {
+        let inner = &mut *self.0;
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        IoData { table, io_ctx }
+    }
 }
 
 // This wrapper forces the compiler to choose the wasmtime_wasi implementations for T: WasiView
 impl<Ctx: WorkerCtx> WasiView for DurableWorkerCtxWasiView<'_, Ctx> {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        self.0.ctx()
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        let inner = &mut *self.0;
+        let ctx = Arc::get_mut(&mut inner.wasi)
+            .expect("WasiCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("WasiCtx mutex must never fail");
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        WasiCtxView { ctx, table, io_ctx }
     }
 }
 
@@ -3190,11 +3216,31 @@ impl<Ctx: WorkerCtx> IoView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             .get_mut()
             .expect("IoCtx mutex must never fail")
     }
+
+    fn io_data(&mut self) -> IoData<'_> {
+        let inner = &mut *self.0;
+        let table = Arc::get_mut(&mut inner.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+        let io_ctx = Arc::get_mut(&mut inner.io_ctx)
+            .expect("IoCtx is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("IoCtx mutex must never fail");
+        IoData { table, io_ctx }
+    }
 }
 
 impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
     fn ctx(&mut self) -> &mut WasiHttpCtx {
         &mut self.0.wasi_http
+    }
+
+    fn table(&mut self) -> &mut ResourceTable {
+        Arc::get_mut(&mut self.0.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail")
     }
 
     fn send_request(

@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use wasmtime_wasi::cli::WasiCliView as _;
 use wasmtime_wasi::p2::bindings::cli::terminal_input::{Host, HostTerminalInput, TerminalInput};
 
-#[async_trait]
 impl<Ctx: WorkerCtx> HostTerminalInput for DurableWorkerCtx<Ctx> {
-    fn drop(&mut self, rep: Resource<TerminalInput>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<TerminalInput>) -> wasmtime::Result<()> {
         self.observe_function_call("cli::terminal_input::terminal_input", "drop");
-        HostTerminalInput::drop(&mut self.as_wasi_view(), rep)
+        HostTerminalInput::drop(&mut self.as_wasi_view().cli(), rep)
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}

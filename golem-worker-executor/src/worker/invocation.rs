@@ -279,10 +279,8 @@ async fn validate_function_parameters(
     match function {
         FindFunctionResult::ExportedFunction(func) => {
             let mut store = store.as_context_mut();
-            let param_types: Vec<_> = {
-                let params = func.params(&store);
-                params.to_vec()
-            };
+            let func_ty = func.ty(&store);
+            let param_types: Vec<_> = func_ty.params().collect();
 
             if function_input.len() != param_types.len() {
                 return Err(WorkerExecutorError::ParamTypeMismatch {
@@ -358,12 +356,13 @@ async fn invoke<Ctx: WorkerCtx>(
 
     for resource in resources_to_drop {
         debug!("Dropping passed owned resources {:?}", resource);
-        resource.resource_drop_async(&mut store).await?;
+        resource.resource_drop_async(&mut store).await
+            .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
     }
 
     match results {
         Ok(results) => {
-            let types = function.results(&store);
+            let types: Vec<_> = function.ty(&store).results().collect();
 
             if results.len() > 1 {
                 Err(WorkerExecutorError::runtime(
@@ -388,6 +387,7 @@ async fn invoke<Ctx: WorkerCtx>(
         }
         Err(err) => {
             let retry_from = store.data().get_current_retry_point().await;
+            let err: anyhow::Error = err.into();
             Ok(InvokeResult::from_error::<Ctx>(
                 consumed_fuel,
                 &err,
@@ -422,6 +422,7 @@ async fn drop_resource<Ctx: WorkerCtx>(
             Ok(_) => wrap_output_as_agent_result(kind, None, consumed_fuel),
             Err(err) => {
                 let retry_from = store.data().get_current_retry_point().await;
+                let err: anyhow::Error = err.into();
                 Ok(InvokeResult::from_error::<Ctx>(
                     consumed_fuel,
                     &err,
@@ -439,7 +440,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     function: Func,
     params: Vec<Val>,
     raw_function_name: &str,
-) -> Result<(anyhow::Result<Vec<Val>>, u64), WorkerExecutorError> {
+) -> Result<(wasmtime::Result<Vec<Val>>, u64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
@@ -452,8 +453,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     }
 
     let mut results: Vec<Val> = function
-        .results(&store)
-        .iter()
+        .ty(&store)
+        .results()
         .map(|_| Val::Bool(false))
         .collect();
 
