@@ -16,9 +16,9 @@ use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::service::worker::WorkerService;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::ValueAndType;
 use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
@@ -77,8 +77,7 @@ pub async fn agent_invoke(
         worker_name: agent_id.to_string(),
     };
 
-    let auth_ctx =
-        golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id);
+    let auth_ctx = golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_tool.account_id);
 
     let agent_output = worker_service
         .invoke_agent(

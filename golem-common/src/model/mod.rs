@@ -30,9 +30,9 @@ pub mod error;
 pub mod exports;
 pub mod http_api_deployment;
 pub mod invocation_context;
-pub mod mcp_deployment;
 pub mod login;
 pub mod lucene;
+pub mod mcp_deployment;
 pub mod oplog;
 pub mod optional_field_update;
 #[cfg(feature = "full")]

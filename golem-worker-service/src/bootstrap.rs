@@ -161,7 +161,7 @@ impl Services {
             component_service,
             worker_service,
             request_handler,
-            mcp_capability_lookup
+            mcp_capability_lookup,
         })
     }
 }
