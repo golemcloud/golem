@@ -45,6 +45,7 @@ use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation,
 };
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -67,7 +68,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
-use tracing::debug;
+use tracing::{debug, trace};
 use uuid::Uuid;
 
 pub struct NameResolutionCache {
@@ -156,6 +157,7 @@ pub struct TestUserContext<Deps> {
     pub token: TokenSecret,
     pub auto_deploy_enabled: bool,
     pub name_cache: Arc<NameResolutionCache>,
+    pub last_deployments: Arc<std::sync::RwLock<HashMap<EnvironmentId, DeploymentRevision>>>,
 }
 
 impl<Deps: TestDependencies> TestUserContext<Deps> {
@@ -228,6 +230,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let agent_types = extract_agent_types(&source_path, false, true).await?;
 
+        trace!("Agent types in component {component_name}:\n{agent_types:#?}");
+
         let component = client
             .create_component(
                 &environment_id.0,
@@ -245,8 +249,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         if self.auto_deploy_enabled {
-            // deploy environment to make component visible
-            self.deploy_environment(&component.environment_id).await?;
+            let deployment = self.deploy_environment(&component.environment_id).await?;
+            self.last_deployments
+                .write()
+                .unwrap()
+                .insert(component.environment_id, deployment.revision);
         }
 
         Ok(component)
@@ -344,8 +351,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         if self.auto_deploy_enabled {
-            // deploy environment to make component visible
-            self.deploy_environment(&component.environment_id).await?;
+            let deployment = self.deploy_environment(&component.environment_id).await?;
+            self.last_deployments
+                .write()
+                .unwrap()
+                .insert(component.environment_id, deployment.revision);
         }
 
         Ok(component)
@@ -415,6 +425,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
+                    deployment_revision: None,
                 },
             )
             .await
@@ -427,6 +438,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: Option<&IdempotencyKey>,
+        deployment_revision: Option<DeploymentRevision>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
@@ -463,6 +475,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
+                    deployment_revision: deployment_revision.map(i64::from),
                 },
             )
             .await
@@ -927,6 +940,20 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             .await;
 
         Ok((application, environment))
+    }
+
+    fn get_last_deployment_revision(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> anyhow::Result<DeploymentRevision> {
+        self.last_deployments
+            .read()
+            .unwrap()
+            .get(environment_id)
+            .copied()
+            .ok_or_else(|| {
+                anyhow!("No deployment revision recorded for environment {environment_id}")
+            })
     }
 }
 

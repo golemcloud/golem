@@ -12,7 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, is_static_method};
+use crate::agentic::agent_definition_attributes::{
+    parse_agent_definition_attributes, AgentDefinitionAttributes,
+};
+use crate::agentic::agent_definition_http_endpoint::{
+    extract_http_endpoints, ParsedHttpEndpointDetails,
+};
+use crate::agentic::helpers::{
+    has_autoinject_attribute, is_async_trait_attr, is_constructor_method, is_static_method,
+    AutoInjectAttrRemover,
+};
 use crate::agentic::{
     async_trait_in_agent_definition_error, endpoint_on_constructor_method_error,
     endpoint_on_static_method_error, generic_type_in_agent_method_error,
@@ -20,18 +29,11 @@ use crate::agentic::{
     invalid_static_method_in_agent_error, multiple_constructor_methods_error,
     no_constructor_method_error,
 };
-
-use syn::spanned::Spanned;
-use syn::ItemTrait;
-
-use crate::agentic::agent_definition_attributes::{
-    parse_agent_definition_attributes, AgentDefinitionAttributes,
-};
-use crate::agentic::agent_definition_http_endpoint::{
-    extract_http_endpoints, ParsedHttpEndpointDetails,
-};
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::spanned::Spanned;
+use syn::visit_mut::VisitMut;
+use syn::ItemTrait;
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
@@ -105,6 +107,8 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             agent_definition_trait.items.push(load_snapshot_item);
             agent_definition_trait.items.push(save_snapshot_item);
             agent_definition_trait.items.push(registration_function);
+
+            AutoInjectAttrRemover.visit_item_trait_mut(&mut agent_definition_trait);
 
             let result = quote! {
                 #[allow(async_fn_in_trait)]
@@ -280,21 +284,23 @@ fn get_agent_type_with_remote_client(
                         return generic_type_in_agent_method_error(pat_type.pat.span(), &type_name).into();
                     }
 
-                    let ty = &pat_type.ty;
-                    input_schema_logic.push(quote! {
-                        let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
-                        match schema {
-                            golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
-                            },
-                            golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
-                                multi_modal_inputs.extend(name_and_types);
-                            },
-                            golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
-                                default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_inject_schema)));
+                    if !has_autoinject_attribute(pat_type) {
+                        let ty = &pat_type.ty;
+                        input_schema_logic.push(quote! {
+                            let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
+                            match schema {
+                                golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                                    default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
+                                },
+                                golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                                    multi_modal_inputs.extend(name_and_types);
+                                },
+                                golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
+                                    default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_inject_schema)));
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
 
@@ -405,6 +411,8 @@ fn get_agent_type_with_remote_client(
     let high_level_description =
         extract_description(&agent_definition_trait.attrs).unwrap_or_default();
 
+    let mut autoinjected_types = Vec::new();
+
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
         constructor_description = extract_description(&ctor_fn.attrs).unwrap_or_default();
         constructor_prompt = extract_prompt_hint(&ctor_fn.attrs).unwrap_or_default();
@@ -433,7 +441,9 @@ fn get_agent_type_with_remote_client(
                             .into());
                         }
 
-                        if type_name != "Principal" {
+                        if has_autoinject_attribute(pat_type) {
+                            autoinjected_types.push(pat_type.ty.clone());
+                        } else if type_name != "Principal" {
                             constructor_param_defs.push(quote! {
                                 #param_ident: #ty
                             });
@@ -448,22 +458,23 @@ fn get_agent_type_with_remote_client(
                     _ => "_".to_string(),
                 };
 
-                let ty = &pat_type.ty;
-                constructor_parameters_with_schema.push(quote! {
-
-                    let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
-                    match schema {
-                        golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
-                        },
-                        golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
-                            constructor_multi_modal_inputs.extend(name_and_types);
-                        },
-                        golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
-                            constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_inject_schema)));
+                if !has_autoinject_attribute(pat_type) {
+                    let ty = &pat_type.ty;
+                    constructor_parameters_with_schema.push(quote! {
+                        let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
+                        match schema {
+                            golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                                constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
+                            },
+                            golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                                constructor_multi_modal_inputs.extend(name_and_types);
+                            },
+                            golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
+                                constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_inject_schema)));
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
         }
     }
@@ -524,6 +535,25 @@ fn get_agent_type_with_remote_client(
         quote! { #high_level_description }
     };
 
+    let config_impl = {
+        let add_described_config_entries = autoinjected_types.iter().map(|ct|
+            quote! {
+                {
+                    let mut config = <#ct as ::golem_rust::agentic::AutoInjectable>::config_entries();
+                    all_configs.append(&mut config);
+                }
+            }
+        );
+
+        quote! {
+            {
+                let mut all_configs = Vec::new();
+                #(#add_described_config_entries)*
+                all_configs
+            }
+        }
+    };
+
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
             golem_rust::agentic::ExtendedAgentType {
@@ -535,6 +565,7 @@ fn get_agent_type_with_remote_client(
                 mode: #mode_value,
                 http_mount: #http_options,
                 snapshotting: #snapshotting_value,
+                config: #config_impl
             }
         },
         remote_client,

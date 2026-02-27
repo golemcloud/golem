@@ -31,8 +31,9 @@ pub struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
+        unsafe { backtrace_on_stack_overflow::enable() };
         init_tracing_with_default_debug_env_filter(
-            &TracingConfig::test("integration-tests").with_env_overrides(),
+            &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
         );
         Self
     }

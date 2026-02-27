@@ -16,7 +16,7 @@ use crate::Tracing;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
-use golem_common::model::OplogIndex;
+use golem_common::model::{OplogIndex, WorkerStatus};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::Value;
@@ -284,6 +284,15 @@ async fn revert_auto_update(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor.log_output(&worker_id).await?;
+
+    // Wait for the worker to finish initialization before reading the oplog
+    executor
+        .wait_for_status(
+            &worker_id,
+            WorkerStatus::Idle,
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")

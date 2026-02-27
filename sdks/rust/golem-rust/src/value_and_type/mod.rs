@@ -1778,8 +1778,8 @@ impl IntoValue for AgentId {
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
         let builder = builder.record(Some("agent-id".to_string()), Some("golem".to_string()));
-        let builder = ComponentId::add_to_type_builder(builder.field("component_id"));
-        let builder = String::add_to_type_builder(builder.field("agent_id"));
+        let builder = ComponentId::add_to_type_builder(builder.field("component-id"));
+        let builder = String::add_to_type_builder(builder.field("agent-id"));
         builder.finish()
     }
 }

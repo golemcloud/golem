@@ -37,7 +37,9 @@ use golem_common::model::component::{
     PluginInstallation,
 };
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
+use golem_common::model::deployment::{
+    CurrentDeployment, DeploymentCreation, DeploymentRevision, DeploymentVersion,
+};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -254,8 +256,27 @@ pub trait TestDsl {
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
-        self.invoke_and_await_agent_impl(component, agent_id, None, method_name, params)
+        self.invoke_and_await_agent_impl(component, agent_id, None, None, method_name, params)
             .await
+    }
+
+    async fn invoke_and_await_agent_at_deployment(
+        &self,
+        component: &ComponentDto,
+        agent_id: &AgentId,
+        deployment_revision: DeploymentRevision,
+        method_name: &str,
+        params: DataValue,
+    ) -> anyhow::Result<DataValue> {
+        self.invoke_and_await_agent_impl(
+            component,
+            agent_id,
+            None,
+            Some(deployment_revision),
+            method_name,
+            params,
+        )
+        .await
     }
 
     async fn invoke_and_await_agent_with_key(
@@ -270,6 +291,7 @@ pub trait TestDsl {
             component,
             agent_id,
             Some(idempotency_key),
+            None,
             method_name,
             params,
         )
@@ -281,6 +303,7 @@ pub trait TestDsl {
         component: &ComponentDto,
         agent_id: &AgentId,
         idempotency_key: Option<&IdempotencyKey>,
+        deployment_revision: Option<DeploymentRevision>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue>;
@@ -594,6 +617,11 @@ pub trait TestDslExtended: TestDsl {
 
         Ok(deployment)
     }
+
+    fn get_last_deployment_revision(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> anyhow::Result<DeploymentRevision>;
 }
 
 pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {

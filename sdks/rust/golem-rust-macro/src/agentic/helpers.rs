@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use syn::visit_mut::VisitMut;
 use syn::{ReturnType, Type};
 
 pub struct FunctionOutputInfo {
@@ -91,4 +92,21 @@ pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
     let path = attr.path();
 
     path.is_ident("async_trait") || path.is_ident("async_trait::async_trait")
+}
+
+pub fn has_autoinject_attribute(pat_type: &syn::PatType) -> bool {
+    pat_type
+        .attrs
+        .iter()
+        .any(|a| a.path().is_ident("autoinject"))
+}
+
+pub struct AutoInjectAttrRemover;
+impl VisitMut for AutoInjectAttrRemover {
+    fn visit_fn_arg_mut(&mut self, i: &mut syn::FnArg) {
+        if let syn::FnArg::Typed(arg) = i {
+            arg.attrs.retain(|att| !att.path().is_ident("autoinject"));
+        }
+        syn::visit_mut::visit_fn_arg_mut(self, i);
+    }
 }
