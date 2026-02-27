@@ -994,7 +994,7 @@ function deserializeReturnValue(
 }
 
 function overrideSelfAgentId(agentId: AgentId) {
-  (globalThis as unknown as { currentAgentId: string }).currentAgentId = agentId.value;
+  globalThis.currentAgentId = agentId.value;
   // vi.mock('wasi:cli/environment@0.2.3', () => ({
   //   getEnvironment: (): [string, string][] => {
   //     return [['GOLEM_AGENT_ID', agentId.value]];

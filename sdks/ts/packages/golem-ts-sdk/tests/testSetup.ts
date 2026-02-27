@@ -71,11 +71,11 @@ vi.mock('golem:rpc/types@0.2.2', () => ({
   WasmRpc: vi.fn().mockImplementation((_: AgentId) => ({})),
 }));
 
-(globalThis as unknown as { currentAgentId: string }).currentAgentId = 'foo-agent(123)';
+globalThis.currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.2.3', () => ({
   getEnvironment: () => [
-    ['GOLEM_AGENT_ID', (globalThis as unknown as { currentAgentId: string }).currentAgentId],
+    ['GOLEM_AGENT_ID', globalThis.currentAgentId],
   ],
 }));
 
