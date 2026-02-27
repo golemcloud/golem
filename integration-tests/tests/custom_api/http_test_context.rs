@@ -72,7 +72,7 @@ pub async fn make_test_context(
         .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
         .await?;
 
-    let deployment = user.deploy_environment(&env.id).await?;
+    let deployment = user.deploy_environment(env.id).await?;
     let host_header = HeaderValue::from_str(&domain.0)?;
 
     let client = {

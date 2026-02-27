@@ -1,5 +1,6 @@
 [
   {
+    "config": [],
     "constructor": {
       "description": "",
       "inputSchema": {
@@ -6202,6 +6203,7 @@
     "typeName": "BarAgent"
   },
   {
+    "config": [],
     "constructor": {
       "description": "",
       "inputSchema": {
@@ -12452,6 +12454,7 @@
     "typeName": "FooAgent"
   },
   {
+    "config": [],
     "constructor": {
       "description": "",
       "inputSchema": {

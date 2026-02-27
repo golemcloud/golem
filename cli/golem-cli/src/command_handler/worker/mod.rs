@@ -461,6 +461,7 @@ impl WorkerCommandHandler {
             schedule_at,
             idempotency_key: Some(idempotency_key.value.clone()),
             deployment_revision: None,
+            owner_account_email: None,
         };
 
         let clients = self.ctx.golem_clients().await?;

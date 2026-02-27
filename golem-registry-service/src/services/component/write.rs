@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use super::ComponentError;
-use crate::model::component::Component;
-use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
@@ -25,25 +23,33 @@ use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
+use crate::services::run_cpu_bound_work;
 use anyhow::Context;
-use golem_common::model::component::ComponentRevision;
+use golem_common::base_model::component::LocalAgentConfigEntry as CommonLocalAgentConfigEntry;
+use golem_common::model::agent::{AgentType, ConfigValueType};
 use golem_common::model::component::{
     ComponentCreation, ComponentFileContentHash, ComponentFileOptions, ComponentFilePath,
     ComponentFilePermissions, ComponentUpdate, InitialComponentFile, InstalledPlugin,
     PluginInstallationAction,
 };
 use golem_common::model::component::{ComponentId, PluginInstallation};
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::{Component, LocalAgentConfigEntry};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_wasm::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tracing::{debug, info};
+use tracing::info;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -130,36 +136,41 @@ impl ComponentWriteService {
             )
             .await?;
 
+        let plugin_installations = self
+            .plugin_installations_for_new_component(&environment, component_creation.plugins, auth)
+            .await?;
+
         let component_id = ComponentId::new();
         let (wasm_hash, wasm_object_store_key) = self
             .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;
 
-        let new_revision = NewComponentRevision::new(
+        let local_agent_config = validate_and_transform_local_agent_config_entries(
+            &component_creation.agent_types,
+            component_creation.local_agent_config,
+        )?;
+
+        let component_size = wasm.len() as u64;
+        let component_metadata = analyze_and_validate_component_wasm(
+            &component_creation.component_name,
+            component_creation.agent_types,
+            wasm.clone(),
+        )
+        .await?;
+
+        let record = ComponentRevisionRecord::creation(
             component_id,
-            ComponentRevision::INITIAL,
-            environment_id,
-            component_creation.component_name.clone(),
+            component_size,
+            component_metadata,
             initial_component_files,
+            plugin_installations,
             component_creation.env,
             component_creation.config_vars,
+            local_agent_config,
             wasm_hash,
             wasm_object_store_key,
-            self.plugin_installations_for_new_component(
-                &environment,
-                component_creation.plugins,
-                auth,
-            )
-            .await?,
-            component_creation.agent_types,
+            auth.account_id(),
         );
-
-        let finalized_revision = self
-            .finalize_new_component_revision(environment_id, new_revision, wasm)
-            .await?;
-
-        let record =
-            ComponentRevisionRecord::from_model(finalized_revision.clone(), auth.account_id());
 
         let stored_component: Component = self
             .component_repo
@@ -167,7 +178,6 @@ impl ComponentWriteService {
                 environment_id.0,
                 &component_creation.component_name.0,
                 record,
-                environment.version_check,
             )
             .await
             .map_err(|err| match err {
@@ -231,83 +241,106 @@ impl ComponentWriteService {
             EnvironmentAction::UpdateComponent,
         )?;
 
-        let component = component_record
+        let mut component = component_record
             .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         if component_update.current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
         };
 
+        component.revision = component.revision.next()?;
+
         let environment_id = component.environment_id;
         let component_id = component.id;
 
         info!(environment_id = %environment_id, "Update component");
 
-        let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = new_wasm {
+        // agent types changing means we need to invalidate component_metadata and agent config if they are not updated.
+        let agent_types_changed = component_update.agent_types.is_some();
+
+        let agent_types = component_update
+            .agent_types
+            .unwrap_or(component.metadata.agent_types().to_vec());
+
+        if let Some(new_wasm) = new_wasm {
             self.account_usage_service
                 .ensure_updated_component_within_limits(
                     environment.owner_account_id,
-                    u64::try_from(new_data.len()).unwrap(),
+                    u64::try_from(new_wasm.len()).unwrap(),
                 )
                 .await?;
 
             let (wasm_hash, wasm_object_store_key) = self
-                .upload_and_hash_component_wasm(environment_id, new_data.clone())
+                .upload_and_hash_component_wasm(environment_id, new_wasm.clone())
                 .await?;
 
-            (new_data, wasm_object_store_key, wasm_hash)
-        } else {
+            component.wasm_hash = wasm_hash;
+            component.object_store_key = wasm_object_store_key;
+            component.metadata = analyze_and_validate_component_wasm(
+                &component.component_name,
+                agent_types,
+                new_wasm.clone(),
+            )
+            .await?;
+        } else if agent_types_changed {
+            // TODO: skip the download here
             let old_data = self
                 .object_store
                 .get(environment_id, &component.object_store_key)
                 .await?;
-            (
+
+            component.metadata = analyze_and_validate_component_wasm(
+                &component.component_name,
+                agent_types,
                 Arc::from(old_data),
-                component.object_store_key,
-                component.wasm_hash,
             )
+            .await?;
         };
 
-        let new_revision = NewComponentRevision::new(
-            component_id,
-            component.revision.next()?,
-            environment_id,
-            component.component_name,
-            self.update_initial_component_files(
+        if let Some(env) = component_update.env {
+            component.env = env;
+        }
+
+        if let Some(config_vars) = component_update.config_vars {
+            component.config_vars = config_vars;
+        }
+
+        if let Some(local_agent_config) = component_update.local_agent_config {
+            component.local_agent_config = validate_and_transform_local_agent_config_entries(
+                component.metadata.agent_types(),
+                local_agent_config,
+            )?;
+        } else if agent_types_changed {
+            check_transformed_local_agent_config_entries_match(
+                component.metadata.agent_types(),
+                &component.local_agent_config,
+            )?;
+        };
+
+        component.files = self
+            .update_initial_component_files(
                 environment_id,
                 component.files,
                 component_update.removed_files,
                 new_files_archive,
                 component_update.new_file_options,
             )
-            .await?,
-            component_update.env.unwrap_or(component.env),
-            component_update
-                .config_vars
-                .unwrap_or(component.config_vars),
-            wasm_hash,
-            wasm_object_store_key,
-            self.update_plugin_installations(
+            .await?;
+
+        component.installed_plugins = self
+            .update_plugin_installations(
                 &environment,
                 component.installed_plugins,
                 component_update.plugin_updates,
                 auth,
             )
-            .await?,
-            component_update
-                .agent_types
-                .unwrap_or(component.metadata.agent_types().to_vec()),
-        );
-
-        let finalized_revision = self
-            .finalize_new_component_revision(environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision, auth.account_id());
+        let record = ComponentRevisionRecord::from_model(component, auth.account_id());
 
         let stored_component: Component = self
             .component_repo
-            .update(record, environment.version_check)
+            .update(record)
             .await
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
@@ -661,34 +694,126 @@ impl ComponentWriteService {
 
         Ok(updated)
     }
+}
 
-    async fn finalize_new_component_revision(
-        &self,
-        environment_id: EnvironmentId,
-        new_revision: NewComponentRevision,
-        wasm: Arc<[u8]>,
-    ) -> Result<FinalizedComponentRevision, ComponentError> {
-        let (_, transformed_object_store_key) = self
-            .upload_and_hash_component_wasm(environment_id, wasm.clone())
+fn validate_and_transform_local_agent_config_entries(
+    agent_types: &[AgentType],
+    mut agent_local_config: Vec<CommonLocalAgentConfigEntry>,
+) -> Result<Vec<LocalAgentConfigEntry>, ComponentError> {
+    let mut results = Vec::new();
+
+    for agent_type in agent_types {
+        let mut seen_agent_config_keys = HashSet::new();
+
+        let applicable_config_values =
+            agent_local_config.extract_if(.., |alc| alc.agent == agent_type.type_name);
+        for config_value in applicable_config_values {
+            let matching_declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.key == config_value.key)
+                .ok_or_else(|| ComponentError::AgentConfigNotDeclared {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                })?;
+
+            let analysed_type: AnalysedType = match &matching_declaration.value {
+                ConfigValueType::Local(inner) => inner.value.clone(),
+                ConfigValueType::Shared(_) => {
+                    return Err(
+                        ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed {
+                            agent: agent_type.type_name.clone(),
+                            key: config_value.key,
+                        },
+                    );
+                }
+            };
+
+            let value = ValueAndType::parse_with_type(&config_value.value, &analysed_type)
+                .map_err(|errors| ComponentError::AgentConfigTypeMismatch {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                    errors,
+                })?;
+
+            let result = LocalAgentConfigEntry {
+                agent: config_value.agent,
+                key: config_value.key,
+                value,
+            };
+
+            if !seen_agent_config_keys.insert(result.key.clone()) {
+                return Err(ComponentError::AgentConfigDuplicateValue {
+                    agent: agent_type.type_name.clone(),
+                    key: result.key.clone(),
+                });
+            }
+
+            results.push(result);
+        }
+    }
+
+    Ok(results)
+}
+
+fn check_transformed_local_agent_config_entries_match(
+    agent_types: &[AgentType],
+    agent_local_config: &[LocalAgentConfigEntry],
+) -> Result<(), ComponentError> {
+    for agent_type in agent_types {
+        let applicable_config_values = agent_local_config
+            .iter()
+            .filter(|alc| alc.agent == agent_type.type_name);
+        for config_value in applicable_config_values {
+            let matching_declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.key == config_value.key)
+                .ok_or_else(|| ComponentError::AgentConfigNotDeclared {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                })?;
+
+            let analysed_type: &AnalysedType = match &matching_declaration.value {
+                ConfigValueType::Local(inner) => &inner.value,
+                ConfigValueType::Shared(_) => {
+                    return Err(
+                        ComponentError::AgentConfigProvidedSharedWhereOnlyLocalAllowed {
+                            agent: agent_type.type_name.clone(),
+                            key: config_value.key.clone(),
+                        },
+                    );
+                }
+            };
+
+            if config_value.value.typ != *analysed_type {
+                return Err(ComponentError::AgentConfigOldConfigNotValid {
+                    agent: agent_type.type_name.clone(),
+                    key: config_value.key.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn analyze_and_validate_component_wasm(
+    component_name: &ComponentName,
+    agent_types: Vec<AgentType>,
+    wasm: Arc<[u8]>,
+) -> Result<ComponentMetadata, ComponentError> {
+    let component_metadata =
+        run_cpu_bound_work(move || ComponentMetadata::analyse_component(&wasm, agent_types))
             .await?;
 
-        let finalized_revision =
-            new_revision.with_transformed_component(transformed_object_store_key, &wasm)?;
-
-        if let Some(known_root_package_name) = &finalized_revision.metadata.root_package_name()
-            && finalized_revision.component_name.0 != *known_root_package_name
-        {
-            Err(ComponentError::InvalidComponentName {
-                actual: finalized_revision.component_name.0.clone(),
-                expected: known_root_package_name.clone(),
-            })?;
-        }
-
-        debug!(
-            environment_id = %environment_id,
-            "Finalized component",
-        );
-
-        Ok(finalized_revision)
+    if let Some(known_root_package_name) = &component_metadata.root_package_name()
+        && component_name.0 != *known_root_package_name
+    {
+        return Err(ComponentError::InvalidComponentName {
+            actual: component_name.0.clone(),
+            expected: known_root_package_name.clone(),
+        });
     }
+
+    Ok(component_metadata)
 }

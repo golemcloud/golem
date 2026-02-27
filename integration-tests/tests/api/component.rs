@@ -18,11 +18,12 @@ use golem_client::api::{
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
-    DeployedRegisteredAgentType, ElementSchema, NamedElementSchema, NamedElementSchemas,
-    RegisteredAgentTypeImplementer, Snapshotting,
+    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
+    ComponentModelElementSchema, DataSchema, DeployedRegisteredAgentType, ElementSchema,
+    NamedElementSchema, NamedElementSchemas, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use golem_common::model::base64::Base64;
+use golem_common::model::component::LocalAgentConfigEntry;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
@@ -36,7 +37,8 @@ use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
-use pretty_assertions::{assert_eq, assert_ne};
+use pretty_assertions::{assert_eq, assert_matches, assert_ne};
+use serde_json::json;
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
@@ -96,6 +98,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             vec![],
             None,
             None,
+            None,
         )
         .await?;
 
@@ -150,6 +153,7 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 ("var1".to_string(), "value11".to_string()),
                 ("var2".to_string(), "value2".to_string()),
             ])),
+            None,
         )
         .await?;
 
@@ -186,6 +190,7 @@ async fn component_update_with_wrong_revision_is_rejected(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
+                local_agent_config: None,
                 agent_types: None,
                 plugin_updates: Vec::new(),
             },
@@ -309,6 +314,7 @@ async fn create_component_with_plugins_and_update_installations(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
+                local_agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
                     environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
@@ -337,6 +343,7 @@ async fn create_component_with_plugins_and_update_installations(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
+                local_agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
                     environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
@@ -403,6 +410,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
+                local_agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
                     environment_plugin_grant_id: oplog_plugin_grant.id,
@@ -446,6 +454,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
                 )]),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
+                local_agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: Vec::new(),
             },
@@ -551,6 +560,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         mode: AgentMode::Durable,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
     };
 
     let component = client
@@ -561,6 +571,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
+                local_agent_config: Vec::new(),
                 agent_types: vec![agent_type.clone()],
                 plugins: Vec::new(),
             },
@@ -578,7 +589,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         std::slice::from_ref(&agent_type)
     );
 
-    let deployment = user.deploy_environment(&env.id).await?;
+    let deployment = user.deploy_environment(env.id).await?;
 
     let agent_types = client
         .list_deployment_agent_types(&env.id.0, deployment.revision.into())
@@ -670,6 +681,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
+                local_agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
                     PluginInstallation {
@@ -748,6 +760,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 file_options: BTreeMap::new(),
                 env: BTreeMap::new(),
                 config_vars: BTreeMap::new(),
+                local_agent_config: Vec::new(),
                 agent_types: Vec::new(),
                 plugins: vec![
                     PluginInstallation {
@@ -858,6 +871,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
+                local_agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![
                     PluginInstallationAction::Install(PluginInstallation {
@@ -938,6 +952,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                 new_file_options: BTreeMap::new(),
                 env: None,
                 config_vars: None,
+                local_agent_config: None,
                 agent_types: None,
                 plugin_updates: vec![
                     PluginInstallationAction::Install(PluginInstallation {
@@ -963,6 +978,203 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
             RegistryServiceUpdateComponentError::Error409(_)
         ))
     ));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_with_local_agent_config(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    user.component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["foo".to_string()],
+                value: json!(1),
+            },
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["nested".to_string(), "a".to_string()],
+                value: json!(true),
+            },
+        ])
+        .store()
+        .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn local_agent_config_with_invalid_type_fails_with_400(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let result = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["foo".to_string()],
+            value: json!(true),
+        }])
+        .store()
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceCreateComponentError> =
+        error.downcast().unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceCreateComponentError::Error400(_))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn local_agent_config_with_undeclared_path_fails_with_409(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let result = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["undeclared".to_string()],
+            value: json!(true),
+        }])
+        .store()
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceCreateComponentError> =
+        error.downcast().unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceCreateComponentError::Error409(_))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn add_new_local_agent_config_entry_during_update(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["foo".to_string()],
+            value: json!(1),
+        }])
+        .store()
+        .await?;
+
+    user.update_component_with(
+        &component.id,
+        component.revision,
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        Some(vec![
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["foo".to_string()],
+                value: json!(2),
+            },
+            LocalAgentConfigEntry {
+                agent: AgentTypeName("ConfigAgent".to_string()),
+                key: vec!["bar".to_string()],
+                value: json!("value"),
+            },
+        ]),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn updating_agent_with_invalid_config_entry_fails_with_409(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .with_local_agent_config(vec![LocalAgentConfigEntry {
+            agent: AgentTypeName("ConfigAgent".to_string()),
+            key: vec!["foo".to_string()],
+            value: json!(1),
+        }])
+        .store()
+        .await?;
+
+    let result = user
+        .update_component_with(
+            &component.id,
+            component.revision,
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(vec![
+                LocalAgentConfigEntry {
+                    agent: AgentTypeName("ConfigAgent".to_string()),
+                    key: vec!["foo".to_string()],
+                    value: json!(2),
+                },
+                LocalAgentConfigEntry {
+                    agent: AgentTypeName("ConfigAgent".to_string()),
+                    key: vec!["bar".to_string()],
+                    value: json!(1),
+                },
+            ]),
+        )
+        .await;
+
+    let Err(error) = result else {
+        panic!("expected failed request")
+    };
+
+    let downcasted: golem_client::Error<RegistryServiceUpdateComponentError> =
+        error.downcast().unwrap();
+
+    assert_matches!(
+        downcasted,
+        golem_client::Error::Item(RegistryServiceUpdateComponentError::Error400(_))
+    );
 
     Ok(())
 }

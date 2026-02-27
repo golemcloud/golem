@@ -40,12 +40,13 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{ComponentCreation, ComponentUpdate};
+use golem_common::model::component::{ComponentCreation, ComponentUpdate, LocalAgentConfigEntry};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, PluginInstallation,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -185,6 +186,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -240,6 +242,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     file_options,
                     env,
                     config_vars,
+                    local_agent_config,
                     plugins,
                     agent_types,
                 },
@@ -249,11 +252,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         if self.auto_deploy_enabled {
-            let deployment = self.deploy_environment(&component.environment_id).await?;
-            self.last_deployments
-                .write()
-                .unwrap()
-                .insert(component.environment_id, deployment.revision);
+            self.deploy_environment(component.environment_id).await?;
         }
 
         Ok(component)
@@ -289,6 +288,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
+        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let client = self.deps.registry_service().client(&self.token).await;
@@ -340,6 +340,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     removed_files,
                     env,
                     config_vars,
+                    local_agent_config,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
@@ -351,11 +352,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await?;
 
         if self.auto_deploy_enabled {
-            let deployment = self.deploy_environment(&component.environment_id).await?;
-            self.last_deployments
-                .write()
-                .unwrap()
-                .insert(component.environment_id, deployment.revision);
+            self.deploy_environment(component.environment_id).await?;
         }
 
         Ok(component)
@@ -426,6 +423,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     schedule_at: None,
                     idempotency_key: None,
                     deployment_revision: None,
+                    owner_account_email: None,
                 },
             )
             .await
@@ -476,6 +474,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     schedule_at: None,
                     idempotency_key: None,
                     deployment_revision: deployment_revision.map(i64::from),
+                    owner_account_email: None,
                 },
             )
             .await
@@ -940,6 +939,35 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             .await;
 
         Ok((application, environment))
+    }
+
+    async fn deploy_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> anyhow::Result<CurrentDeployment> {
+        let client = self.registry_service_client().await;
+
+        let plan = client
+            .get_environment_deployment_plan(&environment_id.0)
+            .await?;
+
+        let deployment = client
+            .deploy_environment(
+                &environment_id.0,
+                &DeploymentCreation {
+                    current_revision: plan.current_revision,
+                    expected_deployment_hash: plan.deployment_hash,
+                    version: DeploymentVersion(Uuid::new_v4().to_string()),
+                },
+            )
+            .await?;
+
+        self.last_deployments
+            .write()
+            .unwrap()
+            .insert(environment_id, deployment.revision);
+
+        Ok(deployment)
     }
 
     fn get_last_deployment_revision(
