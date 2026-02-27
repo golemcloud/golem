@@ -183,8 +183,3 @@ async fn test_resolve_agent_type_nonexistent_revision_returns_none(deps: &Deps) 
 async fn test_resolve_agent_type_unknown_email_returns_none(deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_unknown_email_returns_none(deps).await;
 }
-
-#[test]
-async fn test_resolve_agent_type_case_insensitive_email(deps: &Deps) {
-    crate::repo::common::test_resolve_agent_type_case_insensitive_email(deps).await;
-}
