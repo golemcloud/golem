@@ -21,8 +21,8 @@ use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
     ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
-    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, WithSource,
-    DEFAULT_CONFIG_FILE_NAME,
+    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps,
+    WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
@@ -568,10 +568,16 @@ fn load_app(
     component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
-    load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
-        raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::from_raw_apps(application_name, environments, component_presets, raw_apps)
-                .map(|app| (app, calling_working_dir))
+    load_raw_apps(source_mode).map(|loaded_raw_apps| {
+        loaded_raw_apps.and_then(|loaded_raw_apps| {
+            Application::from_raw_apps(
+                loaded_raw_apps.app_root_dir,
+                application_name,
+                environments,
+                component_presets,
+                loaded_raw_apps.raw_apps,
+            )
+            .map(|app| (app, loaded_raw_apps.calling_working_dir))
         })
     })
 }
@@ -581,11 +587,12 @@ fn preload_app(
     dev_mode: bool,
     sdk_overrides: &SdkOverrides,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
-    load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
-        raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            let used_language_templates = Application::language_templates_from_raw_apps(&raw_apps);
+    load_raw_apps(source_mode).map(|loaded_raw_apps| {
+        loaded_raw_apps.and_then(|loaded_raw_apps| {
+            let used_language_templates =
+                Application::language_templates_from_raw_apps(&loaded_raw_apps.raw_apps);
 
-            Application::environments_from_raw_apps(raw_apps.as_slice())
+            Application::environments_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
                 .and_then(|application_name_and_environments| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
                         &used_language_templates,
@@ -599,16 +606,17 @@ fn preload_app(
                 .map(
                     |(on_demand_common_raw_apps, application_name_and_environments)| {
                         let raw_apps = {
-                            let mut raw_apps = raw_apps;
+                            let mut raw_apps = loaded_raw_apps.raw_apps;
                             raw_apps.extend(on_demand_common_raw_apps);
                             raw_apps
                         };
 
                         ApplicationPreloadResult {
-                            source_mode: ApplicationSourceMode::Preloaded {
+                            source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
+                                app_root_dir: loaded_raw_apps.app_root_dir,
+                                calling_working_dir: loaded_raw_apps.calling_working_dir,
                                 raw_apps,
-                                calling_working_dir,
-                            },
+                            }),
                             loaded_with_warnings: false,
                             application_name_and_environments: Some(
                                 application_name_and_environments,
@@ -646,15 +654,12 @@ fn ensure_on_demand_commons(
     Ok(on_demand_raw_apps)
 }
 
-fn load_raw_apps(
-    source_mode: ApplicationSourceMode,
-) -> Option<ValidatedResult<(Vec<app_raw::ApplicationWithSource>, PathBuf)>> {
-    fn load(
-        root_source: Option<&Path>,
-    ) -> Option<ValidatedResult<(Vec<app_raw::ApplicationWithSource>, PathBuf)>> {
-        collect_sources_and_switch_to_app_root(root_source).map(|sources_and_calling_working_dir| {
-            sources_and_calling_working_dir.and_then(|(sources, calling_working_dir)| {
-                sources
+fn load_raw_apps(source_mode: ApplicationSourceMode) -> Option<ValidatedResult<LoadedRawApps>> {
+    fn load(root_source: Option<&Path>) -> Option<ValidatedResult<LoadedRawApps>> {
+        collect_sources_and_switch_to_app_root(root_source).map(|collected_sources| {
+            collected_sources.and_then(|collected_sources| {
+                collected_sources
+                    .sources
                     .into_iter()
                     .map(|source| {
                         ValidatedResult::from_result(
@@ -662,7 +667,11 @@ fn load_raw_apps(
                         )
                     })
                     .collect::<ValidatedResult<Vec<_>>>()
-                    .map(|raw_apps| (raw_apps, calling_working_dir))
+                    .map(|raw_apps| LoadedRawApps {
+                        app_root_dir: collected_sources.app_root_dir,
+                        calling_working_dir: collected_sources.calling_working_dir,
+                        raw_apps,
+                    })
             })
         })
     }
@@ -670,17 +679,22 @@ fn load_raw_apps(
     match source_mode {
         ApplicationSourceMode::Automatic => load(None),
         ApplicationSourceMode::ByRootManifest(root_manifest) => load(Some(&root_manifest)),
-        ApplicationSourceMode::Preloaded {
-            raw_apps,
-            calling_working_dir,
-        } => Some(ValidatedResult::Ok((raw_apps, calling_working_dir))),
+        ApplicationSourceMode::Preloaded(loaded_raw_apps) => {
+            Some(ValidatedResult::Ok(loaded_raw_apps))
+        }
         ApplicationSourceMode::None => None,
     }
 }
 
+struct CollectedSources {
+    app_root_dir: PathBuf,
+    calling_working_dir: PathBuf,
+    sources: BTreeSet<PathBuf>,
+}
+
 fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
-) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
+) -> Option<ValidatedResult<CollectedSources>> {
     let calling_working_dir = std::env::current_dir()
         .expect("Failed to get current working directory")
         .canonicalize()
@@ -689,26 +703,35 @@ fn collect_sources_and_switch_to_app_root(
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
 
-    fn collect_by_main_source(source: &Path) -> Option<ValidatedResult<BTreeSet<PathBuf>>> {
+    fn collect_by_main_source(
+        source: &Path,
+    ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
         let source_dir =
             fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
         std::env::set_current_dir(source_dir).expect("Failed to set current dir for config parent");
 
         let includes = includes_from_yaml_file(source);
         if includes.is_empty() {
-            Some(ValidatedResult::Ok(BTreeSet::from([source.to_path_buf()])))
+            Some(ValidatedResult::Ok((
+                BTreeSet::from([source.to_path_buf()]),
+                source_dir.to_path_buf(),
+            )))
         } else {
             Some(
-                ValidatedResult::from_result(fs::compile_and_collect_globs(source_dir, &includes))
-                    .map(|mut sources| {
-                        sources.insert(0, source.to_path_buf());
-                        sources.into_iter().collect()
-                    }),
+                ValidatedResult::from_result(fs::compile_and_collect_globs(
+                    &source_dir,
+                    source_dir,
+                    &includes,
+                ))
+                .map(|mut sources| {
+                    sources.insert(0, source.to_path_buf());
+                    (sources.into_iter().collect(), source_dir.to_path_buf())
+                }),
             )
         }
     }
 
-    let sources = match root_manifest {
+    let sources_and_root_dir = match root_manifest {
         None => match find_main_source() {
             Some(source) => collect_by_main_source(&source),
             None => None,
@@ -723,9 +746,10 @@ fn collect_sources_and_switch_to_app_root(
         },
     };
 
-    sources.map(|sources| {
-        sources
-            .inspect(|sources| {
+    sources_and_root_dir.map(|sources_and_root_dir| {
+        sources_and_root_dir
+            .inspect(|sources_and_root_dir| {
+                let sources = &sources_and_root_dir.0;
                 if sources.is_empty() {
                     log_action("Found", "no sources");
                 } else {
@@ -741,7 +765,11 @@ fn collect_sources_and_switch_to_app_root(
                     );
                 }
             })
-            .map(|sources| (sources, calling_working_dir))
+            .map(|sources_and_root_dir| CollectedSources {
+                app_root_dir: sources_and_root_dir.1,
+                calling_working_dir,
+                sources: sources_and_root_dir.0,
+            })
     })
 }
 
