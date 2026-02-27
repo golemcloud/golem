@@ -243,7 +243,7 @@ export class Secret<T> {
 
   /** Lazily loads or reloads the secret value */
   get(): T {
-    return loadConfigKey(this.path, this.typeInfoInternal);
+    return loadConfigKey(this.path, this.typeInfoInternal) as T;
   }
 }
 

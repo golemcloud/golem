@@ -840,9 +840,9 @@ function initiateFooAgent(constructorParam: string, simpleAgentClassMeta: ClassM
 
 function testInvoke(
   methodName: string,
-  parameterNameAndValues: [string, any][],
+  parameterNameAndValues: [string, unknown][],
   resolvedAgent: ResolvedAgent,
-  expectedOutput: any,
+  expectedOutput: unknown,
   multimodal: boolean,
   expectedDataValueOutput?: DataValue,
 ) {
@@ -873,7 +873,7 @@ function testInvoke(
 }
 
 function createInputDataValue(
-  parameterNameAndValues: [string, any][],
+  parameterNameAndValues: [string, unknown][],
   methodName: string,
   multimodal: boolean,
 ): DataValue {
@@ -997,7 +997,7 @@ function deserializeReturnValue(
 }
 
 function overrideSelfAgentId(agentId: AgentId) {
-  (globalThis as any).currentAgentId = agentId.value;
+  globalThis.currentAgentId = agentId.value;
   // vi.mock('wasi:cli/environment@0.2.3', () => ({
   //   getEnvironment: (): [string, string][] => {
   //     return [['GOLEM_AGENT_ID', agentId.value]];

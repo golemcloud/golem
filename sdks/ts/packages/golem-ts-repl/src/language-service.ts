@@ -668,8 +668,11 @@ function getFallbackArgumentInfo(
 function getResolvedSignature(
   callExpression: tsm.CallExpression | tsm.NewExpression,
 ): tsm.Signature | undefined {
-  const directSignature = (callExpression as any).getSignature?.();
-  if (directSignature) return directSignature;
+  const signature = callExpression
+    .getProject()
+    .getTypeChecker()
+    .getResolvedSignature(callExpression);
+  if (signature) return signature;
 
   const isNew = callExpression.getKind() === tsm.SyntaxKind.NewExpression;
   const expressionType = callExpression.getExpression().getType();

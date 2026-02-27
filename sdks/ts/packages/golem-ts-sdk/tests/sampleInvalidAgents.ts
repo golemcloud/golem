@@ -34,6 +34,7 @@ class InvalidAgent extends BaseAgent {
     iterable: Iterable<string>,
     asyncIterator: AsyncIterator<string>,
     asyncIterable: AsyncIterable<string>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing that `any` param type is rejected
     any: any,
     string: String,
     boolean: Boolean,
@@ -73,6 +74,7 @@ class InvalidAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing that `any` return type is rejected
   async fun7(input: string): Promise<any> {
     throw new Error('Unimplemented');
   }

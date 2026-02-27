@@ -112,7 +112,7 @@ export class ResolvedAgent {
     }
     const methodInfo = methodInfoResult.val;
 
-    const deserializedArgs: Either.Either<any[], string> = deserializeDataValue(
+    const deserializedArgs: Either.Either<unknown[], string> = deserializeDataValue(
       methodArgs,
       methodInfo.paramTypes,
       principal,
@@ -127,7 +127,10 @@ export class ResolvedAgent {
       };
     }
 
-    const methodResult = await methodInfo.method.apply(this.agentInstance, deserializedArgs.val);
+    const methodResult = await (methodInfo.method as (...args: unknown[]) => unknown).apply(
+      this.agentInstance,
+      deserializedArgs.val,
+    );
 
     // Converting the result from the method back to data-value
     const dataValueEither = serializeToDataValue(methodResult, methodInfo.returnType);
@@ -190,7 +193,7 @@ export class ResolvedAgent {
         val: cachedInfo,
       };
     } else {
-      const agentMethod = (this.agentInstance as any)[methodName];
+      const agentMethod = getProperty(this.agentInstance as object, methodName);
 
       if (!agentMethod) {
         return {
@@ -257,5 +260,9 @@ export class ResolvedAgent {
 type CachedMethodInfo = {
   paramTypes: ParameterDetail[];
   returnType: TypeInfoInternal;
-  method: any;
+  method: unknown;
 };
+
+function getProperty(obj: object, key: string): unknown {
+  return Reflect.get(obj, key);
+}

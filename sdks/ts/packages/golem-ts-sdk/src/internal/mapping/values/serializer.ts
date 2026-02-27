@@ -34,11 +34,11 @@ import * as util from 'node:util';
  * Serialization of a TypeScript mainly required at RPC boundary
  * as well as when a result of a method needs to be sent through to golem executor.
  *
- * @param tsValue The TypeScript value that exists as `any` type, which represents anything other than unstructured-text or unstructured-binary.
+ * @param tsValue The TypeScript value that exists as `unknown` type, which represents anything other than unstructured-text or unstructured-binary.
  * @param analysedType The expected AnalysedType of the typescript value. There is no `AnalysedType` as such for unstructured-text or unstructured-binary.
  */
 export function serializeDefaultTsValue(
-  tsValue: any,
+  tsValue: unknown,
   analysedType: AnalysedType,
 ): Either.Either<Value, string> {
   switch (analysedType.kind) {
@@ -137,7 +137,7 @@ export function serializeDefaultTsValue(
       if (typeof tsValue === 'bigint' || typeof tsValue === 'number') {
         return Either.right({
           kind: 'u64',
-          value: tsValue as any,
+          value: typeof tsValue === 'bigint' ? tsValue : BigInt(tsValue),
         });
       } else {
         return Either.left(typeMismatchInSerialize(tsValue, 'bigint'));
@@ -395,22 +395,24 @@ export function serializeDefaultTsValue(
       }
 
       if (!('tag' in tsValue)) {
-        return Either.left(missingObjectKey(tsValue, 'tag'));
+        return Either.left(missingObjectKey('tag', tsValue));
       }
+
+      const resultValue = tsValue as Record<string, unknown>;
 
       switch (analysedType.resultType.tag) {
         case 'inbuilt':
-          const keys = Object.keys(tsValue);
+          const keys = Object.keys(resultValue);
 
           if (!keys.includes('tag')) {
-            return Either.left(missingObjectKey('tag', tsValue));
+            return Either.left(missingObjectKey('tag', resultValue));
           }
 
           if (!keys.includes('val')) {
-            return Either.left(missingObjectKey('val', tsValue));
+            return Either.left(missingObjectKey('val', resultValue));
           }
 
-          if (tsValue['tag'] === 'ok') {
+          if (resultValue['tag'] === 'ok') {
             if (!okType) {
               if (analysedType.resultType.okEmptyType) {
                 return Either.right({
@@ -424,7 +426,7 @@ export function serializeDefaultTsValue(
               return Either.left(customSerializationError('unresolved ok type'));
             }
 
-            return Either.map(serializeDefaultTsValue(tsValue['val'], okType), (v) => ({
+            return Either.map(serializeDefaultTsValue(resultValue['val'], okType), (v) => ({
               kind: 'result',
               value: {
                 ok: v,
@@ -432,7 +434,7 @@ export function serializeDefaultTsValue(
             }));
           }
 
-          if (tsValue['tag'] === 'err') {
+          if (resultValue['tag'] === 'err') {
             if (!errType) {
               if (analysedType.resultType.errEmptyType) {
                 return Either.right({
@@ -446,7 +448,7 @@ export function serializeDefaultTsValue(
               return Either.left(customSerializationError('unresolved err type'));
             }
 
-            return Either.map(serializeDefaultTsValue(tsValue['val'], errType), (v) => ({
+            return Either.map(serializeDefaultTsValue(resultValue['val'], errType), (v) => ({
               kind: 'result',
               value: {
                 err: v,
@@ -454,12 +456,12 @@ export function serializeDefaultTsValue(
             }));
           }
 
-          return Either.left(typeMismatchInSerialize(tsValue, 'Result'));
+          return Either.left(typeMismatchInSerialize(resultValue, 'Result'));
         case 'custom':
           const okValueName = analysedType.resultType.okValueName;
           const errValueName = analysedType.resultType.errValueName;
 
-          if (tsValue['tag'] === 'ok') {
+          if (resultValue['tag'] === 'ok') {
             // If ok type exists, we ensure that we have ok value, else return error
             // If ok type doesn't exist, we set ok value to undefined
             if (okType) {
@@ -467,7 +469,7 @@ export function serializeDefaultTsValue(
                 return Either.left(customSerializationError('unresolved key name for ok value'));
               }
 
-              return Either.map(serializeDefaultTsValue(tsValue[okValueName], okType), (v) => ({
+              return Either.map(serializeDefaultTsValue(resultValue[okValueName], okType), (v) => ({
                 kind: 'result',
                 value: {
                   ok: v,
@@ -481,7 +483,7 @@ export function serializeDefaultTsValue(
                 ok: undefined,
               },
             });
-          } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
+          } else if (resultValue['tag'] === 'err') {
             // If err type exists, we ensure that we have err value, else return error
             // If err type doesn't exist, we set err value to undefined
             if (errType) {
@@ -489,12 +491,15 @@ export function serializeDefaultTsValue(
                 return Either.left(customSerializationError('unresolved key name for err value'));
               }
 
-              return Either.map(serializeDefaultTsValue(tsValue[errValueName], errType), (v) => ({
-                kind: 'result',
-                value: {
-                  err: v,
-                },
-              }));
+              return Either.map(
+                serializeDefaultTsValue(resultValue[errValueName], errType),
+                (v) => ({
+                  kind: 'result',
+                  value: {
+                    err: v,
+                  },
+                }),
+              );
             }
 
             return Either.right({
@@ -510,7 +515,7 @@ export function serializeDefaultTsValue(
   }
 }
 
-export function serializeBinaryReferenceTsValue(tsValue: any): Value {
+export function serializeBinaryReferenceTsValue(tsValue: unknown): Value {
   const binaryReference = serializeTsValueToBinaryReference(tsValue);
 
   switch (binaryReference.tag) {
@@ -550,7 +555,7 @@ export function serializeBinaryReferenceTsValue(tsValue: any): Value {
   }
 }
 
-export function serializeTextReferenceTsValue(tsValue: any): Value {
+export function serializeTextReferenceTsValue(tsValue: unknown): Value {
   const textReference: TextReference = serializeTsValueToTextReference(tsValue);
 
   switch (textReference.tag) {
@@ -598,9 +603,10 @@ export function serializeTextReferenceTsValue(tsValue: any): Value {
   }
 }
 
-export function serializeTsValueToBinaryReference(tsValue: any): BinaryReference {
-  if (typeof tsValue === 'object') {
-    const keys = Object.keys(tsValue);
+export function serializeTsValueToBinaryReference(tsValue: unknown): BinaryReference {
+  if (typeof tsValue === 'object' && tsValue !== null) {
+    const obj = tsValue as Record<string, unknown>;
+    const keys = Object.keys(obj);
 
     if (!keys.includes('tag')) {
       throw new Error(
@@ -610,13 +616,13 @@ export function serializeTsValueToBinaryReference(tsValue: any): BinaryReference
       );
     }
 
-    const tag = tsValue['tag'];
+    const tag = obj['tag'];
 
     if (typeof tag === 'string' && tag === 'url') {
       if (keys.includes('val')) {
         return {
           tag: 'url',
-          val: tsValue['val'],
+          val: obj['val'] as string,
         };
       } else {
         throw new Error(
@@ -632,9 +638,9 @@ export function serializeTsValueToBinaryReference(tsValue: any): BinaryReference
         return {
           tag: 'inline',
           val: {
-            data: tsValue['val'],
+            data: obj['val'] as Uint8Array,
             binaryType: {
-              mimeType: tsValue['mimeType'],
+              mimeType: obj['mimeType'] as string,
             },
           },
         };
@@ -661,9 +667,10 @@ export function serializeTsValueToBinaryReference(tsValue: any): BinaryReference
   );
 }
 
-export function serializeTsValueToTextReference(value: any): TextReference {
-  if (typeof value === 'object') {
-    const keys = Object.keys(value);
+export function serializeTsValueToTextReference(value: unknown): TextReference {
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj);
 
     if (!keys.includes('tag')) {
       throw new Error(
@@ -671,13 +678,13 @@ export function serializeTsValueToTextReference(value: any): TextReference {
       );
     }
 
-    const tag = value['tag'];
+    const tag = obj['tag'];
 
     if (typeof tag === 'string' && tag === 'url') {
       if (keys.includes('val')) {
         return {
           tag: 'url',
-          val: value['val'],
+          val: obj['val'] as string,
         };
       } else {
         throw new Error(
@@ -694,9 +701,9 @@ export function serializeTsValueToTextReference(value: any): TextReference {
           return {
             tag: 'inline',
             val: {
-              data: value['val'],
+              data: obj['val'] as string,
               textType: {
-                languageCode: value['languageCode'],
+                languageCode: obj['languageCode'] as string,
               },
             },
           };
@@ -704,7 +711,7 @@ export function serializeTsValueToTextReference(value: any): TextReference {
           return {
             tag: 'inline',
             val: {
-              data: value['val'],
+              data: obj['val'] as string,
             },
           };
         }
@@ -731,7 +738,7 @@ export function serializeTsValueToTextReference(value: any): TextReference {
   );
 }
 
-function serializeBooleanTsValue(tsValue: any): Either.Either<Value, string> {
+function serializeBooleanTsValue(tsValue: unknown): Either.Either<Value, string> {
   if (typeof tsValue === 'boolean') {
     return Either.right({
       kind: 'bool',
@@ -743,7 +750,7 @@ function serializeBooleanTsValue(tsValue: any): Either.Either<Value, string> {
 }
 
 function serializeKeyValuePairs(
-  tsValue: any,
+  tsValue: unknown,
   analysedType: AnalysedType,
   keyAnalysedType: AnalysedType,
   valueAnalysedType: AnalysedType,
@@ -773,13 +780,14 @@ function serializeKeyValuePairs(
 }
 
 function serializeObjectTsValue(
-  tsValue: any,
+  tsValue: unknown,
   analysedType: AnalysedType,
   nameTypePairs: NameTypePair[],
 ): Either.Either<Value, string> {
   if (typeof tsValue !== 'object' || tsValue === null) {
     return Either.left(typeMismatchInSerialize(tsValue, 'object'));
   }
+  const obj = tsValue as Record<string, unknown>;
   const values: Value[] = [];
 
   for (const prop of nameTypePairs) {
@@ -787,35 +795,7 @@ function serializeObjectTsValue(
 
     const type = prop.typ;
 
-    if (!Object.prototype.hasOwnProperty.call(tsValue, key)) {
-      if (tsValue === '' && type.kind === 'string') {
-        values.push({
-          kind: 'string',
-          value: '',
-        });
-      }
-
-      if (tsValue === '0' && type.kind === 'f64') {
-        values.push({
-          kind: 'f64',
-          value: 0,
-        });
-      }
-
-      if (tsValue === '0' && type.kind === 'u64') {
-        values.push({
-          kind: 'u64',
-          value: 0n,
-        });
-      }
-
-      if (tsValue === false && type.kind === 'bool') {
-        values.push({
-          kind: 'bool',
-          value: false,
-        });
-      }
-
+    if (!Object.prototype.hasOwnProperty.call(obj, key)) {
       if (type.kind === 'option') {
         values.push({
           kind: 'option',
@@ -830,7 +810,7 @@ function serializeObjectTsValue(
       return Either.left(customSerializationError('unresolved name-type pair'));
     }
 
-    const fieldVal = serializeDefaultTsValue(tsValue[key], nameTypePair.typ);
+    const fieldVal = serializeDefaultTsValue(obj[key], nameTypePair.typ);
 
     if (Either.isLeft(fieldVal)) {
       return Either.left(fieldVal.val);
@@ -846,7 +826,7 @@ function serializeObjectTsValue(
 }
 
 function serializeUnionTsValue(
-  tsValue: any,
+  tsValue: unknown,
   taggedTypes: TaggedTypeMetadata[],
   nameOptionTypePairs: NameOptionTypePair[],
 ): Either.Either<Value, string> {
@@ -890,17 +870,17 @@ function serializeUnionTsValue(
 }
 
 function serializeTaggedUnionTsValue(
-  tsValue: any,
+  tsValue: unknown,
   nameOptionTypePairs: NameOptionTypePair[],
 ): Either.Either<Value, string> {
-  const keys = Object.keys(tsValue);
-
-  if (!keys.includes('tag')) {
-    return Either.left(missingObjectKey('tag', tsValue));
-  }
-
   if (typeof tsValue !== 'object' || tsValue === null) {
     return Either.left(typeMismatchInSerialize(tsValue, 'object with tag property'));
+  }
+  const obj = tsValue as Record<string, unknown>;
+  const keys = Object.keys(obj);
+
+  if (!keys.includes('tag')) {
+    return Either.left(missingObjectKey('tag', obj));
   }
 
   for (const nameOptionTypePair of nameOptionTypePairs) {
@@ -908,7 +888,7 @@ function serializeTaggedUnionTsValue(
 
     const typeOption = nameOptionTypePair.typ;
 
-    if (tsValue['tag'] === typeName) {
+    if (obj['tag'] === typeName) {
       // Handle only tag names
       if (!typeOption) {
         const value: Value = {
@@ -926,7 +906,7 @@ function serializeTaggedUnionTsValue(
         return Either.left(`Missing value correspond to the tag ${typeName}`);
       }
 
-      const innerValue = serializeDefaultTsValue(tsValue[valueKey], typeOption);
+      const innerValue = serializeDefaultTsValue(obj[valueKey], typeOption);
 
       return Either.map(innerValue, (result) => ({
         kind: 'variant',
@@ -940,7 +920,7 @@ function serializeTaggedUnionTsValue(
 }
 
 function serializeTupleTsValue(
-  tsValue: any,
+  tsValue: unknown,
   tupleElemTypes: AnalysedType[],
 ): Either.Either<Value, string> {
   if (!Array.isArray(tsValue)) {
@@ -958,7 +938,7 @@ function serializeTupleTsValue(
   );
 }
 
-export function matchesType(value: any, type: AnalysedType): boolean {
+export function matchesType(value: unknown, type: AnalysedType): boolean {
   switch (type.kind) {
     case 'bool':
       return typeof value === 'boolean';
@@ -1025,19 +1005,20 @@ export function matchesType(value: any, type: AnalysedType): boolean {
 
     case 'result':
       if (typeof value !== 'object' || value === null) return false;
+      const resultObj = value as Record<string, unknown>;
 
-      if ('ok' in value) {
-        if (value['ok'] === undefined || value['ok'] === null) {
+      if ('ok' in resultObj) {
+        if (resultObj['ok'] === undefined || resultObj['ok'] === null) {
           return type.value.ok === undefined;
         }
         if (!type.value.ok) return false;
-        return matchesType(value['ok'], type.value.ok);
-      } else if ('err' in value) {
-        if (value['err'] === undefined || value['err'] === null) {
+        return matchesType(resultObj['ok'], type.value.ok);
+      } else if ('err' in resultObj) {
+        if (resultObj['err'] === undefined || resultObj['err'] === null) {
           return type.value.err === undefined;
         }
         if (!type.value.err) return false;
-        return matchesType(value['err'], type.value.err);
+        return matchesType(resultObj['err'], type.value.err);
       } else {
         return false;
       }
@@ -1050,11 +1031,12 @@ export function matchesType(value: any, type: AnalysedType): boolean {
       const nameAndOptions = type.value.cases;
 
       // There are two cases, if they are tagged types, or not
-      if (typeof value === 'object') {
-        const keys = Object.keys(value);
+      if (typeof value === 'object' && value !== null) {
+        const obj = value as Record<string, unknown>;
+        const keys = Object.keys(obj);
 
         if (keys.includes('tag')) {
-          const tagValue = value['tag'];
+          const tagValue = obj['tag'];
 
           if (typeof tagValue === 'string') {
             const valueType = nameAndOptions.find(
@@ -1077,7 +1059,7 @@ export function matchesType(value: any, type: AnalysedType): boolean {
               return false;
             }
 
-            return matchesType(value[valueKey], type);
+            return matchesType(obj[valueKey], type);
           }
         }
       }
@@ -1119,7 +1101,7 @@ export function matchesType(value: any, type: AnalysedType): boolean {
   }
 }
 
-function matchesTuple(value: any, tupleTypes: readonly AnalysedType[] | undefined): boolean {
+function matchesTuple(value: unknown, tupleTypes: readonly AnalysedType[] | undefined): boolean {
   if (!Array.isArray(value)) return false;
   if (!tupleTypes) return false;
   if (value.length !== tupleTypes.length) return false;
@@ -1128,7 +1110,7 @@ function matchesTuple(value: any, tupleTypes: readonly AnalysedType[] | undefine
 }
 
 function matchesArray(
-  value: any,
+  value: unknown,
   elementType: AnalysedType,
   typedArray: TypedArray | undefined,
 ): boolean {
@@ -1162,25 +1144,26 @@ function matchesArray(
   return value.every((item) => matchesType(item, elementType));
 }
 
-function handleObjectMatch(value: any, props: NameTypePair[]): boolean {
-  if (typeof value !== 'object' && value !== 'interface') {
+function handleObjectMatch(value: unknown, props: NameTypePair[]): boolean {
+  if (typeof value !== 'object' || value === null) {
     return false;
   }
+  const obj = value as Record<string, unknown>;
 
-  const valueKeys = Object.keys(value);
+  const valueKeys = Object.keys(obj);
   if (valueKeys.length !== props.length) return false;
 
   for (const prop of props) {
     const propName = prop.name;
     const propType = prop.typ; // analysed type record has to keep track of whether it's question mark or not
-    const hasKey = Object.prototype.hasOwnProperty.call(value, propName);
+    const hasKey = Object.prototype.hasOwnProperty.call(obj, propName);
 
     let isOptional = propType.kind === 'option';
 
     if (!hasKey) {
       if (!isOptional) return false;
     } else {
-      if (!matchesType(value[propName], propType)) return false;
+      if (!matchesType(obj[propName], propType)) return false;
     }
   }
 

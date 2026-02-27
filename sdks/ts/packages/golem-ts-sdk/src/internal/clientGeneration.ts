@@ -31,7 +31,7 @@ import {
   ElementValue,
   TextReference,
 } from 'golem:agent/common@1.5.0';
-import { RemoteMethod } from '../baseAgent';
+import { BaseAgent, RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -49,10 +49,15 @@ import { randomUuid } from '../host/hostapi';
 import { AgentId } from '../agentId';
 import * as util from 'node:util';
 
-export function getRemoteClient<T extends new (...args: any[]) => any>(
+type AgentClass<T extends BaseAgent = BaseAgent> = {
+  readonly name: string;
+  readonly prototype: T;
+};
+
+export function getRemoteClient(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: T,
+  ctor: AgentClass,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -63,7 +68,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   }
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (...args: any[]) => {
+  return (...args: unknown[]) => {
     const instance = Object.create(ctor.prototype);
 
     const constructedId = shared.constructAgentId(args);
@@ -72,10 +77,10 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   };
 }
 
-export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: any[]) => any>(
+export function getPhantomRemoteClient(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: T,
+  ctor: AgentClass,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -87,7 +92,7 @@ export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: 
 
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (finalPhantomId: Uuid, ...args: any[]) => {
+  return (finalPhantomId: Uuid, ...args: unknown[]) => {
     const instance = Object.create(ctor.prototype);
 
     const constructedId = shared.constructAgentId(args, finalPhantomId);
@@ -96,10 +101,10 @@ export function getPhantomRemoteClient<T extends new (phantomId: Uuid, ...args: 
   };
 }
 
-export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>(
+export function getNewPhantomRemoteClient(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: T,
+  ctor: AgentClass,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -110,7 +115,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   }
   const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName, agentType);
 
-  return (...args: any[]) => {
+  return (...args: unknown[]) => {
     const instance = Object.create(ctor.prototype);
 
     const finalPhantomId = randomUuid();
@@ -166,7 +171,7 @@ class WasmRpxProxyHandlerShared {
     }
   }
 
-  constructAgentId(args: any[], phantomId?: Uuid): ConstructedAgentId {
+  constructAgentId(args: unknown[], phantomId?: Uuid): ConstructedAgentId {
     let constructorDataValue: DataValue;
 
     if (args.length === 1 && this.constructorParamTypes[0].tag === 'multimodal') {
@@ -289,12 +294,12 @@ class WasmRpxProxyHandlerShared {
   }
 }
 
-class WasmRpcProxyHandler implements ProxyHandler<any> {
+class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
   private readonly shared: WasmRpxProxyHandlerShared;
   private readonly agentId: AgentId;
   private readonly wasmRpc: WasmRpc;
 
-  private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
+  private readonly methodProxyCache = new Map<string, RemoteMethod<unknown[], unknown>>();
 
   private readonly getIdMethod: () => AgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
@@ -314,8 +319,8 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     );
   }
 
-  get(target: any, prop: string | symbol) {
-    const val = target[prop];
+  get(target: Record<string, unknown>, prop: string | symbol) {
+    const val = target[prop.toString()];
     const propString = prop.toString();
 
     if (typeof val === 'function') {
@@ -349,12 +354,12 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     return undefined;
   }
 
-  private createMethodProxy(prop: string): RemoteMethod<any[], any> {
+  private createMethodProxy(prop: string): RemoteMethod<unknown[], unknown> {
     const methodInfo = this.shared.getMethodInfo(prop);
     const agentIdString = this.agentId.value;
     const wasmRpc = this.wasmRpc;
 
-    async function invokeAndAwait(...fnArgs: any[]) {
+    async function invokeAndAwait(...fnArgs: unknown[]) {
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
 
       const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputDataValue);
@@ -383,26 +388,29 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       return deserializeRpcResult(resultDataValue, methodInfo.returnType);
     }
 
-    function invokeFireAndForget(...fnArgs: any[]) {
+    function invokeFireAndForget(...fnArgs: unknown[]) {
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.invoke(methodInfo.name, inputDataValue);
     }
 
-    function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
+    function invokeSchedule(ts: Datetime, ...fnArgs: unknown[]) {
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.scheduleInvocation(ts, methodInfo.name, inputDataValue);
     }
 
-    const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
+    const methodFn: RemoteMethod<unknown[], unknown> = Object.assign(
+      (...args: unknown[]) => invokeAndAwait(...args),
+      {
+        trigger: (...args: unknown[]) => invokeFireAndForget(...args),
+        schedule: (ts: Datetime, ...args: unknown[]) => invokeSchedule(ts, ...args),
+      },
+    );
 
-    methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
-    methodFn.schedule = (ts: Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
-
-    return methodFn as RemoteMethod<any[], any>;
+    return methodFn;
   }
 }
 
-function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
+function serializeArgs(params: CachedParamInfo[], fnArgs: unknown[]): DataValue {
   const elementValues: ElementValue[] = [];
   for (const [index, fnArg] of fnArgs.entries()) {
     const param = params[index];
@@ -441,14 +449,8 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
             `Failed to serialize multimodal arg ${param.name}: ${dataValueEither.val}`,
           );
         }
-        // For a multimodal param, the serialized DataValue is itself the result;
-        // we wrap it as a single tuple with the multimodal elements
         const multimodalDv = dataValueEither.val;
         if (multimodalDv.tag === 'multimodal') {
-          // Each multimodal element becomes part of the overall DataValue
-          // But since params are tuple-based, we need to wrap multimodal as a single element
-          // The server expects each param as an ElementValue in the tuple
-          // For multimodal, we serialize the whole thing as a component-model WitValue
           for (const [, ev] of multimodalDv.val) {
             elementValues.push(ev);
           }
@@ -464,7 +466,10 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
   return { tag: 'tuple', val: elementValues };
 }
 
-function deserializeRpcResult(resultDataValue: DataValue, typeInfoInternal: TypeInfoInternal): any {
+function deserializeRpcResult<T = unknown>(
+  resultDataValue: DataValue,
+  typeInfoInternal: TypeInfoInternal,
+): T {
   return Either.getOrThrowWith(
     deserializeDataValue(
       resultDataValue,
@@ -477,5 +482,5 @@ function deserializeRpcResult(resultDataValue: DataValue, typeInfoInternal: Type
       { tag: 'anonymous' },
     ),
     (err) => new Error(`Failed to deserialize return value of RPC call: ${err}`),
-  )[0];
+  )[0] as T;
 }

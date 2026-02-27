@@ -15,6 +15,7 @@
 import {
   agent,
   BaseAgent,
+  Client,
   MultimodalAdvanced,
   UnstructuredBinary,
   UnstructuredText,
@@ -139,7 +140,7 @@ export class FooAgent extends BaseAgent {
     unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
     unstructuredBinary: UnstructuredBinary<['application/json']>,
   ): Promise<void> {
-    const remoteClient = BarAgent.get(
+    const remoteClient: Client<BarAgent> = BarAgent.get(
       testInterfaceType,
       optionalStringType,
       optionalUnionType,

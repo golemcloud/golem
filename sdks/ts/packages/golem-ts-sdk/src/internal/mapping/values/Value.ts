@@ -115,6 +115,7 @@ export function fromWitValue(wit: WitValue): Value {
 }
 
 function buildTree(node: WitNode, nodes: WitNode[]): Value {
+  let tag = node.tag;
   switch (node.tag) {
     case 'record-value':
       return {
@@ -270,7 +271,7 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
     }
 
     default:
-      throw new Error(`Unhandled tag: ${(node as any).tag}`);
+      throw new Error(`Unhandled tag: ${tag}`);
   }
 }
 
@@ -283,9 +284,9 @@ export function toWitValue(value: Value): WitValue {
 function buildNodes(value: Value, nodes: WitNode[]): number {
   const idx = nodes.length;
   nodes.push({
-    tag: 'placeholder',
-    val: undefined,
-  } as any);
+    tag: 'prim-bool',
+    val: false,
+  });
 
   switch (value.kind) {
     case 'record': {
@@ -478,6 +479,6 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
       return idx;
 
     default:
-      throw new Error(`Unhandled kind: ${(value as any).kind}`);
+      throw new Error(`Unhandled kind: ${(value as { kind: string }).kind}`);
   }
 }

@@ -66,11 +66,19 @@ export type ParameterDetail = {
  * for testing purpose. In this case a fake parameter name can be provided when `dataValue.tag` is `tuple`.
  * And a proper list of `ParameterDetail` is required `dataValue.tag` is multi-modal - and it cannnot be fake.
  */
-export function deserializeDataValue(
+export function deserializeDataValue<T extends unknown[] = unknown[]>(
   dataValue: DataValue,
   paramTypes: ParameterDetail[],
   principal: Principal,
-): Either.Either<any[], string> {
+): Either.Either<T, string> {
+  return _deserializeDataValue(dataValue, paramTypes, principal) as Either.Either<T, string>;
+}
+
+function _deserializeDataValue(
+  dataValue: DataValue,
+  paramTypes: ParameterDetail[],
+  principal: Principal,
+): Either.Either<unknown[], string> {
   switch (dataValue.tag) {
     case 'tuple':
       const inputElements = dataValue.val;
@@ -206,7 +214,7 @@ export function deserializeDataValue(
       const multimodalParamTypes = typeInfo.types;
 
       // These are not separate parameters, but a single parameter of multimodal type
-      const multiModalValue: Either.Either<any[], string> = Either.all(
+      const multiModalValue: Either.Either<unknown[], string> = Either.all(
         multiModalElements.map(([name, elem]) => {
           switch (elem.tag) {
             case 'unstructured-text':
@@ -306,11 +314,13 @@ export function deserializeDataValue(
   }
 }
 
-function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<any> {
+function constructConfigType(
+  typeInfoInternal: TypeInfoInternal & { tag: 'config' },
+): Config<Record<string, unknown>> {
   // safe as the parent node is config
   const properties = (typeInfoInternal.tsType as Type.Type & { kind: 'config' }).properties;
 
-  const root: Record<string, any> = {};
+  const root: Record<string, unknown> = {};
 
   for (const prop of properties) {
     const { path } = prop;
@@ -321,7 +331,7 @@ function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config
     for (let i = 0; i < path.length - 1; i++) {
       const key = path[i];
       if (!(key in current)) current[key] = {};
-      current = current[key];
+      current = current[key] as Record<string, unknown>;
     }
 
     const leafKey = path[path.length - 1];
@@ -338,7 +348,7 @@ function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config
   return new Config(root);
 }
 
-export function loadConfigKey(path: string[], typeInfoInternal: TypeInfoInternal): any {
+export function loadConfigKey(path: string[], typeInfoInternal: TypeInfoInternal): unknown {
   const witValue = getConfigValue(path);
 
   const dataValue = createSingleElementTupleDataValue({
@@ -363,7 +373,7 @@ export function loadConfigKey(path: string[], typeInfoInternal: TypeInfoInternal
 
 // Used to serialize the return type of a method back to DataValue
 export function serializeToDataValue(
-  tsValue: any,
+  tsValue: unknown,
   typeInfoInternal: TypeInfoInternal,
 ): Either.Either<DataValue, string> {
   switch (typeInfoInternal.tag) {
@@ -406,7 +416,10 @@ export function serializeToDataValue(
     case 'multimodal':
       const multiModalTypeInfo = typeInfoInternal.types;
 
-      const nameAndElementValues = serializeMultimodalToDataValue(tsValue, multiModalTypeInfo);
+      const nameAndElementValues = serializeMultimodalToDataValue(
+        tsValue as Record<string, unknown>[],
+        multiModalTypeInfo,
+      );
 
       return Either.right({
         tag: 'multimodal',
@@ -415,7 +428,7 @@ export function serializeToDataValue(
   }
 }
 
-function serializeBinaryReferenceToDataValue(tsValue: any): DataValue {
+function serializeBinaryReferenceToDataValue(tsValue: unknown): DataValue {
   const binaryReference: BinaryReference = serializeTsValueToBinaryReference(tsValue);
 
   const elementValue: ElementValue = {
@@ -429,7 +442,7 @@ function serializeBinaryReferenceToDataValue(tsValue: any): DataValue {
   };
 }
 
-function serializeTextReferenceToDataValue(value: any): DataValue {
+function serializeTextReferenceToDataValue(value: unknown): DataValue {
   const textReference: TextReference = serializeTsValueToTextReference(value);
 
   const elementValue: ElementValue = {
@@ -444,7 +457,7 @@ function serializeTextReferenceToDataValue(value: any): DataValue {
 }
 
 function serializeMultimodalToDataValue(
-  value: any,
+  value: Record<string, unknown>[],
   paramDetails: ParameterDetail[],
 ): [string, ElementValue][] {
   const namesAndElements: [string, ElementValue][] = [];
@@ -457,13 +470,13 @@ function serializeMultimodalToDataValue(
 
   for (const elem of value) {
     let matchedParam: ParameterDetail | null = null;
-    let matchedVal: any = undefined;
+    let matchedVal: unknown = undefined;
 
     for (const param of paramDetails) {
       const name = param.name;
       const type = param.type;
 
-      const valOpt = getValFieldFromTaggedObject(elem, name);
+      const valOpt = getValFieldFromTaggedObject<Record<string, unknown>>(elem, name);
 
       if (valOpt.tag === 'not-found') {
         continue;
@@ -554,13 +567,14 @@ export function createSingleElementTupleDataValue(elementValue: ElementValue): D
  * @param value Example: { tag: 'someTag', val: someValue }
  * @param tagValue Example: 'someTag'
  */
-function getValFieldFromTaggedObject(
-  value: any,
+function getValFieldFromTaggedObject<T = unknown>(
+  value: Record<string, unknown> | null,
   tagValue: string,
-): { tag: 'found'; val: any } | { tag: 'not-found' } {
+): { tag: 'found' | 'not-found'; val?: T } {
   if (typeof value === 'object' && value !== null) {
-    if ('tag' in value && 'val' in value && value['tag'] === tagValue) {
-      return { tag: 'found', val: value['val'] };
+    const obj = value as Record<string, unknown>;
+    if ('tag' in obj && 'val' in obj && obj['tag'] === tagValue) {
+      return { tag: 'found', val: obj['val'] as T };
     }
   }
 

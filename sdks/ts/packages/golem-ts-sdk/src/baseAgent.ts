@@ -102,11 +102,11 @@ export class BaseAgent {
    */
   async loadSnapshot(bytes: Uint8Array): Promise<void> {
     const text = new TextDecoder().decode(bytes);
-    const state = JSON.parse(text);
+    const state = JSON.parse(text) as Partial<this>;
 
     for (const [k, v] of Object.entries(state)) {
       if (k === 'cachedAgentType' || k === 'agentClassName') continue;
-      (this as any)[k] = v;
+      this[k as keyof this] = v;
     }
   }
 
@@ -166,7 +166,7 @@ export class BaseAgent {
    * such as `trigger` and `schedule`. See `Client` documentation for details.
    *
    */
-  static get<T extends new (...args: any[]) => BaseAgent>(
+  static get<T extends new (...args: never[]) => BaseAgent>(
     this: T,
     ...args: GetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
@@ -175,7 +175,7 @@ export class BaseAgent {
     );
   }
 
-  static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
+  static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: never[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
@@ -184,7 +184,7 @@ export class BaseAgent {
     );
   }
 
-  static newPhantom<T extends new (...args: any[]) => BaseAgent>(
+  static newPhantom<T extends new (...args: never[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
@@ -220,15 +220,17 @@ export class BaseAgent {
  *
  * ```
  */
+type MethodKeys<T> = {
+  [K in keyof T]-?: T[K] extends (...args: never[]) => unknown ? K : never;
+}[keyof T];
+
 export type Client<T> = {
-  [K in keyof T as T[K] extends (...args: any[]) => any ? K : never]: T[K] extends (
-    ...args: infer A
-  ) => infer R
+  [K in MethodKeys<T>]: T[K] extends (...args: infer A) => infer R
     ? RemoteMethod<GetArgs<A>, Awaited<R>>
     : never;
 };
 
-export type RemoteMethod<Args extends any[], R> = {
+export type RemoteMethod<Args extends unknown[], R> = {
   (...args: Args): Promise<R>;
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
@@ -254,8 +256,8 @@ type GetArgs<T extends readonly unknown[]> =
 type IsOptional<T extends readonly unknown[], K extends keyof T> =
   {} extends Pick<T, K> ? true : false;
 
-type AllOptional<T extends readonly unknown[], I extends any[] = []> = T extends readonly [
-  any,
+type AllOptional<T extends readonly unknown[], I extends unknown[] = []> = T extends readonly [
+  unknown,
   ...infer R,
 ]
   ? IsOptional<T, I['length']> extends true

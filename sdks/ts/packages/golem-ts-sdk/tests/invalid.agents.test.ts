@@ -197,14 +197,16 @@ test('Undecorated agent that extends BaseAgent throws reasonable error messages'
 });
 
 test('Agent without BaseAgent throws reasonable error messages', () => {
-  // new AgentWithoutBaseAgent will result in calling decorators that fails
+  // Calling agent() directly as a function to test the runtime check,
+  // since TypeScript's type system now correctly prevents @agent() on non-BaseAgent classes
   expect(() => {
-    @agent()
     class AgentWithoutBaseAgent {
       async foo(): Promise<void> {
         return;
       }
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testing runtime error for non-BaseAgent class
+    (agent() as (ctor: new (...args: unknown[]) => unknown) => void)(AgentWithoutBaseAgent);
   }).toThrowError(
     'Invalid agent declaration: `AgentWithoutBaseAgent` must extend `BaseAgent` to be decorated with @agent()',
   );

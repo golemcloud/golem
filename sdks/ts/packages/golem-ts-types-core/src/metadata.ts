@@ -32,6 +32,21 @@ export type ClassMetadata = {
   methods: Map<MethodNameString, { methodParams: MethodParams; returnType: Type }>;
 };
 
+export type MethodMetadataJSON = {
+  methodParams: Record<string, LiteTypeJSON>;
+  returnType: LiteTypeJSON;
+};
+
+export type ClassMetadataJSON = {
+  constructorArgs: Array<{
+    name: string;
+    type: LiteTypeJSON;
+  }>;
+  methods: Record<string, MethodMetadataJSON>;
+};
+
+export type MetadataJSON = Record<ClassNameString, ClassMetadataJSON>;
+
 const Metadata = new Map<ClassNameString, ClassMetadata>();
 
 export const TypeMetadata = {
@@ -60,14 +75,11 @@ export const TypeMetadata = {
     Metadata.clear();
   },
 
-  // TODO: avoid any. Here any simply represents the json representation of Metadata
+  // Represents the json representation of Metadata
   // such that every Type is represented as LiteTypeJSON
-  loadFromJson(json: any) {
+  loadFromJson(json: MetadataJSON) {
     for (const [className, meta] of Object.entries(json)) {
-      const constructorArgsJSON = (meta as any).constructorArgs as Array<{
-        name: string;
-        type: LiteTypeJSON;
-      }>;
+      const constructorArgsJSON = meta.constructorArgs;
 
       const constructorArgs = constructorArgsJSON.map((arg) => ({
         name: arg.name,
@@ -76,15 +88,15 @@ export const TypeMetadata = {
 
       const methodsMap = new Map<string, { methodParams: Map<string, Type>; returnType: Type }>();
 
-      for (const [methodName, methodMeta] of Object.entries((meta as any).methods)) {
+      for (const [methodName, methodMeta] of Object.entries(meta.methods)) {
         const methodParamsMap = new Map<string, Type>();
-        for (const [paramName, paramJSON] of Object.entries((methodMeta as any).methodParams)) {
-          methodParamsMap.set(paramName, buildTypeFromJSON(paramJSON as LiteTypeJSON));
+        for (const [paramName, paramJSON] of Object.entries(methodMeta.methodParams)) {
+          methodParamsMap.set(paramName, buildTypeFromJSON(paramJSON));
         }
 
         methodsMap.set(methodName, {
           methodParams: methodParamsMap,
-          returnType: buildTypeFromJSON((methodMeta as any).returnType as LiteTypeJSON),
+          returnType: buildTypeFromJSON(methodMeta.returnType),
         });
       }
 

@@ -23,7 +23,11 @@ import { Result } from '../../../host/result';
  * @param value
  * @param analysedType
  */
-export function deserialize(value: Value, analysedType: AnalysedType): any {
+export function deserialize<T = unknown>(value: Value, analysedType: AnalysedType): T {
+  return _deserialize(value, analysedType) as T;
+}
+
+function _deserialize(value: Value, analysedType: AnalysedType): unknown {
   if (
     value.kind === 'record' &&
     value.value.length === 0 &&
@@ -67,7 +71,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
 
     const innerType = analysedType.kind === 'option' ? analysedType.value.inner : analysedType;
 
-    return deserialize(caseValue, innerType);
+    return _deserialize(caseValue, innerType);
   }
 
   if (value.kind === 'enum' && analysedType.kind === 'enum') {
@@ -204,8 +208,8 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               throw new Error(typeMismatchInDeserialize(item, 'map'));
             }
 
-            const k = deserialize(item.value[0], keyType);
-            const v = deserialize(item.value[1], valueType);
+            const k = _deserialize(item.value[0], keyType);
+            const v = _deserialize(item.value[1], valueType);
             map.set(k, v);
           }
 
@@ -221,7 +225,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
         if (!elemType) {
           throw new Error(`Unable to infer the type of Array`);
         }
-        return value.value.map((item: Value) => deserialize(item, elemType));
+        return value.value.map((item: Value) => _deserialize(item, elemType));
       } else {
         throw new Error(typeMismatchInDeserialize(value, 'array'));
       }
@@ -249,7 +253,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
           }
 
           return value.value.map((item: Value, idx: number) =>
-            deserialize(item, analysedType.value.items[idx]),
+            _deserialize(item, analysedType.value.items[idx]),
           );
         } else {
           throw new Error(typeMismatchInDeserialize(value, 'tuple'));
@@ -266,11 +270,11 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
             const inbuiltErrType = analysedType.value.err;
 
             if (inbuiltOkType && value.value.ok) {
-              return Result.ok(deserialize(value.value.ok, inbuiltOkType));
+              return Result.ok(_deserialize(value.value.ok, inbuiltOkType));
             }
 
             if (inbuiltErrType && value.value.err) {
-              return Result.err(deserialize(value.value.err, inbuiltErrType));
+              return Result.err(_deserialize(value.value.err, inbuiltErrType));
             }
 
             if ('ok' in value.value && analysedType.resultType.okEmptyType) {
@@ -309,14 +313,14 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               if (value.value.ok) {
                 return {
                   tag: 'ok',
-                  [okName]: deserialize(value.value.ok, okType),
+                  [okName]: _deserialize(value.value.ok, okType),
                 };
               }
 
               if (value.value.err) {
                 return {
                   tag: 'err',
-                  [errName]: deserialize(value.value.err, errType),
+                  [errName]: _deserialize(value.value.err, errType),
                 };
               }
             }
@@ -328,7 +332,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               if (value.value.ok) {
                 return {
                   tag: 'ok',
-                  [okName]: deserialize(value.value.ok, okType),
+                  [okName]: _deserialize(value.value.ok, okType),
                 };
               } else {
                 return {
@@ -344,7 +348,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               if (value.value.err) {
                 return {
                   tag: 'err',
-                  [errName]: deserialize(value.value.err, errType),
+                  [errName]: _deserialize(value.value.err, errType),
                 };
               } else {
                 return {
@@ -399,7 +403,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               throw new Error(typeMismatchInDeserialize(value, 'union'));
             }
 
-            const result = deserialize(caseValue, valueType);
+            const result = _deserialize(caseValue, valueType);
 
             const metadata = analysedType.taggedTypes.find(
               (lit) => lit.tagLiteralName === tagValue,
@@ -431,7 +435,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
           throw new Error(typeMismatchInDeserialize(value, 'union'));
         }
 
-        return deserialize(v, type);
+        return _deserialize(v, type);
       }
 
       throw new Error(typeMismatchInDeserialize(value, 'variant'));
@@ -445,10 +449,10 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
             const name = field.name;
             const expectedFieldType = field.typ;
 
-            acc[name] = deserialize(fieldValues[idx], expectedFieldType);
+            acc[name] = _deserialize(fieldValues[idx], expectedFieldType);
             return acc;
           },
-          {} as Record<string, any>,
+          {} as Record<string, unknown>,
         );
       } else {
         throw new Error(typeMismatchInDeserialize(value, 'object'));
@@ -456,7 +460,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
   }
 }
 
-function convertToNumber(value: Value): any {
+function convertToNumber(value: Value): number {
   if (
     value.kind === 'f64' ||
     value.kind === 'u8' ||
@@ -469,13 +473,13 @@ function convertToNumber(value: Value): any {
     value.kind === 's64' ||
     value.kind === 'f32'
   ) {
-    return value.value;
+    return Number(value.value);
   } else {
     throw new Error();
   }
 }
 
-function convertToBigInt(value: Value): any {
+function convertToBigInt(value: Value): bigint {
   if (value.kind === 'u64' || value.kind === 's64') {
     return value.value;
   } else {
