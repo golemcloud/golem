@@ -14,6 +14,7 @@
 
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
+use crate::repo::model::environment_share::environment_roles_from_bit_vector;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::account::AccountId;
@@ -388,6 +389,44 @@ impl DeploymentService {
 
         self.get_deployed_agent_type(environment.id, agent_type_name)
             .await
+    }
+
+    pub async fn resolve_agent_type_by_names(
+        &self,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: Option<DeploymentRevision>,
+        owner_account_email: Option<&str>,
+        auth: &AuthCtx,
+    ) -> Result<DeployedRegisteredAgentType, DeploymentError> {
+        let caller_account_id = auth.account_id();
+
+        let record = self
+            .deployment_repo
+            .resolve_agent_type_by_names(
+                caller_account_id.0,
+                &app_name.0,
+                &environment_name.0,
+                &agent_type_name.0,
+                deployment_revision.map(|r| r.into()),
+                owner_account_email,
+            )
+            .await?
+            .ok_or_else(|| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
+
+        let owner_account_id = AccountId(record.owner_account_id);
+        let roles = environment_roles_from_bit_vector(record.environment_roles_from_shares);
+
+        // Map authorization failure to NotFound to prevent resource enumeration
+        auth.authorize_environment_action(
+            owner_account_id,
+            &roles,
+            EnvironmentAction::ViewAgentTypes,
+        )
+        .map_err(|_| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
+
+        record.try_into().map_err(DeploymentError::from)
     }
 
     pub async fn get_agent_type_by_names_at_deployment(
