@@ -50,11 +50,15 @@ import { convertAgentMethodNameToKebab } from './mapping/types/stringFormat';
 import { AgentId } from '../agentId';
 import * as util from 'node:util';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function getRemoteClient<T extends new (...args: any[]) => BaseAgent>(
+type AgentClass<T extends BaseAgent = BaseAgent> = {
+  readonly name: string;
+  readonly prototype: T;
+};
+
+export function getRemoteClient(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: T,
+  ctor: AgentClass,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -74,10 +78,11 @@ export function getRemoteClient<T extends new (...args: any[]) => BaseAgent>(
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function getPhantomRemoteClient<
-  T extends new (phantomId: Uuid, ...args: any[]) => BaseAgent,
->(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
+export function getPhantomRemoteClient(
+  agentClassName: AgentClassName,
+  agentType: AgentType,
+  ctor: AgentClass,
+) {
   const metadata = TypeMetadata.get(ctor.name);
 
   if (!metadata) {
@@ -97,11 +102,10 @@ export function getPhantomRemoteClient<
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function getNewPhantomRemoteClient<T extends new (...args: any[]) => BaseAgent>(
+export function getNewPhantomRemoteClient(
   agentClassName: AgentClassName,
   agentType: AgentType,
-  ctor: T,
+  ctor: AgentClass,
 ) {
   const metadata = TypeMetadata.get(ctor.name);
 
@@ -416,13 +420,13 @@ class WasmRpcProxyHandler implements ProxyHandler<Record<string, unknown>> {
       wasmRpc.scheduleInvocation(ts, methodInfo.witFunctionName, parameterWitValues);
     }
 
-    const methodFn = ((...args: unknown[]) => invokeAndAwait(...args)) as unknown as RemoteMethod<
-      unknown[],
-      unknown
-    >;
-
-    methodFn.trigger = (...args: unknown[]) => invokeFireAndForget(...args);
-    methodFn.schedule = (ts: wasmRpc.Datetime, ...args: unknown[]) => invokeSchedule(ts, ...args);
+    const methodFn: RemoteMethod<unknown[], unknown> = Object.assign(
+      (...args: unknown[]) => invokeAndAwait(...args),
+      {
+        trigger: (...args: unknown[]) => invokeFireAndForget(...args),
+        schedule: (ts: wasmRpc.Datetime, ...args: unknown[]) => invokeSchedule(ts, ...args),
+      },
+    );
 
     return methodFn;
   }

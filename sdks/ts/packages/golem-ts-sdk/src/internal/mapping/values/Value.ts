@@ -283,11 +283,10 @@ export function toWitValue(value: Value): WitValue {
 
 function buildNodes(value: Value, nodes: WitNode[]): number {
   const idx = nodes.length;
-  // @fixme tag should have consistent types/values
   nodes.push({
-    tag: 'placeholder',
-    val: undefined,
-  } as unknown as WitNode);
+    tag: 'prim-bool',
+    val: false,
+  });
 
   switch (value.kind) {
     case 'record': {

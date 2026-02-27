@@ -193,7 +193,7 @@ export class ResolvedAgent {
         val: cachedInfo,
       };
     } else {
-      const agentMethod = (this.agentInstance as unknown as Record<string, unknown>)[methodName];
+      const agentMethod = getProperty(this.agentInstance as object, methodName);
 
       if (!agentMethod) {
         return {
@@ -262,3 +262,7 @@ type CachedMethodInfo = {
   returnType: TypeInfoInternal;
   method: unknown;
 };
+
+function getProperty(obj: object, key: string): unknown {
+  return Reflect.get(obj, key);
+}

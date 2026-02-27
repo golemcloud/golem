@@ -166,8 +166,7 @@ export class BaseAgent {
    * such as `trigger` and `schedule`. See `Client` documentation for details.
    *
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
-  static get<T extends new (...args: any[]) => BaseAgent>(
+  static get<T extends new (...args: never[]) => BaseAgent>(
     this: T,
     ...args: GetArgs<ConstructorParameters<T>>
   ): Client<InstanceType<T>> {
@@ -176,8 +175,9 @@ export class BaseAgent {
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
-  static getPhantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
+  static getPhantom<
+    T extends new (phantomId: Uuid | undefined, ...args: never[]) => BaseAgent,
+  >(
     this: T,
     ...args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
@@ -186,8 +186,7 @@ export class BaseAgent {
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
-  static newPhantom<T extends new (...args: any[]) => BaseAgent>(
+  static newPhantom<T extends new (...args: never[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): Client<InstanceType<T>> {
@@ -223,9 +222,12 @@ export class BaseAgent {
  *
  * ```
  */
+type MethodKeys<T> = {
+  [K in keyof T]-?: T[K] extends (...args: never[]) => unknown ? K : never;
+}[keyof T];
+
 export type Client<T> = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any required for contravariant function type matching
-  [K in keyof T as T[K] extends (...args: any[]) => any ? K : never]: T[K] extends (
+  [K in MethodKeys<T>]: T[K] extends (
     ...args: infer A
   ) => infer R
     ? RemoteMethod<GetArgs<A>, Awaited<R>>

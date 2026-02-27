@@ -56,6 +56,12 @@ export type AgentDecoratorOptions = {
   phantom?: boolean;
 };
 
+type MutableAgentStatics = {
+  get?: unknown;
+  newPhantom?: unknown;
+  getPhantom?: unknown;
+};
+
 function parseDurationToNanoseconds(duration: string): bigint {
   const milliseconds = ms(duration as ms.StringValue);
   if (milliseconds === undefined) {
@@ -218,8 +224,7 @@ function resolveSnapshotting(option?: SnapshottingOption): Snapshotting {
  * The first parameter is the phantom ID. If undefined, a new phantom ID will be generated.
  */
 export function agent(options?: AgentDecoratorOptions) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any[] required for legacy decorator contravariance
-  return function <T extends new (...args: any[]) => BaseAgent>(ctor: T) {
+  return function <T extends new (...args: never[]) => BaseAgent>(ctor: T) {
     if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
       throw new Error(
         `Invalid agent declaration: \`${ctor.name}\` must extend \`BaseAgent\` to be decorated with @agent()`,
@@ -229,7 +234,7 @@ export function agent(options?: AgentDecoratorOptions) {
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
-      return ctor;
+      return;
     }
 
     const classMetadata = TypeMetadata.get(ctor.name);
@@ -316,11 +321,10 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    const c = ctor as unknown as Record<string, unknown>;
-    c.get = getRemoteClient(agentClassName, agentType, ctor);
-    c.newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
-
-    c.getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
+    const decoratedCtor = ctor as T & MutableAgentStatics;
+    decoratedCtor.get = getRemoteClient(agentClassName, agentType, ctor);
+    decoratedCtor.newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
+    decoratedCtor.getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {
@@ -341,7 +345,7 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        const instance = new ctor(...deserializedConstructorArgs.val);
+        const instance = Reflect.construct(ctor, deserializedConstructorArgs.val) as BaseAgent;
 
         const agentId = getRawSelfAgentId();
         if (!agentId.value.startsWith(agentTypeName.asWit)) {
