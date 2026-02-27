@@ -23,6 +23,7 @@ pub mod environments;
 pub mod error;
 pub mod http_api_deployments;
 pub mod login;
+pub mod mcp_deployments;
 pub mod plugin_registrations;
 pub mod reports;
 pub mod security_schemes;
@@ -39,6 +40,7 @@ use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::http_api_deployments::HttpApiDeploymentsApi;
 use self::login::LoginApi;
+use self::mcp_deployments::McpDeploymentsApi;
 use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
 use self::security_schemes::SecuritySchemesApi;
@@ -58,7 +60,7 @@ pub type Apis = (
         EnvironmentsApi,
         EnvironmentSharesApi,
     ),
-    HttpApiDeploymentsApi,
+    (HttpApiDeploymentsApi, McpDeploymentsApi),
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
@@ -111,9 +113,15 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.auth_service.clone(),
                 ),
             ),
-            HttpApiDeploymentsApi::new(
-                services.http_api_deployment_service.clone(),
-                services.auth_service.clone(),
+            (
+                HttpApiDeploymentsApi::new(
+                    services.http_api_deployment_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                McpDeploymentsApi::new(
+                    services.mcp_deployment_service.clone(),
+                    services.auth_service.clone(),
+                ),
             ),
             LoginApi::new(
                 services.login_system.clone(),

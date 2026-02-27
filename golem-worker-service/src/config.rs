@@ -40,6 +40,7 @@ pub struct WorkerServiceConfig {
     pub worker_executor: WorkerExecutorClientConfig,
     pub workspace: String,
     pub registry_service: GrpcRegistryServiceConfig,
+    pub mcp_port: u16,
     pub cors_origin_regex: String,
     pub route_resolver: RouteResolverConfig,
     pub component_service: ComponentServiceConfig,
@@ -71,6 +72,7 @@ impl SafeDisplay for WorkerServiceConfig {
             "Custom request port: {}",
             self.custom_request_port
         );
+        let _ = writeln!(&mut result, "MCP port: {}", self.mcp_port);
 
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
@@ -134,6 +136,7 @@ impl Default for WorkerServiceConfig {
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
+            mcp_port: 9007,
             grpc: GrpcApiConfig::default(),
             routing_table: RoutingTableConfig::default(),
             worker_executor: WorkerExecutorClientConfig::default(),

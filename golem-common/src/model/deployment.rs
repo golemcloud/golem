@@ -40,6 +40,11 @@ impl DeploymentPlan {
                 .iter()
                 .map(|had| (had.domain.0.clone(), had.hash.into()))
                 .collect(),
+            mcp_deployments: self
+                .mcp_deployments
+                .iter()
+                .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
+                .collect(),
         }
     }
 }
@@ -56,6 +61,11 @@ impl DeploymentSummary {
                 .http_api_deployments
                 .iter()
                 .map(|had| (had.domain.0.clone(), had.hash.into()))
+                .collect(),
+            mcp_deployments: self
+                .mcp_deployments
+                .iter()
+                .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
                 .collect(),
         }
     }

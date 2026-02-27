@@ -29,6 +29,7 @@ tags:
   description: The limits API allows users to query their current resource limits.
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
+- name: McpDeployment
 - name: Plugin
 - name: Project
   description: |-

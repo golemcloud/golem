@@ -945,6 +945,12 @@ impl AppCommandHandler {
             .deployable_manifest_api_deployments(&environment.environment_name)
             .await?;
 
+        let deployable_manifest_mcp_deployments = self
+            .ctx
+            .api_deployment_handler()
+            .deployable_manifest_mcp_deployments(&environment.environment_name)
+            .await?;
+
         let diffable_local_components = {
             let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
             for (component_name, component_deploy_properties) in &deployable_manifest_components {
@@ -984,9 +990,25 @@ impl AppCommandHandler {
             diffable_local_http_api_deployments
         };
 
+        let diffable_local_mcp_deployments = {
+            let mut diffable_local_mcp_deployments =
+                BTreeMap::<String, diff::HashOf<diff::McpDeployment>>::new();
+            for (domain, mcp_deployment) in &deployable_manifest_mcp_deployments {
+                let agents = mcp_deployment
+                    .agents
+                    .iter()
+                    .map(|(k, v)| (k.0.clone(), v.to_diffable()))
+                    .collect();
+                diffable_local_mcp_deployments
+                    .insert(domain.0.clone(), diff::McpDeployment { agents }.into());
+            }
+            diffable_local_mcp_deployments
+        };
+
         let diffable_local_deployment = diff::Deployment {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
+            mcp_deployments: diffable_local_mcp_deployments,
         };
 
         let local_deployment_hash = diffable_local_deployment.hash();
@@ -995,6 +1017,7 @@ impl AppCommandHandler {
             environment,
             deployable_manifest_components,
             deployable_manifest_http_api_deployments,
+            deployable_manifest_mcp_deployments,
             diffable_local_deployment,
             local_deployment_hash,
         })
@@ -1052,6 +1075,7 @@ impl AppCommandHandler {
             deployable_components: deploy_quick_diff.deployable_manifest_components,
             deployable_http_api_deployments: deploy_quick_diff
                 .deployable_manifest_http_api_deployments,
+            deployable_mcp_deployments: deploy_quick_diff.deployable_manifest_mcp_deployments,
             diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
             local_deployment_hash: deploy_quick_diff.local_deployment_hash,
             current_deployment,
@@ -1405,6 +1429,7 @@ impl AppCommandHandler {
             Ok(())
         };
 
+        // TODO
         for (component_name, component_diff) in &diff_stage.components {
             approve()?;
 
@@ -1468,6 +1493,56 @@ impl AppCommandHandler {
                             deploy_diff.staged_http_api_deployment_identity(&domain),
                             deploy_diff.deployable_manifest_http_api_deployment(&domain),
                             http_api_definition_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
+            approve()?;
+
+            let domain = Domain(domain.to_string());
+
+            match mcp_deployment_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    mcp_deployment_handler
+                        .create_staged_mcp_deployment(
+                            &deploy_diff.environment,
+                            &domain,
+                            deploy_diff.deployable_manifest_mcp_deployment(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    mcp_deployment_handler
+                        .delete_staged_mcp_deployment(
+                            deploy_diff.staged_mcp_deployment_identity(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(mcp_deployment_diff) => {
+                    let mcp_deployment_handler = self.ctx.api_deployment_handler();
+                    let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
+                    let agents = mcp_deployment
+                        .agents
+                        .iter()
+                        .map(|(k, _v)| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
+                        .collect();
+
+                    mcp_deployment_handler
+                        .update_staged_mcp_deployment(
+                            deploy_diff.staged_mcp_deployment_identity(&domain),
+                            &golem_common::model::mcp_deployment::McpDeploymentUpdate {
+                                current_revision: deploy_diff
+                                    .staged_mcp_deployment_identity(&domain)
+                                    .revision,
+                                domain: Some(domain.clone()),
+                                agents: Some(agents),
+                            },
+                            mcp_deployment_diff,
                         )
                         .await?
                 }

@@ -23,6 +23,7 @@ use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, Sq
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhoooks::WebhookCallbackHandler;
+use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
@@ -43,6 +44,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
+    pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
 }
 
 impl Services {
@@ -100,6 +102,10 @@ impl Services {
             api_definition_lookup_service.clone(),
         ));
 
+        let mcp_capability_lookup = Arc::new(RegistryServiceMcpCapabilityLookup::new(
+            registry_service_client.clone(),
+        ));
+
         let call_agent_handler = Arc::new(CallAgentHandler::new(worker_service.clone()));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
@@ -155,6 +161,7 @@ impl Services {
             component_service,
             worker_service,
             request_handler,
+            mcp_capability_lookup,
         })
     }
 }

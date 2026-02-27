@@ -21,6 +21,7 @@ pub mod db;
 pub mod error;
 pub mod grpc;
 pub mod headers;
+pub mod mcp;
 pub mod metrics;
 pub mod migration;
 pub mod model;

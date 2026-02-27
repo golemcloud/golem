@@ -21,6 +21,7 @@ use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
@@ -86,6 +87,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
+        mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(db.pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
     };
@@ -148,4 +150,14 @@ async fn test_http_api_deployment_stage(deps: &Deps) {
 #[test]
 async fn test_account_usage(deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_create_and_update(deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_create_and_update(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_list_and_delete(deps).await;
 }

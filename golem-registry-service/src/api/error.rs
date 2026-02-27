@@ -23,6 +23,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
 use crate::services::http_api_deployment::HttpApiDeploymentError;
+use crate::services::mcp_deployment::McpDeploymentError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
@@ -583,6 +584,31 @@ impl From<HttpApiDeploymentError> for ApiError {
 
             HttpApiDeploymentError::Unauthorized(inner) => inner.into(),
             HttpApiDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<McpDeploymentError> for ApiError {
+    fn from(value: McpDeploymentError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            McpDeploymentError::ParentEnvironmentNotFound(_)
+            | McpDeploymentError::McpDeploymentNotFound(_)
+            | McpDeploymentError::McpDeploymentByDomainNotFound(_)
+            | McpDeploymentError::DomainNotRegistered(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            McpDeploymentError::McpDeploymentForDomainAlreadyExists(_)
+            | McpDeploymentError::ConcurrentUpdate => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            McpDeploymentError::Unauthorized(inner) => inner.into(),
+            McpDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

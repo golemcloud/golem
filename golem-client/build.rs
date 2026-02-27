@@ -287,6 +287,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "HttpApiDeploymentUpdate",
                 "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
             ),
+            (
+                "McpDeployment",
+                "golem_common::model::mcp_deployment::McpDeployment",
+            ),
+            (
+                "McpDeploymentCreation",
+                "golem_common::model::mcp_deployment::McpDeploymentCreation",
+            ),
+            (
+                "McpDeploymentUpdate",
+                "golem_common::model::mcp_deployment::McpDeploymentUpdate",
+            ),
             // common
             ("Empty", "golem_common::model::Empty"),
             ("ErrorBody", "golem_common::model::error::ErrorBody"),

@@ -49,6 +49,8 @@ impl Diffable for HttpApiDeploymentAgentOptions {
     }
 }
 
+// TODO; peal off non-user things from mcp-deployment
+//
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeployment {

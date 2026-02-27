@@ -14,7 +14,7 @@
 
 use crate::model::component::{show_exported_agents, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::http_api::HttpApiDeploymentDeployProperties;
+use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
@@ -38,6 +38,8 @@ pub struct DeployQuickDiff {
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub deployable_manifest_http_api_deployments:
         BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
+    #[allow(dead_code)]
+    pub deployable_manifest_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
 }
@@ -75,6 +77,8 @@ pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub deployable_http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
+    #[allow(dead_code)]
+    pub deployable_mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
     #[allow(unused)] // NOTE: for debug logs
@@ -226,6 +230,21 @@ impl DeployDiff {
             })
     }
 
+    #[allow(dead_code)]
+    pub fn deployable_manifest_mcp_deployment(
+        &self,
+        domain: &Domain,
+    ) -> &McpDeploymentDeployProperties {
+        self.deployable_mcp_deployments
+            .get(domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in deployable manifest",
+                    domain
+                )
+            })
+    }
+
     pub fn staged_component_identity(
         &self,
         component_name: &ComponentName,
@@ -253,6 +272,22 @@ impl DeployDiff {
             .unwrap_or_else(|| {
                 panic!(
                     "Expected HTTP API deployment {} not found in staged deployment",
+                    domain
+                )
+            })
+    }
+
+    pub fn staged_mcp_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &golem_common::model::deployment::DeploymentPlanMcpDeploymentEntry {
+        self.staged_deployment
+            .mcp_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected MCP deployment {} not found in staged deployment",
                     domain
                 )
             })
@@ -754,6 +789,14 @@ fn normalized_diff_deployment(
             .iter()
             .filter(|(domain, _)| {
                 diff.is_some_and(|diff| diff.http_api_deployments.contains_key(*domain))
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        mcp_deployments: deployment
+            .mcp_deployments
+            .iter()
+            .filter(|(domain, _)| {
+                diff.is_some_and(|diff| diff.mcp_deployments.contains_key(*domain))
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),

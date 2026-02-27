@@ -18,6 +18,7 @@ import "golem/registry/agent_deployment.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
 import "golem/customapi/core.proto";
+import "golem/mcp/core.proto";
 import "golem/auth/auth_details_for_environment.proto";
 
 service RegistryService {
@@ -46,6 +47,7 @@ service RegistryService {
 
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
+  rpc GetActiveMcpForDomain (GetActiveMcpForDomainRequest) returns (GetActiveMcpForDomainResponse);
   rpc GetAgentDeployments (GetAgentDeploymentsRequest) returns (GetAgentDeploymentsResponse);
 }
 
@@ -289,6 +291,10 @@ message GetActiveRoutesForDomainRequest {
   string domain = 1;
 }
 
+message GetActiveMcpForDomainRequest {
+  string domain = 1;
+}
+
 message GetActiveRoutesForDomainResponse {
   oneof result {
     GetActiveRoutesForDomainSuccessResponse success = 1;
@@ -296,8 +302,19 @@ message GetActiveRoutesForDomainResponse {
   }
 }
 
+message GetActiveMcpForDomainResponse {
+  oneof result {
+    GetActiveMcpForDomainSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
 message GetActiveRoutesForDomainSuccessResponse {
   golem.customapi.CompiledRoutes compiled_routes = 1;
+}
+
+message GetActiveMcpForDomainSuccessResponse {
+  golem.mcp.CompiledMcp compiled_mcp = 1;
 }
 
 message GetAgentDeploymentsRequest {

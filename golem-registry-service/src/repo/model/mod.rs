@@ -25,6 +25,7 @@ pub mod environment_plugin_grant;
 pub mod environment_share;
 pub mod hash;
 pub mod http_api_deployment;
+pub mod mcp_deployment;
 pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod plan;
