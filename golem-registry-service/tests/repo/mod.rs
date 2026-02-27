@@ -17,7 +17,9 @@ use golem_registry_service::repo::account::AccountRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
 use golem_registry_service::repo::component::ComponentRepo;
+use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
+use golem_registry_service::repo::environment_share::EnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
@@ -55,6 +57,8 @@ pub struct Deps {
     pub component_repo: Box<dyn ComponentRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
     pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
+    pub full_deployment_repo: Box<dyn DeploymentRepo>,
+    pub environment_share_repo: Box<dyn EnvironmentShareRepo>,
     pub plugin_repo: Box<dyn PluginRepo>,
 }
 
@@ -84,11 +88,17 @@ impl Deps {
 
     pub async fn create_account(&self) -> AccountExtRevisionRecord {
         let account_id = new_repo_uuid();
+        self.create_account_with_email(&format!("test-{account_id}@golem"))
+            .await
+    }
+
+    pub async fn create_account_with_email(&self, email: &str) -> AccountExtRevisionRecord {
+        let account_id = new_repo_uuid();
         self.account_repo
             .create(AccountRevisionRecord {
                 account_id,
                 revision_id: 0,
-                email: format!("test-{account_id}@golem"),
+                email: email.to_string(),
                 audit: DeletableRevisionAuditFields::new(account_id),
                 name: format!("Test Account {account_id}"),
                 plan_id: self.test_plan_id(),

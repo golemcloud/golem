@@ -25,16 +25,16 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
     GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeAtDeploymentRequest, ResolveComponentRequest,
+    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response,
     get_all_agent_types_response, get_all_deployed_component_revisions_response,
     get_auth_details_for_environment_response, get_component_metadata_response,
     get_deployed_component_metadata_response, get_resource_limits_response,
-    resolve_agent_type_at_deployment_response, resolve_component_response,
-    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
+    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
@@ -166,6 +166,16 @@ pub trait RegistryService: Send + Sync {
         environment_name: &EnvironmentName,
         agent_type_name: &AgentTypeName,
         deployment_revision: DeploymentRevision,
+    ) -> Result<RegisteredAgentType, RegistryServiceError>;
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: Option<DeploymentRevision>,
+        owner_account_email: Option<&str>,
+        auth_ctx: &AuthCtx,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
     async fn get_active_routes_for_domain(
@@ -725,6 +735,41 @@ impl RegistryService for GrpcRegistryService {
             Some(resolve_agent_type_at_deployment_response::Result::Error(error)) => {
                 Err(error.into())
             }
+        }
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        app_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        agent_type_name: &AgentTypeName,
+        deployment_revision: Option<DeploymentRevision>,
+        owner_account_email: Option<&str>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+        let response = self
+            .client
+            .call("resolve_agent_type_by_names", move |client| {
+                let request = ResolveAgentTypeByNamesRequest {
+                    app_name: app_name.0.clone(),
+                    environment_name: environment_name.0.clone(),
+                    agent_type_name: agent_type_name.0.clone(),
+                    deployment_revision: deployment_revision.map(|r| r.get()),
+                    owner_account_email: owner_account_email.map(|e| e.to_string()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                };
+                Box::pin(client.resolve_agent_type_by_names(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_agent_type_by_names_response::Result::Success(payload)) => Ok(payload
+                .agent_type
+                .ok_or("missing agent_type field")?
+                .try_into()?),
+            Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

@@ -15,7 +15,7 @@
 use super::model::BindFields;
 use super::model::deployment::{
     CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
-    DeploymentRevisionCreationRecord,
+    DeploymentRevisionCreationRecord, ResolvedAgentTypeRecord,
 };
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
@@ -36,10 +36,11 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
-use indoc::indoc;
+use golem_service_base::repo::{BindingsStack, RepoError, RepoResult, ResultExt};
+use indoc::{formatdoc, indoc};
 use sqlx::{Database, Row};
 use std::fmt::Debug;
+use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -139,6 +140,16 @@ pub trait DeploymentRepo: Send + Sync {
         component_id: &Uuid,
         component_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        caller_account_id: Uuid,
+        app_name: &str,
+        env_name: &str,
+        agent_type: &str,
+        deployment_revision: Option<i64>,
+        owner_email: Option<&str>,
+    ) -> RepoResult<Option<ResolvedAgentTypeRecord>>;
 
     async fn set_current_deployment(
         &self,
@@ -418,6 +429,33 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
                 environment_id = %environment_id,
                 component_id = %component_id,
                 component_revision_id = %component_revision_id,
+            ))
+            .await
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        caller_account_id: Uuid,
+        app_name: &str,
+        env_name: &str,
+        agent_type: &str,
+        deployment_revision: Option<i64>,
+        owner_email: Option<&str>,
+    ) -> RepoResult<Option<ResolvedAgentTypeRecord>> {
+        self.repo
+            .resolve_agent_type_by_names(
+                caller_account_id,
+                app_name,
+                env_name,
+                agent_type,
+                deployment_revision,
+                owner_email,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                app_name = %app_name,
+                env_name = %env_name,
+                agent_type = %agent_type,
             ))
             .await
     }
@@ -946,6 +984,103 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 "#})
                 .bind(environment_id)
             )
+            .await
+    }
+
+    async fn resolve_agent_type_by_names(
+        &self,
+        caller_account_id: Uuid,
+        app_name: &str,
+        env_name: &str,
+        agent_type: &str,
+        deployment_revision: Option<i64>,
+        owner_email: Option<&str>,
+    ) -> RepoResult<Option<ResolvedAgentTypeRecord>> {
+        let mut binding_stack = BindingsStack::new(5);
+
+        let owner_filter = if let Some(owner_email) = owner_email {
+            let i = binding_stack.push(owner_email);
+            format!("AND email = ${i}")
+        } else {
+            "AND account_id = $1".to_string()
+        };
+
+        let deployment_revision_expr = if let Some(rev) = deployment_revision {
+            let i = binding_stack.push(rev);
+            format!("${i}")
+        } else {
+            indoc! { r#"
+                (SELECT cdr.deployment_revision_id
+                 FROM current_deployments cd
+                 JOIN current_deployment_revisions cdr
+                   ON cdr.environment_id = cd.environment_id
+                  AND cdr.revision_id = cd.current_revision_id
+                 WHERE cd.environment_id = env.environment_id)"#
+            }
+            .to_string()
+        };
+
+        let query = formatdoc! { r#"
+            WITH owner AS (
+              SELECT account_id
+              FROM accounts
+              WHERE deleted_at IS NULL
+                {owner_filter}
+            ),
+            env AS (
+              SELECT e.environment_id, owner.account_id AS owner_account_id
+              FROM owner
+              JOIN applications ap
+                ON ap.account_id = owner.account_id AND ap.deleted_at IS NULL
+              JOIN environments e
+                ON e.application_id = ap.application_id AND e.deleted_at IS NULL
+              WHERE ap.name = $2 AND e.name = $3
+            ),
+            target AS (
+              SELECT
+                env.environment_id,
+                env.owner_account_id,
+                {deployment_revision_expr} AS deployment_revision_id,
+                COALESCE((
+                  SELECT esr.roles
+                  FROM environment_shares es
+                  JOIN environment_share_revisions esr
+                    ON esr.environment_share_id = es.environment_share_id
+                   AND esr.revision_id = es.current_revision_id
+                  WHERE es.environment_id = env.environment_id
+                    AND es.grantee_account_id = $1
+                    AND es.deleted_at IS NULL
+                ), 0) AS roles_bitmask
+              FROM env
+            )
+            SELECT
+              r.environment_id, r.deployment_revision_id,
+              r.agent_type_name, r.agent_wrapper_type_name,
+              r.component_id, r.component_revision_id,
+              r.webhook_prefix_authority_and_path, r.agent_type,
+              target.owner_account_id,
+              target.roles_bitmask AS environment_roles_from_shares
+            FROM target
+            JOIN deployment_registered_agent_types r
+              ON r.environment_id = target.environment_id
+             AND r.deployment_revision_id = target.deployment_revision_id
+            WHERE (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
+            ORDER BY (r.agent_wrapper_type_name = $4) DESC
+            LIMIT 1
+        "#};
+
+        let query_as = {
+            let binding_stack = binding_stack;
+            sqlx::query_as(&query)
+                .bind(caller_account_id) // $1
+                .bind(app_name) // $2
+                .bind(env_name) // $3
+                .bind(agent_type) // $4
+                .pipe(|q| binding_stack.apply(q))
+        };
+
+        self.with_ro("resolve_agent_type_by_names")
+            .fetch_optional_as(query_as)
             .await
     }
 
