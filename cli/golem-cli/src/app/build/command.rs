@@ -287,6 +287,8 @@ pub async fn execute_external_command(
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
 ) -> anyhow::Result<()> {
+    let app_root_dir = ctx.application().app_root_dir();
+
     let build_dir = command
         .dir
         .as_ref()
@@ -296,8 +298,8 @@ pub async fn execute_external_command(
     let (sources, targets) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
             (
-                fs::compile_and_collect_globs(&build_dir, &command.sources)?,
-                fs::compile_and_collect_globs(&build_dir, &command.targets)?,
+                fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.sources)?,
+                fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.targets)?,
             )
         } else {
             (vec![], vec![])
@@ -365,9 +367,10 @@ pub async fn execute_external_command(
                 )
                 .await?;
 
-                Command::new(command_tokens[0].clone())
-                    .args(command_tokens.iter().skip(1))
+                let mut cmd = Command::new(command_tokens[0].clone());
+                cmd.args(command_tokens.iter().skip(1))
                     .current_dir(&build_dir)
+                    .envs(&command.env)
                     .stream_and_run(&command_tokens[0])
                     .await
             },

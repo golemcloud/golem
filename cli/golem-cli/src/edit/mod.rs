@@ -12,26 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::Serialize;
-use std::fmt::Debug;
-use std::hash::Hash;
+pub mod cargo_toml;
+pub mod golem_yaml;
+pub mod json;
+pub mod main_rs;
+pub mod main_ts;
+pub mod package_json;
+pub mod text;
+pub mod tsconfig_json;
 
-pub trait Layer {
-    type Id: Debug + Eq + Hash + Clone + Serialize;
-    type Value: Debug + Default + Clone + Serialize;
-    type Selector;
-    type AppliedSelection: Debug + Clone + Serialize;
-    type ApplyContext;
-    type ApplyError;
-
-    fn id(&self) -> &Self::Id;
-
-    fn parent_layers(&self) -> &[Self::Id];
-
-    fn apply_onto_parent(
-        &self,
-        ctx: &Self::ApplyContext,
-        selector: &Self::Selector,
-        value: &mut Self::Value,
-    ) -> Result<(), Self::ApplyError>;
-}
+#[cfg(test)]
+mod tests;

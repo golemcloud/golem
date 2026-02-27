@@ -1,12 +1,28 @@
-import alias from "@rollup/plugin-alias";
 import commonjs from "@rollup/plugin-commonjs";
 import json from "@rollup/plugin-json";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 import url from "node:url";
 import path from "node:path";
+import process from "node:process";
 
-export default function componentRollupConfig(componentName) {
+function componentRollupConfig() {
+    const componentName = process.env.GOLEM_COMPONENT_NAME;
+    if (!componentName) {
+        throw new Error("GOLEM_COMPONENT_NAME is not set");
+    }
+
+    const golemTemp = process.env.GOLEM_TEMP;
+    if (!golemTemp) {
+        throw new Error("GOLEM_TEMP is not set");
+    }
+
+    const appRootDir = process.env.GOLEM_APP_ROOT;
+    if (!appRootDir) {
+        throw new Error("GOLEM_APP_ROOT is not set");
+    }
+
+
     const dir = path.dirname(url.fileURLToPath(import.meta.url));
 
     const externalPackages = (id) => {
@@ -31,7 +47,7 @@ export default function componentRollupConfig(componentName) {
                 if (id === resolvedVirtualAgentMainId) {
                     return `
 import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
-import { Metadata } from '../../golem-temp/ts-metadata/${componentName}/.metadata/generated-types';
+import { Metadata } from '${golemTemp}/ts-metadata/${componentName}/.metadata/generated-types';
 
 TypescriptTypeRegistry.register(Metadata);
 
@@ -46,7 +62,7 @@ export default (async () => { return await import("./src/main");})();
     return {
         input: virtualAgentMainId,
         output: {
-            file: `../../golem-temp/ts-dist/${componentName}/main.js`,
+            file: `${golemTemp}/ts-dist/${componentName}/main.js`,
             format: "esm",
             inlineDynamicImports: true,
             sourcemap: false,
@@ -58,15 +74,17 @@ export default (async () => { return await import("./src/main");})();
                 extensions: [".mjs", ".js", ".node", ".ts"],
             }),
             commonjs({
-                include: ["../../node_modules/**"],
+                include: [`${appRootDir}/node_modules/**`],
             }),
             json(),
             typescript({
                 noEmitOnError: true,
                 include: [
-                    "./src/**/*.ts",
+                    `./src/**/*.ts`,
                 ],
             }),
         ],
     };
 }
+
+export default componentRollupConfig();

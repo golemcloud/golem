@@ -47,8 +47,9 @@ impl<L: Layer> Store<L> {
         &self,
         id: &L::Id,
         selector: &L::Selector,
+        ctx: &L::ApplyContext,
     ) -> Result<L::Value, StoreGetValueError<L>> {
-        self.value_internal(&L::root_id_to_context(id), id, selector)
+        self.value_internal(ctx, id, selector)
     }
 
     fn value_internal(

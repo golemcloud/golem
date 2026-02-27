@@ -425,6 +425,7 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
 ) -> anyhow::Result<(PathBuf, String)> {
     let glob = glob.as_ref();
     let path = Path::new(glob);
+
     let mut prefix_path = PathBuf::new();
     let mut resolved_path = PathBuf::new();
     let mut prefix_ended = false;
@@ -471,10 +472,40 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
     ))
 }
 
-pub fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<PathBuf>, Error> {
+fn split_absolute_glob(base_dir: &Path, glob: &str) -> anyhow::Result<(PathBuf, String)> {
+    let path = Path::new(glob);
+    if !path.is_absolute() {
+        bail!(
+            "Expected absolute glob, got: {}",
+            glob.log_color_error_highlight()
+        );
+    }
+
+    let relative = path.strip_prefix(base_dir).map_err(|_| {
+        anyhow!(
+            "Absolute glob {} is outside base directory {}",
+            glob.log_color_error_highlight(),
+            base_dir.display().to_string().log_color_highlight()
+        )
+    })?;
+
+    Ok((base_dir.to_path_buf(), path_to_str(relative)?.to_string()))
+}
+
+pub fn compile_and_collect_globs(
+    root_dir_for_absolute_globs: &Path,
+    root_dir_for_relative_globs: &Path,
+    globs: &[String],
+) -> Result<Vec<PathBuf>, Error> {
     Ok(globs
         .iter()
-        .map(|pattern| resolve_relative_glob(root_dir, pattern))
+        .map(|pattern| {
+            if Path::new(pattern).is_absolute() {
+                split_absolute_glob(root_dir_for_absolute_globs, pattern)
+            } else {
+                resolve_relative_glob(root_dir_for_relative_globs, pattern)
+            }
+        })
         .collect::<Result<Vec<_>, _>>()?
         .iter()
         .map(|(root_dir, pattern)| {
@@ -555,5 +586,24 @@ mod test {
                 .unwrap(),
             (base_dir.join("../../../"), "target/a".to_string())
         );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_absolute_globs_under_base_dir() {
+        let base_dir = PathBuf::from("/tmp/golem");
+
+        assert_eq!(
+            fs::split_absolute_glob(&base_dir, "/tmp/golem/dir/**/*.ts").unwrap(),
+            (base_dir.clone(), "dir/**/*.ts".to_string())
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_absolute_globs_outside_base_dir() {
+        let base_dir = PathBuf::from("/tmp/golem");
+
+        assert!(fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").is_err());
     }
 }
