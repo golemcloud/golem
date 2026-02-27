@@ -24,7 +24,7 @@ use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
-use tracing::{debug};
+use tracing::debug;
 
 pub async fn agent_invoke(
     worker_service: &Arc<WorkerService>,
@@ -98,7 +98,8 @@ pub async fn agent_invoke(
             ErrorData::internal_error(format!("Failed to invoke worker: {:?}", e), None)
         })?;
 
-    interpret_agent_response(result.clone(), &mcp_tool.raw_method.output_schema).map(CallToolResult::structured)
+    interpret_agent_response(result.clone(), &mcp_tool.raw_method.output_schema)
+        .map(CallToolResult::structured)
 }
 
 pub fn interpret_agent_response(
@@ -128,15 +129,14 @@ pub fn interpret_agent_response(
                         "return-value": json_value,
                     })
                 })
-
                 .map_err(|e| {
-                tracing::error!("Failed to map successful agent response: {}", e);
+                    tracing::error!("Failed to map successful agent response: {}", e);
 
-                ErrorData::internal_error(
-                    format!("Failed to map successful agent response: {}", e),
-                    None,
-                )
-            })
+                    ErrorData::internal_error(
+                        format!("Failed to map successful agent response: {}", e),
+                        None,
+                    )
+                })
         }
         Some(Value::Result(Err(Some(agent_error_value)))) => {
             let agent_error = AgentError::from_value(*agent_error_value).map_err(|err| {
@@ -212,9 +212,7 @@ fn map_successful_agent_response(
 
 fn map_single_element_agent_response(element: ElementValue) -> Result<serde_json::Value, String> {
     match element {
-        ElementValue::ComponentModel(value_and_type) => {
-            value_and_type.to_json_value()
-        },
+        ElementValue::ComponentModel(value_and_type) => value_and_type.to_json_value(),
 
         ElementValue::UnstructuredBinary(_) => Err(
             "Received unstructured binary response, which is not supported in this context"
