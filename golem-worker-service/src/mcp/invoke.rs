@@ -24,7 +24,7 @@ use rmcp::ErrorData;
 use rmcp::model::{CallToolResult, JsonObject};
 use serde_json::json;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug};
 
 pub async fn agent_invoke(
     worker_service: &Arc<WorkerService>,
@@ -98,19 +98,7 @@ pub async fn agent_invoke(
             ErrorData::internal_error(format!("Failed to invoke worker: {:?}", e), None)
         })?;
 
-    match result {
-        Some(value_and_type) => match value_and_type.to_json_value() {
-            Ok(json_value) => Ok(CallToolResult::structured(json_value)),
-            Err(e) => {
-                tracing::error!("Failed to convert result to JSON: {}", e);
-                Err(ErrorData::internal_error(
-                    format!("Failed to convert result to JSON: {}", e),
-                    None,
-                ))
-            }
-        },
-        None => Ok(CallToolResult::structured(json!(null))),
-    }
+    interpret_agent_response(result.clone(), &mcp_tool.raw_method.output_schema).map(CallToolResult::structured)
 }
 
 pub fn interpret_agent_response(
@@ -134,8 +122,16 @@ pub fn interpret_agent_response(
                     )
                 })?;
 
-            map_successful_agent_response(untyped_data_value, expected_type).map_err(|e| {
+            map_successful_agent_response(untyped_data_value, expected_type)
+                .map(|json_value| {
+                    json!({
+                        "return-value": json_value,
+                    })
+                })
+
+                .map_err(|e| {
                 tracing::error!("Failed to map successful agent response: {}", e);
+
                 ErrorData::internal_error(
                     format!("Failed to map successful agent response: {}", e),
                     None,
@@ -216,7 +212,9 @@ fn map_successful_agent_response(
 
 fn map_single_element_agent_response(element: ElementValue) -> Result<serde_json::Value, String> {
     match element {
-        ElementValue::ComponentModel(value_and_type) => value_and_type.to_json_value(),
+        ElementValue::ComponentModel(value_and_type) => {
+            value_and_type.to_json_value()
+        },
 
         ElementValue::UnstructuredBinary(_) => Err(
             "Received unstructured binary response, which is not supported in this context"
