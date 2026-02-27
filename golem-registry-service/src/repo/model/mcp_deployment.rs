@@ -123,9 +123,7 @@ impl McpDeploymentRevisionRecord {
             agents: self
                 .data
                 .value()
-                .agents
-                .iter()
-                .map(|(k, _v)| (k.0.clone(), DiffMcpDeploymentAgentOptions::default()))
+                .agents.keys().map(|k| (k.0.clone(), DiffMcpDeploymentAgentOptions::default()))
                 .collect(),
         }
     }

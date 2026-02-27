@@ -1527,9 +1527,7 @@ impl AppCommandHandler {
                     let mcp_deployment_handler = self.ctx.api_deployment_handler();
                     let mcp_deployment = deploy_diff.deployable_manifest_mcp_deployment(&domain);
                     let agents = mcp_deployment
-                        .agents
-                        .iter()
-                        .map(|(k, _v)| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
+                        .agents.keys().map(|k| (k.clone(), golem_common::model::mcp_deployment::McpDeploymentAgentOptions::default()))
                         .collect();
 
                     mcp_deployment_handler
