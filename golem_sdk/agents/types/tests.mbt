@@ -128,3 +128,46 @@ test "unstructured_binary_from_wrong_element_value" {
     content="Err(InvalidInput(\"Expected UnstructuredBinary ElementValue\"))",
   )
 }
+
+///|
+test "multimodal_text_or_binary_roundtrip" {
+  let original : Multimodal[TextOrBinary] = Multimodal::new([
+    TextOrBinary::Text(
+      UnstructuredText::from_url("https://example.com/doc.txt"),
+    ),
+    TextOrBinary::Binary(
+      UnstructuredBinary::from_inline(b"\x89PNG", mime_type="image/png"),
+    ),
+  ])
+  let data = original.to_data_value()
+  let restored : Multimodal[TextOrBinary] = Multimodal::from_data_value(data)
+  assert_eq(restored, original)
+}
+
+///|
+test "multimodal_custom_modality_string_roundtrip" {
+  let original : Multimodal[CustomModality[String]] = Multimodal::new([
+    CustomModality::Text(UnstructuredText::from_inline("hello")),
+    CustomModality::Structured("world"),
+    CustomModality::Binary(
+      UnstructuredBinary::from_url("https://example.com/bin"),
+    ),
+  ])
+  let data = original.to_data_value()
+  let restored : Multimodal[CustomModality[String]] = Multimodal::from_data_value(
+    data,
+  )
+  assert_eq(restored, original)
+}
+
+///|
+test "multimodal_from_tuple_data_value_raises_error" {
+  let data = @common.DataValue::Tuple([])
+  let result : Result[Multimodal[TextOrBinary], _] = try? Multimodal::from_data_value(
+    data,
+  )
+  inspect(
+    result,
+    content="Err(InvalidInput(\"Expected Multimodal DataValue\"))",
+  )
+}

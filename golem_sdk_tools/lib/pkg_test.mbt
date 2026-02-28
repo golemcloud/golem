@@ -110,6 +110,86 @@ test "update_pkg_link inserts link into existing options" {
 }
 
 ///|
+test "ensure_pkg_import adds import to existing block" {
+  let content =
+    #|import {
+    #|  "some/pkg",
+    #|}
+    #|
+    #|options(
+    #|  "is-main": true,
+    #|)
+  let result = @lib.ensure_pkg_import(
+    content, "vigoo/golem_sdk/agents/types", "@types",
+  )
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "some/pkg",
+      #|  "vigoo/golem_sdk/agents/types" @types,
+      #|}
+      #|
+      #|options(
+      #|  "is-main": true,
+      #|)
+    ),
+  )
+}
+
+///|
+test "ensure_pkg_import is idempotent" {
+  let content =
+    #|import {
+    #|  "some/pkg",
+    #|  "vigoo/golem_sdk/agents/types" @types,
+    #|}
+    #|
+    #|options(
+    #|  "is-main": true,
+    #|)
+  let result = @lib.ensure_pkg_import(
+    content, "vigoo/golem_sdk/agents/types", "@types",
+  )
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "some/pkg",
+      #|  "vigoo/golem_sdk/agents/types" @types,
+      #|}
+      #|
+      #|options(
+      #|  "is-main": true,
+      #|)
+    ),
+  )
+}
+
+///|
+test "ensure_pkg_import adds import block when none exists" {
+  let content =
+    #|options(
+    #|  "is-main": true,
+    #|)
+  let result = @lib.ensure_pkg_import(
+    content, "vigoo/golem_sdk/agents/types", "@types",
+  )
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "vigoo/golem_sdk/agents/types" @types,
+      #|}
+      #|
+      #|options(
+      #|  "is-main": true,
+      #|)
+    ),
+  )
+}
+
+///|
 test "update_pkg_link appends options when none exist" {
   let content =
     #|import {

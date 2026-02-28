@@ -101,6 +101,24 @@ test "option_array_string_roundtrip" {
 }
 
 ///|
+test "bytes_roundtrip" {
+  let original : Bytes = b"\x01\x02\x03\x04"
+  let element = to_element_value_as(original)
+  let restored : Bytes = from_element_value_as(element)
+  assert_eq(restored, original)
+}
+
+///|
+test "bytes_schema" {
+  inspect(
+    schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[Bytes])),
+    content=(
+      #|ComponentModel({nodes: [{name: None, owner: None, type_: ListType(1)}, {name: None, owner: None, type_: PrimU8Type}]})
+    ),
+  )
+}
+
+///|
 test "record_with_option_field_schema" {
   let schema = make_record_schema([
     ("name", schema_of("")),

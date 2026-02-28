@@ -232,6 +232,24 @@ test "parse variant enum with cross-package payload" {
 }
 
 ///|
+test "parse_multimodal_enum" {
+  let content =
+    #|///|
+    #|#derive.multimodal
+    #|pub(all) enum TextOrImage {
+    #|  Text(String)
+    #|  Image(Bytes)
+    #|}
+  let result = parse_multimodal_enums([("test.mbt", content)])
+  inspect(
+    result,
+    content=(
+      #|[{name: "TextOrImage", variants: [("Text", Simple("String")), ("Image", Simple("Bytes"))]}]
+    ),
+  )
+}
+
+///|
 test "non-annotated types are skipped" {
   let content =
     #|///|

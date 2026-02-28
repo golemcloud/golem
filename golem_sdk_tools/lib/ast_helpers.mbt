@@ -131,6 +131,23 @@ fn make_method_ref(type_name : String, method_name : String) -> @syntax.Expr {
   )
 }
 
+///|
+fn make_qualified_method_ref(
+  pkg : String,
+  type_name : String,
+  method_name : String,
+) -> @syntax.Expr {
+  @syntax.Expr::Method(
+    type_name=@syntax.TypeName::{
+      name: @syntax.LongIdent::Dot(pkg~, id=type_name),
+      is_object: false,
+      loc: dummy_loc,
+    },
+    method_name=make_label(method_name),
+    loc=dummy_loc,
+  )
+}
+
 // --- Expressions: Constructors ---
 
 ///|

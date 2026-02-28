@@ -72,6 +72,7 @@ pub impl FromElementValue for Double
 pub impl FromElementValue for String
 pub impl[T : FromExtractor] FromElementValue for T?
 pub impl[T : FromExtractor, E : FromExtractor] FromElementValue for Result[T, E]
+pub impl FromElementValue for Bytes
 pub impl[T : FromExtractor] FromElementValue for Array[T]
 pub impl[T0 : FromExtractor, T1 : FromExtractor] FromElementValue for (T0, T1)
 pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor] FromElementValue for (T0, T1, T2)
@@ -104,6 +105,7 @@ pub impl FromExtractor for Double
 pub impl FromExtractor for String
 pub impl[T : FromExtractor] FromExtractor for T?
 pub impl[T : FromExtractor, E : FromExtractor] FromExtractor for Result[T, E]
+pub impl FromExtractor for Bytes
 pub impl[T : FromExtractor] FromExtractor for Array[T]
 pub impl[T0 : FromExtractor, T1 : FromExtractor] FromExtractor for (T0, T1)
 pub impl[T0 : FromExtractor, T1 : FromExtractor, T2 : FromExtractor] FromExtractor for (T0, T1, T2)
@@ -136,6 +138,7 @@ pub impl HasElementSchema for Double
 pub impl HasElementSchema for String
 pub impl[T : HasElementSchema] HasElementSchema for T?
 pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result[T, E]
+pub impl HasElementSchema for Bytes
 pub impl[T : HasElementSchema] HasElementSchema for Array[T]
 pub impl[T0 : HasElementSchema, T1 : HasElementSchema] HasElementSchema for (T0, T1)
 pub impl[T0 : HasElementSchema, T1 : HasElementSchema, T2 : HasElementSchema] HasElementSchema for (T0, T1, T2)
@@ -168,6 +171,7 @@ pub impl ToElementValue for Double
 pub impl ToElementValue for String
 pub impl[T : ToElementValue] ToElementValue for T?
 pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
+pub impl ToElementValue for Bytes
 pub impl[T : ToElementValue] ToElementValue for Array[T]
 pub impl[T0 : ToElementValue, T1 : ToElementValue] ToElementValue for (T0, T1)
 pub impl[T0 : ToElementValue, T1 : ToElementValue, T2 : ToElementValue] ToElementValue for (T0, T1, T2)

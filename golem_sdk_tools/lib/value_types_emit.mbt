@@ -574,3 +574,107 @@ fn build_variant_to_element_value(
     body,
   )
 }
+
+// --- MultimodalEnum ---
+
+///|
+pub fn generate_multimodal_impls(
+  enums : Array[MultimodalEnumInfo],
+) -> @list.List[@syntax.Impl] {
+  let all : Array[@syntax.Impl] = []
+  for e in enums {
+    all.push(build_multimodal_schema(e))
+    all.push(build_multimodal_to_named_element(e))
+    all.push(build_multimodal_from_named_element(e))
+  }
+  to_list(all)
+}
+
+///|
+fn build_multimodal_schema(e : MultimodalEnumInfo) -> @syntax.Impl {
+  let tuple_exprs = e.variants.map(fn(v) {
+    let (name, pt) = v
+    make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+  })
+  let body = make_array(tuple_exprs)
+  make_top_impl(
+    e.name,
+    "types",
+    "MultimodalModality",
+    "multimodal_schema",
+    [],
+    body,
+  )
+}
+
+///|
+fn build_multimodal_to_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for v in e.variants {
+    let (name, _pt) = v
+    match_cases.push(
+      make_case(
+        make_constr_pattern(name, [make_var_pattern("v")]),
+        make_tuple([
+          make_string_expr(name),
+          make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+            make_ident_expr("v"),
+          ]),
+        ]),
+      ),
+    )
+  }
+  let body = make_match(make_ident_expr("self"), match_cases)
+  make_top_impl(
+    e.name,
+    "types",
+    "MultimodalModality",
+    "to_named_element",
+    ["self"],
+    body,
+  )
+}
+
+///|
+fn build_multimodal_from_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for v in e.variants {
+    let (name, _pt) = v
+    match_cases.push(
+      make_case(
+        make_string_pattern(name),
+        make_apply(make_constr_no_args(name), [
+          make_apply(make_qualified_expr("schema", "from_element_value_as"), [
+            make_ident_expr("value"),
+          ]),
+        ]),
+      ),
+    )
+  }
+  match_cases.push(
+    make_case(
+      make_wildcard_pattern(),
+      make_raise(
+        make_apply(
+          make_qualified_constr("common", "AgentError", "InvalidInput"),
+          [
+            make_infix(
+              "+",
+              make_string_expr("Unknown modality: "),
+              make_ident_expr("name"),
+            ),
+          ],
+        ),
+      ),
+    ),
+  )
+  let body = make_match(make_ident_expr("name"), match_cases)
+  make_top_impl(
+    e.name,
+    "types",
+    "MultimodalModality",
+    "from_named_element",
+    ["name", "value"],
+    body,
+  )
+}

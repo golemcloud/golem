@@ -532,6 +532,58 @@ test "generate impls for struct with type alias fields" {
 }
 
 ///|
+test "generate multimodal impls for TextOrImage" {
+  let enums : Array[MultimodalEnumInfo] = [
+    {
+      name: "TextOrImage",
+      variants: [("Text", Simple("String")), ("Image", Simple("Bytes"))],
+    },
+  ]
+  let impls = generate_multimodal_impls(enums)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @types.MultimodalModality for TextOrImage with multimodal_schema() {
+      #|  [
+      #|    (
+      #|      "Text",
+      #|      @schema.schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[String])),
+      #|    ),
+      #|    (
+      #|      "Image",
+      #|      @schema.schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[Bytes])),
+      #|    ),
+      #|  ]
+      #|}
+      #|
+      #|///|
+      #|impl @types.MultimodalModality for TextOrImage with to_named_element(self) {
+      #|  match self {
+      #|    Text(v) => ("Text", @schema.to_element_value_as(v))
+      #|    Image(v) => ("Image", @schema.to_element_value_as(v))
+      #|  }
+      #|}
+      #|
+      #|///|
+      #|impl @types.MultimodalModality for TextOrImage with from_named_element(
+      #|  name,
+      #|  value,
+      #|) {
+      #|  match name {
+      #|    "Text" => Text(@schema.from_element_value_as(value))
+      #|    "Image" => Image(@schema.from_element_value_as(value))
+      #|    _ => raise  @common.AgentError::InvalidInput("Unknown modality: " + name)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
 test "generate impls for struct with compound fields" {
   let types : Array[ValueTypeInfo] = [
     {

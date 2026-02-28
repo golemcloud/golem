@@ -81,6 +81,57 @@ fn generate_link_block_lines(exports : Array[String]) -> Array[String] {
 ///|
 /// Updates a `moon.pkg` file's content to include or replace the `link: { ... }` block.
 /// Preserves all other content (imports, is-main, pre-build, etc.).
+pub fn ensure_pkg_import(
+  content : String,
+  import_path : String,
+  import_alias : String,
+) -> String {
+  let lines : Array[String] = content
+    .split("\n")
+    .map(fn(sv) { sv.to_string() })
+    .collect()
+  for line in lines {
+    let trimmed = line.trim()
+    if trimmed.contains(import_path) {
+      return content
+    }
+  }
+  let mut import_start = -1
+  let mut import_end = -1
+  for i = 0; i < lines.length(); i = i + 1 {
+    let trimmed = lines[i].trim()
+    if trimmed.has_prefix("import") && trimmed.contains("{") {
+      import_start = i
+    }
+    if import_start >= 0 && trimmed == "}" {
+      import_end = i
+      break
+    }
+  }
+  let result : Array[String] = []
+  if import_start >= 0 && import_end >= 0 {
+    for i = 0; i < import_end; i = i + 1 {
+      result.push(lines[i])
+    }
+    result.push("  \"\{import_path}\" \{import_alias},")
+    for i = import_end; i < lines.length(); i = i + 1 {
+      result.push(lines[i])
+    }
+  } else {
+    result.push("import {")
+    result.push("  \"\{import_path}\" \{import_alias},")
+    result.push("}")
+    result.push("")
+    for line in lines {
+      result.push(line)
+    }
+  }
+  result.join("\n")
+}
+
+///|
+/// Updates a `moon.pkg` file's content to include or replace the `link: { ... }` block.
+/// Preserves all other content (imports, is-main, pre-build, etc.).
 pub fn update_pkg_link(content : String, exports : Array[String]) -> String {
   let link_lines = generate_link_block_lines(exports)
   let lines : Array[String] = content

@@ -15,11 +15,17 @@ pub fn decode_qualified(String) -> (String, String)?
 
 pub fn encode_qualified(String, String) -> ParamType
 
+pub fn ensure_pkg_import(String, String, String) -> String
+
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
+
+pub fn generate_multimodal_impls(Array[MultimodalEnumInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
 
 pub fn generate_value_type_impls(Array[ValueTypeInfo]) -> @list.List[@syntax.Impl]
+
+pub fn is_multimodal_type(ParamType) -> Bool
 
 pub fn param_type_to_schema_expr(ParamType, options? : SchemaOptions?) -> @syntax.Expr
 
@@ -28,6 +34,8 @@ pub fn param_type_to_type_string(ParamType) -> String
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
 pub fn parse_mbt_source(String) -> Array[FnSignature]
+
+pub fn parse_multimodal_enums(Array[(String, String)]) -> Array[MultimodalEnumInfo] raise AgentParseError
 
 pub fn parse_pkg_exports(String) -> Array[String]
 
@@ -85,12 +93,20 @@ pub(all) struct MethodInfo {
 }
 pub impl Show for MethodInfo
 
+pub(all) struct MultimodalEnumInfo {
+  name : String
+  variants : Array[(String, ParamType)]
+}
+pub impl Show for MultimodalEnumInfo
+
 pub(all) enum ParamType {
   Simple(String)
   Optional(ParamType)
   List(ParamType)
   ResultType(ParamType, ParamType)
   Tuple(Array[ParamType])
+  MultimodalType(ParamType)
+  MultimodalCustomType(ParamType)
 }
 pub impl Eq for ParamType
 pub impl Show for ParamType

@@ -1,6 +1,8 @@
 import {
   "moonbitlang/core/env",
+  "moonbitlang/core/list",
   "moonbitlang/formatter",
+  "moonbitlang/parser/syntax",
   "moonbitlang/x/fs",
   "vigoo/golem_sdk_tools/lib" @lib,
 }

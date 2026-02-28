@@ -1474,6 +1474,90 @@ test "generate_agent_registration with ephemeral mode" {
 }
 
 ///|
+test "parse_agent_with_multimodal_return" {
+  let source =
+    #|///| Echo agent
+    #|#derive.agent
+    #|pub(all) struct EchoAgent {
+    #|  value : String
+    #|}
+    #|
+    #|pub fn EchoAgent::new() -> EchoAgent {
+    #|  { value: "" }
+    #|}
+    #|
+    #|///| Echo multimodal
+    #|pub fn EchoAgent::echo(self : Self, input : Multimodal[TextOrBinary]) -> Multimodal[TextOrBinary] {
+    #|  input
+    #|}
+  let result = parse_agents([("test.mbt", source)])
+  let m = result[0].methods[0]
+  inspect(
+    m.params,
+    content=(
+      #|[("input", MultimodalType(Simple("TextOrBinary")))]
+    ),
+  )
+  inspect(
+    m.return_type,
+    content=(
+      #|Some(MultimodalType(Simple("TextOrBinary")))
+    ),
+  )
+}
+
+///|
+test "generate_agent_registration with multimodal return uses to_data_value" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "EchoAgent",
+      description: "Echo agent",
+      mode: Durable,
+      constructor_params: [],
+      constructor_description: "Creates an echo agent",
+      constructor_prompt_hint: None,
+      methods: [
+        {
+          name: "echo",
+          description: "Echo multimodal",
+          prompt_hint: None,
+          params: [("input", MultimodalType(Simple("TextOrBinary")))],
+          return_type: Some(MultimodalType(Simple("TextOrBinary"))),
+          param_schema_options: {},
+        },
+      ],
+      has_init: false,
+      constructor_schema_options: {},
+    },
+  ]
+  let impl_ = build_raw_agent_impl(agents[0])
+  let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @agents.RawAgent for EchoAgent with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      "echo" => {
+      #|        let input :@types.Multimodal[TextOrBinary] = 
+      #|          @types.Multimodal::from_data_value(input)
+      #|        let result = self.echo(input)
+      #|        Ok(result.to_data_value())
+      #|      }
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
 test "validate_no_nested_unstructured rejects Option[UnstructuredText]" {
   let result : Result[_, _] = try? validate_no_nested_unstructured(
     "input",

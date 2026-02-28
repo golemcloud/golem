@@ -10,6 +10,10 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
       let parts = elems.map(param_type_to_type_string)
       "(" + parts.join(", ") + ")"
     }
+    MultimodalType(inner) =>
+      "@types.Multimodal[\{param_type_to_type_string(inner)}]"
+    MultimodalCustomType(inner) =>
+      "@types.Multimodal[@types.CustomModality[\{param_type_to_type_string(inner)}]]"
   }
 }
 
@@ -30,6 +34,16 @@ fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
         param_type_to_ast_type(err),
       ])
     Tuple(elems) => make_tuple_type(elems.map(param_type_to_ast_type))
+    MultimodalType(inner) =>
+      make_qualified_parameterized_type("types", "Multimodal", [
+        param_type_to_ast_type(inner),
+      ])
+    MultimodalCustomType(inner) =>
+      make_qualified_parameterized_type("types", "Multimodal", [
+        make_qualified_parameterized_type("types", "CustomModality", [
+          param_type_to_ast_type(inner),
+        ]),
+      ])
   }
 }
 
@@ -78,7 +92,56 @@ pub fn param_type_to_schema_expr(
 }
 
 ///|
+fn build_multimodal_schema_expr(pt : ParamType) -> @syntax.Expr {
+  match pt {
+    MultimodalType(inner) => {
+      let type_name = param_type_to_type_string(inner)
+      let method_ref = match decode_qualified(type_name) {
+        Some((pkg, id)) =>
+          make_qualified_method_ref(pkg, id, "multimodal_schema")
+        None => make_method_ref(type_name, "multimodal_schema")
+      }
+      make_apply(method_ref, [])
+    }
+    MultimodalCustomType(inner) => {
+      let text_schema = param_type_to_schema_expr(Simple("UnstructuredText"))
+      let binary_schema = param_type_to_schema_expr(
+        Simple("UnstructuredBinary"),
+      )
+      let structured_schema = param_type_to_schema_expr(inner)
+      make_array([
+        make_tuple([make_string_expr("Text"), text_schema]),
+        make_tuple([make_string_expr("Binary"), binary_schema]),
+        make_tuple([make_string_expr("Structured"), structured_schema]),
+      ])
+    }
+    _ => panic()
+  }
+}
+
+///|
 fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
+  let is_multimodal_ctor = agent.constructor_params.length() == 1 &&
+    is_multimodal_type(agent.constructor_params[0].1)
+  let try_body = if is_multimodal_ctor {
+    build_multimodal_construct_body(agent)
+  } else {
+    build_tuple_construct_body(agent)
+  }
+  // fn(input) { try { ... } catch { e => Err(e) } }
+  make_lambda(
+    ["input"],
+    make_try_catch(try_body, [
+      make_case(
+        make_var_pattern("e"),
+        make_apply(make_constr_no_args("Err"), [make_ident_expr("e")]),
+      ),
+    ]),
+  )
+}
+
+///|
+fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let param_count = agent.constructor_params.length()
   // Ok(AgentName::new(p1, p2, ...))
   let new_args = agent.constructor_params.map(fn(param) {
@@ -124,50 +187,79 @@ fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
     body,
   )
   // let elements = @extractor.extract_tuple(input); <guard + lets>
-  let try_body = make_let(
+  make_let(
     "elements",
     make_apply(make_qualified_expr("extractor", "extract_tuple"), [
       make_ident_expr("input"),
     ]),
     body,
   )
-  // fn(input) { try { ... } catch { e => Err(e) } }
-  make_lambda(
-    ["input"],
-    make_try_catch(try_body, [
-      make_case(
-        make_var_pattern("e"),
-        make_apply(make_constr_no_args("Err"), [make_ident_expr("e")]),
-      ),
-    ]),
+}
+
+///|
+fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
+  let (param_name, param_type) = agent.constructor_params[0]
+  // Ok(AgentName::new(param_name))
+  let ok_call = make_apply(make_constr_no_args("Ok"), [
+    make_apply(make_method_ref(agent.name, "new"), [make_ident_expr(param_name)]),
+  ])
+  // let param_name : Type = @types.Multimodal::from_data_value(input)
+  make_let_typed(
+    param_name,
+    param_type_to_ast_type(param_type),
+    make_apply(
+      make_qualified_method_ref("types", "Multimodal", "from_data_value"),
+      [make_ident_expr("input")],
+    ),
+    ok_call,
   )
 }
 
 ///|
 fn build_method_record(info : MethodInfo) -> @syntax.Expr {
-  let input_elems = info.params.map(fn(param) {
-    let (name, pt) = param
-    let opts = info.param_schema_options.get(name)
-    make_tuple([
-      make_string_expr(name),
-      param_type_to_schema_expr(pt, options=opts),
+  let is_multimodal_input = info.params.length() == 1 &&
+    is_multimodal_type(info.params[0].1)
+  let input_schema = if is_multimodal_input {
+    make_apply(make_qualified_constr("common", "DataSchema", "Multimodal"), [
+      build_multimodal_schema_expr(info.params[0].1),
     ])
-  })
-  let input_schema = make_apply(
-    make_qualified_constr("common", "DataSchema", "Tuple"),
-    [make_array(input_elems)],
-  )
-  let output_schema = match info.return_type {
-    Some(pt) =>
-      make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
-        make_array([
-          make_tuple([make_string_expr("result"), param_type_to_schema_expr(pt)]),
-        ]),
+  } else {
+    let input_elems = info.params.map(fn(param) {
+      let (name, pt) = param
+      let opts = info.param_schema_options.get(name)
+      make_tuple([
+        make_string_expr(name),
+        param_type_to_schema_expr(pt, options=opts),
       ])
-    None =>
-      make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
-        make_array([]),
-      ])
+    })
+    make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+      make_array(input_elems),
+    ])
+  }
+  let is_multimodal_output = match info.return_type {
+    Some(pt) => is_multimodal_type(pt)
+    None => false
+  }
+  let output_schema = if is_multimodal_output {
+    make_apply(make_qualified_constr("common", "DataSchema", "Multimodal"), [
+      build_multimodal_schema_expr(info.return_type.unwrap()),
+    ])
+  } else {
+    match info.return_type {
+      Some(pt) =>
+        make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+          make_array([
+            make_tuple([
+              make_string_expr("result"),
+              param_type_to_schema_expr(pt),
+            ]),
+          ]),
+        ])
+      None =>
+        make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+          make_array([]),
+        ])
+    }
   }
   let hint_expr = match info.prompt_hint {
     Some(s) => make_apply(make_constr_no_args("Some"), [make_string_expr(s)])
@@ -184,18 +276,25 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
 
 ///|
 pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
-  let schema_elems = agent.constructor_params.map(fn(param) {
-    let (name, pt) = param
-    let opts = agent.constructor_schema_options.get(name)
-    make_tuple([
-      make_string_expr(name),
-      param_type_to_schema_expr(pt, options=opts),
+  let is_multimodal_ctor = agent.constructor_params.length() == 1 &&
+    is_multimodal_type(agent.constructor_params[0].1)
+  let input_schema = if is_multimodal_ctor {
+    make_apply(make_qualified_constr("common", "DataSchema", "Multimodal"), [
+      build_multimodal_schema_expr(agent.constructor_params[0].1),
     ])
-  })
-  let input_schema = make_apply(
-    make_qualified_constr("common", "DataSchema", "Tuple"),
-    [make_array(schema_elems)],
-  )
+  } else {
+    let schema_elems = agent.constructor_params.map(fn(param) {
+      let (name, pt) = param
+      let opts = agent.constructor_schema_options.get(name)
+      make_tuple([
+        make_string_expr(name),
+        param_type_to_schema_expr(pt, options=opts),
+      ])
+    })
+    make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+      make_array(schema_elems),
+    ])
+  }
   let ctor_hint_expr = match agent.constructor_prompt_hint {
     Some(s) => make_apply(make_constr_no_args("Some"), [make_string_expr(s)])
     None => make_constr_no_args("None")
@@ -244,6 +343,23 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
 
 ///|
 fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
+  let is_multimodal_input = info.params.length() == 1 &&
+    is_multimodal_type(info.params[0].1)
+  let is_multimodal_output = match info.return_type {
+    Some(pt) => is_multimodal_type(pt)
+    None => false
+  }
+  if is_multimodal_input || is_multimodal_output {
+    build_multimodal_method_arm_body(
+      info, is_multimodal_input, is_multimodal_output,
+    )
+  } else {
+    build_tuple_method_arm_body(info)
+  }
+}
+
+///|
+fn build_tuple_method_arm_body(info : MethodInfo) -> @syntax.Expr {
   let param_count = info.params.length()
   let has_return = info.return_type is Some(_)
   // Build the method call
@@ -318,6 +434,119 @@ fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
     ]),
     body,
   )
+}
+
+///|
+fn build_multimodal_method_arm_body(
+  info : MethodInfo,
+  multimodal_input : Bool,
+  multimodal_output : Bool,
+) -> @syntax.Expr {
+  // Build the method call
+  let method_args = info.params.map(fn(param) { make_ident_expr(param.0) })
+  let call = make_dot_apply(make_ident_expr("self"), info.name, method_args)
+  // Build result wrapping
+  let has_return = info.return_type is Some(_)
+  let ok_expr = if has_return && multimodal_output {
+    // let result = self.method(args)
+    // Ok(result.to_data_value())
+    make_let(
+      "result",
+      call,
+      make_apply(make_constr_no_args("Ok"), [
+        make_dot_apply(make_ident_expr("result"), "to_data_value", []),
+      ]),
+    )
+  } else if has_return {
+    // let result = self.method(args)
+    // Ok(DataValue::Tuple([to_element_value_as(result)]))
+    make_let(
+      "result",
+      call,
+      make_apply(make_constr_no_args("Ok"), [
+        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+          make_array([
+            make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+              make_ident_expr("result"),
+            ]),
+          ]),
+        ]),
+      ]),
+    )
+  } else {
+    // self.method(args)
+    // Ok(DataValue::Tuple([]))
+    make_sequence([
+      call,
+      make_apply(make_constr_no_args("Ok"), [
+        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+          make_array([]),
+        ]),
+      ]),
+    ])
+  }
+  // Build param deserialization
+  if multimodal_input {
+    let (param_name, param_type) = info.params[0]
+    // let param_name : Type = @types.Multimodal::from_data_value(input)
+    make_let_typed(
+      param_name,
+      param_type_to_ast_type(param_type),
+      make_apply(
+        make_qualified_method_ref("types", "Multimodal", "from_data_value"),
+        [make_ident_expr("input")],
+      ),
+      ok_expr,
+    )
+  } else {
+    // Non-multimodal input with multimodal output — use tuple extraction as normal
+    let param_count = info.params.length()
+    let mut body = ok_expr
+    for idx in 0..<param_count {
+      let i = param_count - 1 - idx
+      let (name, pt) = info.params[i]
+      body = make_let_typed(
+        name,
+        param_type_to_ast_type(pt),
+        make_apply(make_qualified_expr("schema", "from_element_value_as"), [
+          make_array_get(make_ident_expr("elements"), make_int_expr(i)),
+        ]),
+        body,
+      )
+    }
+    let elements_length = make_dot_apply(
+      make_ident_expr("elements"),
+      "length",
+      [],
+    )
+    body = make_guard_else(
+      make_infix("==", elements_length, make_int_expr(param_count)),
+      make_raise(
+        make_apply(
+          make_qualified_constr("common", "AgentError", "InvalidInput"),
+          [
+            make_infix(
+              "+",
+              make_string_expr("Expected \{param_count} elements, got "),
+              make_dot_apply(
+                make_dot_apply(make_ident_expr("elements"), "length", []),
+                "to_string",
+                [],
+              ),
+            ),
+          ],
+        ),
+      ),
+      body,
+    )
+    make_let(
+      "elements",
+      make_apply(make_qualified_expr("extractor", "extract_tuple"), [
+        make_ident_expr("input"),
+      ]),
+      body,
+    )
+  }
 }
 
 ///|

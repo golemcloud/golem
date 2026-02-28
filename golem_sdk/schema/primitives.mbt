@@ -234,3 +234,50 @@ pub impl FromElementValue for Char with from_element_value(v) {
 pub impl ToElementValue for Char with to_element_value(self) {
   @common.ElementValue::ComponentModel(@builder.Builder::new().char(self))
 }
+
+///|
+pub impl HasElementSchema for Bytes with element_schema() {
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().list_type({
+      nodes: [
+        { name: None, owner: None, type_: @types.WitTypeNode::PrimU8Type },
+      ],
+    }),
+  )
+}
+
+///|
+pub impl FromExtractor for Bytes with from_extractor(e) {
+  guard e.list_elements() is Some(items) else {
+    raise @common.AgentError::InvalidInput("Expected Bytes (list<u8>)")
+  }
+  let arr : Array[Byte] = []
+  for item in items {
+    guard item.u8() is Some(b) else {
+      raise @common.AgentError::InvalidInput("Expected u8 element in Bytes")
+    }
+    arr.push(b)
+  }
+  Bytes::from_array(arr)
+}
+
+///|
+pub impl FromElementValue for Bytes with from_element_value(v) {
+  FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl ToElementValue for Bytes with to_element_value(self) {
+  let inner_values : Array[@types.WitValue] = []
+  for i in 0..<self.length() {
+    inner_values.push(@builder.Builder::new().u8(self[i]))
+  }
+  let wit_value = @builder.Builder::new().list(item => {
+    for v in inner_values {
+      item.wit_value(v)
+    }
+  }) catch {
+    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
+  }
+  @common.ElementValue::ComponentModel(wit_value)
+}

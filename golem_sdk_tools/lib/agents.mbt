@@ -5,6 +5,8 @@ pub(all) enum ParamType {
   List(ParamType)
   ResultType(ParamType, ParamType)
   Tuple(Array[ParamType])
+  MultimodalType(ParamType)
+  MultimodalCustomType(ParamType)
 } derive(Show, Eq)
 
 ///|
@@ -117,13 +119,49 @@ pub fn syntax_type_to_param_type(
                   "Result type requires two type parameters",
                 )
             }
+          } else if name == "Multimodal" {
+            match tys {
+              More(inner, ..) =>
+                MultimodalType(syntax_type_to_param_type(inner))
+              Empty =>
+                raise AgentParseError(
+                  "Multimodal type requires a type parameter",
+                )
+            }
+          } else if name == "MultimodalCustom" {
+            match tys {
+              More(inner, ..) =>
+                MultimodalCustomType(syntax_type_to_param_type(inner))
+              Empty =>
+                raise AgentParseError(
+                  "MultimodalCustom type requires a type parameter",
+                )
+            }
           } else if tys.is_empty() {
             Simple(name)
           } else {
             raise AgentParseError("Unsupported parameterized type: \{name}")
           }
         Dot(pkg~, id~) =>
-          if tys.is_empty() {
+          if id == "Multimodal" && not(tys.is_empty()) {
+            match tys {
+              More(inner, ..) =>
+                MultimodalType(syntax_type_to_param_type(inner))
+              Empty =>
+                raise AgentParseError(
+                  "Multimodal type requires a type parameter",
+                )
+            }
+          } else if id == "MultimodalCustom" && not(tys.is_empty()) {
+            match tys {
+              More(inner, ..) =>
+                MultimodalCustomType(syntax_type_to_param_type(inner))
+              Empty =>
+                raise AgentParseError(
+                  "MultimodalCustom type requires a type parameter",
+                )
+            }
+          } else if tys.is_empty() {
             encode_qualified(pkg, id)
           } else {
             raise AgentParseError(
@@ -209,6 +247,14 @@ fn is_unstructured_type_name(name : String) -> Bool {
 }
 
 ///|
+pub fn is_multimodal_type(pt : ParamType) -> Bool {
+  match pt {
+    MultimodalType(_) | MultimodalCustomType(_) => true
+    _ => false
+  }
+}
+
+///|
 pub fn validate_no_nested_unstructured(
   param_name : String,
   pt : ParamType,
@@ -217,16 +263,25 @@ pub fn validate_no_nested_unstructured(
     Simple(name) => {
       let _ = name
     }
-    Optional(inner) =>
+    MultimodalType(_) | MultimodalCustomType(_) => ()
+    Optional(inner) => {
       validate_no_unstructured_inside("Option", param_name, inner)
-    List(inner) => validate_no_unstructured_inside("Array", param_name, inner)
+      validate_no_multimodal_inside("Option", param_name, inner)
+    }
+    List(inner) => {
+      validate_no_unstructured_inside("Array", param_name, inner)
+      validate_no_multimodal_inside("Array", param_name, inner)
+    }
     ResultType(ok, err) => {
       validate_no_unstructured_inside("Result", param_name, ok)
       validate_no_unstructured_inside("Result", param_name, err)
+      validate_no_multimodal_inside("Result", param_name, ok)
+      validate_no_multimodal_inside("Result", param_name, err)
     }
     Tuple(elems) =>
       for elem in elems {
         validate_no_unstructured_inside("Tuple", param_name, elem)
+        validate_no_multimodal_inside("Tuple", param_name, elem)
       }
   }
 }
@@ -244,6 +299,7 @@ fn validate_no_unstructured_inside(
           "\{name} cannot be nested inside \{wrapper} for parameter '\{param_name}'; it must be a direct parameter or return type",
         )
       }
+    MultimodalType(_) | MultimodalCustomType(_) => ()
     Optional(inner) =>
       validate_no_unstructured_inside(wrapper, param_name, inner)
     List(inner) => validate_no_unstructured_inside(wrapper, param_name, inner)
@@ -254,6 +310,31 @@ fn validate_no_unstructured_inside(
     Tuple(elems) =>
       for elem in elems {
         validate_no_unstructured_inside(wrapper, param_name, elem)
+      }
+  }
+}
+
+///|
+fn validate_no_multimodal_inside(
+  wrapper : String,
+  param_name : String,
+  pt : ParamType,
+) -> Unit raise AgentParseError {
+  match pt {
+    MultimodalType(_) | MultimodalCustomType(_) =>
+      raise AgentParseError(
+        "Multimodal cannot be nested inside \{wrapper} for parameter '\{param_name}'; it must be a direct parameter or return type",
+      )
+    Simple(_) => ()
+    Optional(inner) => validate_no_multimodal_inside(wrapper, param_name, inner)
+    List(inner) => validate_no_multimodal_inside(wrapper, param_name, inner)
+    ResultType(ok, err) => {
+      validate_no_multimodal_inside(wrapper, param_name, ok)
+      validate_no_multimodal_inside(wrapper, param_name, err)
+    }
+    Tuple(elems) =>
+      for elem in elems {
+        validate_no_multimodal_inside(wrapper, param_name, elem)
       }
   }
 }
@@ -525,6 +606,15 @@ pub fn parse_agents(
       let (pname, pt) = param
       validate_no_nested_unstructured(pname, pt)
     }
+    // Validate multimodal is sole constructor param
+    let has_multimodal_ctor = agent.constructor_params
+      .iter()
+      .find_first(fn(p) { is_multimodal_type(p.1) })
+    if has_multimodal_ctor is Some(_) && agent.constructor_params.length() != 1 {
+      raise AgentParseError(
+        "Multimodal parameter in constructor of agent '\{agent.name}' must be the only parameter",
+      )
+    }
     for rname, opts in agent.constructor_schema_options {
       let param_type = agent.constructor_params
         .iter()
@@ -581,6 +671,15 @@ pub fn parse_agents(
       match meth.return_type {
         Some(rt) => validate_no_nested_unstructured("return", rt)
         None => ()
+      }
+      // Validate multimodal params
+      let has_multimodal_param = meth.params
+        .iter()
+        .find_first(fn(p) { is_multimodal_type(p.1) })
+      if has_multimodal_param is Some(_) && meth.params.length() != 1 {
+        raise AgentParseError(
+          "Multimodal parameter in method '\{meth.name}' must be the only parameter",
+        )
       }
       for rname, opts in meth.param_schema_options {
         let param_type = meth.params.iter().find_first(fn(p) { p.0 == rname })

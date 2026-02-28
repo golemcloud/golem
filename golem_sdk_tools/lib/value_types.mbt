@@ -19,6 +19,73 @@ pub(all) struct ValueTypeInfo {
 } derive(Show, Eq)
 
 ///|
+pub(all) struct MultimodalEnumInfo {
+  name : String
+  variants : Array[(String, ParamType)]
+} derive(Show)
+
+///|
+pub fn parse_multimodal_enums(
+  files : Array[(String, String)],
+) -> Array[MultimodalEnumInfo] raise AgentParseError {
+  let results : Array[MultimodalEnumInfo] = []
+  for pair in files {
+    let (_filename, content) = pair
+    let (impls, _reports) = @parser.parse_string(content)
+    let impl_arr = impls.to_array()
+    for impl_ in impl_arr {
+      match impl_ {
+        TopTypeDef(type_decl) => {
+          let mut is_multimodal = false
+          let attr_arr = type_decl.attrs.to_array()
+          for attr in attr_arr {
+            if attr.raw == "#derive.multimodal" {
+              is_multimodal = true
+            }
+          }
+          if is_multimodal {
+            let name = type_decl.tycon
+            match type_decl.components {
+              Variant(constrs) => {
+                let variants : Array[(String, ParamType)] = []
+                let constr_arr = constrs.to_array()
+                for constr in constr_arr {
+                  let case_name = constr.name.name
+                  match constr.args {
+                    Some(params) => {
+                      let param_arr = params.to_array()
+                      if param_arr.length() == 1 {
+                        let pt = syntax_type_to_param_type(param_arr[0].ty)
+                        variants.push((case_name, pt))
+                      } else {
+                        raise AgentParseError(
+                          "Multimodal enum variant '\{case_name}' must have exactly one payload type",
+                        )
+                      }
+                    }
+                    None =>
+                      raise AgentParseError(
+                        "Multimodal enum variant '\{case_name}' must have a payload type",
+                      )
+                  }
+                }
+                results.push({ name, variants })
+              }
+              _ =>
+                raise AgentParseError(
+                  "#derive.multimodal can only be applied to enum types, but '\{name}' is not an enum",
+                )
+            }
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+  results
+}
+
+///|
 pub fn parse_value_types(
   files : Array[(String, String)],
 ) -> Array[ValueTypeInfo] raise AgentParseError {
