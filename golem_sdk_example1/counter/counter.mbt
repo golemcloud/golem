@@ -13,16 +13,43 @@ fn Counter::new(name : String) -> Counter {
 }
 
 ///|
+/// Increments the counter
 pub fn Counter::increment(self : Self) -> Unit {
   self.value += 1
+}
+
+///|
+/// Decrements the counter
+pub fn Counter::decrement(self : Self) -> Unit {
+  self.value -= 1
+}
+
+///|
+/// Returns the current value of the counter
+pub fn Counter::get_value(self : Self) -> UInt64 {
+  self.value
 }
 
 ///|
 impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
   match method_name {
     "increment" => {
-      let result = self.increment()
+      self.increment()
       Ok(@common.DataValue::Tuple([]))
+    }
+    "decrement" => {
+      self.decrement()
+      Ok(@common.DataValue::Tuple([]))
+    }
+    "get_value" => {
+      let result = self.get_value()
+      Ok(
+        @common.DataValue::Tuple([
+          @common.ElementValue::ComponentModel(
+            { nodes: [@types.WitNode::PrimU64(result)] },
+          ),
+        ]),
+      )
     }
     _ =>
       @agents.panic_with_message(

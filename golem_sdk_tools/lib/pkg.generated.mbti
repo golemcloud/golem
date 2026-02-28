@@ -38,6 +38,7 @@ pub(all) struct AgentInfo {
   description : String
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
+  methods : Array[MethodInfo]
   has_init : Bool
 }
 pub impl Show for AgentInfo
@@ -48,6 +49,14 @@ pub(all) struct FnSignature {
   params : Array[String]
   return_type : String
 }
+
+pub(all) struct MethodInfo {
+  name : String
+  description : String
+  params : Array[(String, ParamType)]
+  return_type : ParamType?
+}
+pub impl Show for MethodInfo
 
 pub(all) enum ParamType {
   Simple(String)

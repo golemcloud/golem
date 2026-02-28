@@ -214,13 +214,11 @@ fn make_record_with_type(
   fields : Array[@syntax.FieldDef],
 ) -> @syntax.Expr {
   @syntax.Expr::Record(
-    type_name=Some(
-      @syntax.TypeName::{
-        name: @syntax.LongIdent::Dot(pkg~, id=type_name),
-        is_object: false,
-        loc: dummy_loc,
-      },
-    ),
+    type_name=Some(@syntax.TypeName::{
+      name: @syntax.LongIdent::Dot(pkg~, id=type_name),
+      is_object: false,
+      loc: dummy_loc,
+    }),
     fields=to_list(fields),
     trailing=@syntax.TrailingMark::Comma,
     loc=dummy_loc,

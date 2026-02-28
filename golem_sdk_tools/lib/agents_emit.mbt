@@ -102,6 +102,37 @@ fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+fn build_method_record(info : MethodInfo) -> @syntax.Expr {
+  let input_elems = info.params.map(fn(param) {
+    let (name, pt) = param
+    make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+  })
+  let input_schema = make_apply(
+    make_qualified_constr("common", "DataSchema", "Tuple"),
+    [make_array(input_elems)],
+  )
+  let output_schema = match info.return_type {
+    Some(pt) =>
+      make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+        make_array([
+          make_tuple([make_string_expr("result"), param_type_to_schema_expr(pt)]),
+        ]),
+      ])
+    None =>
+      make_apply(make_qualified_constr("common", "DataSchema", "Tuple"), [
+        make_array([]),
+      ])
+  }
+  make_record([
+    make_field("name", make_string_expr(info.name)),
+    make_field("description", make_string_expr(info.description)),
+    make_field("prompt_hint", make_constr_no_args("None")),
+    make_field("input_schema", input_schema),
+    make_field("output_schema", output_schema),
+  ])
+}
+
+///|
 fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
   let schema_elems = agent.constructor_params.map(fn(param) {
     let (name, pt) = param
@@ -120,11 +151,12 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
     make_field("prompt_hint", make_constr_no_args("None")),
     make_field("input_schema", input_schema),
   ])
+  let method_records = agent.methods.map(fn(m) { build_method_record(m) })
   let agent_type = make_record([
     make_field("type_name", make_string_expr(agent.name)),
     make_field("description", make_string_expr(agent.description)),
     make_field("constructor_", constructor_record),
-    make_field("methods", make_array([])),
+    make_field("methods", make_array(method_records)),
     make_field("dependencies", make_array([])),
   ])
   make_apply(make_qualified_expr("agents", "register_agent"), [
