@@ -137,7 +137,7 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
 }
 
 ///|
-fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
+pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
   let schema_elems = agent.constructor_params.map(fn(param) {
     let (name, pt) = param
     make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
@@ -160,13 +160,18 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
     make_field("input_schema", input_schema),
   ])
   let method_records = agent.methods.map(fn(m) { build_method_record(m) })
-  let agent_type = make_record([
+  make_record([
     make_field("type_name", make_string_expr(agent.name)),
     make_field("description", make_string_expr(agent.description)),
     make_field("constructor_", constructor_record),
     make_field("methods", make_array(method_records)),
     make_field("dependencies", make_array([])),
   ])
+}
+
+///|
+fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
+  let agent_type = build_agent_type_expr(agent)
   make_apply(make_qualified_expr("agents", "register_agent"), [
     make_record([
       make_field("name", make_string_expr(agent.name)),

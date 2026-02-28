@@ -421,6 +421,436 @@ test "generate_agent_registration with prompt_hints" {
 }
 
 ///|
+fn format_expr(expr : @syntax.Expr) -> String {
+  let impl_ = @syntax.Impl::TopExpr(
+    expr~,
+    is_main=false,
+    local_types=@list.List::from_array([]),
+    is_async=None,
+    loc=@basic.Location::{
+      start: { fname: "", lnum: 0, bol: 0, cnum: 0 },
+      end: { fname: "", lnum: 0, bol: 0, cnum: 0 },
+    },
+  )
+  let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
+  // Strip the wrapping "{\n" and "}\n\n" from the init block output
+  output
+}
+
+///|
+fn parse_and_build_agent_type(files : Array[(String, String)]) -> String raise {
+  let agents = parse_agents(files)
+  guard agents.length() == 1 else {
+    fail("Expected exactly 1 agent, got \{agents.length()}")
+  }
+  let expr = build_agent_type_expr(agents[0])
+  format_expr(expr)
+}
+
+///|
+test "end-to-end: simple counter agent type" {
+  let source =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|///| Creates a new counter
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name, value: 0 }
+    #|}
+  let output = parse_and_build_agent_type([("counter.mbt", source)])
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  {
+      #|    type_name: "Counter",
+      #|    description: "A counter agent",
+      #|    constructor_: {
+      #|      name: Some("new"),
+      #|      description: "Creates a new counter",
+      #|      prompt_hint: None,
+      #|      input_schema: @common.DataSchema::Tuple([
+      #|        (
+      #|          "name",
+      #|          @schema.schema_of_tag(
+      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|          ),
+      #|        ),
+      #|      ]),
+      #|    },
+      #|    methods: [],
+      #|    dependencies: [],
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "end-to-end: agent with methods" {
+  let source =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|///| Creates a new counter
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name, value: 0 }
+    #|}
+    #|
+    #|///| Increments the counter by one
+    #|pub fn Counter::increment(self : Self) -> Unit {
+    #|  self.value += 1
+    #|}
+    #|
+    #|///| Adds a value to the counter
+    #|pub fn Counter::add(self : Self, value : UInt64) -> UInt64 {
+    #|  self.value += value
+    #|  self.value
+    #|}
+  let output = parse_and_build_agent_type([("counter.mbt", source)])
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  {
+      #|    type_name: "Counter",
+      #|    description: "A counter agent",
+      #|    constructor_: {
+      #|      name: Some("new"),
+      #|      description: "Creates a new counter",
+      #|      prompt_hint: None,
+      #|      input_schema: @common.DataSchema::Tuple([
+      #|        (
+      #|          "name",
+      #|          @schema.schema_of_tag(
+      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|          ),
+      #|        ),
+      #|      ]),
+      #|    },
+      #|    methods: [
+      #|      {
+      #|        name: "increment",
+      #|        description: "Increments the counter by one",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([]),
+      #|        output_schema: @common.DataSchema::Tuple([]),
+      #|      },
+      #|      {
+      #|        name: "add",
+      #|        description: "Adds a value to the counter",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "value",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|        output_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "result",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|    ],
+      #|    dependencies: [],
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "end-to-end: agent with prompt hints" {
+  let source =
+    #|///| A smart agent
+    #|#derive.agent
+    #|pub(all) struct SmartAgent {
+    #|  config : String
+    #|}
+    #|
+    #|///| Creates a smart agent
+    #|#derive.prompt_hint("Provide a JSON config string")
+    #|pub fn SmartAgent::new(config : String) -> SmartAgent {
+    #|  { config }
+    #|}
+    #|
+    #|///| Processes input text
+    #|#derive.prompt_hint("Pass natural language text")
+    #|pub fn SmartAgent::process(self : Self, text : String) -> String {
+    #|  self.config + text
+    #|}
+  let output = parse_and_build_agent_type([("smart.mbt", source)])
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  {
+      #|    type_name: "SmartAgent",
+      #|    description: "A smart agent",
+      #|    constructor_: {
+      #|      name: Some("new"),
+      #|      description: "Creates a smart agent",
+      #|      prompt_hint: Some("Provide a JSON config string"),
+      #|      input_schema: @common.DataSchema::Tuple([
+      #|        (
+      #|          "config",
+      #|          @schema.schema_of_tag(
+      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|          ),
+      #|        ),
+      #|      ]),
+      #|    },
+      #|    methods: [
+      #|      {
+      #|        name: "process",
+      #|        description: "Processes input text",
+      #|        prompt_hint: Some("Pass natural language text"),
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "text",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|        output_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "result",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|    ],
+      #|    dependencies: [],
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "end-to-end: agent with complex param types" {
+  let source =
+    #|///| A data processor
+    #|#derive.agent
+    #|pub(all) struct Processor {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn Processor::new(name : String) -> Processor {
+    #|  { name }
+    #|}
+    #|
+    #|///| Processes a batch of items
+    #|pub fn Processor::batch(self : Self, items : Array[String], count : UInt64?) -> Array[String] {
+    #|  []
+    #|}
+  let output = parse_and_build_agent_type([("processor.mbt", source)])
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  {
+      #|    type_name: "Processor",
+      #|    description: "A data processor",
+      #|    constructor_: {
+      #|      name: Some("new"),
+      #|      description: "Creates a new Processor",
+      #|      prompt_hint: None,
+      #|      input_schema: @common.DataSchema::Tuple([
+      #|        (
+      #|          "name",
+      #|          @schema.schema_of_tag(
+      #|            (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|          ),
+      #|        ),
+      #|      ]),
+      #|    },
+      #|    methods: [
+      #|      {
+      #|        name: "batch",
+      #|        description: "Processes a batch of items",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "items",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),
+      #|            ),
+      #|          ),
+      #|          (
+      #|            "count",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|        output_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "result",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Array[String]]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|    ],
+      #|    dependencies: [],
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "end-to-end: agent with no constructor params" {
+  let source =
+    #|///| A simple worker
+    #|#derive.agent
+    #|pub(all) struct Worker {
+    #|  mut count : Int
+    #|}
+    #|
+    #|///| Creates a default worker
+    #|pub fn Worker::new() -> Worker {
+    #|  { count: 0 }
+    #|}
+    #|
+    #|///| Does work
+    #|pub fn Worker::run(self : Self) -> Int {
+    #|  self.count += 1
+    #|  self.count
+    #|}
+  let output = parse_and_build_agent_type([("worker.mbt", source)])
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  {
+      #|    type_name: "Worker",
+      #|    description: "A simple worker",
+      #|    constructor_: {
+      #|      name: Some("new"),
+      #|      description: "Creates a default worker",
+      #|      prompt_hint: None,
+      #|      input_schema: @common.DataSchema::Tuple([]),
+      #|    },
+      #|    methods: [
+      #|      {
+      #|        name: "run",
+      #|        description: "Does work",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([]),
+      #|        output_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "result",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Int]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|    ],
+      #|    dependencies: [],
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "end-to-end: agent split across multiple files" {
+  let struct_file =
+    #|///| A multi-file agent
+    #|#derive.agent
+    #|pub(all) struct MultiAgent {
+    #|  id : UInt64
+    #|}
+    #|
+    #|pub fn MultiAgent::new(id : UInt64) -> MultiAgent {
+    #|  { id }
+    #|}
+  let methods_file =
+    #|///| Gets the ID
+    #|pub fn MultiAgent::get_id(self : Self) -> UInt64 {
+    #|  self.id
+    #|}
+  let output = parse_and_build_agent_type([
+    ("multi_agent.mbt", struct_file),
+    ("multi_agent_methods.mbt", methods_file),
+  ])
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  {
+      #|    type_name: "MultiAgent",
+      #|    description: "A multi-file agent",
+      #|    constructor_: {
+      #|      name: Some("new"),
+      #|      description: "Creates a new MultiAgent",
+      #|      prompt_hint: None,
+      #|      input_schema: @common.DataSchema::Tuple([
+      #|        (
+      #|          "id",
+      #|          @schema.schema_of_tag(
+      #|            (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+      #|          ),
+      #|        ),
+      #|      ]),
+      #|    },
+      #|    methods: [
+      #|      {
+      #|        name: "get_id",
+      #|        description: "Gets the ID",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([]),
+      #|        output_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "result",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|    ],
+      #|    dependencies: [],
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
 test "param_type_to_type_string for various types" {
   inspect(param_type_to_type_string(Simple("String")), content="String")
   inspect(param_type_to_type_string(Simple("UInt64")), content="UInt64")

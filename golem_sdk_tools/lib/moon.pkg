@@ -8,4 +8,6 @@ import {
 
 import {
   "moonbitlang/formatter",
+  "moonbitlang/parser/basic",
+  "moonbitlang/parser/syntax",
 } for "test"
