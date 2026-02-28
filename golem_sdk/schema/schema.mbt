@@ -34,3 +34,15 @@ pub fn[T : FromElementValue] from_element_value_as(
 ) -> T raise @common.AgentError {
   T::from_element_value(v)
 }
+
+///|
+pub(open) trait ToElementValue {
+  to_element_value(Self) -> @common.ElementValue raise @common.AgentError
+}
+
+///|
+pub fn[T : ToElementValue] to_element_value_as(
+  v : T,
+) -> @common.ElementValue raise @common.AgentError {
+  T::to_element_value(v)
+}

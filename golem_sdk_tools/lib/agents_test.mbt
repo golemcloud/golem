@@ -192,7 +192,19 @@ test "generate_agent_registration for simple agent" {
       #|  })
       #|}
       #|
+      #|///|
+      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
       #|
+      #|
+
     ),
   )
 }
@@ -298,7 +310,41 @@ test "generate_agent_registration with methods" {
       #|  })
       #|}
       #|
+      #|///|
+      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      "increment" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        self.increment()
+      #|        Ok(@common.DataValue::Tuple([]))
+      #|      }
+      #|      "add" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let value :UInt64 = @schema.from_element_value_as(elements[0])
+      #|        let result = self.add(value)
+      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|      }
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
       #|
+      #|
+
+
     ),
   )
 }
@@ -415,7 +461,30 @@ test "generate_agent_registration with prompt_hints" {
       #|  })
       #|}
       #|
+      #|///|
+      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      "increment" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        self.increment()
+      #|        Ok(@common.DataValue::Tuple([]))
+      #|      }
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
       #|
+      #|
+
+
     ),
   )
 }
@@ -846,6 +915,92 @@ test "end-to-end: agent split across multiple files" {
       #|}
       #|
       #|
+    ),
+  )
+}
+
+///|
+test "build_raw_agent_impl for counter-like agent" {
+  let agent : AgentInfo = {
+    name: "Counter",
+    description: "A counter agent",
+    constructor_params: [("name", Simple("String"))],
+    constructor_description: "Creates a new counter",
+    constructor_prompt_hint: None,
+    methods: [
+      {
+        name: "increment",
+        description: "Increments the counter",
+        prompt_hint: None,
+        params: [],
+        return_type: None,
+      },
+      {
+        name: "get_value",
+        description: "Gets the current value",
+        prompt_hint: None,
+        params: [],
+        return_type: Some(Simple("UInt64")),
+      },
+      {
+        name: "add",
+        description: "Adds a value",
+        prompt_hint: None,
+        params: [("value", Simple("UInt64"))],
+        return_type: Some(Simple("UInt64")),
+      },
+    ],
+    has_init: false,
+  }
+  let impl_ = build_raw_agent_impl(agent)
+  let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @agents.RawAgent for Counter with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      "increment" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        self.increment()
+      #|        Ok(@common.DataValue::Tuple([]))
+      #|      }
+      #|      "get_value" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let result = self.get_value()
+      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|      }
+      #|      "add" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let value :UInt64 = @schema.from_element_value_as(elements[0])
+      #|        let result = self.add(value)
+      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|      }
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+
     ),
   )
 }

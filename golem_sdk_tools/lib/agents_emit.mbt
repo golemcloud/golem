@@ -182,9 +182,133 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
+  let param_count = info.params.length()
+  let has_return = info.return_type is Some(_)
+  // Build the method call
+  let method_args = info.params.map(fn(param) {
+    make_ident_expr(param.0)
+  })
+  let call = make_dot_apply(make_ident_expr("self"), info.name, method_args)
+  // Build the Ok(...) result expression
+  let ok_expr = if has_return {
+    make_let(
+      "result",
+      call,
+      make_apply(make_constr_no_args("Ok"), [
+        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+          make_array([
+            make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+              make_ident_expr("result"),
+            ]),
+          ]),
+        ]),
+      ]),
+    )
+  } else {
+    make_sequence([
+      call,
+      make_apply(make_constr_no_args("Ok"), [
+        make_apply(make_qualified_constr("common", "DataValue", "Tuple"), [
+          make_array([]),
+        ]),
+      ]),
+    ])
+  }
+  // Build let bindings for each param (from last to first)
+  let mut body = ok_expr
+  for idx in 0..<param_count {
+    let i = param_count - 1 - idx
+    let (name, pt) = info.params[i]
+    body = make_let_typed(
+      name,
+      param_type_to_ast_type(pt),
+      make_apply(make_qualified_expr("schema", "from_element_value_as"), [
+        make_array_get(make_ident_expr("elements"), make_int_expr(i)),
+      ]),
+      body,
+    )
+  }
+  // guard elements.length() == N
+  let elements_length = make_dot_apply(
+    make_ident_expr("elements"),
+    "length",
+    [],
+  )
+  body = make_guard_else(
+    make_infix("==", elements_length, make_int_expr(param_count)),
+    make_raise(
+      make_apply(
+        make_qualified_constr("common", "AgentError", "InvalidInput"),
+        [
+          make_infix(
+            "+",
+            make_string_expr("Expected \{param_count} elements, got "),
+            make_dot_apply(
+              make_dot_apply(make_ident_expr("elements"), "length", []),
+              "to_string",
+              [],
+            ),
+          ),
+        ],
+      ),
+    ),
+    body,
+  )
+  // let elements = @extractor.extract_tuple(input)
+  make_let(
+    "elements",
+    make_apply(make_qualified_expr("extractor", "extract_tuple"), [
+      make_ident_expr("input"),
+    ]),
+    body,
+  )
+}
+
+///|
+pub fn build_raw_agent_impl(agent : AgentInfo) -> @syntax.Impl {
+  // Build match arms for each method
+  let cases : Array[@syntax.Case] = agent.methods.map(fn(m) {
+    make_case(make_string_pattern(m.name), build_method_arm_body(m))
+  })
+  // Default arm: other => Err(@common.AgentError::InvalidMethod(other))
+  cases.push(
+    make_case(
+      make_var_pattern("other"),
+      make_apply(make_constr_no_args("Err"), [
+        make_apply(
+          make_qualified_constr("common", "AgentError", "InvalidMethod"),
+          [make_ident_expr("other")],
+        ),
+      ]),
+    ),
+  )
+  let match_expr = make_match(make_ident_expr("method_name"), cases)
+  let try_body = make_try_catch(match_expr, [
+    make_case(
+      make_var_pattern("e"),
+      make_apply(make_constr_no_args("Err"), [make_ident_expr("e")]),
+    ),
+  ])
+  make_top_impl(
+    agent.name,
+    "agents",
+    "RawAgent",
+    "invoke",
+    ["self", "method_name", "input"],
+    try_body,
+  )
+}
+
+///|
 pub fn generate_agent_registration(
   agents : Array[AgentInfo],
 ) -> @list.List[@syntax.Impl] {
   let calls = agents.map(fn(a) { build_register_call(a) })
-  to_list([make_init_block(make_sequence(calls))])
+  let impls = agents.map(fn(a) { build_raw_agent_impl(a) })
+  let all : Array[@syntax.Impl] = [make_init_block(make_sequence(calls))]
+  for impl_ in impls {
+    all.push(impl_)
+  }
+  to_list(all)
 }

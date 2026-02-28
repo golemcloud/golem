@@ -396,3 +396,64 @@ fn make_param(name : String, type_name : String) -> @syntax.Parameter {
 fn make_var_pattern(name : String) -> @syntax.Pattern {
   @syntax.Pattern::Var(make_binder(name))
 }
+
+///|
+fn make_match(expr : @syntax.Expr, cases : Array[@syntax.Case]) -> @syntax.Expr {
+  @syntax.Expr::Match(
+    expr~,
+    cases=to_list(cases),
+    match_loc=dummy_loc,
+    loc=dummy_loc,
+  )
+}
+
+///|
+fn make_string_pattern(s : String) -> @syntax.Pattern {
+  @syntax.Pattern::Constant(c=@syntax.Constant::String(s), loc=dummy_loc)
+}
+
+///|
+fn make_top_impl(
+  self_type_name : String,
+  trait_pkg : String,
+  trait_name : String,
+  method_name : String,
+  params : Array[String],
+  body : @syntax.Expr,
+) -> @syntax.Impl {
+  @syntax.Impl::TopImpl(
+    self_ty=Some(
+      @syntax.Type::Name(
+        constr_id=@syntax.ConstrId::{
+          id: @syntax.LongIdent::Ident(name=self_type_name),
+          loc: dummy_loc,
+        },
+        tys=to_list([]),
+        loc=dummy_loc,
+      ),
+    ),
+    trait_=@syntax.TypeName::{
+      name: @syntax.LongIdent::Dot(pkg=trait_pkg, id=trait_name),
+      is_object: false,
+      loc: dummy_loc,
+    },
+    method_name=make_binder(method_name),
+    has_error=None,
+    quantifiers=to_list([]),
+    params=to_list(
+      params.map(fn(name) {
+        @syntax.Parameter::Positional(binder=make_binder(name), ty=None)
+      }),
+    ),
+    ret_ty=None,
+    err_ty=@syntax.ErrorType::NoErrorType,
+    body=@syntax.DeclBody::DeclBody(
+      local_types=to_list([]),
+      expr=body,
+    ),
+    vis=@syntax.Visibility::Default,
+    loc=dummy_loc,
+    attrs=to_list([]),
+    doc=@syntax.DocString::empty(),
+  )
+}

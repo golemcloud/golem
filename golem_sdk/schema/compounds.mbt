@@ -31,6 +31,29 @@ pub impl[T : FromExtractor] FromElementValue for T? with from_element_value(v) {
 }
 
 ///|
+pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
+  match self {
+    None =>
+      @common.ElementValue::ComponentModel(
+        { nodes: [@types.WitNode::OptionValue(None)] },
+      )
+    Some(v) => {
+      let inner = T::to_element_value(v)
+      guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+        raise @common.AgentError::InvalidInput(
+          "Expected ComponentModel for Option inner value",
+        )
+      }
+      let nodes : Array[@types.WitNode] = [@types.WitNode::OptionValue(Some(1))]
+      for node in inner_wit.nodes {
+        nodes.push(node)
+      }
+      @common.ElementValue::ComponentModel({ nodes, })
+    }
+  }
+}
+
+///|
 pub impl[T : HasElementSchema] HasElementSchema for Array[T] with element_schema() {
   let inner = T::element_schema()
   guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
@@ -65,6 +88,30 @@ pub impl[T : FromExtractor] FromElementValue for Array[T] with from_element_valu
   v,
 ) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl[T : ToElementValue] ToElementValue for Array[T] with to_element_value(
+  self,
+) {
+  let child_indices : Array[Int] = []
+  let nodes : Array[@types.WitNode] = []
+  nodes.push(@types.WitNode::ListValue([]))
+  for item in self {
+    let inner = T::to_element_value(item)
+    guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+      raise @common.AgentError::InvalidInput(
+        "Expected ComponentModel for Array element",
+      )
+    }
+    let start_idx = nodes.length()
+    child_indices.push(start_idx)
+    for node in inner_wit.nodes {
+      nodes.push(node)
+    }
+  }
+  nodes[0] = @types.WitNode::ListValue(child_indices)
+  @common.ElementValue::ComponentModel({ nodes, })
 }
 
 ///|
@@ -119,4 +166,42 @@ pub impl[T : FromExtractor, E : FromExtractor] FromElementValue for Result[T, E]
   v,
 ) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E] with to_element_value(
+  self,
+) {
+  match self {
+    Ok(v) => {
+      let inner = T::to_element_value(v)
+      guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+        raise @common.AgentError::InvalidInput(
+          "Expected ComponentModel for Result Ok value",
+        )
+      }
+      let nodes : Array[@types.WitNode] = [
+        @types.WitNode::ResultValue(Ok(Some(1))),
+      ]
+      for node in inner_wit.nodes {
+        nodes.push(node)
+      }
+      @common.ElementValue::ComponentModel({ nodes, })
+    }
+    Err(e) => {
+      let inner = E::to_element_value(e)
+      guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
+        raise @common.AgentError::InvalidInput(
+          "Expected ComponentModel for Result Err value",
+        )
+      }
+      let nodes : Array[@types.WitNode] = [
+        @types.WitNode::ResultValue(Err(Some(1))),
+      ]
+      for node in inner_wit.nodes {
+        nodes.push(node)
+      }
+      @common.ElementValue::ComponentModel({ nodes, })
+    }
+  }
 }

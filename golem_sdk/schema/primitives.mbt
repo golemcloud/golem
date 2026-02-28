@@ -24,6 +24,11 @@ pub impl FromElementValue for String with from_element_value(v) {
 }
 
 ///|
+pub impl ToElementValue for String with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().string(self))
+}
+
+///|
 pub impl HasElementSchema for Bool with element_schema() {
   make_prim_schema(@types.WitTypeNode::PrimBoolType)
 }
@@ -39,6 +44,11 @@ pub impl FromExtractor for Bool with from_extractor(e) {
 ///|
 pub impl FromElementValue for Bool with from_element_value(v) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl ToElementValue for Bool with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().bool(self))
 }
 
 ///|
@@ -60,6 +70,11 @@ pub impl FromElementValue for Int with from_element_value(v) {
 }
 
 ///|
+pub impl ToElementValue for Int with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().s32(self))
+}
+
+///|
 pub impl HasElementSchema for UInt with element_schema() {
   make_prim_schema(@types.WitTypeNode::PrimU32Type)
 }
@@ -75,6 +90,11 @@ pub impl FromExtractor for UInt with from_extractor(e) {
 ///|
 pub impl FromElementValue for UInt with from_element_value(v) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl ToElementValue for UInt with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().u32(self))
 }
 
 ///|
@@ -96,6 +116,11 @@ pub impl FromElementValue for Int64 with from_element_value(v) {
 }
 
 ///|
+pub impl ToElementValue for Int64 with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().s64(self))
+}
+
+///|
 pub impl HasElementSchema for UInt64 with element_schema() {
   make_prim_schema(@types.WitTypeNode::PrimU64Type)
 }
@@ -111,6 +136,11 @@ pub impl FromExtractor for UInt64 with from_extractor(e) {
 ///|
 pub impl FromElementValue for UInt64 with from_element_value(v) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl ToElementValue for UInt64 with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().u64(self))
 }
 
 ///|
@@ -132,6 +162,11 @@ pub impl FromElementValue for Float with from_element_value(v) {
 }
 
 ///|
+pub impl ToElementValue for Float with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().f32(self))
+}
+
+///|
 pub impl HasElementSchema for Double with element_schema() {
   make_prim_schema(@types.WitTypeNode::PrimF64Type)
 }
@@ -147,6 +182,11 @@ pub impl FromExtractor for Double with from_extractor(e) {
 ///|
 pub impl FromElementValue for Double with from_element_value(v) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl ToElementValue for Double with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().f64(self))
 }
 
 ///|
@@ -168,6 +208,11 @@ pub impl FromElementValue for Byte with from_element_value(v) {
 }
 
 ///|
+pub impl ToElementValue for Byte with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().u8(self))
+}
+
+///|
 pub impl HasElementSchema for Char with element_schema() {
   make_prim_schema(@types.WitTypeNode::PrimCharType)
 }
@@ -183,4 +228,9 @@ pub impl FromExtractor for Char with from_extractor(e) {
 ///|
 pub impl FromElementValue for Char with from_element_value(v) {
   FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+}
+
+///|
+pub impl ToElementValue for Char with to_element_value(self) {
+  @common.ElementValue::ComponentModel(@builder.Builder::new().char(self))
 }
