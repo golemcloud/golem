@@ -31,6 +31,8 @@ share a layered architecture:
 ```
 moonbit-golem/
 ├── AGENTS.md                          # This file
+├── TODO.md                            # Remaining work items
+├── PROBLEMS.md                        # MoonBit ecosystem issues encountered
 ├── golem_sdk/                         # The SDK library (will be published)
 │   ├── moon.mod.json                  # Module: vigoo/golem_sdk
 │   ├── moon.pkg                       # Root package (currently empty)
@@ -68,25 +70,54 @@ moonbit-golem/
 │   │       └── stub.mbt              # Snapshot load (currently returns Err)
 │   ├── world/                         # WIT-generated world-level bindings
 │   │   └── agentGuest/                # agent-guest world imports and type re-exports
-│   └── agents/                        # SDK's agent registry
-│       └── agents.mbt                 # AgentState, RegisteredAgent, RawAgent trait, register_agent
+│   ├── agents/                        # SDK's agent registry
+│   │   └── agents.mbt                 # AgentState, RegisteredAgent, RawAgent trait, register_agent
+│   ├── builder/                       # WitValue & WitType builder API
+│   │   ├── top.mbt                    # Builder struct, primitive add_* methods, build()
+│   │   ├── item_builder.mbt           # ItemBuilder for single-child nodes (option, result, variant)
+│   │   ├── child_items_builder.mbt    # ChildItemsBuilder for multi-child nodes (record, tuple, list)
+│   │   ├── type_builder.mbt           # TypeBuilder for constructing WitType trees
+│   │   └── tests.mbt                  # Builder tests
+│   ├── extractor/                     # WitValue extractor (deserialization from WitNode tree)
+│   │   ├── top.mbt                    # Extractor trait, WitValueExtractor, NodeExtractor impls
+│   │   └── tests.mbt                  # Extractor tests
+│   └── schema/                        # Schema traits & primitive/compound impls
+│       ├── schema.mbt                 # HasElementSchema, FromExtractor, FromElementValue, ToElementValue traits
+│       ├── primitives.mbt             # Impls for String, Bool, Int, UInt, Int64, UInt64, Float, Double, Byte, Char
+│       ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T, E]
+│       ├── records.mbt               # make_record_schema/value, extract_field, enum/variant helpers
+│       ├── schema_test.mbt           # Schema tests (primitives, compounds, roundtrips)
+│       └── records_test.mbt          # Record/enum/variant schema and roundtrip tests
 ├── golem_sdk_tools/                   # Code generation tools (native CLI, not WASM)
-│   ├── moon.mod.json                  # Module: vigoo/golem_sdk_tools (deps: moonbitlang/x, moonbitlang/parser)
+│   ├── moon.mod.json                  # Module: vigoo/golem_sdk_tools (deps: moonbitlang/x, moonbitlang/parser, moonbitlang/formatter)
 │   ├── lib/                           # Library package
-│   │   ├── mbti.mbt                   # Parser for .mbti files (extracts FnSignature from pub fn lines)
-│   │   ├── reexports.mbt             # AST construction: generates @syntax.Impl nodes for re-export wrappers
-│   │   ├── emitter.mbt               # Custom AST-to-string serializer (bypasses moonbitlang/formatter dep issues)
-│   │   ├── mbti_test.mbt             # Tests for MBTI parsing
-│   │   └── reexports_test.mbt        # Tests for reexport generation + emission
+│   │   ├── mbti.mbt                   # Parser for .mbt source files (extracts pub fn signatures)
+│   │   ├── reexports.mbt             # AST construction: generates reexport wrapper functions
+│   │   ├── agents.mbt                # Agent source parser: finds #derive.agent structs, constructors, methods
+│   │   ├── agents_emit.mbt           # Agent code emitter: generates registration, RawAgent impls as AST
+│   │   ├── value_types.mbt           # Value type parser: finds #derive.golem_schema types (records, enums, variants)
+│   │   ├── value_types_emit.mbt      # Value type code emitter: generates HasElementSchema/FromExtractor/ToElementValue impls
+│   │   ├── ast_helpers.mbt           # AST construction helpers (make_type, make_expr, make_pattern, etc.)
+│   │   ├── pkg.mbt                   # moon.pkg parser/updater: parses exports, updates link section
+│   │   ├── mbti_test.mbt             # Tests for source parsing
+│   │   ├── reexports_test.mbt        # Tests for reexport generation
+│   │   ├── agents_test.mbt           # Tests for agent parsing and emission
+│   │   ├── value_types_test.mbt      # Tests for value type parsing
+│   │   ├── value_types_emit_test.mbt # Tests for value type emission
+│   │   └── pkg_test.mbt             # Tests for moon.pkg parsing/updating
 │   └── cmd/                           # CLI entry point
-│       └── main.mbt                   # `reexports` subcommand: reads SDK mbti, writes golem_reexports.mbt
+│       └── main.mbt                   # `reexports` and `agents` subcommands
 └── golem_sdk_example1/                # Example consumer project
     ├── moon.mod.json                  # Module: vigoo/golem_sdk_example1 (deps on local golem_sdk)
-    ├── build.sh                       # moon build + wasm-tools embed + component new
-    └── counter/                       # Example agent: Counter
-        ├── moon.pkg                   # is-main, WASM export link config
-        ├── counter.mbt               # Hand-written agent: struct, RawAgent impl, registration
-        └── golem_reexports.mbt       # Generated by golem_sdk_tools — re-exports WASM entry points
+    ├── build.sh                       # Build script: reexports + agents codegen + moon build + wasm-tools
+    ├── golem.yaml                     # Golem 1.4.2 application definition with build pipeline
+    └── counter/                       # Example agents: Counter and TaskManager
+        ├── moon.pkg                   # is-main, WASM export link config (auto-updated by tools)
+        ├── counter.mbt               # Counter agent: #derive.agent struct with increment/decrement/get_value
+        ├── task_manager.mbt          # TaskManager agent: custom types with #derive.golem_schema
+        ├── golem_reexports.mbt       # Generated — re-exports WASM entry points from SDK gen package
+        ├── golem_derive.mbt          # Generated — HasElementSchema/FromExtractor/ToElementValue for custom types
+        └── golem_agents.mbt          # Generated — agent registration, RawAgent impls, init block
 ```
 
 ## Key Concepts
@@ -143,8 +174,9 @@ pub(open) trait RawAgent {
 }
 ```
 
-This is the low-level interface every agent must implement. Currently users implement it by hand
-with a `match` on `method_name`. The goal is to auto-generate this via code generation.
+This is the low-level interface every agent must implement. The `agents` code generation tool
+auto-generates `RawAgent` impls with method dispatch, constructor deserialization, and result
+serialization.
 
 ### Data Types (WIT ↔ MoonBit Mapping)
 
@@ -172,6 +204,200 @@ The agent-level types from `interface/golem/agent/common/`:
 | `AgentConstructor` | Constructor schema: name, description, input schema |
 | `AgentError` | Error type with InvalidInput/InvalidMethod/InvalidType/CustomError variants |
 
+### Builder (WitValue Construction)
+
+The `builder/` package provides a fluent API for constructing `WitValue` and `WitType` trees:
+
+- **`Builder`** — builds `WitValue` trees. Has convenience methods for all primitive types
+  (`u8`, `s32`, `string`, `bool`, etc.) and compound types (`record`, `list`, `option_some`,
+  `option_none`, `result_ok`, `result_err`, `variant`, `tuple`, `flags`, `enum_value`, `handle`).
+  Uses a callback-based nesting pattern with `ItemBuilder` and `ChildItemsBuilder`.
+- **`TypeBuilder`** — builds `WitType` trees. Methods: `option_type`, `list_type`, `result_type`,
+  `record_type`, `variant_type`, `enum_type`. Both builders handle node index rebasing when
+  composing sub-trees via `add_wit_value` / `add_wit_type`.
+- **`ItemBuilder`** — used inside callbacks for single-child container nodes (option, result, variant).
+  Mirrors all `Builder` methods but delegates to the parent builder.
+- **`ChildItemsBuilder`** — used inside callbacks for multi-child container nodes (record, tuple, list).
+  Collects child node indices and finalizes them on the parent.
+- **`BuilderError`** — suberror for builder misuse (e.g., adding to a closed builder).
+
+### Extractor (WitValue Deserialization)
+
+The `extractor/` package provides a trait-based API for reading values from `WitValue` trees:
+
+- **`Extractor` trait** — 21-method open trait with accessors for all WIT node types:
+  `u8()`, `s32()`, `string()`, `field(idx)`, `variant()`, `enum_value()`, `flags()`,
+  `tuple_element(idx)`, `list_elements()`, `option()`, `result()`, `handle()`, etc.
+  Returns `Option` types (`None` on type mismatch).
+- **`WitValueExtractor`** — implements `Extractor` for a `WitValue` (delegates to root node).
+- **`NodeExtractor`** — implements `Extractor` for a single `WitNode` within a `WitValue` context.
+- **`extract(WitValue) -> &Extractor`** — entry point for extraction.
+- **`extract_component_model_value(ElementValue) -> &Extractor`** — unwraps
+  `ElementValue::ComponentModel` and extracts.
+- **`extract_tuple`, `extract_multimodal`, `expect_single_element`** — helpers for `DataValue`.
+
+### Schema Traits (Serialization Layer)
+
+The `schema/` package defines the serialization traits and provides implementations for all
+primitive and compound MoonBit types. This is the SDK's equivalent of the Rust SDK's
+`IntoValue`/`FromValueAndType`.
+
+**Traits** (in `schema.mbt`):
+
+| Trait | Purpose |
+|---|---|
+| `HasElementSchema` | Returns the `ElementSchema` (WitType) for a type. Static method. |
+| `FromExtractor` | Deserializes from an `&Extractor` (low-level, works at WitNode level). |
+| `FromElementValue` | Deserializes from an `ElementValue` (convenience, wraps `FromExtractor`). |
+| `ToElementValue` | Serializes to an `ElementValue`. |
+
+**Helper functions**:
+- `schema_of(v)` — infers `HasElementSchema` from a value
+- `schema_of_tag(TypeTag[T])` — gets schema for a type without needing a value instance
+- `from_element_value_as[T](ElementValue) -> T` — typed deserialization
+- `to_element_value_as[T](v) -> ElementValue` — typed serialization
+- `from_extractor_as[T](&Extractor) -> T` — typed low-level deserialization
+
+**Primitive implementations** (`primitives.mbt`):
+All four traits are implemented for: `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64),
+`UInt64` (U64), `Float` (F32), `Double` (F64), `Byte` (U8), `Char`.
+
+**Compound implementations** (`compounds.mbt`):
+All four traits are implemented for: `Option[T]`, `Array[T]`, `Result[T, E]` (with appropriate
+trait bounds on type parameters).
+
+**Record/Enum/Variant helpers** (`records.mbt`):
+Used by generated code for custom user types:
+- `make_record_schema(fields)` / `make_record_value(fields)` / `extract_field[T](e, idx)`
+- `make_enum_schema(cases)` / `make_enum_value(idx)` / `extract_enum(e)`
+- `make_variant_schema(cases)` / `make_variant_value(case_idx, payload)` / `extract_variant(e)`
+
+### Code Generation (golem_sdk_tools)
+
+The `golem_sdk_tools` CLI provides two subcommands that automate boilerplate generation:
+
+#### `reexports` subcommand
+
+Generates `golem_reexports.mbt` — re-exports all WASM entry points (`cabi_realloc`,
+`wasmExport*` functions) from the SDK's `gen` package. Also auto-updates the target `moon.pkg`
+file's `link.wasm.exports` section.
+
+```sh
+cd golem_sdk_tools
+moon run cmd -- reexports <sdk-path> <target-dir>
+# e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/counter
+```
+
+The tool parses `.mbt` source files in the SDK's `gen/` directory to discover exported functions
+(public `fn` declarations matching `wasmExport*` or `mbt_ffi_cabi_realloc`), constructs AST nodes
+via `moonbitlang/parser`, and emits MoonBit source via `moonbitlang/formatter`.
+
+It also parses the SDK's `gen/moon.pkg` to extract the `link.wasm.exports` entries, transforms
+them (stripping `mbt_ffi_` prefixes), and updates the target `moon.pkg` with the correct link
+section (creating or replacing it as needed).
+
+#### `agents` subcommand
+
+Generates two files from user source code annotations:
+
+1. **`golem_agents.mbt`** — agent registration and dispatch code:
+   - `fn init {}` block that calls `register_agent(...)` for each agent
+   - `AgentType` definitions with schemas derived from method signatures
+   - Constructor deserialization (extracts tuple elements, deserializes via `@schema`)
+   - `impl RawAgent for AgentName` with method dispatch (`match method_name { ... }`)
+   - Parameter deserialization and result serialization using `@schema` traits
+
+2. **`golem_derive.mbt`** — serialization impls for custom data types:
+   - `impl HasElementSchema` — generates schema using `make_record_schema` / `make_enum_schema` / `make_variant_schema`
+   - `impl FromExtractor` — generates field-by-field extraction for records, case matching for enums/variants
+   - `impl FromElementValue` — boilerplate delegation to `FromExtractor`
+   - `impl ToElementValue` — generates field-by-field serialization for records, case matching for enums/variants
+
+```sh
+cd golem_sdk_tools
+moon run cmd -- agents <package-dir>
+# e.g.: moon run cmd -- agents ../golem_sdk_example1/counter
+```
+
+**Source annotations recognized:**
+
+- `#derive.agent` on a struct — marks it as a Golem agent. Supports `#derive.agent("ephemeral")`
+  for ephemeral mode (default is durable).
+- `#derive.golem_schema` on a struct or enum — generates serialization impls for custom data types.
+- `#derive.prompt_hint("...")` on methods — adds a prompt hint to the method's agent definition.
+- Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions.
+
+**Agent parsing** (`agents.mbt`):
+- Finds structs annotated with `#derive.agent`
+- Finds the `::new` constructor (required) and extracts parameters
+- Finds all public methods with `Self` as first parameter
+- Extracts return types, parameter types, doc strings, mode, and prompt hints
+- Supports types: `Simple(name)`, `Optional(T)`, `List(T)`, `ResultType(T, E)`
+
+**Value type parsing** (`value_types.mbt`):
+- Finds types annotated with `#derive.golem_schema`
+- Supports three kinds: `Record` (struct fields), `SimpleEnum` (all-unit enum), `VariantEnum` (enum with payloads)
+- Variant payloads can be: `None` (unit), `Single(type)`, or `Multi(fields)` (record-like)
+
+**Code emission** (`agents_emit.mbt`, `value_types_emit.mbt`):
+Both emitters construct `@syntax.Impl` AST nodes using helpers from `ast_helpers.mbt`, then
+serialize them via `@formatter.impls_to_string`. The `ast_helpers.mbt` file provides ~50 helper
+functions for constructing AST nodes (types, expressions, patterns, match cases, etc.).
+
+**Architecture note**: The `golem_sdk_tools` now uses `moonbitlang/formatter` (via a local path
+dependency pointing to `../../moonbit-formatter`) for code emission, and `moonbitlang/parser` for
+both parsing and AST construction. The earlier custom emitter was replaced once the formatter
+dependency became available via a local path workaround.
+
+### User-Facing API
+
+Users write agents with minimal boilerplate:
+
+```moonbit
+/// Counter agent in MoonBit
+#derive.agent
+struct Counter {
+  name : String
+  mut value : UInt64
+}
+
+/// Creates a new counter with the given name
+fn Counter::new(name : String) -> Counter {
+  { name, value: 0 }
+}
+
+/// Increments the counter
+pub fn Counter::increment(self : Self) -> Unit {
+  self.value += 1
+}
+
+/// Returns the current value of the counter
+pub fn Counter::get_value(self : Self) -> UInt64 {
+  self.value
+}
+```
+
+Custom data types used in method parameters/return types need `#derive.golem_schema`:
+
+```moonbit
+#derive.golem_schema
+pub(all) enum Priority {
+  Low
+  Medium
+  High
+} derive(Eq)
+
+#derive.golem_schema
+pub(all) struct TaskInfo {
+  title : String
+  priority : Priority
+  description : String?
+}
+```
+
+The `fn main {}` block must exist in the main package (can be empty). Multiple agents can
+coexist in the same package — each gets registered in the generated `fn init {}` block.
+
 ### Durability
 
 The durability system (in `interface/golem/durability/durability/`) provides:
@@ -192,119 +418,62 @@ The pattern for wrapping any side-effecting call:
 
 ## Current State & What Works
 
-- WIT bindings are fully generated and compile for the `wasm` target
+- WIT bindings are fully generated and compile for the `wasm` target (updated to Golem 1.4.2 WITs)
 - The agent registry pattern is implemented
-- A minimal hand-written `Counter` agent works end-to-end (registers, initializes, invokes)
-- The build pipeline works: `moon build --target wasm` → `wasm-tools component embed` → `wasm-tools component new`
+- **Builder/Extractor packages are complete** — fluent API for constructing and reading `WitValue`/`WitType` trees, with comprehensive tests
+- **Schema traits are implemented** — `HasElementSchema`, `FromExtractor`, `FromElementValue`, `ToElementValue` for all MoonBit primitives and compound types (`Option[T]`, `Array[T]`, `Result[T, E]`), plus record/enum/variant helpers for custom types
+- **Agent code generation is complete** — the `agents` subcommand parses `#derive.agent` and `#derive.golem_schema` annotations, generates `golem_agents.mbt` (registration + RawAgent dispatch) and `golem_derive.mbt` (serialization impls)
+- **Reexport generation is complete** — the `reexports` subcommand generates `golem_reexports.mbt` and auto-updates `moon.pkg` link sections
+- **Two working example agents** — `Counter` (simple state, primitive types) and `TaskManager` (custom types: `Priority` enum, `TaskInfo` struct with optional fields)
+- The build pipeline works: codegen → `moon build --target wasm` → `wasm-tools component embed` → `wasm-tools component new`
+- A `golem.yaml` application definition is set up for Golem 1.4.2 with the full build pipeline
 - Snapshot save/load stubs exist but are not yet functional
-- **`golem_sdk_tools reexports` command is complete and tested** — automatically generates
-  `golem_reexports.mbt` files that re-export all WASM entry points (`cabi_realloc`,
-  `wasmExport*` functions) from the SDK's `gen` package. This eliminates hand-written
-  boilerplate in consumer projects. Usage:
-  ```sh
-  cd golem_sdk_tools
-  moon run cmd -- reexports <sdk-path> <target-dir>
-  # e.g.: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/counter
-  ```
-  The tool parses `gen/pkg.generated.mbti` to discover exported functions, constructs AST
-  nodes via `moonbitlang/parser`, and emits MoonBit source using a custom lightweight emitter
-  (bypasses `moonbitlang/formatter` dependency conflicts). Has 9 tests covering MBTI parsing,
-  reexport generation, and emission.
-
-  **Architecture note**: The `.mbti` parsing uses string-based processing rather than
-  `@mbti_parser` because the parser's grammar has an upstream bug: the `func_sig` rule lacks
-  a `vis` prefix, so it cannot parse `pub fn` signatures that `moon info` generates. The AST
-  construction uses `moonbitlang/parser/syntax` types. The emitter is a custom `StringBuilder`-
-  based serializer because `moonbitlang/formatter` cannot be added as a dependency due to a
-  transitive `Yoorkin/ArgParser` version conflict (formatter 0.1.2 pins parser 0.1.11 +
-  ArgParser 0.1.11, while we use parser 0.1.16). Once both upstream issues are resolved, the
-  tool should switch to: `@mbti_parser` for parsing → AST transform → `@formatter.impls_to_string`
-  for emission.
+- Agent mode (durable/ephemeral) is supported via `#derive.agent("ephemeral")`
+- Prompt hints on methods via `#derive.prompt_hint("...")`
 
 ## What Needs To Be Built
 
-### 1. IntoValue / FromValue Serialization Traits
+### 1. Custom Data Types — Extended Support
 
-Equivalent to the Rust SDK's `IntoValue` / `FromValueAndType`. These traits convert between
-user-defined MoonBit types and `WitValue` / `WitType`.
+The current `#derive.golem_schema` supports structs (records), simple enums (all-unit), and
+variant enums (with payloads). Still needed:
+- Variant enums with multi-field (record-like) payloads
+- Tuple types
+- Nested custom types across packages (currently must be in the same package)
+- Unstructured text/binary data types (multimodal)
 
-```moonbit
-// Target API (conceptual)
-pub(open) trait IntoValue {
-  into_value(Self) -> WitValue
-  get_type() -> WitType  // static — returns the WitType schema for this type
-}
-
-pub(open) trait FromValue {
-  from_value(WitValue, WitType) -> Result[Self, String]
-}
-```
-
-Must provide implementations for all MoonBit primitives: `Bool`, `Int`, `UInt`, `Int64`, `UInt64`,
-`Float`, `Double`, `String`, `Byte`, `Char`, `Option[T]`, `Result[T, E]`, `Array[T]`, tuples, etc.
-
-### 2. Code Generation (Custom Derive)
-
-MoonBit doesn't have proc-macros. The approach is a CLI tool using `moonbitlang/parser` and
-`moonbitlang/formatter` (see [Yoorkin/custom_derive](https://github.com/Yoorkin/custom_derive)):
-
-- Parse source files, find types annotated with `#derive.into_value` / `#derive.from_value`
-- Generate `impl IntoValue for MyType` and `impl FromValue for MyType`
-- Generate agent registration code: `RawAgent` impl, `AgentType` construction, `register_agent` call
-- Mark generated code with `#derive.generated` for idempotent re-runs
-
-The derive tool would be a separate MoonBit package (`derive/` or `cmd/`) that runs as a pre-build step.
-
-### 3. Agent Definition Abstraction
-
-Replace the current hand-written boilerplate in user code. The Rust SDK uses
-`#[agent_definition]` on a trait + `#[agent_implementation]` on an impl block. For MoonBit,
-the equivalent could be:
-
-```moonbit
-// User writes this:
-#derive.agent
-pub(all) struct Counter {
-  name : String
-  mut value : UInt64
-}
-
-// With annotated methods:
-#derive.agent_method("increment", description="Increments the counter")
-pub fn Counter::increment(self : Self) -> Unit { ... }
-
-#derive.agent_constructor(description="Creates a new counter")
-pub fn Counter::new(name : String) -> Counter { ... }
-```
-
-The derive tool would generate:
-- `impl RawAgent for Counter` with method dispatch
-- `AgentType` definition with schemas derived from method signatures
-- `register_agent(...)` call in an `init {}` block
-- WIT export re-export functions
-
-### 4. WIT Export Boilerplate Elimination
-
-~~Currently the example (`counter.mbt`) must manually re-export all `@gen.wasmExport*` functions~~
-**Partially solved**: The `golem_sdk_tools reexports` command now auto-generates `golem_reexports.mbt`
-with all WASM entry point re-exports. The `moon.pkg` link configuration still needs to be duplicated
-in each consumer project. A future improvement could auto-generate the `moon.pkg` link section too.
-
-### 5. Snapshot Support
+### 2. Snapshot Support
 
 Implement `save` and `load` for agent state persistence. Requires a serialization format (JSON or
 binary) and the ability to serialize/deserialize the agent struct. Could leverage the same
-`IntoValue`/`FromValue` traits or MoonBit's `ToJson`/`FromJson`.
+schema traits or MoonBit's `ToJson`/`FromJson`.
 
-### 6. Durability Wrapper
+### 3. Durability Wrapper
 
 A high-level `Durability` struct/module that wraps the low-level durability FFI calls into an
 ergonomic API, similar to Rust's `Durability<SOk, SErr>`.
 
-### 7. Host API Re-exports
+### 4. Host API Re-exports
 
 Provide ergonomic re-exports of commonly used host APIs (logging, key-value store, blob storage,
 config, LLM, etc.) so users import from `@golem_sdk` instead of deep WIT-generated paths.
+
+### 5. RPC Support
+
+Inter-component communication via the `golem:rpc` types (`WasmRpc`, etc.).
+
+### 6. Template Generalization
+
+Generalize the example directory as a reusable MoonBit Golem template with proper variable
+substitution.
+
+### 7. Golem 1.5 Update
+
+Update WIT definitions and SDK to Golem 1.5 when available.
+
+### 8. Code-First Endpoints & Config
+
+Support for defining REST endpoints and configuration schemas from code.
 
 ## Build & Test Commands
 
@@ -312,7 +481,7 @@ config, LLM, etc.) so users import from `@golem_sdk` instead of deep WIT-generat
 # In golem_sdk/:
 moon check --target wasm          # Type-check SDK
 moon build --target wasm          # Build SDK
-moon test                         # Run tests (non-wasm tests)
+moon test                         # Run tests (builder, extractor, schema tests)
 moon fmt                          # Format code
 moon info                         # Regenerate .mbti files
 
@@ -322,15 +491,16 @@ moon run script bindgen
 # In golem_sdk_tools/:
 moon check                        # Type-check tools (native target)
 moon build                        # Build tools
-moon test                         # Run tests (9 tests: MBTI parsing, reexport generation, emission)
-moon run cmd -- reexports <sdk-path> <target-dir>  # Generate reexports
+moon test                         # Run tests
+moon run cmd -- reexports <sdk-path> <target-dir>  # Generate reexports + update moon.pkg
+moon run cmd -- agents <package-dir>               # Generate golem_agents.mbt + golem_derive.mbt
 
 # In golem_sdk_example1/:
 moon check --target wasm          # Type-check example
-./build.sh                        # Full build: moon build + wasm-tools embed + component new
+./build.sh                        # Full build: codegen + moon build + wasm-tools
 
 # The resulting component WASM is at:
-# golem_sdk_example1/target/wasm/release/counter.agent.wasm
+# golem_sdk_example1/_build/wasm/release/counter.agent.wasm
 ```
 
 ## Coding Conventions
@@ -338,6 +508,7 @@ moon check --target wasm          # Type-check example
 - MoonBit blocks separated by `///|` — order is irrelevant
 - Follow existing naming: `snake_case` for functions/values, `UpperCamelCase` for types/enums
 - Files generated by `wit-bindgen` are marked `// Generated by wit-bindgen ... DO NOT EDIT!`
+- Files generated by `golem_sdk_tools` are marked `// Generated by golem_sdk_tools — DO NOT EDIT!`
 - SDK stub files (`gen/interface/*/stub.mbt`) ARE maintained by hand despite being in the `gen/` tree
 - Use `moon check --target wasm` frequently — the project targets WASM only
 - Tests should use `inspect()` with snapshot testing (`moon test --update`)
@@ -349,14 +520,17 @@ moon check --target wasm          # Type-check example
 - String encoding is **UTF-16** (MoonBit's native format, passed to `wasm-tools component embed --encoding utf16`)
 - Memory management uses `mbt_ffi_malloc`/`mbt_ffi_free` (inlined per-package) for WASM linear memory, with MoonBit's GC for MoonBit objects
 - The `agents` package holds mutable global state (`let state : AgentState = AgentState::new()`) — this is a module-level singleton
-- WASM exports are linked via `moon.pkg` link configuration — every agent component must declare these exports
+- WASM exports are linked via `moon.pkg` link configuration — every agent component must declare these exports (auto-generated by the `reexports` tool)
 - The `mbt_ffi_cabi_realloc` function in `gen/ffi.mbt` is the Component Model's canonical ABI allocator
 - `moon.pkg` can use either the new format (plain text) or `moon.pkg.json` (JSON) — `moon fmt` converts JSON to plain text
+- Generated code files (`golem_reexports.mbt`, `golem_agents.mbt`, `golem_derive.mbt`) should not be manually edited
+- Multiple agents can coexist in the same package — each is registered in the single generated `fn init {}` block
 
 ## Dependencies & Tools
 
 - **wit-bindgen** ≥ 0.53.1 with `moonbit` backend — generates all WIT bindings
 - **wasm-tools** — for `component embed` (adds WIT type info to WASM) and `component new` (creates Component Model WASM)
 - **moon** — MoonBit build tool
-- **moonbitlang/parser** (0.1.16) — used by `golem_sdk_tools` for AST construction; `moonbitlang/formatter` is NOT used (bypassed with custom emitter due to dependency conflicts)
+- **moonbitlang/parser** (0.1.16) — used by `golem_sdk_tools` for parsing source files and AST construction
+- **moonbitlang/formatter** (local path `../../moonbit-formatter`) — used by `golem_sdk_tools` for emitting generated MoonBit source from AST
 - **moonbitlang/x** (0.4.39) — used by `golem_sdk_tools` for filesystem and env args
