@@ -11,9 +11,9 @@ pub fn get_agent_type(String) -> RegisteredAgentType?
 
 pub fn get_all_agent_types() -> Array[RegisteredAgentType]
 
-pub fn make_agent_id(String, @common.DataValue) -> Result[String, @common.AgentError]
+pub fn make_agent_id(String, @common.DataValue, @types.Uuid?) -> Result[String, @common.AgentError]
 
-pub fn parse_agent_id(String) -> Result[(String, @common.DataValue), @common.AgentError]
+pub fn parse_agent_id(String) -> Result[(String, @common.DataValue, @types.Uuid?), @common.AgentError]
 
 // Errors
 

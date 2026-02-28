@@ -50,7 +50,7 @@ pub impl Show for ChangePersistenceLevelParameters
 
 pub(all) struct ChangeRetryPolicyParameters {
   timestamp : @wallClock.Datetime
-  retry_policy : @host.RetryPolicy
+  new_policy : @host.RetryPolicy
 }
 pub impl Eq for ChangeRetryPolicyParameters
 pub impl Show for ChangeRetryPolicyParameters
@@ -58,15 +58,16 @@ pub impl Show for ChangeRetryPolicyParameters
 pub(all) struct CreateParameters {
   timestamp : @wallClock.Datetime
   agent_id : @types.AgentId
-  component_version : UInt64
+  component_revision : UInt64
   args : Array[String]
   env : Array[(String, String)]
   created_by : @host.AccountId
-  project_id : @host.ProjectId
+  environment_id : @host.EnvironmentId
   parent : @types.AgentId?
   component_size : UInt64
   initial_total_linear_memory_size : UInt64
   initial_active_plugins : Array[PluginInstallationDescription]
+  config_vars : Array[(String, String)]
 }
 pub impl Eq for CreateParameters
 pub impl Show for CreateParameters
@@ -113,13 +114,14 @@ pub impl Show for EndRemoteWriteParameters
 pub(all) struct ErrorParameters {
   timestamp : @wallClock.Datetime
   error : String
+  retry_from : UInt64
 }
 pub impl Eq for ErrorParameters
 pub impl Show for ErrorParameters
 
 pub(all) struct ExportedFunctionCompletedParameters {
   timestamp : @wallClock.Datetime
-  response : @types.WitValue?
+  response : @types.ValueAndType?
   consumed_fuel : Int64
 }
 pub impl Eq for ExportedFunctionCompletedParameters
@@ -128,7 +130,10 @@ pub impl Show for ExportedFunctionCompletedParameters
 pub(all) struct ExportedFunctionInvocationParameters {
   idempotency_key : String
   function_name : String
-  input : Array[@types.WitValue]?
+  input : Array[@types.ValueAndType]?
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
 }
 pub impl Eq for ExportedFunctionInvocationParameters
 pub impl Show for ExportedFunctionInvocationParameters
@@ -136,7 +141,7 @@ pub impl Show for ExportedFunctionInvocationParameters
 pub(all) struct ExportedFunctionInvokedParameters {
   timestamp : @wallClock.Datetime
   function_name : String
-  request : Array[@types.WitValue]
+  request : Array[@types.ValueAndType]
   idempotency_key : String
   trace_id : String
   trace_states : Array[String]
@@ -153,7 +158,7 @@ pub impl Show for ExternalSpanData
 
 pub(all) struct FailedUpdateParameters {
   timestamp : @wallClock.Datetime
-  target_version : UInt64
+  target_revision : UInt64
   details : String?
 }
 pub impl Eq for FailedUpdateParameters
@@ -185,8 +190,8 @@ pub impl Show for GrowMemoryParameters
 pub(all) struct ImportedFunctionInvokedParameters {
   timestamp : @wallClock.Datetime
   function_name : String
-  request : @types.WitValue
-  response : @types.WitValue
+  request : @types.ValueAndType
+  response : @types.ValueAndType
   wrapped_function_type : WrappedFunctionType
 }
 pub impl Eq for ImportedFunctionInvokedParameters
@@ -194,8 +199,7 @@ pub impl Show for ImportedFunctionInvokedParameters
 
 pub(all) struct JumpParameters {
   timestamp : @wallClock.Datetime
-  start : UInt64
-  end : UInt64
+  jump : OplogRegion
 }
 pub impl Eq for JumpParameters
 pub impl Show for JumpParameters
@@ -240,16 +244,16 @@ pub(all) enum OplogEntry {
   ImportedFunctionInvoked(ImportedFunctionInvokedParameters)
   ExportedFunctionInvoked(ExportedFunctionInvokedParameters)
   ExportedFunctionCompleted(ExportedFunctionCompletedParameters)
-  Suspend(@wallClock.Datetime)
+  Suspend(Timestamp)
   Error(ErrorParameters)
-  NoOp(@wallClock.Datetime)
+  NoOp(Timestamp)
   Jump(JumpParameters)
-  Interrupted(@wallClock.Datetime)
-  Exited(@wallClock.Datetime)
+  Interrupted(Timestamp)
+  Exited(Timestamp)
   ChangeRetryPolicy(ChangeRetryPolicyParameters)
-  BeginAtomicRegion(@wallClock.Datetime)
+  BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
-  BeginRemoteWrite(@wallClock.Datetime)
+  BeginRemoteWrite(Timestamp)
   EndRemoteWrite(EndRemoteWriteParameters)
   PendingAgentInvocation(PendingAgentInvocationParameters)
   PendingUpdate(PendingUpdateParameters)
@@ -259,7 +263,7 @@ pub(all) enum OplogEntry {
   CreateResource(CreateResourceParameters)
   DropResource(DropResourceParameters)
   Log(LogParameters)
-  Restart(@wallClock.Datetime)
+  Restart(Timestamp)
   ActivatePlugin(ActivatePluginParameters)
   DeactivatePlugin(DeactivatePluginParameters)
   Revert(RevertParameters)
@@ -277,6 +281,13 @@ pub(all) enum OplogEntry {
 pub impl Eq for OplogEntry
 pub impl Show for OplogEntry
 
+pub(all) struct OplogRegion {
+  start : UInt64
+  end : UInt64
+}
+pub impl Eq for OplogRegion
+pub impl Show for OplogRegion
+
 pub(all) struct PendingAgentInvocationParameters {
   timestamp : @wallClock.Datetime
   invocation : AgentInvocation
@@ -286,14 +297,13 @@ pub impl Show for PendingAgentInvocationParameters
 
 pub(all) struct PendingUpdateParameters {
   timestamp : @wallClock.Datetime
-  target_version : UInt64
+  target_revision : UInt64
   update_description : UpdateDescription
 }
 pub impl Eq for PendingUpdateParameters
 pub impl Show for PendingUpdateParameters
 
 pub(all) struct PluginInstallationDescription {
-  installation_id : @types.Uuid
   name : String
   version : String
   parameters : Array[(String, String)]
@@ -353,12 +363,18 @@ pub impl Show for StartSpanParameters
 
 pub(all) struct SuccessfulUpdateParameters {
   timestamp : @wallClock.Datetime
-  target_version : UInt64
+  target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[PluginInstallationDescription]
 }
 pub impl Eq for SuccessfulUpdateParameters
 pub impl Show for SuccessfulUpdateParameters
+
+pub(all) struct Timestamp {
+  timestamp : @wallClock.Datetime
+}
+pub impl Eq for Timestamp
+pub impl Show for Timestamp
 
 pub(all) enum UpdateDescription {
   AutoUpdate

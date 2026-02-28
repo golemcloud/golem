@@ -8135,6 +8135,7 @@ pub fn wasmExportGetDefinition() -> Int {
   }
   mbt_ffi_store32(return_area + 72, result.dependencies.length())
   mbt_ffi_store32(return_area + 68, address834)
+  mbt_ffi_store8(return_area + 76, result.mode.ordinal())
   return return_area
 }
 
@@ -9714,10 +9715,10 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
     Ok(payload) => {
       mbt_ffi_store8(return_area + 0, 0)
 
-      let address837 = mbt_ffi_malloc(payload.length() * 76)
+      let address837 = mbt_ffi_malloc(payload.length() * 80)
       for index838 = 0; index838 < payload.length(); index838 = index838 + 1 {
         let iter_elem : @common.AgentType = payload[index838]
-        let iter_base = address837 + index838 * 76
+        let iter_base = address837 + index838 * 80
 
         let ptr = mbt_ffi_str2ptr(iter_elem.type_name)
         mbt_ffi_store32(iter_base + 4, iter_elem.type_name.length())
@@ -14557,6 +14558,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
         }
         mbt_ffi_store32(iter_base + 72, iter_elem.dependencies.length())
         mbt_ffi_store32(iter_base + 68, address835)
+        mbt_ffi_store8(iter_base + 76, iter_elem.mode.ordinal())
       }
       mbt_ffi_store32(return_area + 8, payload.length())
       mbt_ffi_store32(return_area + 4, address837)
@@ -15163,7 +15165,7 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
   match mbt_ffi_load8_u(p0 + 0) {
     0 => {
       for index98 = 0; index98 < mbt_ffi_load32(p0 + 8); index98 = index98 + 1 {
-        let iter_base = mbt_ffi_load32(p0 + 4) + index98 * 76
+        let iter_base = mbt_ffi_load32(p0 + 4) + index98 * 80
         mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
         mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 

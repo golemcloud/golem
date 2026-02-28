@@ -11,7 +11,7 @@ pub fn complete_promise(PromiseId, FixedArray[Byte]) -> Bool
 
 pub fn create_promise() -> PromiseId
 
-pub fn fork(String) -> ForkResult
+pub fn fork() -> ForkResult
 
 pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
 
@@ -59,7 +59,7 @@ pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
 
 // Types and methods
 pub(all) struct AccountId {
-  value : String
+  uuid : @types.Uuid
 }
 pub impl Eq for AccountId
 pub impl Show for AccountId
@@ -105,7 +105,7 @@ pub(all) struct AgentMetadata {
   env : Array[(String, String)]
   config_vars : Array[(String, String)]
   status : AgentStatus
-  component_version : UInt64
+  component_revision : UInt64
   retry_count : UInt64
 }
 pub impl Eq for AgentMetadata
@@ -157,6 +157,12 @@ pub(all) struct AgentVersionFilter {
 pub impl Eq for AgentVersionFilter
 pub impl Show for AgentVersionFilter
 
+pub(all) struct EnvironmentId {
+  uuid : @types.Uuid
+}
+pub impl Eq for EnvironmentId
+pub impl Show for EnvironmentId
+
 pub(all) enum FilterComparator {
   EQUAL
   NOT_EQUAL
@@ -170,12 +176,16 @@ pub fn FilterComparator::ordinal(Self) -> Int
 pub impl Eq for FilterComparator
 pub impl Show for FilterComparator
 
-pub(all) enum ForkResult {
-  ORIGINAL
-  FORKED
+pub(all) struct ForkDetails {
+  forked_phantom_id : @types.Uuid
 }
-pub fn ForkResult::from(Int) -> Self
-pub fn ForkResult::ordinal(Self) -> Int
+pub impl Eq for ForkDetails
+pub impl Show for ForkDetails
+
+pub(all) enum ForkResult {
+  Original(ForkDetails)
+  Forked(ForkDetails)
+}
 pub impl Eq for ForkResult
 pub impl Show for ForkResult
 
@@ -204,12 +214,6 @@ pub(all) enum PersistenceLevel {
 }
 pub impl Eq for PersistenceLevel
 pub impl Show for PersistenceLevel
-
-pub(all) struct ProjectId {
-  uuid : @types.Uuid
-}
-pub impl Eq for ProjectId
-pub impl Show for ProjectId
 
 pub(all) struct PromiseId {
   agent_id : @types.AgentId

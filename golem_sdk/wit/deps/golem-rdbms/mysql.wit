@@ -61,13 +61,11 @@ interface mysql {
        boolean(bool),
        tinyint(s8),
        smallint(s16),
-       // s24
        mediumint(s32),
        int(s32),
        bigint(s64),
        tinyint-unsigned(u8),
        smallint-unsigned(u16),
-       // u24
        mediumint-unsigned(u32),
        int-unsigned(u32),
        bigint-unsigned(u64),

@@ -166,6 +166,10 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
     make_field("constructor_", constructor_record),
     make_field("methods", make_array(method_records)),
     make_field("dependencies", make_array([])),
+    make_field(
+      "mode",
+      make_qualified_constr("common", "AgentMode", "DURABLE"),
+    ),
   ])
 }
 

@@ -34,9 +34,9 @@ pub impl[T : FromExtractor] FromElementValue for T? with from_element_value(v) {
 pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
   match self {
     None =>
-      @common.ElementValue::ComponentModel(
-        { nodes: [@types.WitNode::OptionValue(None)] },
-      )
+      @common.ElementValue::ComponentModel({
+        nodes: [@types.WitNode::OptionValue(None)],
+      })
     Some(v) => {
       let inner = T::to_element_value(v)
       guard inner is @common.ElementValue::ComponentModel(inner_wit) else {

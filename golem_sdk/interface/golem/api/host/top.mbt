@@ -11,12 +11,12 @@ pub(all) struct PromiseId {
 ///|
 /// Represents a Golem Cloud account
 pub(all) struct AccountId {
-  value : String
+  uuid : @types.Uuid
 } derive(Show, Eq)
 
 ///|
-/// Represents a Golem project
-pub(all) struct ProjectId {
+/// Represents a Golem environment
+pub(all) struct EnvironmentId {
   uuid : @types.Uuid
 } derive(Show, Eq)
 
@@ -245,7 +245,7 @@ pub(all) struct AgentMetadata {
   env : Array[(String, String)]
   config_vars : Array[(String, String)]
   status : AgentStatus
-  component_version : UInt64
+  component_revision : UInt64
   retry_count : UInt64
 } derive(Show, Eq)
 
@@ -268,28 +268,19 @@ pub(all) enum RevertAgentTarget {
 } derive(Show, Eq)
 
 ///|
-/// Indicates which agent the code is running on after `fork`
-pub(all) enum ForkResult {
-  ORIGINAL
-  FORKED
+/// Details about the fork result
+pub(all) struct ForkDetails {
+  forked_phantom_id : @types.Uuid
 } derive(Show, Eq)
 
 ///|
-pub fn ForkResult::ordinal(self : ForkResult) -> Int {
-  match self {
-    ORIGINAL => 0
-    FORKED => 1
-  }
-}
-
-///|
-pub fn ForkResult::from(self : Int) -> ForkResult {
-  match self {
-    0 => ORIGINAL
-    1 => FORKED
-    _ => panic()
-  }
-}
+/// Indicates which agent the code is running on after `fork`.
+/// The parameter contains details about the fork result, such as the phantom-ID of the newly
+/// created agent.
+pub(all) enum ForkResult {
+  Original(ForkDetails)
+  Forked(ForkDetails)
+} derive(Show, Eq)
 
 ///|
 pub(all) struct GetPromiseResult(Int) derive(Show, Eq)
@@ -515,7 +506,7 @@ pub fn GetAgents::get_next(self : GetAgents) -> Array[AgentMetadata]? {
           env: array3,
           config_vars: array7,
           status: AgentStatus::from(mbt_ffi_load8_u(iter_base + 48)),
-          component_version: mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+          component_revision: mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
           retry_count: mbt_ffi_load64(iter_base + 64).reinterpret_as_uint64(),
         })
       }
@@ -765,7 +756,7 @@ pub fn generate_idempotency_key() -> @types.Uuid {
 /// not waiting for the agent to get updated.
 pub fn update_agent(
   agent_id : @types.AgentId,
-  target_version : UInt64,
+  target_revision : UInt64,
   mode : UpdateMode,
 ) -> Unit {
   let ptr = mbt_ffi_str2ptr(agent_id.agent_id)
@@ -774,7 +765,7 @@ pub fn update_agent(
     agent_id.component_id.uuid.low_bits.reinterpret_as_int64(),
     ptr,
     agent_id.agent_id.length(),
-    target_version.reinterpret_as_int64(),
+    target_revision.reinterpret_as_int64(),
     mode.ordinal(),
   )
   mbt_ffi_free(ptr)
@@ -854,7 +845,7 @@ pub fn get_self_metadata() -> AgentMetadata {
     env: array3,
     config_vars: array7,
     status: AgentStatus::from(mbt_ffi_load8_u(return_area + 48)),
-    component_version: mbt_ffi_load64(return_area + 56).reinterpret_as_uint64(),
+    component_revision: mbt_ffi_load64(return_area + 56).reinterpret_as_uint64(),
     retry_count: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
   }
 }
@@ -947,7 +938,7 @@ pub fn get_agent_metadata(agent_id : @types.AgentId) -> AgentMetadata? {
         env: array3,
         config_vars: array7,
         status: AgentStatus::from(mbt_ffi_load8_u(return_area + 56)),
-        component_version: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
+        component_revision: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
         retry_count: mbt_ffi_load64(return_area + 72).reinterpret_as_uint64(),
       })
     }
@@ -1130,12 +1121,31 @@ pub fn resolve_agent_id_strict(
 }
 
 ///|
-/// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-/// and this agent continues running as well. The return value is going to be different in this agent and
-/// the forked agent.
-pub fn fork(new_name : String) -> ForkResult {
-  let ptr = mbt_ffi_str2ptr(new_name)
-  let result : Int = wasmImportFork(ptr, new_name.length())
-  mbt_ffi_free(ptr)
-  return ForkResult::from(result)
+/// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+/// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+/// both sides. The newly created agent continues running from the same point, but the return value is
+/// going to be different in this agent and the forked agent.
+pub fn fork() -> ForkResult {
+  let return_area = mbt_ffi_malloc(24)
+  wasmImportFork(return_area)
+
+  let lifted = match mbt_ffi_load8_u(return_area + 0) {
+    0 =>
+      ForkResult::Original(ForkDetails::{
+        forked_phantom_id: @types.Uuid::{
+          high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
+          low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
+        },
+      })
+    1 =>
+      ForkResult::Forked(ForkDetails::{
+        forked_phantom_id: @types.Uuid::{
+          high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
+          low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
+        },
+      })
+    _ => panic()
+  }
+  mbt_ffi_free(return_area)
+  return lifted
 }

@@ -3605,6 +3605,7 @@ pub fn get_all_agent_types() -> Array[RegisteredAgentType] {
         },
         methods: array226,
         dependencies: array461,
+        mode: @common.AgentMode::from(mbt_ffi_load8_u(iter_base + 76)),
       },
       implemented_by: @types.ComponentId::{
         uuid: @types.Uuid::{
@@ -7247,6 +7248,7 @@ pub fn get_agent_type(agent_type_name : String) -> RegisteredAgentType? {
           },
           methods: array226,
           dependencies: array461,
+          mode: @common.AgentMode::from(mbt_ffi_load8_u(return_area + 84)),
         },
         implemented_by: @types.ComponentId::{
           uuid: @types.Uuid::{
@@ -7265,9 +7267,11 @@ pub fn get_agent_type(agent_type_name : String) -> RegisteredAgentType? {
 
 ///|
 /// Constructs a string agent-id from the agent type and its constructor parameters
+/// and an optional phantom ID
 pub fn make_agent_id(
   agent_type_name : String,
   input : @common.DataValue,
+  phantom_id : @types.Uuid?,
 ) -> Result[String, @common.AgentError] {
   let cleanup_list : Array[Int] = []
 
@@ -8036,6 +8040,16 @@ pub fn make_agent_id(
       (1, address120, payload59.length())
     }
   }
+
+  let (lowered126, lowered127, lowered128) = match phantom_id {
+    None => (0, 0L, 0L)
+    Some(payload125) =>
+      (
+        1,
+        payload125.high_bits.reinterpret_as_int64(),
+        payload125.low_bits.reinterpret_as_int64(),
+      )
+  }
   let return_area = mbt_ffi_malloc(24)
   wasmImportMakeAgentId(
     ptr,
@@ -8043,10 +8057,13 @@ pub fn make_agent_id(
     lowered,
     lowered122,
     lowered123,
+    lowered126,
+    lowered127,
+    lowered128,
     return_area,
   )
 
-  let lifted169 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted174 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
         mbt_ffi_load32(return_area + 4),
@@ -8056,53 +8073,53 @@ pub fn make_agent_id(
       Result::Ok(result)
     }
     1 => {
-      let lifted168 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted173 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
-          let result124 = mbt_ffi_ptr2str(
+          let result129 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          @common.AgentError::InvalidInput(result124)
+          @common.AgentError::InvalidInput(result129)
         }
         1 => {
-          let result125 = mbt_ffi_ptr2str(
+          let result130 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          @common.AgentError::InvalidMethod(result125)
+          @common.AgentError::InvalidMethod(result130)
         }
         2 => {
-          let result126 = mbt_ffi_ptr2str(
+          let result131 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          @common.AgentError::InvalidType(result126)
+          @common.AgentError::InvalidType(result131)
         }
         3 => {
-          let result127 = mbt_ffi_ptr2str(
+          let result132 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 8),
             mbt_ffi_load32(return_area + 12),
           )
 
-          @common.AgentError::InvalidAgentId(result127)
+          @common.AgentError::InvalidAgentId(result132)
         }
         4 => {
-          let array142 : Array[@types.WitNode] = []
-          for index143 = 0
-              index143 < mbt_ffi_load32(return_area + 12)
-              index143 = index143 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 8) + index143 * 24
+          let array147 : Array[@types.WitNode] = []
+          for index148 = 0
+              index148 < mbt_ffi_load32(return_area + 12)
+              index148 = index148 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 8) + index148 * 24
 
-            let lifted141 = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted146 = match mbt_ffi_load8_u(iter_base + 0) {
               0 => {
                 let array : Array[Int] = []
-                for index128 = 0
-                    index128 < mbt_ffi_load32(iter_base + 12)
-                    index128 = index128 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index128 * 4
+                for index133 = 0
+                    index133 < mbt_ffi_load32(iter_base + 12)
+                    index133 = index133 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index133 * 4
 
                   array.push(mbt_ffi_load32(iter_base + 0))
                 }
@@ -8126,79 +8143,79 @@ pub fn make_agent_id(
                   mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                 )
               3 => {
-                let array129 : Array[Bool] = []
-                for index130 = 0
-                    index130 < mbt_ffi_load32(iter_base + 12)
-                    index130 = index130 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index130 * 1
+                let array134 : Array[Bool] = []
+                for index135 = 0
+                    index135 < mbt_ffi_load32(iter_base + 12)
+                    index135 = index135 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index135 * 1
 
-                  array129.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                  array134.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::FlagsValue(array129)
+                @types.WitNode::FlagsValue(array134)
               }
               4 => {
-                let array131 : Array[Int] = []
-                for index132 = 0
-                    index132 < mbt_ffi_load32(iter_base + 12)
-                    index132 = index132 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index132 * 4
+                let array136 : Array[Int] = []
+                for index137 = 0
+                    index137 < mbt_ffi_load32(iter_base + 12)
+                    index137 = index137 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index137 * 4
 
-                  array131.push(mbt_ffi_load32(iter_base + 0))
+                  array136.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::TupleValue(array131)
+                @types.WitNode::TupleValue(array136)
               }
               5 => {
-                let array133 : Array[Int] = []
-                for index134 = 0
-                    index134 < mbt_ffi_load32(iter_base + 12)
-                    index134 = index134 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index134 * 4
+                let array138 : Array[Int] = []
+                for index139 = 0
+                    index139 < mbt_ffi_load32(iter_base + 12)
+                    index139 = index139 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index139 * 4
 
-                  array133.push(mbt_ffi_load32(iter_base + 0))
+                  array138.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::ListValue(array133)
+                @types.WitNode::ListValue(array138)
               }
               6 => {
-                let lifted135 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted140 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                @types.WitNode::OptionValue(lifted135)
+                @types.WitNode::OptionValue(lifted140)
               }
               7 => {
-                let lifted138 = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted143 = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => {
-                    let lifted136 : Int? = match
+                    let lifted141 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                       _ => panic()
                     }
 
-                    Result::Ok(lifted136)
+                    Result::Ok(lifted141)
                   }
                   1 => {
-                    let lifted137 : Int? = match
+                    let lifted142 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                       _ => panic()
                     }
 
-                    Result::Err(lifted137)
+                    Result::Err(lifted142)
                   }
                   _ => panic()
                 }
 
-                @types.WitNode::ResultValue(lifted138)
+                @types.WitNode::ResultValue(lifted143)
               }
               8 =>
                 @types.WitNode::PrimU8(mbt_ffi_load8_u(iter_base + 8).to_byte())
@@ -8230,22 +8247,22 @@ pub fn make_agent_id(
               19 =>
                 @types.WitNode::PrimBool(mbt_ffi_load8_u(iter_base + 8) != 0)
               20 => {
-                let result139 = mbt_ffi_ptr2str(
+                let result144 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.WitNode::PrimString(result139)
+                @types.WitNode::PrimString(result144)
               }
               21 => {
-                let result140 = mbt_ffi_ptr2str(
+                let result145 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
                 @types.WitNode::Handle(
                   (
-                    @types.Uri::{ value: result140 },
+                    @types.Uri::{ value: result145 },
                     mbt_ffi_load64(iter_base + 16).reinterpret_as_uint64(),
                   ),
                 )
@@ -8253,151 +8270,151 @@ pub fn make_agent_id(
               _ => panic()
             }
 
-            array142.push(lifted141)
+            array147.push(lifted146)
           }
           mbt_ffi_free(mbt_ffi_load32(return_area + 8))
 
-          let array166 : Array[@types.NamedWitTypeNode] = []
-          for index167 = 0
-              index167 < mbt_ffi_load32(return_area + 20)
-              index167 = index167 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 16) + index167 * 48
+          let array171 : Array[@types.NamedWitTypeNode] = []
+          for index172 = 0
+              index172 < mbt_ffi_load32(return_area + 20)
+              index172 = index172 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 16) + index172 * 48
 
-            let lifted145 : String? = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted150 : String? = match mbt_ffi_load8_u(iter_base + 0) {
               0 => Option::None
               1 => {
-                let result144 = mbt_ffi_ptr2str(
+                let result149 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 4),
                   mbt_ffi_load32(iter_base + 8),
                 )
 
-                Option::Some(result144)
+                Option::Some(result149)
               }
               _ => panic()
             }
 
-            let lifted147 : String? = match mbt_ffi_load8_u(iter_base + 12) {
+            let lifted152 : String? = match mbt_ffi_load8_u(iter_base + 12) {
               0 => Option::None
               1 => {
-                let result146 = mbt_ffi_ptr2str(
+                let result151 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 16),
                   mbt_ffi_load32(iter_base + 20),
                 )
 
-                Option::Some(result146)
+                Option::Some(result151)
               }
               _ => panic()
             }
 
-            let lifted165 = match mbt_ffi_load8_u(iter_base + 24) {
+            let lifted170 = match mbt_ffi_load8_u(iter_base + 24) {
               0 => {
-                let array149 : Array[(String, Int)] = []
-                for index150 = 0
-                    index150 < mbt_ffi_load32(iter_base + 36)
-                    index150 = index150 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index150 * 12
+                let array154 : Array[(String, Int)] = []
+                for index155 = 0
+                    index155 < mbt_ffi_load32(iter_base + 36)
+                    index155 = index155 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index155 * 12
 
-                  let result148 = mbt_ffi_ptr2str(
+                  let result153 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array149.push((result148, mbt_ffi_load32(iter_base + 8)))
+                  array154.push((result153, mbt_ffi_load32(iter_base + 8)))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::RecordType(array149)
+                @types.WitTypeNode::RecordType(array154)
               }
               1 => {
-                let array153 : Array[(String, Int?)] = []
-                for index154 = 0
-                    index154 < mbt_ffi_load32(iter_base + 36)
-                    index154 = index154 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index154 * 16
+                let array158 : Array[(String, Int?)] = []
+                for index159 = 0
+                    index159 < mbt_ffi_load32(iter_base + 36)
+                    index159 = index159 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index159 * 16
 
-                  let result151 = mbt_ffi_ptr2str(
+                  let result156 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  let lifted152 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                  let lifted157 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                     0 => Option::None
                     1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                     _ => panic()
                   }
 
-                  array153.push((result151, lifted152))
+                  array158.push((result156, lifted157))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::VariantType(array153)
+                @types.WitTypeNode::VariantType(array158)
               }
               2 => {
-                let array156 : Array[String] = []
-                for index157 = 0
-                    index157 < mbt_ffi_load32(iter_base + 36)
-                    index157 = index157 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index157 * 8
-
-                  let result155 = mbt_ffi_ptr2str(
-                    mbt_ffi_load32(iter_base + 0),
-                    mbt_ffi_load32(iter_base + 4),
-                  )
-
-                  array156.push(result155)
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                @types.WitTypeNode::EnumType(array156)
-              }
-              3 => {
-                let array159 : Array[String] = []
-                for index160 = 0
-                    index160 < mbt_ffi_load32(iter_base + 36)
-                    index160 = index160 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index160 * 8
-
-                  let result158 = mbt_ffi_ptr2str(
-                    mbt_ffi_load32(iter_base + 0),
-                    mbt_ffi_load32(iter_base + 4),
-                  )
-
-                  array159.push(result158)
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                @types.WitTypeNode::FlagsType(array159)
-              }
-              4 => {
-                let array161 : Array[Int] = []
+                let array161 : Array[String] = []
                 for index162 = 0
                     index162 < mbt_ffi_load32(iter_base + 36)
                     index162 = index162 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index162 * 4
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index162 * 8
 
-                  array161.push(mbt_ffi_load32(iter_base + 0))
+                  let result160 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 0),
+                    mbt_ffi_load32(iter_base + 4),
+                  )
+
+                  array161.push(result160)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::TupleType(array161)
+                @types.WitTypeNode::EnumType(array161)
+              }
+              3 => {
+                let array164 : Array[String] = []
+                for index165 = 0
+                    index165 < mbt_ffi_load32(iter_base + 36)
+                    index165 = index165 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index165 * 8
+
+                  let result163 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 0),
+                    mbt_ffi_load32(iter_base + 4),
+                  )
+
+                  array164.push(result163)
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                @types.WitTypeNode::FlagsType(array164)
+              }
+              4 => {
+                let array166 : Array[Int] = []
+                for index167 = 0
+                    index167 < mbt_ffi_load32(iter_base + 36)
+                    index167 = index167 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index167 * 4
+
+                  array166.push(mbt_ffi_load32(iter_base + 0))
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                @types.WitTypeNode::TupleType(array166)
               }
               5 => @types.WitTypeNode::ListType(mbt_ffi_load32(iter_base + 32))
               6 =>
                 @types.WitTypeNode::OptionType(mbt_ffi_load32(iter_base + 32))
               7 => {
-                let lifted163 : Int? = match mbt_ffi_load8_u(iter_base + 32) {
+                let lifted168 : Int? = match mbt_ffi_load8_u(iter_base + 32) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 36))
                   _ => panic()
                 }
 
-                let lifted164 : Int? = match mbt_ffi_load8_u(iter_base + 40) {
+                let lifted169 : Int? = match mbt_ffi_load8_u(iter_base + 40) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 44))
                   _ => panic()
                 }
 
-                @types.WitTypeNode::ResultType((lifted163, lifted164))
+                @types.WitTypeNode::ResultType((lifted168, lifted169))
               }
               8 => @types.WitTypeNode::PrimU8Type
               9 => @types.WitTypeNode::PrimU16Type
@@ -8422,23 +8439,23 @@ pub fn make_agent_id(
               _ => panic()
             }
 
-            array166.push(@types.NamedWitTypeNode::{
-              name: lifted145,
-              owner: lifted147,
-              type_: lifted165,
+            array171.push(@types.NamedWitTypeNode::{
+              name: lifted150,
+              owner: lifted152,
+              type_: lifted170,
             })
           }
           mbt_ffi_free(mbt_ffi_load32(return_area + 16))
 
           @common.AgentError::CustomError(@types.ValueAndType::{
-            value: @types.WitValue::{ nodes: array142 },
-            typ: @types.WitType::{ nodes: array166 },
+            value: @types.WitValue::{ nodes: array147 },
+            typ: @types.WitType::{ nodes: array171 },
           })
         }
         _ => panic()
       }
 
-      Result::Err(lifted168)
+      Result::Err(lifted173)
     }
     _ => panic()
   }
@@ -8446,32 +8463,33 @@ pub fn make_agent_id(
   mbt_ffi_free(return_area)
 
   cleanup_list.each(mbt_ffi_free)
-  return lifted169
+  return lifted174
 }
 
 ///|
 /// Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
+/// and an optional phantom ID
 pub fn parse_agent_id(
   agent_id : String,
-) -> Result[(String, @common.DataValue), @common.AgentError] {
+) -> Result[(String, @common.DataValue, @types.Uuid?), @common.AgentError] {
   let ptr = mbt_ffi_str2ptr(agent_id)
-  let return_area = mbt_ffi_malloc(24)
+  let return_area = mbt_ffi_malloc(56)
   wasmImportParseAgentId(ptr, agent_id.length(), return_area)
 
-  let lifted106 = match mbt_ffi_load8_u(return_area + 0) {
+  let lifted107 = match mbt_ffi_load8_u(return_area + 0) {
     0 => {
       let result = mbt_ffi_ptr2str(
-        mbt_ffi_load32(return_area + 4),
         mbt_ffi_load32(return_area + 8),
+        mbt_ffi_load32(return_area + 12),
       )
 
-      let lifted58 = match mbt_ffi_load8_u(return_area + 12) {
+      let lifted58 = match mbt_ffi_load8_u(return_area + 16) {
         0 => {
           let array25 : Array[@common.ElementValue] = []
           for index26 = 0
-              index26 < mbt_ffi_load32(return_area + 20)
+              index26 < mbt_ffi_load32(return_area + 24)
               index26 = index26 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 16) + index26 * 28
+            let iter_base = mbt_ffi_load32(return_area + 20) + index26 * 28
 
             let lifted24 = match mbt_ffi_load8_u(iter_base + 0) {
               0 => {
@@ -8748,16 +8766,16 @@ pub fn parse_agent_id(
 
             array25.push(lifted24)
           }
-          mbt_ffi_free(mbt_ffi_load32(return_area + 16))
+          mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
           @common.DataValue::Tuple(array25)
         }
         1 => {
           let array56 : Array[(String, @common.ElementValue)] = []
           for index57 = 0
-              index57 < mbt_ffi_load32(return_area + 20)
+              index57 < mbt_ffi_load32(return_area + 24)
               index57 = index57 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 16) + index57 * 36
+            let iter_base = mbt_ffi_load32(return_area + 20) + index57 * 36
 
             let result27 = mbt_ffi_ptr2str(
               mbt_ffi_load32(iter_base + 0),
@@ -9039,72 +9057,82 @@ pub fn parse_agent_id(
 
             array56.push((result27, lifted55))
           }
-          mbt_ffi_free(mbt_ffi_load32(return_area + 16))
+          mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
           @common.DataValue::Multimodal(array56)
         }
         _ => panic()
       }
 
-      Result::Ok((result, lifted58))
+      let lifted59 : @types.Uuid? = match mbt_ffi_load8_u(return_area + 32) {
+        0 => Option::None
+        1 =>
+          Option::Some(@types.Uuid::{
+            high_bits: mbt_ffi_load64(return_area + 40).reinterpret_as_uint64(),
+            low_bits: mbt_ffi_load64(return_area + 48).reinterpret_as_uint64(),
+          })
+        _ => panic()
+      }
+
+      Result::Ok((result, lifted58, lifted59))
     }
     1 => {
-      let lifted105 = match mbt_ffi_load8_u(return_area + 4) {
+      let lifted106 = match mbt_ffi_load8_u(return_area + 8) {
         0 => {
-          let result59 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
+          let result60 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
+            mbt_ffi_load32(return_area + 16),
           )
 
-          @common.AgentError::InvalidInput(result59)
+          @common.AgentError::InvalidInput(result60)
         }
         1 => {
-          let result60 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
+          let result61 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
+            mbt_ffi_load32(return_area + 16),
           )
 
-          @common.AgentError::InvalidMethod(result60)
+          @common.AgentError::InvalidMethod(result61)
         }
         2 => {
-          let result61 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
+          let result62 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
+            mbt_ffi_load32(return_area + 16),
           )
 
-          @common.AgentError::InvalidType(result61)
+          @common.AgentError::InvalidType(result62)
         }
         3 => {
-          let result62 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(return_area + 8),
+          let result63 = mbt_ffi_ptr2str(
             mbt_ffi_load32(return_area + 12),
+            mbt_ffi_load32(return_area + 16),
           )
 
-          @common.AgentError::InvalidAgentId(result62)
+          @common.AgentError::InvalidAgentId(result63)
         }
         4 => {
-          let array79 : Array[@types.WitNode] = []
-          for index80 = 0
-              index80 < mbt_ffi_load32(return_area + 12)
-              index80 = index80 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 8) + index80 * 24
+          let array80 : Array[@types.WitNode] = []
+          for index81 = 0
+              index81 < mbt_ffi_load32(return_area + 16)
+              index81 = index81 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 12) + index81 * 24
 
-            let lifted78 = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted79 = match mbt_ffi_load8_u(iter_base + 0) {
               0 => {
-                let array63 : Array[Int] = []
-                for index64 = 0
-                    index64 < mbt_ffi_load32(iter_base + 12)
-                    index64 = index64 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index64 * 4
+                let array64 : Array[Int] = []
+                for index65 = 0
+                    index65 < mbt_ffi_load32(iter_base + 12)
+                    index65 = index65 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index65 * 4
 
-                  array63.push(mbt_ffi_load32(iter_base + 0))
+                  array64.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::RecordValue(array63)
+                @types.WitNode::RecordValue(array64)
               }
               1 => {
-                let lifted65 : Int? = match mbt_ffi_load8_u(iter_base + 12) {
+                let lifted66 : Int? = match mbt_ffi_load8_u(iter_base + 12) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                   _ => panic()
@@ -9113,7 +9141,7 @@ pub fn parse_agent_id(
                 @types.WitNode::VariantValue(
                   (
                     mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                    lifted65,
+                    lifted66,
                   ),
                 )
               }
@@ -9122,66 +9150,56 @@ pub fn parse_agent_id(
                   mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                 )
               3 => {
-                let array66 : Array[Bool] = []
-                for index67 = 0
-                    index67 < mbt_ffi_load32(iter_base + 12)
-                    index67 = index67 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index67 * 1
+                let array67 : Array[Bool] = []
+                for index68 = 0
+                    index68 < mbt_ffi_load32(iter_base + 12)
+                    index68 = index68 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index68 * 1
 
-                  array66.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                  array67.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::FlagsValue(array66)
+                @types.WitNode::FlagsValue(array67)
               }
               4 => {
-                let array68 : Array[Int] = []
-                for index69 = 0
-                    index69 < mbt_ffi_load32(iter_base + 12)
-                    index69 = index69 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index69 * 4
+                let array69 : Array[Int] = []
+                for index70 = 0
+                    index70 < mbt_ffi_load32(iter_base + 12)
+                    index70 = index70 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index70 * 4
 
-                  array68.push(mbt_ffi_load32(iter_base + 0))
+                  array69.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::TupleValue(array68)
+                @types.WitNode::TupleValue(array69)
               }
               5 => {
-                let array70 : Array[Int] = []
-                for index71 = 0
-                    index71 < mbt_ffi_load32(iter_base + 12)
-                    index71 = index71 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 8) + index71 * 4
+                let array71 : Array[Int] = []
+                for index72 = 0
+                    index72 < mbt_ffi_load32(iter_base + 12)
+                    index72 = index72 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index72 * 4
 
-                  array70.push(mbt_ffi_load32(iter_base + 0))
+                  array71.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                @types.WitNode::ListValue(array70)
+                @types.WitNode::ListValue(array71)
               }
               6 => {
-                let lifted72 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted73 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                   _ => panic()
                 }
 
-                @types.WitNode::OptionValue(lifted72)
+                @types.WitNode::OptionValue(lifted73)
               }
               7 => {
-                let lifted75 = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted76 = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => {
-                    let lifted73 : Int? = match
-                      mbt_ffi_load8_u(iter_base + 12) {
-                      0 => Option::None
-                      1 => Option::Some(mbt_ffi_load32(iter_base + 16))
-                      _ => panic()
-                    }
-
-                    Result::Ok(lifted73)
-                  }
-                  1 => {
                     let lifted74 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
@@ -9189,12 +9207,22 @@ pub fn parse_agent_id(
                       _ => panic()
                     }
 
-                    Result::Err(lifted74)
+                    Result::Ok(lifted74)
+                  }
+                  1 => {
+                    let lifted75 : Int? = match
+                      mbt_ffi_load8_u(iter_base + 12) {
+                      0 => Option::None
+                      1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                      _ => panic()
+                    }
+
+                    Result::Err(lifted75)
                   }
                   _ => panic()
                 }
 
-                @types.WitNode::ResultValue(lifted75)
+                @types.WitNode::ResultValue(lifted76)
               }
               8 =>
                 @types.WitNode::PrimU8(mbt_ffi_load8_u(iter_base + 8).to_byte())
@@ -9226,22 +9254,22 @@ pub fn parse_agent_id(
               19 =>
                 @types.WitNode::PrimBool(mbt_ffi_load8_u(iter_base + 8) != 0)
               20 => {
-                let result76 = mbt_ffi_ptr2str(
+                let result77 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
-                @types.WitNode::PrimString(result76)
+                @types.WitNode::PrimString(result77)
               }
               21 => {
-                let result77 = mbt_ffi_ptr2str(
+                let result78 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 8),
                   mbt_ffi_load32(iter_base + 12),
                 )
 
                 @types.WitNode::Handle(
                   (
-                    @types.Uri::{ value: result77 },
+                    @types.Uri::{ value: result78 },
                     mbt_ffi_load64(iter_base + 16).reinterpret_as_uint64(),
                   ),
                 )
@@ -9249,151 +9277,151 @@ pub fn parse_agent_id(
               _ => panic()
             }
 
-            array79.push(lifted78)
+            array80.push(lifted79)
           }
-          mbt_ffi_free(mbt_ffi_load32(return_area + 8))
+          mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-          let array103 : Array[@types.NamedWitTypeNode] = []
-          for index104 = 0
-              index104 < mbt_ffi_load32(return_area + 20)
-              index104 = index104 + 1 {
-            let iter_base = mbt_ffi_load32(return_area + 16) + index104 * 48
+          let array104 : Array[@types.NamedWitTypeNode] = []
+          for index105 = 0
+              index105 < mbt_ffi_load32(return_area + 24)
+              index105 = index105 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 20) + index105 * 48
 
-            let lifted82 : String? = match mbt_ffi_load8_u(iter_base + 0) {
+            let lifted83 : String? = match mbt_ffi_load8_u(iter_base + 0) {
               0 => Option::None
               1 => {
-                let result81 = mbt_ffi_ptr2str(
+                let result82 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 4),
                   mbt_ffi_load32(iter_base + 8),
                 )
 
-                Option::Some(result81)
+                Option::Some(result82)
               }
               _ => panic()
             }
 
-            let lifted84 : String? = match mbt_ffi_load8_u(iter_base + 12) {
+            let lifted85 : String? = match mbt_ffi_load8_u(iter_base + 12) {
               0 => Option::None
               1 => {
-                let result83 = mbt_ffi_ptr2str(
+                let result84 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 16),
                   mbt_ffi_load32(iter_base + 20),
                 )
 
-                Option::Some(result83)
+                Option::Some(result84)
               }
               _ => panic()
             }
 
-            let lifted102 = match mbt_ffi_load8_u(iter_base + 24) {
+            let lifted103 = match mbt_ffi_load8_u(iter_base + 24) {
               0 => {
-                let array86 : Array[(String, Int)] = []
-                for index87 = 0
-                    index87 < mbt_ffi_load32(iter_base + 36)
-                    index87 = index87 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index87 * 12
+                let array87 : Array[(String, Int)] = []
+                for index88 = 0
+                    index88 < mbt_ffi_load32(iter_base + 36)
+                    index88 = index88 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index88 * 12
 
-                  let result85 = mbt_ffi_ptr2str(
+                  let result86 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array86.push((result85, mbt_ffi_load32(iter_base + 8)))
+                  array87.push((result86, mbt_ffi_load32(iter_base + 8)))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::RecordType(array86)
+                @types.WitTypeNode::RecordType(array87)
               }
               1 => {
-                let array90 : Array[(String, Int?)] = []
-                for index91 = 0
-                    index91 < mbt_ffi_load32(iter_base + 36)
-                    index91 = index91 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index91 * 16
+                let array91 : Array[(String, Int?)] = []
+                for index92 = 0
+                    index92 < mbt_ffi_load32(iter_base + 36)
+                    index92 = index92 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index92 * 16
 
-                  let result88 = mbt_ffi_ptr2str(
+                  let result89 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  let lifted89 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                  let lifted90 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
                     0 => Option::None
                     1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                     _ => panic()
                   }
 
-                  array90.push((result88, lifted89))
+                  array91.push((result89, lifted90))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::VariantType(array90)
+                @types.WitTypeNode::VariantType(array91)
               }
               2 => {
-                let array93 : Array[String] = []
-                for index94 = 0
-                    index94 < mbt_ffi_load32(iter_base + 36)
-                    index94 = index94 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index94 * 8
+                let array94 : Array[String] = []
+                for index95 = 0
+                    index95 < mbt_ffi_load32(iter_base + 36)
+                    index95 = index95 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index95 * 8
 
-                  let result92 = mbt_ffi_ptr2str(
+                  let result93 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array93.push(result92)
+                  array94.push(result93)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::EnumType(array93)
+                @types.WitTypeNode::EnumType(array94)
               }
               3 => {
-                let array96 : Array[String] = []
-                for index97 = 0
-                    index97 < mbt_ffi_load32(iter_base + 36)
-                    index97 = index97 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index97 * 8
+                let array97 : Array[String] = []
+                for index98 = 0
+                    index98 < mbt_ffi_load32(iter_base + 36)
+                    index98 = index98 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index98 * 8
 
-                  let result95 = mbt_ffi_ptr2str(
+                  let result96 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array96.push(result95)
+                  array97.push(result96)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::FlagsType(array96)
+                @types.WitTypeNode::FlagsType(array97)
               }
               4 => {
-                let array98 : Array[Int] = []
-                for index99 = 0
-                    index99 < mbt_ffi_load32(iter_base + 36)
-                    index99 = index99 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index99 * 4
+                let array99 : Array[Int] = []
+                for index100 = 0
+                    index100 < mbt_ffi_load32(iter_base + 36)
+                    index100 = index100 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index100 * 4
 
-                  array98.push(mbt_ffi_load32(iter_base + 0))
+                  array99.push(mbt_ffi_load32(iter_base + 0))
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                @types.WitTypeNode::TupleType(array98)
+                @types.WitTypeNode::TupleType(array99)
               }
               5 => @types.WitTypeNode::ListType(mbt_ffi_load32(iter_base + 32))
               6 =>
                 @types.WitTypeNode::OptionType(mbt_ffi_load32(iter_base + 32))
               7 => {
-                let lifted100 : Int? = match mbt_ffi_load8_u(iter_base + 32) {
+                let lifted101 : Int? = match mbt_ffi_load8_u(iter_base + 32) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 36))
                   _ => panic()
                 }
 
-                let lifted101 : Int? = match mbt_ffi_load8_u(iter_base + 40) {
+                let lifted102 : Int? = match mbt_ffi_load8_u(iter_base + 40) {
                   0 => Option::None
                   1 => Option::Some(mbt_ffi_load32(iter_base + 44))
                   _ => panic()
                 }
 
-                @types.WitTypeNode::ResultType((lifted100, lifted101))
+                @types.WitTypeNode::ResultType((lifted101, lifted102))
               }
               8 => @types.WitTypeNode::PrimU8Type
               9 => @types.WitTypeNode::PrimU16Type
@@ -9418,27 +9446,27 @@ pub fn parse_agent_id(
               _ => panic()
             }
 
-            array103.push(@types.NamedWitTypeNode::{
-              name: lifted82,
-              owner: lifted84,
-              type_: lifted102,
+            array104.push(@types.NamedWitTypeNode::{
+              name: lifted83,
+              owner: lifted85,
+              type_: lifted103,
             })
           }
-          mbt_ffi_free(mbt_ffi_load32(return_area + 16))
+          mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
           @common.AgentError::CustomError(@types.ValueAndType::{
-            value: @types.WitValue::{ nodes: array79 },
-            typ: @types.WitType::{ nodes: array103 },
+            value: @types.WitValue::{ nodes: array80 },
+            typ: @types.WitType::{ nodes: array104 },
           })
         }
         _ => panic()
       }
 
-      Result::Err(lifted105)
+      Result::Err(lifted106)
     }
     _ => panic()
   }
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted106
+  return lifted107
 }

@@ -40,5 +40,5 @@ componentTemplates:
 
 components:
   # component names always have to be in 'namespace:name' format
-  moonbit:example1:
+  golem:agent-guest:
     templates: moonbit

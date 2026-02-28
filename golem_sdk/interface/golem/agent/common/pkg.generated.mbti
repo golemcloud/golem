@@ -47,12 +47,22 @@ pub(all) struct AgentMethod {
 pub impl Eq for AgentMethod
 pub impl Show for AgentMethod
 
+pub(all) enum AgentMode {
+  DURABLE
+  EPHEMERAL
+}
+pub fn AgentMode::from(Int) -> Self
+pub fn AgentMode::ordinal(Self) -> Int
+pub impl Eq for AgentMode
+pub impl Show for AgentMode
+
 pub(all) struct AgentType {
   type_name : String
   description : String
   constructor_ : AgentConstructor
   methods : Array[AgentMethod]
   dependencies : Array[AgentDependency]
+  mode : AgentMode
 }
 pub impl Eq for AgentType
 pub impl Show for AgentType

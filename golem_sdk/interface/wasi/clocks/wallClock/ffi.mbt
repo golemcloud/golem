@@ -7,10 +7,6 @@ fn wasmImportNow(p0 : Int) = "wasi:clocks/wall-clock@0.2.3" "now"
 fn wasmImportResolution(p0 : Int) = "wasi:clocks/wall-clock@0.2.3" "resolution"
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
 
@@ -24,3 +20,7 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
 ///|
 extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
   #|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)

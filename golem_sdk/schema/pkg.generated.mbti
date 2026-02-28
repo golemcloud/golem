@@ -11,9 +11,15 @@ pub fn[T : FromElementValue] from_element_value_as(@common.ElementValue) -> T ra
 
 pub fn[T : HasElementSchema] schema_of(T) -> @common.ElementSchema
 
+pub fn[T : HasElementSchema] schema_of_tag(TypeTag[T]) -> @common.ElementSchema
+
+pub fn[T : ToElementValue] to_element_value_as(T) -> @common.ElementValue raise @common.AgentError
+
 // Errors
 
 // Types and methods
+pub(all) struct TypeTag[T] {
+}
 
 // Type aliases
 
@@ -68,4 +74,21 @@ pub impl HasElementSchema for String
 pub impl[T : HasElementSchema] HasElementSchema for T?
 pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result[T, E]
 pub impl[T : HasElementSchema] HasElementSchema for Array[T]
+
+pub(open) trait ToElementValue {
+  to_element_value(Self) -> @common.ElementValue raise @common.AgentError
+}
+pub impl ToElementValue for Bool
+pub impl ToElementValue for Byte
+pub impl ToElementValue for Char
+pub impl ToElementValue for Int
+pub impl ToElementValue for Int64
+pub impl ToElementValue for UInt
+pub impl ToElementValue for UInt64
+pub impl ToElementValue for Float
+pub impl ToElementValue for Double
+pub impl ToElementValue for String
+pub impl[T : ToElementValue] ToElementValue for T?
+pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
+pub impl[T : ToElementValue] ToElementValue for Array[T]
 

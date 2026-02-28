@@ -33,22 +33,9 @@ pub fn OplogEntryVersion::from(self : Int) -> OplogEntryVersion {
 }
 
 ///|
-/// Represents a raw persisted durable function invocation. This record is not self-describing, the `response` field
-/// can store an arbitrary data. This is used internally for some predefined invocations. For user-defined custom
-/// durability, the `typed` variants are recommended, as those contain type information about the payload that can
-/// be used by tools to observe the contents of the entries.
-pub(all) struct PersistedDurableFunctionInvocation {
-  timestamp : @wallClock.Datetime
-  function_name : String
-  response : FixedArray[Byte]
-  function_type : @oplog.WrappedFunctionType
-  entry_version : OplogEntryVersion
-} derive(Show, Eq)
-
-///|
-/// The typed, self-describing version of `persisted-durable-function-invocation`. The difference is that the `response` field
+/// Represents a persisted durable function invocation. The `response` field
 /// contains a value and its type information together, making the user-defined payload observable by external tools.
-pub(all) struct PersistedTypedDurableFunctionInvocation {
+pub(all) struct PersistedDurableFunctionInvocation {
   timestamp : @wallClock.Datetime
   function_name : String
   response : @types.ValueAndType
@@ -186,63 +173,10 @@ pub fn current_durable_execution_state() -> DurableExecutionState {
 
 ///|
 /// Writes a record to the agent's oplog representing a durable function invocation
-pub fn persist_durable_function_invocation(
-  function_name : String,
-  request : FixedArray[Byte],
-  response : FixedArray[Byte],
-  function_type : @oplog.WrappedFunctionType,
-) -> Unit {
-  let ptr = mbt_ffi_str2ptr(function_name)
-
-  let ptr0 = mbt_ffi_bytes2ptr(request)
-
-  let ptr1 = mbt_ffi_bytes2ptr(response)
-
-  let (lowered14, lowered15, lowered16) = match function_type {
-    ReadLocal => (0, 0, 0L)
-    WriteLocal => (1, 0, 0L)
-    ReadRemote => (2, 0, 0L)
-    WriteRemote => (3, 0, 0L)
-    WriteRemoteBatched(payload5) => {
-      let (lowered, lowered8) = match payload5 {
-        None => (0, 0L)
-        Some(payload7) => (1, payload7.reinterpret_as_int64())
-      }
-
-      (4, lowered, lowered8)
-    }
-    WriteRemoteTransaction(payload9) => {
-      let (lowered12, lowered13) = match payload9 {
-        None => (0, 0L)
-        Some(payload11) => (1, payload11.reinterpret_as_int64())
-      }
-
-      (5, lowered12, lowered13)
-    }
-  }
-  wasmImportPersistDurableFunctionInvocation(
-    ptr,
-    function_name.length(),
-    ptr0,
-    request.length(),
-    ptr1,
-    response.length(),
-    lowered14,
-    lowered15,
-    lowered16,
-  )
-  mbt_ffi_free(ptr)
-  mbt_ffi_free(ptr0)
-  mbt_ffi_free(ptr1)
-}
-
-///|
-/// Writes a record to the agent's oplog representing a durable function invocation
 ///
 /// The request and response are defined as pairs of value and type, which makes it
-/// self-describing for observers of oplogs. This is the recommended way to persist
-/// third-party function invocations.
-pub fn persist_typed_durable_function_invocation(
+/// self-describing for observers of oplogs.
+pub fn persist_durable_function_invocation(
   function_name : String,
   request : @types.ValueAndType,
   response : @types.ValueAndType,
@@ -1334,7 +1268,7 @@ pub fn persist_typed_durable_function_invocation(
       (5, lowered196, lowered197)
     }
   }
-  wasmImportPersistTypedDurableFunctionInvocation(
+  wasmImportPersistDurableFunctionInvocation(
     ptr,
     function_name.length(),
     address39,
@@ -1361,65 +1295,8 @@ pub fn persist_typed_durable_function_invocation(
 ///|
 /// Reads the next persisted durable function invocation from the oplog during replay
 pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionInvocation {
-  let return_area = mbt_ffi_malloc(64)
-  wasmImportReadPersistedDurableFunctionInvocation(return_area)
-
-  let result = mbt_ffi_ptr2str(
-    mbt_ffi_load32(return_area + 16),
-    mbt_ffi_load32(return_area + 20),
-  )
-
-  let result0 = mbt_ffi_ptr2bytes(
-    mbt_ffi_load32(return_area + 24),
-    mbt_ffi_load32(return_area + 28),
-  )
-
-  let lifted2 = match mbt_ffi_load8_u(return_area + 32) {
-    0 => @oplog.WrappedFunctionType::ReadLocal
-    1 => @oplog.WrappedFunctionType::WriteLocal
-    2 => @oplog.WrappedFunctionType::ReadRemote
-    3 => @oplog.WrappedFunctionType::WriteRemote
-    4 => {
-      let lifted : UInt64? = match mbt_ffi_load8_u(return_area + 40) {
-        0 => Option::None
-        1 =>
-          Option::Some(mbt_ffi_load64(return_area + 48).reinterpret_as_uint64())
-        _ => panic()
-      }
-
-      @oplog.WrappedFunctionType::WriteRemoteBatched(lifted)
-    }
-    5 => {
-      let lifted1 : UInt64? = match mbt_ffi_load8_u(return_area + 40) {
-        0 => Option::None
-        1 =>
-          Option::Some(mbt_ffi_load64(return_area + 48).reinterpret_as_uint64())
-        _ => panic()
-      }
-
-      @oplog.WrappedFunctionType::WriteRemoteTransaction(lifted1)
-    }
-    _ => panic()
-  }
-  mbt_ffi_free(return_area)
-  return PersistedDurableFunctionInvocation::{
-    timestamp: @wallClock.Datetime::{
-      seconds: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
-      nanoseconds: mbt_ffi_load32(return_area + 8).reinterpret_as_uint(),
-    },
-    function_name: result,
-    response: result0,
-    function_type: lifted2,
-    entry_version: OplogEntryVersion::from(mbt_ffi_load8_u(return_area + 56)),
-  }
-}
-
-///|
-/// Reads the next persisted durable function invocation from the oplog during replay, assuming it
-/// was created with `persist-typed-durable-function-invocation`
-pub fn read_persisted_typed_durable_function_invocation() -> PersistedTypedDurableFunctionInvocation {
   let return_area = mbt_ffi_malloc(72)
-  wasmImportReadPersistedTypedDurableFunctionInvocation(return_area)
+  wasmImportReadPersistedDurableFunctionInvocation(return_area)
 
   let result = mbt_ffi_ptr2str(
     mbt_ffi_load32(return_area + 16),
@@ -1784,7 +1661,7 @@ pub fn read_persisted_typed_durable_function_invocation() -> PersistedTypedDurab
     _ => panic()
   }
   mbt_ffi_free(return_area)
-  return PersistedTypedDurableFunctionInvocation::{
+  return PersistedDurableFunctionInvocation::{
     timestamp: @wallClock.Datetime::{
       seconds: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
       nanoseconds: mbt_ffi_load32(return_area + 8).reinterpret_as_uint(),

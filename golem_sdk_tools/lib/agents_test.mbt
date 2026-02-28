@@ -174,6 +174,7 @@ test "generate_agent_registration for simple agent" {
       #|      },
       #|      methods: [],
       #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -204,6 +205,7 @@ test "generate_agent_registration for simple agent" {
       #|}
       #|
       #|
+
 
     ),
   )
@@ -292,6 +294,7 @@ test "generate_agent_registration with methods" {
       #|        },
       #|      ],
       #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -343,6 +346,7 @@ test "generate_agent_registration with methods" {
       #|}
       #|
       #|
+
 
 
     ),
@@ -443,6 +447,7 @@ test "generate_agent_registration with prompt_hints" {
       #|        },
       #|      ],
       #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
       #|    },
       #|    construct: fn(input) {
       #|      try {
@@ -483,6 +488,7 @@ test "generate_agent_registration with prompt_hints" {
       #|}
       #|
       #|
+
 
 
     ),
@@ -553,10 +559,12 @@ test "end-to-end: simple counter agent type" {
       #|    },
       #|    methods: [],
       #|    dependencies: [],
+      #|    mode: @common.AgentMode::DURABLE,
       #|  }
       #|}
       #|
       #|
+
     ),
   )
 }
@@ -638,10 +646,12 @@ test "end-to-end: agent with methods" {
       #|      },
       #|    ],
       #|    dependencies: [],
+      #|    mode: @common.AgentMode::DURABLE,
       #|  }
       #|}
       #|
       #|
+
     ),
   )
 }
@@ -711,10 +721,12 @@ test "end-to-end: agent with prompt hints" {
       #|      },
       #|    ],
       #|    dependencies: [],
+      #|    mode: @common.AgentMode::DURABLE,
       #|  }
       #|}
       #|
       #|
+
     ),
   )
 }
@@ -787,10 +799,12 @@ test "end-to-end: agent with complex param types" {
       #|      },
       #|    ],
       #|    dependencies: [],
+      #|    mode: @common.AgentMode::DURABLE,
       #|  }
       #|}
       #|
       #|
+
     ),
   )
 }
@@ -845,10 +859,12 @@ test "end-to-end: agent with no constructor params" {
       #|      },
       #|    ],
       #|    dependencies: [],
+      #|    mode: @common.AgentMode::DURABLE,
       #|  }
       #|}
       #|
       #|
+
     ),
   )
 }
@@ -911,10 +927,12 @@ test "end-to-end: agent split across multiple files" {
       #|      },
       #|    ],
       #|    dependencies: [],
+      #|    mode: @common.AgentMode::DURABLE,
       #|  }
       #|}
       #|
       #|
+
     ),
   )
 }
