@@ -152,6 +152,25 @@ pub fn TypeBuilder::variant_type(
 }
 
 ///|
+pub fn TypeBuilder::tuple_type(
+  self : TypeBuilder,
+  elements : Array[@types.WitType],
+) -> @types.WitType {
+  let idx = self.add(@types.WitTypeNode::TupleType([]))
+  let elem_indices : Array[Int] = []
+  for i in 0..<elements.length() {
+    let root = self.add_wit_type(elements[i])
+    elem_indices.push(root)
+  }
+  self.nodes[idx] = {
+    name: None,
+    owner: None,
+    type_: @types.WitTypeNode::TupleType(elem_indices),
+  }
+  self.build()
+}
+
+///|
 pub fn TypeBuilder::enum_type(
   self : TypeBuilder,
   cases : Array[String],

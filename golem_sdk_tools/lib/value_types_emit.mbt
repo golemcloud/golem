@@ -42,7 +42,10 @@ fn make_pun_field(name : String) -> @syntax.FieldDef {
 
 ///|
 fn make_int_pattern(n : Int) -> @syntax.Pattern {
-  @syntax.Pattern::Constant(c=@syntax.Constant::Int(n.to_string()), loc=dummy_loc)
+  @syntax.Pattern::Constant(
+    c=@syntax.Constant::Int(n.to_string()),
+    loc=dummy_loc,
+  )
 }
 
 ///|
@@ -64,10 +67,7 @@ fn make_constr_pattern(
     @syntax.Pattern::Constr(constr~, args=None, is_open=false, loc=dummy_loc)
   } else {
     let pat_args = args.map(fn(p) {
-      @syntax.ConstrPatArg::{
-        pat: p,
-        kind: @syntax.ArgumentKind::Positional,
-      }
+      @syntax.ConstrPatArg::{ pat: p, kind: @syntax.ArgumentKind::Positional }
     })
     @syntax.Pattern::Constr(
       constr~,
@@ -80,24 +80,18 @@ fn make_constr_pattern(
 
 ///|
 fn make_uint_expr(n : Int) -> @syntax.Expr {
-  @syntax.Expr::Constant(
-    c=@syntax.Constant::UInt(n.to_string()),
-    loc=dummy_loc,
-  )
+  @syntax.Expr::Constant(c=@syntax.Constant::UInt(n.to_string()), loc=dummy_loc)
 }
 
 ///|
 fn build_from_element_value(type_name : String) -> @syntax.Impl {
   // @schema.FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
-  let body = make_apply(
-    make_qualified_expr("schema", "from_extractor_as"),
-    [
-      make_apply(
-        make_qualified_expr("extractor", "extract_component_model_value"),
-        [make_ident_expr("v")],
-      ),
-    ],
-  )
+  let body = make_apply(make_qualified_expr("schema", "from_extractor_as"), [
+    make_apply(
+      make_qualified_expr("extractor", "extract_component_model_value"),
+      [make_ident_expr("v")],
+    ),
+  ])
   make_top_impl(
     type_name,
     "schema",
@@ -119,10 +113,9 @@ fn build_record_has_element_schema(
     let (name, pt) = field
     make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
   })
-  let body = make_apply(
-    make_qualified_expr("schema", "make_record_schema"),
-    [make_array(field_exprs)],
-  )
+  let body = make_apply(make_qualified_expr("schema", "make_record_schema"), [
+    make_array(field_exprs),
+  ])
   make_top_impl(
     type_name,
     "schema",
@@ -176,10 +169,9 @@ fn build_record_to_element_value(
       make_field_access(make_ident_expr("self"), name),
     ])
   })
-  let body = make_apply(
-    make_qualified_expr("schema", "make_record_value"),
-    [make_array(field_exprs)],
-  )
+  let body = make_apply(make_qualified_expr("schema", "make_record_value"), [
+    make_array(field_exprs),
+  ])
   make_top_impl(
     type_name,
     "schema",
@@ -198,10 +190,9 @@ fn build_enum_has_element_schema(
   cases : Array[String],
 ) -> @syntax.Impl {
   let case_exprs = cases.map(fn(name) { make_string_expr(name) })
-  let body = make_apply(
-    make_qualified_expr("schema", "make_enum_schema"),
-    [make_array(case_exprs)],
-  )
+  let body = make_apply(make_qualified_expr("schema", "make_enum_schema"), [
+    make_array(case_exprs),
+  ])
   make_top_impl(
     type_name,
     "schema",
@@ -220,9 +211,7 @@ fn build_enum_from_extractor(
   // match idx { 0 => Low, 1 => Medium, ... _ => raise ... }
   let match_cases : Array[@syntax.Case] = []
   for i, name in cases {
-    match_cases.push(
-      make_case(make_int_pattern(i), make_constr_no_args(name)),
-    )
+    match_cases.push(make_case(make_int_pattern(i), make_constr_no_args(name)))
   }
   // Wildcard case
   match_cases.push(
@@ -318,10 +307,9 @@ fn build_variant_has_element_schema(
     let (name, payload) = c
     make_tuple([make_string_expr(name), variant_payload_schema_expr(payload)])
   })
-  let body = make_apply(
-    make_qualified_expr("schema", "make_variant_schema"),
-    [make_array(case_exprs)],
-  )
+  let body = make_apply(make_qualified_expr("schema", "make_variant_schema"), [
+    make_array(case_exprs),
+  ])
   make_top_impl(
     type_name,
     "schema",
@@ -381,9 +369,7 @@ fn build_variant_from_extractor_case(
       // let field0 : T0 = @schema.extract_field(p, 0)
       // let field1 : T1 = @schema.extract_field(p, 1)
       // CaseName(field0, field1)
-      let field_args = fields.mapi(fn(i, _f) {
-        make_ident_expr("field\{i}")
-      })
+      let field_args = fields.mapi(fn(i, _f) { make_ident_expr("field\{i}") })
       let result = make_apply(make_constr_no_args(case_name), field_args)
       let mut body = result
       for rev_idx in 0..<fields.length() {
@@ -499,9 +485,7 @@ fn build_variant_to_element_value(
           ),
         )
       Multi(fields) => {
-        let field_pats = fields.mapi(fn(j, _f) {
-          make_var_pattern("field\{j}")
-        })
+        let field_pats = fields.mapi(fn(j, _f) { make_var_pattern("field\{j}") })
         let field_value_exprs = fields.mapi(fn(j, _f) {
           make_apply(make_qualified_expr("schema", "to_element_value_as"), [
             make_ident_expr("field\{j}"),
@@ -513,10 +497,9 @@ fn build_variant_to_element_value(
             make_apply(make_qualified_expr("schema", "make_variant_value"), [
               make_uint_expr(i),
               make_apply(make_constr_no_args("Some"), [
-                make_apply(
-                  make_qualified_expr("schema", "make_record_value"),
-                  [make_array(field_value_exprs)],
-                ),
+                make_apply(make_qualified_expr("schema", "make_record_value"), [
+                  make_array(field_value_exprs),
+                ]),
               ]),
             ]),
           ),

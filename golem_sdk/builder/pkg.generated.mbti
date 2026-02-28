@@ -94,6 +94,7 @@ pub fn TypeBuilder::new() -> Self
 pub fn TypeBuilder::option_type(Self, @types.WitType) -> @types.WitType
 pub fn TypeBuilder::record_type(Self, Array[(String, @types.WitType)]) -> @types.WitType
 pub fn TypeBuilder::result_type(Self, @types.WitType, @types.WitType) -> @types.WitType
+pub fn TypeBuilder::tuple_type(Self, Array[@types.WitType]) -> @types.WitType
 pub fn TypeBuilder::variant_type(Self, Array[(String, @types.WitType?)]) -> @types.WitType
 
 // Type aliases

@@ -9,9 +9,13 @@ import {
 // Values
 pub fn build_agent_type_expr(AgentInfo) -> @syntax.Expr
 
+pub fn build_raw_agent_impl(AgentInfo) -> @syntax.Impl
+
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
+
+pub fn generate_value_type_impls(Array[ValueTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn param_type_to_schema_expr(ParamType) -> @syntax.Expr
 
@@ -22,6 +26,8 @@ pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentPars
 pub fn parse_mbt_source(String) -> Array[FnSignature]
 
 pub fn parse_pkg_exports(String) -> Array[String]
+
+pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise AgentParseError
 
 pub fn syntax_type_to_param_type(@syntax.Type) -> ParamType raise AgentParseError
 
@@ -38,6 +44,7 @@ pub suberror AgentParseError {
 pub(all) struct AgentInfo {
   name : String
   description : String
+  mode : AgentMode
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
   constructor_prompt_hint : String?
@@ -45,6 +52,13 @@ pub(all) struct AgentInfo {
   has_init : Bool
 }
 pub impl Show for AgentInfo
+
+pub(all) enum AgentMode {
+  Durable
+  Ephemeral
+}
+pub impl Eq for AgentMode
+pub impl Show for AgentMode
 
 pub(all) struct FnSignature {
   gen_name : String
@@ -67,9 +81,33 @@ pub(all) enum ParamType {
   Optional(ParamType)
   List(ParamType)
   ResultType(ParamType, ParamType)
+  Tuple(Array[ParamType])
 }
 pub impl Eq for ParamType
 pub impl Show for ParamType
+
+pub(all) struct ValueTypeInfo {
+  name : String
+  kind : ValueTypeKind
+}
+pub impl Eq for ValueTypeInfo
+pub impl Show for ValueTypeInfo
+
+pub(all) enum ValueTypeKind {
+  Record(Array[(String, ParamType)])
+  SimpleEnum(Array[String])
+  VariantEnum(Array[(String, VariantPayload)])
+}
+pub impl Eq for ValueTypeKind
+pub impl Show for ValueTypeKind
+
+pub(all) enum VariantPayload {
+  None
+  Single(ParamType)
+  Multi(Array[(String, ParamType)])
+}
+pub impl Eq for VariantPayload
+pub impl Show for VariantPayload
 
 // Type aliases
 

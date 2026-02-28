@@ -4,6 +4,7 @@ pub(all) enum ParamType {
   Optional(ParamType)
   List(ParamType)
   ResultType(ParamType, ParamType)
+  Tuple(Array[ParamType])
 } derive(Show, Eq)
 
 ///|
@@ -44,6 +45,14 @@ pub fn syntax_type_to_param_type(
 ) -> ParamType raise AgentParseError {
   match ty {
     Option(ty~, ..) => Optional(syntax_type_to_param_type(ty))
+    Tuple(tys~, ..) => {
+      let elems : Array[ParamType] = []
+      tys.each(fn(t) {
+        let pt = syntax_type_to_param_type(t) catch { _ => Simple("Unknown") }
+        elems.push(pt)
+      })
+      Tuple(elems)
+    }
     Name(constr_id~, tys~, ..) =>
       match constr_id.id {
         Ident(name~) =>

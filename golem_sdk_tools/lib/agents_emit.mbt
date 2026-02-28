@@ -6,6 +6,10 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
     List(inner) => "Array[\{param_type_to_type_string(inner)}]"
     ResultType(ok, err) =>
       "Result[\{param_type_to_type_string(ok)}, \{param_type_to_type_string(err)}]"
+    Tuple(elems) => {
+      let parts = elems.map(param_type_to_type_string)
+      "(" + parts.join(", ") + ")"
+    }
   }
 }
 
@@ -21,18 +25,29 @@ fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
         param_type_to_ast_type(ok),
         param_type_to_ast_type(err),
       ])
+    Tuple(elems) => make_tuple_type(elems.map(param_type_to_ast_type))
   }
 }
 
 ///|
 pub fn param_type_to_schema_expr(pt : ParamType) -> @syntax.Expr {
-  let ty = param_type_to_ast_type(pt)
-  let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [ty])
-  let tag_expr = make_constraint_expr(
-    make_record_with_type("schema", "TypeTag", []),
-    type_tag_ty,
-  )
-  make_apply(make_qualified_expr("schema", "schema_of_tag"), [tag_expr])
+  match pt {
+    Tuple(elems) =>
+      make_apply(make_qualified_expr("schema", "make_tuple_schema"), [
+        make_array(elems.map(param_type_to_schema_expr)),
+      ])
+    _ => {
+      let ty = param_type_to_ast_type(pt)
+      let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [
+        ty,
+      ])
+      let tag_expr = make_constraint_expr(
+        make_record_with_type("schema", "TypeTag", []),
+        type_tag_ty,
+      )
+      make_apply(make_qualified_expr("schema", "schema_of_tag"), [tag_expr])
+    }
+  }
 }
 
 ///|
@@ -197,9 +212,7 @@ fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
   let param_count = info.params.length()
   let has_return = info.return_type is Some(_)
   // Build the method call
-  let method_args = info.params.map(fn(param) {
-    make_ident_expr(param.0)
-  })
+  let method_args = info.params.map(fn(param) { make_ident_expr(param.0) })
   let call = make_dot_apply(make_ident_expr("self"), info.name, method_args)
   // Build the Ok(...) result expression
   let ok_expr = if has_return {
@@ -241,11 +254,7 @@ fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
     )
   }
   // guard elements.length() == N
-  let elements_length = make_dot_apply(
-    make_ident_expr("elements"),
-    "length",
-    [],
-  )
+  let elements_length = make_dot_apply(make_ident_expr("elements"), "length", [])
   body = make_guard_else(
     make_infix("==", elements_length, make_int_expr(param_count)),
     make_raise(

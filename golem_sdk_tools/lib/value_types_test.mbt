@@ -48,10 +48,7 @@ test "parse simple enum (all unit cases)" {
   let types = parse_value_types([("priority.mbt", content)])
   inspect(types.length(), content="1")
   inspect(types[0].name, content="Priority")
-  inspect(
-    types[0].kind,
-    content="SimpleEnum([\"Low\", \"Medium\", \"High\"])",
-  )
+  inspect(types[0].kind, content="SimpleEnum([\"Low\", \"Medium\", \"High\"])")
 }
 
 ///|
@@ -134,10 +131,7 @@ test "multiple types in one file" {
     content="Record([(\"x\", Simple(\"Double\")), (\"y\", Simple(\"Double\"))])",
   )
   inspect(types[1].name, content="Color")
-  inspect(
-    types[1].kind,
-    content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])",
-  )
+  inspect(types[1].kind, content="SimpleEnum([\"Red\", \"Green\", \"Blue\"])")
 }
 
 ///|
@@ -173,6 +167,26 @@ test "types across multiple files" {
 }
 
 ///|
+test "parse struct with tuple field" {
+  let content =
+    #|///|
+    #|#derive.golem_schema
+    #|pub(all) struct PairHolder {
+    #|  pair : (String, Int)
+    #|  triple : (String, Int, Bool)
+    #|}
+  let types = parse_value_types([("pair.mbt", content)])
+  inspect(types.length(), content="1")
+  inspect(types[0].name, content="PairHolder")
+  inspect(
+    types[0].kind,
+    content=(
+      #|Record([("pair", Tuple([Simple("String"), Simple("Int")])), ("triple", Tuple([Simple("String"), Simple("Int"), Simple("Bool")]))])
+    ),
+  )
+}
+
+///|
 test "non-annotated types are skipped" {
   let content =
     #|///|
@@ -194,8 +208,5 @@ test "non-annotated types are skipped" {
   let types = parse_value_types([("mixed.mbt", content)])
   inspect(types.length(), content="1")
   inspect(types[0].name, content="Public")
-  inspect(
-    types[0].kind,
-    content="Record([(\"name\", Simple(\"String\"))])",
-  )
+  inspect(types[0].kind, content="Record([(\"name\", Simple(\"String\"))])")
 }

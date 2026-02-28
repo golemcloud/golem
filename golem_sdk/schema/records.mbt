@@ -52,6 +52,60 @@ pub fn[T : FromExtractor] extract_field(
 }
 
 ///|
+pub fn make_tuple_schema(
+  elements : Array[@common.ElementSchema],
+) -> @common.ElementSchema {
+  let wit_elems : Array[@types.WitType] = []
+  for i in 0..<elements.length() {
+    guard elements[i] is @common.ElementSchema::ComponentModel(inner_wit_type) else {
+      abort(
+        "make_tuple_schema: element at index \{i} is not a ComponentModel schema",
+      )
+    }
+    wit_elems.push(inner_wit_type)
+  }
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().tuple_type(wit_elems),
+  )
+}
+
+///|
+pub fn make_tuple_value(
+  elements : Array[@common.ElementValue],
+) -> @common.ElementValue raise @common.AgentError {
+  let wit_values : Array[@types.WitValue] = []
+  for i in 0..<elements.length() {
+    guard elements[i] is @common.ElementValue::ComponentModel(inner_wit) else {
+      raise @common.AgentError::InvalidInput(
+        "Expected ComponentModel for tuple element at index " + i.to_string(),
+      )
+    }
+    wit_values.push(inner_wit)
+  }
+  let wit_value = @builder.Builder::new().tuple(item => {
+    for v in wit_values {
+      item.wit_value(v)
+    }
+  }) catch {
+    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
+  }
+  @common.ElementValue::ComponentModel(wit_value)
+}
+
+///|
+pub fn[T : FromExtractor] extract_tuple_element(
+  e : &@extractor.Extractor,
+  idx : Int,
+) -> T raise @common.AgentError {
+  guard e.tuple_element(idx) is Some(elem) else {
+    raise @common.AgentError::InvalidInput(
+      "Expected tuple element at index " + idx.to_string(),
+    )
+  }
+  T::from_extractor(elem)
+}
+
+///|
 pub fn make_enum_schema(cases : Array[String]) -> @common.ElementSchema {
   @common.ElementSchema::ComponentModel(
     @builder.TypeBuilder::new().enum_type(cases),

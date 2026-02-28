@@ -206,8 +206,6 @@ test "generate_agent_registration for simple agent" {
       #|}
       #|
       #|
-
-
     ),
   )
 }
@@ -348,9 +346,6 @@ test "generate_agent_registration with methods" {
       #|}
       #|
       #|
-
-
-
     ),
   )
 }
@@ -491,9 +486,6 @@ test "generate_agent_registration with prompt_hints" {
       #|}
       #|
       #|
-
-
-
     ),
   )
 }
@@ -567,7 +559,6 @@ test "end-to-end: simple counter agent type" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -654,7 +645,6 @@ test "end-to-end: agent with methods" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -729,7 +719,6 @@ test "end-to-end: agent with prompt hints" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -807,7 +796,6 @@ test "end-to-end: agent with complex param types" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -867,7 +855,6 @@ test "end-to-end: agent with no constructor params" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -935,7 +922,6 @@ test "end-to-end: agent split across multiple files" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -1022,7 +1008,6 @@ test "build_raw_agent_impl for counter-like agent" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -1043,6 +1028,48 @@ test "param_type_to_type_string for various types" {
   inspect(
     param_type_to_type_string(Optional(List(Simple("String")))),
     content="Array[String]?",
+  )
+}
+
+///|
+test "param_type_to_type_string for tuples" {
+  inspect(
+    param_type_to_type_string(Tuple([Simple("String"), Simple("Int")])),
+    content="(String, Int)",
+  )
+  inspect(
+    param_type_to_type_string(
+      Tuple([Simple("String"), Simple("Int"), Simple("Bool")]),
+    ),
+    content="(String, Int, Bool)",
+  )
+}
+
+///|
+test "parse_agents with tuple return type" {
+  let content =
+    #|///| Agent with tuples
+    #|#derive.agent
+    #|pub(all) struct TupleAgent {
+    #|  mut x : Int
+    #|}
+    #|
+    #|pub fn TupleAgent::new() -> TupleAgent {
+    #|  { x: 0 }
+    #|}
+    #|
+    #|///| Returns a pair
+    #|pub fn TupleAgent::get_pair(self : Self) -> (String, Int) {
+    #|  ("hello", self.x)
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].methods.length(), content="1")
+  inspect(agents[0].methods[0].name, content="get_pair")
+  inspect(
+    agents[0].methods[0].return_type,
+    content=(
+      #|Some(Tuple([Simple("String"), Simple("Int")]))
+    ),
   )
 }
 
@@ -1157,8 +1184,6 @@ test "generate_agent_registration with ephemeral mode" {
       #|}
       #|
       #|
-
-
     ),
   )
 }

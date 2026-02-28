@@ -71,6 +71,11 @@ fn make_option_type(inner : @syntax.Type) -> @syntax.Type {
   @syntax.Type::Option(ty=inner, loc=dummy_loc, question_loc=dummy_loc)
 }
 
+///|
+fn make_tuple_type(elements : Array[@syntax.Type]) -> @syntax.Type {
+  @syntax.Type::Tuple(tys=to_list(elements), loc=dummy_loc)
+}
+
 // --- Expressions: Literals ---
 
 ///|
@@ -308,9 +313,7 @@ fn make_let_tuple(
   expr : @syntax.Expr,
   body : @syntax.Expr,
 ) -> @syntax.Expr {
-  let pats = names.map(fn(name) {
-    @syntax.Pattern::Var(make_binder(name))
-  })
+  let pats = names.map(fn(name) { @syntax.Pattern::Var(make_binder(name)) })
   @syntax.Expr::Let(
     pattern=@syntax.Pattern::Tuple(pats=to_list(pats), loc=dummy_loc),
     expr~,
@@ -476,10 +479,7 @@ fn make_top_impl(
     ),
     ret_ty=None,
     err_ty=@syntax.ErrorType::NoErrorType,
-    body=@syntax.DeclBody::DeclBody(
-      local_types=to_list([]),
-      expr=body,
-    ),
+    body=@syntax.DeclBody::DeclBody(local_types=to_list([]), expr=body),
     vis=@syntax.Visibility::Default,
     loc=dummy_loc,
     attrs=to_list([]),
