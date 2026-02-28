@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
+
+app: golem-sdk-example1
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release
+
+componentTemplates:
+  # Reusable build template - could be coming from a separate (static) Golem YAML file part of a template
+  moonbit:
+    build:
+      # Here can be one or more `- command` items that are calling whatever external tools
+      # we need to call to produce the `main.js` file. For example in the TS template, we are compiling TS to JS here
+      # using tsc and rollup: https://github.com/golemcloud/golem/blob/main/cli/golem-templates/templates/ts/ts-app-common/common-ts/golem.yaml#L6-L27
+      #
+      - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/counter # TODO: directory name from template
+        dir: ../golem_sdk_tools
+      - command: moon run cmd -- agents ../golem_sdk ../golem_sdk_example1/counter # TODO: directory name from template
+        dir: ../golem_sdk_tools        
+      - command: moon build --target wasm --release
+      - command: wasm-tools component embed ../golem_sdk/wit _build/wasm/release/build/counter/counter.wasm  --encoding utf16 --output _build/wasm/release/counter.embed.wasm #: TODO: template vars
+      - command: wasm-tools component new _build/wasm/release/counter.embed.wasm --output _build/wasm/release/counter.agent.wasm #: TODO: template vars
+      # We also need to generate a "static wrapper" for this, which exposes our agent types (dynamically defined by the JS code)
+      # as a static component-model WIT interface:
+      - generateAgentWrapper: golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+        basedOnCompiledWasm: _build/wasm/release/counter.agent.wasm #: TODO: template vars
+      # And finally compose the wrapper component with the component that is our base WASM with the injected JS script:
+      - composeAgentWrapper: golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+        withAgent: _build/wasm/release/counter.agent.wasm #: TODO: template vars
+        to: golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+    sourceWit: ../golem_sdk/wit 
+    generatedWit: golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
+    componentWasm: golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+    linkedWasm: golem-temp/agents/{{ component_name | to_snake_case }}.wasm # <- this will be the final WASM that gets deployed by golem
+
+components:
+  # component names always have to be in 'namespace:name' format
+  moonbit:example1:
+    templates: moonbit
