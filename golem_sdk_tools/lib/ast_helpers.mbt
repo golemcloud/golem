@@ -83,6 +83,18 @@ fn make_int_expr(n : Int) -> @syntax.Expr {
   @syntax.Expr::Constant(c=@syntax.Constant::Int(n.to_string()), loc=dummy_loc)
 }
 
+///|
+fn make_field_access(
+  record : @syntax.Expr,
+  field_name : String,
+) -> @syntax.Expr {
+  @syntax.Expr::Field(
+    record~,
+    accessor=@syntax.Accessor::Label(make_label(field_name)),
+    loc=dummy_loc,
+  )
+}
+
 // --- Expressions: Identifiers ---
 
 ///|
@@ -284,6 +296,23 @@ fn make_let_typed(
       ty~,
       loc=dummy_loc,
     ),
+    expr~,
+    body~,
+    loc=dummy_loc,
+  )
+}
+
+///|
+fn make_let_tuple(
+  names : Array[String],
+  expr : @syntax.Expr,
+  body : @syntax.Expr,
+) -> @syntax.Expr {
+  let pats = names.map(fn(name) {
+    @syntax.Pattern::Var(make_binder(name))
+  })
+  @syntax.Expr::Let(
+    pattern=@syntax.Pattern::Tuple(pats=to_list(pats), loc=dummy_loc),
     expr~,
     body~,
     loc=dummy_loc,

@@ -5,3 +5,4 @@ target/
 _build/
 golem_reexports.mbt
 golem_agents.mbt
+golem_derive.mbt

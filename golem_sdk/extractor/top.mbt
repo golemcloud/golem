@@ -29,11 +29,13 @@ pub fn expect_single_element(
 ///|
 pub fn extract_component_model_value(
   element : @common.ElementValue,
-) -> &Extractor {
-  match element {
-    @common.ElementValue::ComponentModel(model) => extract(model)
-    _ => panic()
+) -> &Extractor raise @common.AgentError {
+  guard element is @common.ElementValue::ComponentModel(model) else {
+    raise @common.AgentError::InvalidInput(
+      "Expected ComponentModel ElementValue",
+    )
   }
+  extract(model)
 }
 
 ///|

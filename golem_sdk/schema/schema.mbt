@@ -46,3 +46,10 @@ pub fn[T : ToElementValue] to_element_value_as(
 ) -> @common.ElementValue raise @common.AgentError {
   T::to_element_value(v)
 }
+
+///|
+pub fn[T : FromExtractor] from_extractor_as(
+  e : &@extractor.Extractor,
+) -> T raise @common.AgentError {
+  T::from_extractor(e)
+}

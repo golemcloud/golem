@@ -11,7 +11,7 @@ pub fn expect_single_element(Array[@common.ElementValue]) -> @common.ElementValu
 
 pub fn extract(@types.WitValue) -> &Extractor
 
-pub fn extract_component_model_value(@common.ElementValue) -> &Extractor
+pub fn extract_component_model_value(@common.ElementValue) -> &Extractor raise @common.AgentError
 
 pub fn extract_multimodal(@common.DataValue) -> Array[(String, @common.ElementValue)]
 

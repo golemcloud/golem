@@ -495,6 +495,39 @@ pub fn Builder::handle(
 }
 
 ///|
+pub fn Builder::add_wit_value(
+  self : Builder,
+  value : @types.WitValue,
+) -> NodeIndex {
+  let offset = self.nodes.length()
+  for node in value.nodes {
+    self.nodes.push(rebase_wit_node(node, offset))
+  }
+  offset
+}
+
+///|
+fn rebase_wit_node(node : @types.WitNode, offset : Int) -> @types.WitNode {
+  match node {
+    RecordValue(fields) =>
+      @types.WitNode::RecordValue(fields.map(fn(i) { i + offset }))
+    VariantValue((case_idx, inner)) =>
+      @types.WitNode::VariantValue((case_idx, inner.map(fn(i) { i + offset })))
+    TupleValue(elems) =>
+      @types.WitNode::TupleValue(elems.map(fn(i) { i + offset }))
+    ListValue(elems) =>
+      @types.WitNode::ListValue(elems.map(fn(i) { i + offset }))
+    OptionValue(inner) =>
+      @types.WitNode::OptionValue(inner.map(fn(i) { i + offset }))
+    ResultValue(Ok(inner)) =>
+      @types.WitNode::ResultValue(Ok(inner.map(fn(i) { i + offset })))
+    ResultValue(Err(inner)) =>
+      @types.WitNode::ResultValue(Err(inner.map(fn(i) { i + offset })))
+    _ => node
+  }
+}
+
+///|
 fn Builder::build(self : Builder) -> @types.WitValue {
   { nodes: self.nodes }
 }

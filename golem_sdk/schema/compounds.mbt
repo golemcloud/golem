@@ -4,16 +4,16 @@ pub impl[T : HasElementSchema] HasElementSchema for T? with element_schema() {
   guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
     inner
   }
-  let result_nodes : Array[@types.NamedWitTypeNode] = []
-  result_nodes.push({
+  let nodes : Array[@types.NamedWitTypeNode] = [
+    { name: None, owner: None, type_: @types.WitTypeNode::OptionType(0) },
+  ]
+  let inner_root = merge_wit_type(nodes, inner_wit_type)
+  nodes[0] = {
     name: None,
     owner: None,
-    type_: @types.WitTypeNode::OptionType(1),
-  })
-  for node in inner_wit_type.nodes {
-    result_nodes.push(node)
+    type_: @types.WitTypeNode::OptionType(inner_root),
   }
-  @common.ElementSchema::ComponentModel({ nodes: result_nodes })
+  @common.ElementSchema::ComponentModel({ nodes, })
 }
 
 ///|
@@ -34,9 +34,9 @@ pub impl[T : FromExtractor] FromElementValue for T? with from_element_value(v) {
 pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
   match self {
     None =>
-      @common.ElementValue::ComponentModel({
-        nodes: [@types.WitNode::OptionValue(None)],
-      })
+      @common.ElementValue::ComponentModel(
+        @builder.Builder::new().option_none(),
+      )
     Some(v) => {
       let inner = T::to_element_value(v)
       guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
@@ -44,11 +44,13 @@ pub impl[T : ToElementValue] ToElementValue for T? with to_element_value(self) {
           "Expected ComponentModel for Option inner value",
         )
       }
-      let nodes : Array[@types.WitNode] = [@types.WitNode::OptionValue(Some(1))]
-      for node in inner_wit.nodes {
-        nodes.push(node)
+      let wit_value = @builder.Builder::new().option_some(item => {
+        item.wit_value(inner_wit)
+      }) catch {
+        @builder.BuilderError(msg) =>
+          raise @common.AgentError::InvalidInput(msg)
       }
-      @common.ElementValue::ComponentModel({ nodes, })
+      @common.ElementValue::ComponentModel(wit_value)
     }
   }
 }
@@ -59,16 +61,16 @@ pub impl[T : HasElementSchema] HasElementSchema for Array[T] with element_schema
   guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
     inner
   }
-  let result_nodes : Array[@types.NamedWitTypeNode] = []
-  result_nodes.push({
+  let nodes : Array[@types.NamedWitTypeNode] = [
+    { name: None, owner: None, type_: @types.WitTypeNode::ListType(0) },
+  ]
+  let inner_root = merge_wit_type(nodes, inner_wit_type)
+  nodes[0] = {
     name: None,
     owner: None,
-    type_: @types.WitTypeNode::ListType(1),
-  })
-  for node in inner_wit_type.nodes {
-    result_nodes.push(node)
+    type_: @types.WitTypeNode::ListType(inner_root),
   }
-  @common.ElementSchema::ComponentModel({ nodes: result_nodes })
+  @common.ElementSchema::ComponentModel({ nodes, })
 }
 
 ///|
@@ -94,9 +96,7 @@ pub impl[T : FromExtractor] FromElementValue for Array[T] with from_element_valu
 pub impl[T : ToElementValue] ToElementValue for Array[T] with to_element_value(
   self,
 ) {
-  let child_indices : Array[Int] = []
-  let nodes : Array[@types.WitNode] = []
-  nodes.push(@types.WitNode::ListValue([]))
+  let inner_values : Array[@types.WitValue] = []
   for item in self {
     let inner = T::to_element_value(item)
     guard inner is @common.ElementValue::ComponentModel(inner_wit) else {
@@ -104,14 +104,16 @@ pub impl[T : ToElementValue] ToElementValue for Array[T] with to_element_value(
         "Expected ComponentModel for Array element",
       )
     }
-    let start_idx = nodes.length()
-    child_indices.push(start_idx)
-    for node in inner_wit.nodes {
-      nodes.push(node)
-    }
+    inner_values.push(inner_wit)
   }
-  nodes[0] = @types.WitNode::ListValue(child_indices)
-  @common.ElementValue::ComponentModel({ nodes, })
+  let wit_value = @builder.Builder::new().list(item => {
+    for v in inner_values {
+      item.wit_value(v)
+    }
+  }) catch {
+    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
+  }
+  @common.ElementValue::ComponentModel(wit_value)
 }
 
 ///|
@@ -127,21 +129,21 @@ pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result
   guard err_schema is @common.ElementSchema::ComponentModel(err_wit_type) else {
     err_schema
   }
-  let result_nodes : Array[@types.NamedWitTypeNode] = []
-  let ok_root = 1
-  let err_root = 1 + ok_wit_type.nodes.length()
-  result_nodes.push({
+  let nodes : Array[@types.NamedWitTypeNode] = [
+    {
+      name: None,
+      owner: None,
+      type_: @types.WitTypeNode::ResultType((None, None)),
+    },
+  ]
+  let ok_root = merge_wit_type(nodes, ok_wit_type)
+  let err_root = merge_wit_type(nodes, err_wit_type)
+  nodes[0] = {
     name: None,
     owner: None,
     type_: @types.WitTypeNode::ResultType((Some(ok_root), Some(err_root))),
-  })
-  for node in ok_wit_type.nodes {
-    result_nodes.push(node)
   }
-  for node in err_wit_type.nodes {
-    result_nodes.push(node)
-  }
-  @common.ElementSchema::ComponentModel({ nodes: result_nodes })
+  @common.ElementSchema::ComponentModel({ nodes, })
 }
 
 ///|
@@ -180,13 +182,13 @@ pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
           "Expected ComponentModel for Result Ok value",
         )
       }
-      let nodes : Array[@types.WitNode] = [
-        @types.WitNode::ResultValue(Ok(Some(1))),
-      ]
-      for node in inner_wit.nodes {
-        nodes.push(node)
+      let wit_value = @builder.Builder::new().result_ok(item => {
+        item.wit_value(inner_wit)
+      }) catch {
+        @builder.BuilderError(msg) =>
+          raise @common.AgentError::InvalidInput(msg)
       }
-      @common.ElementValue::ComponentModel({ nodes, })
+      @common.ElementValue::ComponentModel(wit_value)
     }
     Err(e) => {
       let inner = E::to_element_value(e)
@@ -195,13 +197,13 @@ pub impl[T : ToElementValue, E : ToElementValue] ToElementValue for Result[T, E]
           "Expected ComponentModel for Result Err value",
         )
       }
-      let nodes : Array[@types.WitNode] = [
-        @types.WitNode::ResultValue(Err(Some(1))),
-      ]
-      for node in inner_wit.nodes {
-        nodes.push(node)
+      let wit_value = @builder.Builder::new().result_err(item => {
+        item.wit_value(inner_wit)
+      }) catch {
+        @builder.BuilderError(msg) =>
+          raise @common.AgentError::InvalidInput(msg)
       }
-      @common.ElementValue::ComponentModel({ nodes, })
+      @common.ElementValue::ComponentModel(wit_value)
     }
   }
 }

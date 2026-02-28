@@ -376,3 +376,15 @@ pub fn ItemBuilder::handle(
   let item_type_index = self.root_builder().add_handle(uri, handle_value)
   self.parent.add_item(item_type_index)
 }
+
+///|
+pub fn ItemBuilder::wit_value(
+  self : ItemBuilder,
+  value : @types.WitValue,
+) -> Unit raise BuilderError {
+  if self.parent.is_closed() {
+    raise BuilderError("ItemBuilder is already closed")
+  }
+  let item_type_index = self.root_builder().add_wit_value(value)
+  self.parent.add_item(item_type_index)
+}

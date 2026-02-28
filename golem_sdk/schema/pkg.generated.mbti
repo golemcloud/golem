@@ -7,7 +7,27 @@ import {
 }
 
 // Values
+pub fn extract_enum(&@extractor.Extractor) -> UInt raise @common.AgentError
+
+pub fn[T : FromExtractor] extract_field(&@extractor.Extractor, Int) -> T raise @common.AgentError
+
+pub fn extract_variant(&@extractor.Extractor) -> (UInt, &@extractor.Extractor?) raise @common.AgentError
+
 pub fn[T : FromElementValue] from_element_value_as(@common.ElementValue) -> T raise @common.AgentError
+
+pub fn[T : FromExtractor] from_extractor_as(&@extractor.Extractor) -> T raise @common.AgentError
+
+pub fn make_enum_schema(Array[String]) -> @common.ElementSchema
+
+pub fn make_enum_value(UInt) -> @common.ElementValue
+
+pub fn make_record_schema(Array[(String, @common.ElementSchema)]) -> @common.ElementSchema
+
+pub fn make_record_value(Array[@common.ElementValue]) -> @common.ElementValue raise @common.AgentError
+
+pub fn make_variant_schema(Array[(String, @common.ElementSchema?)]) -> @common.ElementSchema
+
+pub fn make_variant_value(UInt, @common.ElementValue?) -> @common.ElementValue raise @common.AgentError
 
 pub fn[T : HasElementSchema] schema_of(T) -> @common.ElementSchema
 
