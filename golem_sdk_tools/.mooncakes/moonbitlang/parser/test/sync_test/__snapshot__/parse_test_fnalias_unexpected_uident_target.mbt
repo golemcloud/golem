@@ -1,2 +1,0 @@
-fnalias Foo
-

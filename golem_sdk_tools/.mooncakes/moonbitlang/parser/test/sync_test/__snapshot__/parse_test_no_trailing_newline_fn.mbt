@@ -1,1 +1,0 @@
-fn foo(x : Int) -> Int { x }//no trailing newline

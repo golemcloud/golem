@@ -1,0 +1,140 @@
+///|
+test "parse_pkg_exports extracts export entries from moon.pkg" {
+  let content =
+    #|import {
+    #|  "some/pkg",
+    #|}
+    #|
+    #|options(
+    #|  link: {
+    #|    "wasm": {
+    #|      "export-memory-name": "memory",
+    #|      "exports": [
+    #|        "cabi_realloc:cabi_realloc",
+    #|        "wasmExportInit:golem:agent/guest#initialize",
+    #|        "wasmExportSave:golem:api/save-snapshot@1.1.7#save",
+    #|      ],
+    #|      "heap-start-address": 16,
+    #|    },
+    #|  },
+    #|)
+  let exports = @lib.parse_pkg_exports(content)
+  inspect(
+    exports,
+    content=(
+      #|["cabi_realloc:cabi_realloc", "wasmExportInit:golem:agent/guest#initialize", "wasmExportSave:golem:api/save-snapshot@1.1.7#save"]
+    ),
+  )
+}
+
+///|
+test "update_pkg_link replaces existing link block" {
+  let content =
+    #|import {
+    #|  "some/pkg",
+    #|}
+    #|
+    #|options(
+    #|  "is-main": true,
+    #|  link: {
+    #|    "wasm": {
+    #|      "export-memory-name": "memory",
+    #|      "exports": [
+    #|        "old:old-export",
+    #|      ],
+    #|      "heap-start-address": 16,
+    #|    },
+    #|  },
+    #|)
+  let exports = [
+    "cabi_realloc:cabi_realloc", "wasmExportInit:golem:agent/guest#initialize",
+  ]
+  let result = @lib.update_pkg_link(content, exports)
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "some/pkg",
+      #|}
+      #|
+      #|options(
+      #|  "is-main": true,
+      #|  link: {
+      #|    "wasm": {
+      #|      "export-memory-name": "memory",
+      #|      "exports": [
+      #|        "cabi_realloc:cabi_realloc",
+      #|        "wasmExportInit:golem:agent/guest#initialize",
+      #|      ],
+      #|      "heap-start-address": 16,
+      #|    },
+      #|  },
+      #|)
+    ),
+  )
+}
+
+///|
+test "update_pkg_link inserts link into existing options" {
+  let content =
+    #|import {
+    #|  "some/pkg",
+    #|}
+    #|
+    #|options(
+    #|  "is-main": true,
+    #|)
+  let exports = ["cabi_realloc:cabi_realloc"]
+  let result = @lib.update_pkg_link(content, exports)
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "some/pkg",
+      #|}
+      #|
+      #|options(
+      #|  "is-main": true,
+      #|  link: {
+      #|    "wasm": {
+      #|      "export-memory-name": "memory",
+      #|      "exports": [
+      #|        "cabi_realloc:cabi_realloc",
+      #|      ],
+      #|      "heap-start-address": 16,
+      #|    },
+      #|  },
+      #|)
+    ),
+  )
+}
+
+///|
+test "update_pkg_link appends options when none exist" {
+  let content =
+    #|import {
+    #|  "some/pkg",
+    #|}
+  let exports = ["cabi_realloc:cabi_realloc"]
+  let result = @lib.update_pkg_link(content, exports)
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "some/pkg",
+      #|}
+      #|
+      #|options(
+      #|  link: {
+      #|    "wasm": {
+      #|      "export-memory-name": "memory",
+      #|      "exports": [
+      #|        "cabi_realloc:cabi_realloc",
+      #|      ],
+      #|      "heap-start-address": 16,
+      #|    },
+      #|  },
+      #|)
+    ),
+  )
+}

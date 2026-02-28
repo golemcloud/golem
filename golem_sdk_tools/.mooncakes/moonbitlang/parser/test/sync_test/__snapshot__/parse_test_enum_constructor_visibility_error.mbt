@@ -1,4 +1,0 @@
-enum E {
-  pub A
-}
-

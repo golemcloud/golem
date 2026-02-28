@@ -1,2 +1,0 @@
-typealias foo as Bar
-

@@ -1,6 +1,0 @@
-{
-  "import": [
-    "moonbitlang/yacc/lib/elab",
-    "moonbitlang/yacc/lib/util/stamp"
-  ]
-}

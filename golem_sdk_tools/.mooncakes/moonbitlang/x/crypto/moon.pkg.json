@@ -1,9 +1,0 @@
-{
-  "import": [
-    "moonbitlang/core/cmp",
-    "moonbitlang/core/bench"
-  ],
-  "test-import": [
-    "moonbitlang/x/encoding"
-  ]
-}

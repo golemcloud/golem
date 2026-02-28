@@ -35,4 +35,12 @@ fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
   let output_path = "\{target_dir}/golem_reexports.mbt"
   @fs.write_string_to_file(output_path, output)
   println("Generated \{output_path} with \{fns.length()} functions")
+  // Update target moon.pkg with link section from SDK's gen/moon.pkg
+  let gen_pkg_content = @fs.read_file_to_string("\{gen_dir}/moon.pkg")
+  let exports = @lib.transform_exports(@lib.parse_pkg_exports(gen_pkg_content))
+  let target_pkg_path = "\{target_dir}/moon.pkg"
+  let target_pkg_content = @fs.read_file_to_string(target_pkg_path)
+  let updated = @lib.update_pkg_link(target_pkg_content, exports)
+  @fs.write_string_to_file(target_pkg_path, updated)
+  println("Updated \{target_pkg_path} with \{exports.length()} exports")
 }

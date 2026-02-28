@@ -1,9 +1,0 @@
-{
-  "import": [
-    "moonbitlang/core/bigint",
-    "moonbitlang/core/json",
-    "moonbitlang/core/quickcheck",
-    "moonbitlang/core/strconv",
-    "moonbitlang/core/math"
-  ]
-}

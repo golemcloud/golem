@@ -1,7 +1,0 @@
-import {
-  "moonbitlang/core/ref",
-}
-
-import {
-  "moonbitlang/core/json",
-} for "test"

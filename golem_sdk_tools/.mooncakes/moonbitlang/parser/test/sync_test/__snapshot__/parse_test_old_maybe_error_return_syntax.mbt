@@ -1,3 +1,0 @@
-fn f() -> Int ?Unit {
-}
-

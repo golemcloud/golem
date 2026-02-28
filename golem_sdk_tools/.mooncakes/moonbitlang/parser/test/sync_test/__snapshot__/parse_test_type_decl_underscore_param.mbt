@@ -1,2 +1,0 @@
-type Foo[_] = Int
-

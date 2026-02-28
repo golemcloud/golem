@@ -1,2 +1,0 @@
-typealias Foo = Bar
-

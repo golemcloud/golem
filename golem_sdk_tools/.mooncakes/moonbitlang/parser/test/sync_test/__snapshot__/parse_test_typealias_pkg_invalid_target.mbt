@@ -1,2 +1,0 @@
-typealias @pkg.1
-

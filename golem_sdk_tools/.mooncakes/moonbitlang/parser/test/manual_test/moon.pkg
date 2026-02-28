@@ -1,7 +1,0 @@
-import {
-  "moonbitlang/parser",
-  "moonbitlang/parser/syntax",
-  "moonbitlang/parser/basic",
-  "moonbitlang/x/fs",
-  "moonbitlang/core/test",
-} for "test"

@@ -1,5 +1,0 @@
-//!build: xx
-fn init {
-  ()
-}
-
