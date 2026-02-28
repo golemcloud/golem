@@ -8,12 +8,47 @@ pub(all) enum ParamType {
 } derive(Show, Eq)
 
 ///|
+/// Encodes a qualified (cross-package) type name into the `Simple` string format.
+pub fn encode_qualified(pkg : String, id : String) -> ParamType {
+  Simple("@\{pkg}.\{id}")
+}
+
+///|
+/// Tries to decode a `Simple` name as a qualified type.
+/// Returns `Some((pkg, id))` for names like `"@pkg.Type"`, `None` otherwise.
+pub fn decode_qualified(name : String) -> (String, String)? {
+  if name.has_prefix("@") {
+    match name.find(".") {
+      Some(dot) => {
+        let pkg = name.unsafe_substring(start=1, end=dot)
+        let id = name.unsafe_substring(start=dot + 1, end=name.length())
+        if pkg.length() > 0 && id.length() > 0 {
+          Some((pkg, id))
+        } else {
+          None
+        }
+      }
+      None => None
+    }
+  } else {
+    None
+  }
+}
+
+///|
+pub(all) struct SchemaOptions {
+  text_languages : Array[String]
+  binary_mime_types : Array[String]
+} derive(Show, Eq)
+
+///|
 pub(all) struct MethodInfo {
   name : String
   description : String
   prompt_hint : String?
   params : Array[(String, ParamType)]
   return_type : ParamType?
+  param_schema_options : Map[String, SchemaOptions]
 } derive(Show)
 
 ///|
@@ -32,12 +67,13 @@ pub(all) struct AgentInfo {
   constructor_prompt_hint : String?
   methods : Array[MethodInfo]
   has_init : Bool
+  constructor_schema_options : Map[String, SchemaOptions]
 } derive(Show)
 
 ///|
 pub suberror AgentParseError {
   AgentParseError(String)
-}
+} derive(Show)
 
 ///|
 pub fn syntax_type_to_param_type(
@@ -88,7 +124,7 @@ pub fn syntax_type_to_param_type(
           }
         Dot(pkg~, id~) =>
           if tys.is_empty() {
-            Simple("@\{pkg}.\{id}")
+            encode_qualified(pkg, id)
           } else {
             raise AgentParseError(
               "Unsupported qualified parameterized type: @\{pkg}.\{id}",
@@ -158,6 +194,140 @@ fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
 }
 
 ///|
+let unstructured_type_names : Array[String] = [
+  "UnstructuredText", "UnstructuredBinary",
+]
+
+///|
+fn is_unstructured_type_name(name : String) -> Bool {
+  for uname in unstructured_type_names {
+    if name == uname || name.has_suffix(".\{uname}") {
+      return true
+    }
+  }
+  false
+}
+
+///|
+pub fn validate_no_nested_unstructured(
+  param_name : String,
+  pt : ParamType,
+) -> Unit raise AgentParseError {
+  match pt {
+    Simple(name) => {
+      let _ = name
+    }
+    Optional(inner) =>
+      validate_no_unstructured_inside("Option", param_name, inner)
+    List(inner) => validate_no_unstructured_inside("Array", param_name, inner)
+    ResultType(ok, err) => {
+      validate_no_unstructured_inside("Result", param_name, ok)
+      validate_no_unstructured_inside("Result", param_name, err)
+    }
+    Tuple(elems) =>
+      for elem in elems {
+        validate_no_unstructured_inside("Tuple", param_name, elem)
+      }
+  }
+}
+
+///|
+fn validate_no_unstructured_inside(
+  wrapper : String,
+  param_name : String,
+  pt : ParamType,
+) -> Unit raise AgentParseError {
+  match pt {
+    Simple(name) =>
+      if is_unstructured_type_name(name) {
+        raise AgentParseError(
+          "\{name} cannot be nested inside \{wrapper} for parameter '\{param_name}'; it must be a direct parameter or return type",
+        )
+      }
+    Optional(inner) =>
+      validate_no_unstructured_inside(wrapper, param_name, inner)
+    List(inner) => validate_no_unstructured_inside(wrapper, param_name, inner)
+    ResultType(ok, err) => {
+      validate_no_unstructured_inside(wrapper, param_name, ok)
+      validate_no_unstructured_inside(wrapper, param_name, err)
+    }
+    Tuple(elems) =>
+      for elem in elems {
+        validate_no_unstructured_inside(wrapper, param_name, elem)
+      }
+  }
+}
+
+///|
+fn extract_schema_restrictions(
+  attrs : @list.List[@attribute.Attribute],
+) -> Map[String, SchemaOptions] {
+  let result : Map[String, SchemaOptions] = {}
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "text_languages" }, props)) => {
+        let strings : Array[String] = []
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => strings.push(s)
+            _ => ()
+          }
+        })
+        if strings.length() >= 2 {
+          let param_name = strings[0]
+          let codes : Array[String] = []
+          for i in 1..<strings.length() {
+            codes.push(strings[i])
+          }
+          match result.get(param_name) {
+            Some(existing) =>
+              result[param_name] = {
+                text_languages: existing.text_languages + codes,
+                binary_mime_types: existing.binary_mime_types,
+              }
+            None =>
+              result[param_name] = {
+                text_languages: codes,
+                binary_mime_types: [],
+              }
+          }
+        }
+      }
+      Some(Apply({ qual: Some("derive"), name: "mime_types" }, props)) => {
+        let strings : Array[String] = []
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => strings.push(s)
+            _ => ()
+          }
+        })
+        if strings.length() >= 2 {
+          let param_name = strings[0]
+          let mimes : Array[String] = []
+          for i in 1..<strings.length() {
+            mimes.push(strings[i])
+          }
+          match result.get(param_name) {
+            Some(existing) =>
+              result[param_name] = {
+                text_languages: existing.text_languages,
+                binary_mime_types: existing.binary_mime_types + mimes,
+              }
+            None =>
+              result[param_name] = {
+                text_languages: [],
+                binary_mime_types: mimes,
+              }
+          }
+        }
+      }
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
 fn extract_method_params(
   fun_decl : @syntax.FunDecl,
 ) -> Array[(String, ParamType)] raise AgentParseError {
@@ -206,7 +376,7 @@ pub fn parse_agents(
   let agent_modes : Map[String, AgentMode] = {}
   let agent_constructors : Map[
     String,
-    (Array[(String, ParamType)], String, String?),
+    (Array[(String, ParamType)], String, String?, Map[String, SchemaOptions]),
   ] = {}
   let agent_methods : Map[String, Array[MethodInfo]] = {}
   let mut has_init = false
@@ -260,7 +430,8 @@ pub fn parse_agents(
                     doc
                   }
                   let hint = extract_prompt_hint(fun_decl.attrs)
-                  agent_constructors[name] = (params, desc, hint)
+                  let restrictions = extract_schema_restrictions(fun_decl.attrs)
+                  agent_constructors[name] = (params, desc, hint, restrictions)
                 } else if fun_decl.vis is Pub(..) {
                   // Public method — check if first param is Self
                   let mut is_method = false
@@ -303,6 +474,9 @@ pub fn parse_agents(
                     let method_name = fun_decl.name.name
                     let desc = if doc == "" { method_name } else { doc }
                     let hint = extract_prompt_hint(fun_decl.attrs)
+                    let restrictions = extract_schema_restrictions(
+                      fun_decl.attrs,
+                    )
                     match agent_methods.get(name) {
                       Some(methods) =>
                         methods.push({
@@ -311,6 +485,7 @@ pub fn parse_agents(
                           prompt_hint: hint,
                           params,
                           return_type,
+                          param_schema_options: restrictions,
                         })
                       None => ()
                     }
@@ -328,7 +503,7 @@ pub fn parse_agents(
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
     match agent_constructors.get(name) {
-      Some((params, ctor_desc, ctor_hint)) =>
+      Some((params, ctor_desc, ctor_hint, ctor_restrictions)) =>
         agents.push({
           name,
           description,
@@ -338,8 +513,120 @@ pub fn parse_agents(
           constructor_prompt_hint: ctor_hint,
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
+          constructor_schema_options: ctor_restrictions,
         })
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
+    }
+  }
+  // Validate nesting and restriction targets
+  for agent in agents {
+    // Validate constructor params
+    for param in agent.constructor_params {
+      let (pname, pt) = param
+      validate_no_nested_unstructured(pname, pt)
+    }
+    for rname, opts in agent.constructor_schema_options {
+      let param_type = agent.constructor_params
+        .iter()
+        .find_first(fn(p) { p.0 == rname })
+      match param_type {
+        None =>
+          raise AgentParseError(
+            "#derive.text_languages/#derive.mime_types references unknown constructor parameter '\{rname}'",
+          )
+        Some((_, pt)) => {
+          if opts.text_languages.length() > 0 {
+            match pt {
+              Simple(name) =>
+                if not(
+                    name == "UnstructuredText" ||
+                    name.has_suffix(".UnstructuredText"),
+                  ) {
+                  raise AgentParseError(
+                    "#derive.text_languages on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredText",
+                  )
+                }
+              _ =>
+                raise AgentParseError(
+                  "#derive.text_languages on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredText",
+                )
+            }
+          }
+          if opts.binary_mime_types.length() > 0 {
+            match pt {
+              Simple(name) =>
+                if not(
+                    name == "UnstructuredBinary" ||
+                    name.has_suffix(".UnstructuredBinary"),
+                  ) {
+                  raise AgentParseError(
+                    "#derive.mime_types on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredBinary",
+                  )
+                }
+              _ =>
+                raise AgentParseError(
+                  "#derive.mime_types on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredBinary",
+                )
+            }
+          }
+        }
+      }
+    }
+    // Validate methods
+    for meth in agent.methods {
+      for param in meth.params {
+        let (pname, pt) = param
+        validate_no_nested_unstructured(pname, pt)
+      }
+      match meth.return_type {
+        Some(rt) => validate_no_nested_unstructured("return", rt)
+        None => ()
+      }
+      for rname, opts in meth.param_schema_options {
+        let param_type = meth.params.iter().find_first(fn(p) { p.0 == rname })
+        match param_type {
+          None =>
+            raise AgentParseError(
+              "#derive.text_languages/#derive.mime_types references unknown parameter '\{rname}' of method '\{meth.name}'",
+            )
+          Some((_, pt)) => {
+            if opts.text_languages.length() > 0 {
+              match pt {
+                Simple(name) =>
+                  if not(
+                      name == "UnstructuredText" ||
+                      name.has_suffix(".UnstructuredText"),
+                    ) {
+                    raise AgentParseError(
+                      "#derive.text_languages on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredText",
+                    )
+                  }
+                _ =>
+                  raise AgentParseError(
+                    "#derive.text_languages on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredText",
+                  )
+              }
+            }
+            if opts.binary_mime_types.length() > 0 {
+              match pt {
+                Simple(name) =>
+                  if not(
+                      name == "UnstructuredBinary" ||
+                      name.has_suffix(".UnstructuredBinary"),
+                    ) {
+                    raise AgentParseError(
+                      "#derive.mime_types on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredBinary",
+                    )
+                  }
+                _ =>
+                  raise AgentParseError(
+                    "#derive.mime_types on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredBinary",
+                  )
+              }
+            }
+          }
+        }
+      }
     }
   }
   agents

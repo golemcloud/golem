@@ -11,13 +11,17 @@ pub fn build_agent_type_expr(AgentInfo) -> @syntax.Expr
 
 pub fn build_raw_agent_impl(AgentInfo) -> @syntax.Impl
 
+pub fn decode_qualified(String) -> (String, String)?
+
+pub fn encode_qualified(String, String) -> ParamType
+
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
 
 pub fn generate_value_type_impls(Array[ValueTypeInfo]) -> @list.List[@syntax.Impl]
 
-pub fn param_type_to_schema_expr(ParamType) -> @syntax.Expr
+pub fn param_type_to_schema_expr(ParamType, options? : SchemaOptions?) -> @syntax.Expr
 
 pub fn param_type_to_type_string(ParamType) -> String
 
@@ -35,10 +39,13 @@ pub fn transform_exports(Array[String]) -> Array[String]
 
 pub fn update_pkg_link(String, Array[String]) -> String
 
+pub fn validate_no_nested_unstructured(String, ParamType) -> Unit raise AgentParseError
+
 // Errors
 pub suberror AgentParseError {
   AgentParseError(String)
 }
+pub impl Show for AgentParseError
 
 // Types and methods
 pub(all) struct AgentInfo {
@@ -50,6 +57,7 @@ pub(all) struct AgentInfo {
   constructor_prompt_hint : String?
   methods : Array[MethodInfo]
   has_init : Bool
+  constructor_schema_options : Map[String, SchemaOptions]
 }
 pub impl Show for AgentInfo
 
@@ -73,6 +81,7 @@ pub(all) struct MethodInfo {
   prompt_hint : String?
   params : Array[(String, ParamType)]
   return_type : ParamType?
+  param_schema_options : Map[String, SchemaOptions]
 }
 pub impl Show for MethodInfo
 
@@ -85,6 +94,13 @@ pub(all) enum ParamType {
 }
 pub impl Eq for ParamType
 pub impl Show for ParamType
+
+pub(all) struct SchemaOptions {
+  text_languages : Array[String]
+  binary_mime_types : Array[String]
+}
+pub impl Eq for SchemaOptions
+pub impl Show for SchemaOptions
 
 pub(all) struct ValueTypeInfo {
   name : String
@@ -104,7 +120,7 @@ pub impl Show for ValueTypeKind
 pub(all) enum VariantPayload {
   None
   Single(ParamType)
-  Multi(Array[(String, ParamType)])
+  Multi(Array[(String, ParamType)], Bool)
 }
 pub impl Eq for VariantPayload
 pub impl Show for VariantPayload

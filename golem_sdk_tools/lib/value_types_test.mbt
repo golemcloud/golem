@@ -84,7 +84,9 @@ test "parse enum with multi-field positional case" {
   inspect(types[0].name, content="Shape")
   inspect(
     types[0].kind,
-    content="VariantEnum([(\"Circle\", Single(Simple(\"Double\"))), (\"Rectangle\", Multi([(\"field0\", Simple(\"Double\")), (\"field1\", Simple(\"Double\"))]))])",
+    content=(
+      #|VariantEnum([("Circle", Single(Simple("Double"))), ("Rectangle", Multi([("field0", Simple("Double")), ("field1", Simple("Double"))], false))])
+    ),
   )
 }
 
@@ -102,7 +104,9 @@ test "parse enum with labelled fields" {
   inspect(types[0].name, content="Shape")
   inspect(
     types[0].kind,
-    content="VariantEnum([(\"Circle\", Multi([(\"radius\", Simple(\"Double\"))])), (\"Rect\", Multi([(\"width\", Simple(\"Double\")), (\"height\", Simple(\"Double\"))]))])",
+    content=(
+      #|VariantEnum([("Circle", Multi([("radius", Simple("Double"))], true)), ("Rect", Multi([("width", Simple("Double")), ("height", Simple("Double"))], true))])
+    ),
   )
 }
 
@@ -182,6 +186,47 @@ test "parse struct with tuple field" {
     types[0].kind,
     content=(
       #|Record([("pair", Tuple([Simple("String"), Simple("Int")])), ("triple", Tuple([Simple("String"), Simple("Int"), Simple("Bool")]))])
+    ),
+  )
+}
+
+///|
+test "parse struct with cross-package type field" {
+  let content =
+    #|///|
+    #|#derive.golem_schema
+    #|pub(all) struct Order {
+    #|  id : UInt64
+    #|  status : @types.OrderStatus
+    #|  items : Array[@types.Item]
+    #|  note : @types.Note?
+    #|}
+  let types = parse_value_types([("order.mbt", content)])
+  inspect(types.length(), content="1")
+  inspect(types[0].name, content="Order")
+  inspect(
+    types[0].kind,
+    content="Record([(\"id\", Simple(\"UInt64\")), (\"status\", Simple(\"@types.OrderStatus\")), (\"items\", List(Simple(\"@types.Item\"))), (\"note\", Optional(Simple(\"@types.Note\")))])",
+  )
+}
+
+///|
+test "parse variant enum with cross-package payload" {
+  let content =
+    #|///|
+    #|#derive.golem_schema
+    #|pub(all) enum Event {
+    #|  Created(@types.Info)
+    #|  Updated(@types.Info, @types.Metadata)
+    #|  Deleted
+    #|}
+  let types = parse_value_types([("event.mbt", content)])
+  inspect(types.length(), content="1")
+  inspect(types[0].name, content="Event")
+  inspect(
+    types[0].kind,
+    content=(
+      #|VariantEnum([("Created", Single(Simple("@types.Info"))), ("Updated", Multi([("field0", Simple("@types.Info")), ("field1", Simple("@types.Metadata"))], false)), ("Deleted", None)])
     ),
   )
 }

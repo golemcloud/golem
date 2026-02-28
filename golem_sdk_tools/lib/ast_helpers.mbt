@@ -173,10 +173,31 @@ fn make_positional_arg(expr : @syntax.Expr) -> @syntax.Argument {
 }
 
 ///|
+fn make_labelled_arg(name : String, expr : @syntax.Expr) -> @syntax.Argument {
+  @syntax.Argument::{
+    value: expr,
+    kind: @syntax.ArgumentKind::Labelled(make_label(name)),
+  }
+}
+
+///|
 fn make_apply(func : @syntax.Expr, args : Array[@syntax.Expr]) -> @syntax.Expr {
   @syntax.Expr::Apply(
     func~,
     args=to_list(args.map(make_positional_arg)),
+    attr=@syntax.ApplyAttr::NoAttr,
+    loc=dummy_loc,
+  )
+}
+
+///|
+fn make_apply_with_args(
+  func : @syntax.Expr,
+  args : Array[@syntax.Argument],
+) -> @syntax.Expr {
+  @syntax.Expr::Apply(
+    func~,
+    args=to_list(args),
     attr=@syntax.ApplyAttr::NoAttr,
     loc=dummy_loc,
   )

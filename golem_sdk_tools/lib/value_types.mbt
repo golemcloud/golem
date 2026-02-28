@@ -2,7 +2,7 @@
 pub(all) enum VariantPayload {
   None
   Single(ParamType)
-  Multi(Array[(String, ParamType)])
+  Multi(Array[(String, ParamType)], Bool)
 } derive(Show, Eq)
 
 ///|
@@ -128,7 +128,7 @@ fn parse_constr_payload(
       } else if items.length() == 1 && not(any_labelled) {
         Single(items[0].1)
       } else {
-        Multi(items)
+        Multi(items, any_labelled)
       }
     }
   }

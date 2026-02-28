@@ -147,6 +147,7 @@ test "generate_agent_registration for simple agent" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
+      constructor_schema_options: {},
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -227,6 +228,7 @@ test "generate_agent_registration with methods" {
           prompt_hint: None,
           params: [],
           return_type: None,
+          param_schema_options: {},
         },
         {
           name: "add",
@@ -234,9 +236,11 @@ test "generate_agent_registration with methods" {
           prompt_hint: None,
           params: [("value", Simple("UInt64"))],
           return_type: Some(Simple("UInt64")),
+          param_schema_options: {},
         },
       ],
       has_init: false,
+      constructor_schema_options: {},
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -406,9 +410,11 @@ test "generate_agent_registration with prompt_hints" {
           prompt_hint: Some("Call to increase"),
           params: [],
           return_type: None,
+          param_schema_options: {},
         },
       ],
       has_init: false,
+      constructor_schema_options: {},
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -942,6 +948,7 @@ test "build_raw_agent_impl for counter-like agent" {
         prompt_hint: None,
         params: [],
         return_type: None,
+        param_schema_options: {},
       },
       {
         name: "get_value",
@@ -949,6 +956,7 @@ test "build_raw_agent_impl for counter-like agent" {
         prompt_hint: None,
         params: [],
         return_type: Some(Simple("UInt64")),
+        param_schema_options: {},
       },
       {
         name: "add",
@@ -956,9 +964,11 @@ test "build_raw_agent_impl for counter-like agent" {
         prompt_hint: None,
         params: [("value", Simple("UInt64"))],
         return_type: Some(Simple("UInt64")),
+        param_schema_options: {},
       },
     ],
     has_init: false,
+    constructor_schema_options: {},
   }
   let impl_ = build_raw_agent_impl(agent)
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
@@ -1013,6 +1023,140 @@ test "build_raw_agent_impl for counter-like agent" {
 }
 
 ///|
+test "encode_qualified creates Simple with @pkg.id format" {
+  inspect(
+    encode_qualified("types", "Config"),
+    content="Simple(\"@types.Config\")",
+  )
+  inspect(
+    encode_qualified("my_pkg", "MyType"),
+    content="Simple(\"@my_pkg.MyType\")",
+  )
+}
+
+///|
+test "decode_qualified parses @pkg.id format" {
+  inspect(
+    decode_qualified("@types.Config"),
+    content="Some((\"types\", \"Config\"))",
+  )
+  inspect(
+    decode_qualified("@my_pkg.MyType"),
+    content="Some((\"my_pkg\", \"MyType\"))",
+  )
+  inspect(decode_qualified("String"), content="None")
+  inspect(decode_qualified("UserId"), content="None")
+  inspect(decode_qualified("@"), content="None")
+  inspect(decode_qualified("@."), content="None")
+  inspect(decode_qualified("@pkg."), content="None")
+  inspect(decode_qualified("@.Type"), content="None")
+}
+
+///|
+test "encode/decode_qualified roundtrips" {
+  let cases = [("types", "Config"), ("my_pkg", "MyType"), ("a", "B")]
+  for pair in cases {
+    let (pkg, id) = pair
+    let encoded = encode_qualified(pkg, id)
+    match encoded {
+      Simple(name) =>
+        inspect(decode_qualified(name), content="Some((\"\{pkg}\", \"\{id}\"))")
+      _ => fail("encode_qualified should return Simple")
+    }
+  }
+}
+
+///|
+test "parse_agents with cross-package param types" {
+  let content =
+    #|///| An agent using cross-package types
+    #|#derive.agent
+    #|pub(all) struct OrderAgent {
+    #|  state : @types.State
+    #|}
+    #|
+    #|pub fn OrderAgent::new(config : @types.Config) -> OrderAgent {
+    #|  { state: @types.State::default() }
+    #|}
+    #|
+    #|///| Processes an order
+    #|pub fn OrderAgent::process(self : Self, order : @types.Order) -> @types.Result {
+    #|  @types.Result::ok()
+    #|}
+  let agents = parse_agents([("order.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].constructor_params.length(), content="1")
+  inspect(
+    agents[0].constructor_params[0].1,
+    content="Simple(\"@types.Config\")",
+  )
+  inspect(agents[0].methods.length(), content="1")
+  inspect(agents[0].methods[0].params[0].1, content="Simple(\"@types.Order\")")
+  inspect(
+    agents[0].methods[0].return_type,
+    content="Some(Simple(\"@types.Result\"))",
+  )
+}
+
+///|
+test "parse_agents with type alias in params" {
+  let content =
+    #|///| Agent using type aliases
+    #|#derive.agent
+    #|pub(all) struct AliasAgent {
+    #|  id : UserId
+    #|}
+    #|
+    #|pub fn AliasAgent::new(id : UserId) -> AliasAgent {
+    #|  { id }
+    #|}
+    #|
+    #|///| Looks up a user
+    #|pub fn AliasAgent::lookup(self : Self, name : UserName) -> UserId {
+    #|  self.id
+    #|}
+  let agents = parse_agents([("alias.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].constructor_params[0].1, content="Simple(\"UserId\")")
+  inspect(agents[0].methods[0].params[0].1, content="Simple(\"UserName\")")
+  inspect(agents[0].methods[0].return_type, content="Some(Simple(\"UserId\"))")
+}
+
+///|
+test "parse_agents with cross-package type in compound positions" {
+  let content =
+    #|///| Agent with nested cross-package types
+    #|#derive.agent
+    #|pub(all) struct NestedAgent {
+    #|  items : Array[@types.Item]
+    #|}
+    #|
+    #|pub fn NestedAgent::new() -> NestedAgent {
+    #|  { items: [] }
+    #|}
+    #|
+    #|///| Gets optional info
+    #|pub fn NestedAgent::get_info(self : Self) -> @types.Info? {
+    #|  None
+    #|}
+    #|
+    #|///| Returns a result with cross-package types
+    #|pub fn NestedAgent::try_fetch(self : Self) -> Result[@types.Data, @types.Error] {
+    #|  Err(@types.Error::new())
+    #|}
+  let agents = parse_agents([("nested.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(
+    agents[0].methods[0].return_type,
+    content="Some(Optional(Simple(\"@types.Info\")))",
+  )
+  inspect(
+    agents[0].methods[1].return_type,
+    content="Some(ResultType(Simple(\"@types.Data\"), Simple(\"@types.Error\")))",
+  )
+}
+
+///|
 test "param_type_to_type_string for various types" {
   inspect(param_type_to_type_string(Simple("String")), content="String")
   inspect(param_type_to_type_string(Simple("UInt64")), content="UInt64")
@@ -1028,6 +1172,146 @@ test "param_type_to_type_string for various types" {
   inspect(
     param_type_to_type_string(Optional(List(Simple("String")))),
     content="Array[String]?",
+  )
+}
+
+///|
+test "generate_agent_registration with cross-package types" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "OrderAgent",
+      description: "An order agent",
+      mode: Durable,
+      constructor_params: [("config", Simple("@types.Config"))],
+      constructor_description: "Creates an order agent",
+      constructor_prompt_hint: None,
+      methods: [
+        {
+          name: "process",
+          description: "Processes an order",
+          prompt_hint: None,
+          params: [("order", Simple("@types.Order"))],
+          return_type: Some(Simple("@types.Result")),
+          param_schema_options: {},
+        },
+      ],
+      has_init: false,
+      constructor_schema_options: {},
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  @agents.register_agent({
+      #|    name: "OrderAgent",
+      #|    agent_type: {
+      #|      type_name: "OrderAgent",
+      #|      description: "An order agent",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates an order agent",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "config",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|      methods: [
+      #|        {
+      #|          name: "process",
+      #|          description: "Processes an order",
+      #|          prompt_hint: None,
+      #|          input_schema: @common.DataSchema::Tuple([
+      #|            (
+      #|              "order",
+      #|              @schema.schema_of_tag(
+      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),
+      #|              ),
+      #|            ),
+      #|          ]),
+      #|          output_schema: @common.DataSchema::Tuple([
+      #|            (
+      #|              "result",
+      #|              @schema.schema_of_tag(
+      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),
+      #|              ),
+      #|            ),
+      #|          ]),
+      #|        },
+      #|      ],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let config :@types.Config = @schema.from_element_value_as(elements[0])
+      #|        Ok(OrderAgent::new(config))
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
+      #|}
+      #|
+      #|///|
+      #|impl @agents.RawAgent for OrderAgent with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      "process" => {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let order :@types.Order = @schema.from_element_value_as(elements[0])
+      #|        let result = self.process(order)
+      #|        Ok(@common.DataValue::Tuple([@schema.to_element_value_as(result)]))
+      #|      }
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "param_type_to_type_string for cross-package types" {
+  inspect(
+    param_type_to_type_string(Simple("@types.Config")),
+    content="@types.Config",
+  )
+  inspect(
+    param_type_to_type_string(Optional(Simple("@types.Info"))),
+    content="@types.Info?",
+  )
+  inspect(
+    param_type_to_type_string(List(Simple("@types.Item"))),
+    content="Array[@types.Item]",
+  )
+  inspect(
+    param_type_to_type_string(
+      ResultType(Simple("@types.Data"), Simple("@types.Error")),
+    ),
+    content="Result[@types.Data, @types.Error]",
   )
 }
 
@@ -1133,6 +1417,7 @@ test "generate_agent_registration with ephemeral mode" {
       constructor_prompt_hint: None,
       methods: [],
       has_init: false,
+      constructor_schema_options: {},
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1185,5 +1470,184 @@ test "generate_agent_registration with ephemeral mode" {
       #|
       #|
     ),
+  )
+}
+
+///|
+test "validate_no_nested_unstructured rejects Option[UnstructuredText]" {
+  let result : Result[_, _] = try? validate_no_nested_unstructured(
+    "input",
+    Optional(Simple("UnstructuredText")),
+  )
+  inspect(
+    result,
+    content="Err(AgentParseError(\"UnstructuredText cannot be nested inside Option for parameter 'input'; it must be a direct parameter or return type\"))",
+  )
+}
+
+///|
+test "validate_no_nested_unstructured rejects Array[UnstructuredBinary]" {
+  let result : Result[_, _] = try? validate_no_nested_unstructured(
+    "data",
+    List(Simple("UnstructuredBinary")),
+  )
+  inspect(
+    result,
+    content="Err(AgentParseError(\"UnstructuredBinary cannot be nested inside Array for parameter 'data'; it must be a direct parameter or return type\"))",
+  )
+}
+
+///|
+test "validate_no_nested_unstructured allows top-level UnstructuredText" {
+  let result : Result[_, _] = try? validate_no_nested_unstructured(
+    "input",
+    Simple("UnstructuredText"),
+  )
+  inspect(result, content="Ok(())")
+}
+
+///|
+test "parse_agents with text_languages annotation" {
+  let content =
+    #|///| A text agent
+    #|#derive.agent
+    #|pub(all) struct TextAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn TextAgent::new(name : String) -> TextAgent {
+    #|  { name }
+    #|}
+    #|
+    #|///| Summarize text
+    #|#derive.text_languages("input", "en", "de")
+    #|pub fn TextAgent::summarize(self : Self, input : UnstructuredText) -> String {
+    #|  ""
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(
+    agents[0].methods[0].param_schema_options.get("input"),
+    content="Some({text_languages: [\"en\", \"de\"], binary_mime_types: []})",
+  )
+}
+
+///|
+test "parse_agents rejects text_languages on non-unstructured param" {
+  let content =
+    #|///| A bad agent
+    #|#derive.agent
+    #|pub(all) struct BadAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn BadAgent::new(name : String) -> BadAgent {
+    #|  { name }
+    #|}
+    #|
+    #|#derive.text_languages("input", "en")
+    #|pub fn BadAgent::process(self : Self, input : String) -> String {
+    #|  ""
+    #|}
+  let result : Result[_, _] = try? parse_agents([("agent.mbt", content)])
+  inspect(
+    result,
+    content="Err(AgentParseError(\"#derive.text_languages on parameter 'input' of method 'process' requires the parameter type to be UnstructuredText\"))",
+  )
+}
+
+///|
+test "parse_agents rejects mime_types on UnstructuredText param" {
+  let content =
+    #|///| A bad agent
+    #|#derive.agent
+    #|pub(all) struct BadAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn BadAgent::new(name : String) -> BadAgent {
+    #|  { name }
+    #|}
+    #|
+    #|#derive.mime_types("input", "image/png")
+    #|pub fn BadAgent::process(self : Self, input : UnstructuredText) -> String {
+    #|  ""
+    #|}
+  let result : Result[_, _] = try? parse_agents([("agent.mbt", content)])
+  inspect(
+    result,
+    content="Err(AgentParseError(\"#derive.mime_types on parameter 'input' of method 'process' requires the parameter type to be UnstructuredBinary\"))",
+  )
+}
+
+///|
+test "parse_agents rejects restriction on unknown param" {
+  let content =
+    #|///| A bad agent
+    #|#derive.agent
+    #|pub(all) struct BadAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn BadAgent::new(name : String) -> BadAgent {
+    #|  { name }
+    #|}
+    #|
+    #|#derive.text_languages("nonexistent", "en")
+    #|pub fn BadAgent::process(self : Self, input : UnstructuredText) -> String {
+    #|  ""
+    #|}
+  let result : Result[_, _] = try? parse_agents([("agent.mbt", content)])
+  inspect(
+    result,
+    content=(
+      #|Err(AgentParseError("#derive.text_languages/#derive.mime_types references unknown parameter 'nonexistent' of method 'process'"))
+    ),
+  )
+}
+
+///|
+test "validate_no_nested_unstructured rejects Result[UnstructuredText, String]" {
+  let result : Result[_, _] = try? validate_no_nested_unstructured(
+    "input",
+    ResultType(Simple("UnstructuredText"), Simple("String")),
+  )
+  inspect(
+    result,
+    content="Err(AgentParseError(\"UnstructuredText cannot be nested inside Result for parameter 'input'; it must be a direct parameter or return type\"))",
+  )
+}
+
+///|
+test "validate_no_nested_unstructured rejects qualified @types.UnstructuredText in Option" {
+  let result : Result[_, _] = try? validate_no_nested_unstructured(
+    "input",
+    Optional(Simple("@types.UnstructuredText")),
+  )
+  inspect(
+    result,
+    content="Err(AgentParseError(\"@types.UnstructuredText cannot be nested inside Option for parameter 'input'; it must be a direct parameter or return type\"))",
+  )
+}
+
+///|
+test "parse_agents rejects nested UnstructuredText" {
+  let content =
+    #|///| A bad agent
+    #|#derive.agent
+    #|pub(all) struct BadAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn BadAgent::new(name : String) -> BadAgent {
+    #|  { name }
+    #|}
+    #|
+    #|pub fn BadAgent::process(self : Self, input : UnstructuredText?) -> String {
+    #|  ""
+    #|}
+  let result : Result[_, _] = try? parse_agents([("agent.mbt", content)])
+  inspect(
+    result,
+    content="Err(AgentParseError(\"UnstructuredText cannot be nested inside Option for parameter 'input'; it must be a direct parameter or return type\"))",
   )
 }

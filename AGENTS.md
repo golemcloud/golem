@@ -71,7 +71,11 @@ moonbit-golem/
 │   ├── world/                         # WIT-generated world-level bindings
 │   │   └── agentGuest/                # agent-guest world imports and type re-exports
 │   ├── agents/                        # SDK's agent registry
-│   │   └── agents.mbt                 # AgentState, RegisteredAgent, RawAgent trait, register_agent
+│   │   ├── agents.mbt                 # AgentState, RegisteredAgent, RawAgent trait, register_agent
+│   │   └── types/                     # User-facing unstructured data types
+│   │       ├── top.mbt                # UnstructuredText, UnstructuredBinary enums + constructors
+│   │       ├── schema.mbt             # HasElementSchema/FromElementValue/ToElementValue impls
+│   │       └── tests.mbt              # Roundtrip and schema tests
 │   ├── builder/                       # WitValue & WitType builder API
 │   │   ├── top.mbt                    # Builder struct, primitive add_* methods, build()
 │   │   ├── item_builder.mbt           # ItemBuilder for single-child nodes (option, result, variant)
@@ -82,7 +86,7 @@ moonbit-golem/
 │   │   ├── top.mbt                    # Extractor trait, WitValueExtractor, NodeExtractor impls
 │   │   └── tests.mbt                  # Extractor tests
 │   └── schema/                        # Schema traits & primitive/compound impls
-│       ├── schema.mbt                 # HasElementSchema, FromExtractor, FromElementValue, ToElementValue traits
+│       ├── schema.mbt                 # HasElementSchema, FromExtractor, FromElementValue, ToElementValue traits + SchemaOptions
 │       ├── primitives.mbt             # Impls for String, Bool, Int, UInt, Int64, UInt64, Float, Double, Byte, Char
 │       ├── compounds.mbt             # Impls for Option[T], Array[T], Result[T, E]
 │       ├── records.mbt               # make_record_schema/value, extract_field, enum/variant helpers
@@ -253,10 +257,17 @@ primitive and compound MoonBit types. This is the SDK's equivalent of the Rust S
 
 **Helper functions**:
 - `schema_of(v)` — infers `HasElementSchema` from a value
-- `schema_of_tag(TypeTag[T])` — gets schema for a type without needing a value instance
+- `schema_of_tag(TypeTag[T], options~)` — gets schema for a type without needing a value instance;
+  accepts optional `SchemaOptions` for applying language/MIME restrictions to unstructured types
 - `from_element_value_as[T](ElementValue) -> T` — typed deserialization
 - `to_element_value_as[T](v) -> ElementValue` — typed serialization
 - `from_extractor_as[T](&Extractor) -> T` — typed low-level deserialization
+
+**SchemaOptions** (`schema.mbt`):
+- `SchemaOptions { text_languages, binary_mime_types }` — passed to `schema_of_tag` to apply
+  restrictions. When `text_languages` is non-empty and the base schema is `UnstructuredText`,
+  the restrictions are injected into the `TextDescriptor`. Similarly for `binary_mime_types` /
+  `UnstructuredBinary`. Options are silently ignored for `ComponentModel` schemas.
 
 **Primitive implementations** (`primitives.mbt`):
 All four traits are implemented for: `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64),
@@ -325,14 +336,22 @@ moon run cmd -- agents <package-dir>
   for ephemeral mode (default is durable).
 - `#derive.golem_schema` on a struct or enum — generates serialization impls for custom data types.
 - `#derive.prompt_hint("...")` on methods — adds a prompt hint to the method's agent definition.
+- `#derive.text_languages("param_name", "en", "de")` on methods — applies language restrictions
+  to an `UnstructuredText` parameter's schema.
+- `#derive.mime_types("param_name", "image/png", "image/jpeg")` on methods — applies MIME type
+  restrictions to an `UnstructuredBinary` parameter's schema.
 - Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions.
 
 **Agent parsing** (`agents.mbt`):
 - Finds structs annotated with `#derive.agent`
 - Finds the `::new` constructor (required) and extracts parameters
 - Finds all public methods with `Self` as first parameter
-- Extracts return types, parameter types, doc strings, mode, and prompt hints
-- Supports types: `Simple(name)`, `Optional(T)`, `List(T)`, `ResultType(T, E)`
+- Extracts return types, parameter types, doc strings, mode, prompt hints, and schema restrictions
+- Supports types: `Simple(name)`, `Optional(T)`, `List(T)`, `ResultType(T, E)`, `Tuple(elems)`
+- Validates that `UnstructuredText`/`UnstructuredBinary` are not nested inside `Option`/`Array`/
+  `Result`/`Tuple` — they must be direct parameter or return types
+- Validates that `#derive.text_languages` / `#derive.mime_types` annotations reference existing
+  parameters of the correct unstructured type
 
 **Value type parsing** (`value_types.mbt`):
 - Finds types annotated with `#derive.golem_schema`
@@ -430,6 +449,12 @@ The pattern for wrapping any side-effecting call:
 - Snapshot save/load stubs exist but are not yet functional
 - Agent mode (durable/ephemeral) is supported via `#derive.agent("ephemeral")`
 - Prompt hints on methods via `#derive.prompt_hint("...")`
+- **Unstructured text/binary types are supported** — `UnstructuredText` and `UnstructuredBinary`
+  enums in `agents/types/` with full schema trait impls. Uses `Bytes` for binary data (idiomatic
+  MoonBit). The code generator treats them like any other type via trait dispatch (no name-based
+  recognition). Language/MIME restrictions via `#derive.text_languages`/`#derive.mime_types`
+  annotations on methods, validated at codegen time. Nesting inside `Option`/`Array`/`Result`/
+  `Tuple` is detected and rejected with clear error messages.
 
 ## What Needs To Be Built
 
@@ -440,7 +465,6 @@ variant enums (with payloads). Still needed:
 - Variant enums with multi-field (record-like) payloads
 - Tuple types
 - Nested custom types across packages (currently must be in the same package)
-- Unstructured text/binary data types (multimodal)
 
 ### 2. Snapshot Support
 

@@ -79,6 +79,30 @@ fn make_constr_pattern(
 }
 
 ///|
+fn make_labelled_constr_pattern(
+  name : String,
+  fields : Array[(String, @syntax.Pattern)],
+) -> @syntax.Pattern {
+  let constr = @syntax.Constructor::{
+    name: @syntax.ConstrName::{ name, loc: dummy_loc },
+    extra_info: @syntax.ConstructorExtraInfo::NoExtraInfo,
+    loc: dummy_loc,
+  }
+  let pat_args = fields.map(fn(f) {
+    @syntax.ConstrPatArg::{
+      pat: f.1,
+      kind: @syntax.ArgumentKind::Labelled(make_label(f.0)),
+    }
+  })
+  @syntax.Pattern::Constr(
+    constr~,
+    args=Some(to_list(pat_args)),
+    is_open=false,
+    loc=dummy_loc,
+  )
+}
+
+///|
 fn make_uint_expr(n : Int) -> @syntax.Expr {
   @syntax.Expr::Constant(c=@syntax.Constant::UInt(n.to_string()), loc=dummy_loc)
 }
@@ -284,7 +308,7 @@ fn variant_payload_schema_expr(payload : VariantPayload) -> @syntax.Expr {
     None => make_constr_no_args("None")
     Single(pt) =>
       make_apply(make_constr_no_args("Some"), [param_type_to_schema_expr(pt)])
-    Multi(fields) => {
+    Multi(fields, _) => {
       let field_exprs = fields.map(fn(f) {
         let (name, pt) = f
         make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
@@ -364,19 +388,35 @@ fn build_variant_from_extractor_case(
       )
       make_case(make_int_pattern(idx), guarded)
     }
-    Multi(fields) => {
+    Multi(fields, labelled) => {
       // guard payload is Some(p) else { raise ... }
-      // let field0 : T0 = @schema.extract_field(p, 0)
-      // let field1 : T1 = @schema.extract_field(p, 1)
-      // CaseName(field0, field1)
-      let field_args = fields.mapi(fn(i, _f) { make_ident_expr("field\{i}") })
-      let result = make_apply(make_constr_no_args(case_name), field_args)
+      // let v0 : T0 = @schema.extract_field(p, 0)
+      // let v1 : T1 = @schema.extract_field(p, 1)
+      // CaseName(v0, v1)  or  CaseName(label0=v0, label1=v1)
+      let var_name = fn(i : Int, f : (String, ParamType)) -> String {
+        if labelled {
+          f.0
+        } else {
+          "field\{i}"
+        }
+      }
+      let result = if labelled {
+        let args = fields.mapi(fn(i, f) {
+          make_labelled_arg(f.0, make_ident_expr(var_name(i, f)))
+        })
+        make_apply_with_args(make_constr_no_args(case_name), args)
+      } else {
+        let field_args = fields.mapi(fn(i, f) {
+          make_ident_expr(var_name(i, f))
+        })
+        make_apply(make_constr_no_args(case_name), field_args)
+      }
       let mut body = result
       for rev_idx in 0..<fields.length() {
         let i = fields.length() - 1 - rev_idx
-        let (_name, pt) = fields[i]
+        let (name, pt) = fields[i]
         body = make_let_typed(
-          "field\{i}",
+          var_name(i, (name, pt)),
           param_type_to_ast_type(pt),
           make_apply(make_qualified_expr("schema", "extract_field"), [
             make_ident_expr("p"),
@@ -484,16 +524,33 @@ fn build_variant_to_element_value(
             ]),
           ),
         )
-      Multi(fields) => {
-        let field_pats = fields.mapi(fn(j, _f) { make_var_pattern("field\{j}") })
-        let field_value_exprs = fields.mapi(fn(j, _f) {
+      Multi(fields, labelled) => {
+        let var_name = fn(j : Int, f : (String, ParamType)) -> String {
+          if labelled {
+            f.0
+          } else {
+            "field\{j}"
+          }
+        }
+        let pat = if labelled {
+          let labelled_pats = fields.mapi(fn(j, f) {
+            (f.0, make_var_pattern(var_name(j, f)))
+          })
+          make_labelled_constr_pattern(name, labelled_pats)
+        } else {
+          let field_pats = fields.mapi(fn(j, f) {
+            make_var_pattern(var_name(j, f))
+          })
+          make_constr_pattern(name, field_pats)
+        }
+        let field_value_exprs = fields.mapi(fn(j, f) {
           make_apply(make_qualified_expr("schema", "to_element_value_as"), [
-            make_ident_expr("field\{j}"),
+            make_ident_expr(var_name(j, f)),
           ])
         })
         match_cases.push(
           make_case(
-            make_constr_pattern(name, field_pats),
+            pat,
             make_apply(make_qualified_expr("schema", "make_variant_value"), [
               make_uint_expr(i),
               make_apply(make_constr_no_args("Some"), [

@@ -16,7 +16,11 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
 ///|
 fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
   match pt {
-    Simple(name) => make_type(name)
+    Simple(name) =>
+      match decode_qualified(name) {
+        Some((pkg, id)) => make_qualified_parameterized_type(pkg, id, [])
+        None => make_type(name)
+      }
     Optional(inner) => make_option_type(param_type_to_ast_type(inner))
     List(inner) =>
       make_parameterized_type("Array", [param_type_to_ast_type(inner)])
@@ -30,11 +34,14 @@ fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
 }
 
 ///|
-pub fn param_type_to_schema_expr(pt : ParamType) -> @syntax.Expr {
+pub fn param_type_to_schema_expr(
+  pt : ParamType,
+  options? : SchemaOptions? = None,
+) -> @syntax.Expr {
   match pt {
     Tuple(elems) =>
       make_apply(make_qualified_expr("schema", "make_tuple_schema"), [
-        make_array(elems.map(param_type_to_schema_expr)),
+        make_array(elems.map(fn(e) { param_type_to_schema_expr(e) })),
       ])
     _ => {
       let ty = param_type_to_ast_type(pt)
@@ -45,7 +52,27 @@ pub fn param_type_to_schema_expr(pt : ParamType) -> @syntax.Expr {
         make_record_with_type("schema", "TypeTag", []),
         type_tag_ty,
       )
-      make_apply(make_qualified_expr("schema", "schema_of_tag"), [tag_expr])
+      match options {
+        Some(opts) if opts.text_languages.length() > 0 ||
+          opts.binary_mime_types.length() > 0 => {
+          let options_expr = make_record_with_type("schema", "SchemaOptions", [
+            make_field(
+              "text_languages",
+              make_array(opts.text_languages.map(make_string_expr)),
+            ),
+            make_field(
+              "binary_mime_types",
+              make_array(opts.binary_mime_types.map(make_string_expr)),
+            ),
+          ])
+          make_apply_with_args(make_qualified_expr("schema", "schema_of_tag"), [
+            make_positional_arg(tag_expr),
+            make_labelled_arg("options", options_expr),
+          ])
+        }
+        _ =>
+          make_apply(make_qualified_expr("schema", "schema_of_tag"), [tag_expr])
+      }
     }
   }
 }
@@ -120,7 +147,11 @@ fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
 fn build_method_record(info : MethodInfo) -> @syntax.Expr {
   let input_elems = info.params.map(fn(param) {
     let (name, pt) = param
-    make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+    let opts = info.param_schema_options.get(name)
+    make_tuple([
+      make_string_expr(name),
+      param_type_to_schema_expr(pt, options=opts),
+    ])
   })
   let input_schema = make_apply(
     make_qualified_constr("common", "DataSchema", "Tuple"),
@@ -155,7 +186,11 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
 pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
   let schema_elems = agent.constructor_params.map(fn(param) {
     let (name, pt) = param
-    make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+    let opts = agent.constructor_schema_options.get(name)
+    make_tuple([
+      make_string_expr(name),
+      param_type_to_schema_expr(pt, options=opts),
+    ])
   })
   let input_schema = make_apply(
     make_qualified_constr("common", "DataSchema", "Tuple"),

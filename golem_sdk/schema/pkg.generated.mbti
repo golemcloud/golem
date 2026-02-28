@@ -37,13 +37,20 @@ pub fn make_variant_value(UInt, @common.ElementValue?) -> @common.ElementValue r
 
 pub fn[T : HasElementSchema] schema_of(T) -> @common.ElementSchema
 
-pub fn[T : HasElementSchema] schema_of_tag(TypeTag[T]) -> @common.ElementSchema
+pub fn[T : HasElementSchema] schema_of_tag(TypeTag[T], options? : SchemaOptions) -> @common.ElementSchema
 
 pub fn[T : ToElementValue] to_element_value_as(T) -> @common.ElementValue raise @common.AgentError
 
 // Errors
 
 // Types and methods
+pub(all) struct SchemaOptions {
+  text_languages : Array[String]
+  binary_mime_types : Array[String]
+}
+pub impl Eq for SchemaOptions
+pub impl Show for SchemaOptions
+
 pub(all) struct TypeTag[T] {
 }
 

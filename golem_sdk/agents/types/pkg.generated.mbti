@@ -1,0 +1,44 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/agents/types"
+
+import {
+  "vigoo/golem_sdk/extractor",
+  "vigoo/golem_sdk/interface/golem/agent/common",
+  "vigoo/golem_sdk/schema",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) enum UnstructuredBinary {
+  Url(String)
+  Inline(data~ : Bytes, mime_type~ : String)
+}
+pub fn UnstructuredBinary::from_inline(Bytes, mime_type~ : String) -> Self
+pub fn UnstructuredBinary::from_url(String) -> Self
+pub impl Eq for UnstructuredBinary
+pub impl Show for UnstructuredBinary
+pub impl @schema.FromElementValue for UnstructuredBinary
+pub impl @schema.FromExtractor for UnstructuredBinary
+pub impl @schema.HasElementSchema for UnstructuredBinary
+pub impl @schema.ToElementValue for UnstructuredBinary
+
+pub(all) enum UnstructuredText {
+  Url(String)
+  Inline(text~ : String, language_code~ : String?)
+}
+pub fn UnstructuredText::from_inline(String, language_code? : String?) -> Self
+pub fn UnstructuredText::from_url(String) -> Self
+pub impl Eq for UnstructuredText
+pub impl Show for UnstructuredText
+pub impl @schema.FromElementValue for UnstructuredText
+pub impl @schema.FromExtractor for UnstructuredText
+pub impl @schema.HasElementSchema for UnstructuredText
+pub impl @schema.ToElementValue for UnstructuredText
+
+// Type aliases
+
+// Traits
+

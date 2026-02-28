@@ -108,7 +108,10 @@ test "generate impls for variant enum" {
         ("Circle", Single(Simple("Double"))),
         (
           "Rectangle",
-          Multi([("field0", Simple("Double")), ("field1", Simple("Double"))]),
+          Multi(
+            [("field0", Simple("Double")), ("field1", Simple("Double"))],
+            false,
+          ),
         ),
         ("Point", VariantPayload::None),
       ]),
@@ -201,6 +204,326 @@ test "generate impls for variant enum" {
       #|    }
       #|    Point => @schema.make_variant_value(2U, None)
       #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "generate impls for variant enum with labelled fields" {
+  let types : Array[ValueTypeInfo] = [
+    {
+      name: "Event",
+      kind: VariantEnum([
+        ("Created", Single(Simple("String"))),
+        (
+          "Updated",
+          Multi(
+            [("title", Simple("String")), ("priority", Simple("Int"))],
+            true,
+          ),
+        ),
+        ("Deleted", VariantPayload::None),
+      ]),
+    },
+  ]
+  let impls = generate_value_type_impls(types)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @schema.HasElementSchema for Event with element_schema() {
+      #|  @schema.make_variant_schema([
+      #|    (
+      #|      "Created",
+      #|      Some(
+      #|        @schema.schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[String])),
+      #|      ),
+      #|    ),
+      #|    (
+      #|      "Updated",
+      #|      Some(
+      #|        @schema.make_record_schema([
+      #|          (
+      #|            "title",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|            ),
+      #|          ),
+      #|          (
+      #|            "priority",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[Int]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      ),
+      #|    ),
+      #|    ("Deleted", None),
+      #|  ])
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromExtractor for Event with from_extractor(e) {
+      #|  let (idx, payload) = @schema.extract_variant(e)
+      #|  match idx {
+      #|    0 => {
+      #|      guard payload is Some(p) else {
+      #|        raise  @common.AgentError::InvalidInput(
+      #|          "Expected payload for Event::Created",
+      #|        )
+      #|      }
+      #|      let field0 :String = @schema.from_extractor_as(p)
+      #|      Created(field0)
+      #|    }
+      #|    1 => {
+      #|      guard payload is Some(p) else {
+      #|        raise  @common.AgentError::InvalidInput(
+      #|          "Expected payload for Event::Updated",
+      #|        )
+      #|      }
+      #|      let title :String = @schema.extract_field(p, 0)
+      #|      let priority :Int = @schema.extract_field(p, 1)
+      #|      Updated(title~, priority~)
+      #|    }
+      #|    2 => Deleted
+      #|    _ => raise  @common.AgentError::InvalidInput("Unknown Event case")
+      #|  }
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromElementValue for Event with from_element_value(v) {
+      #|  @schema.from_extractor_as(@extractor.extract_component_model_value(v))
+      #|}
+      #|
+      #|///|
+      #|impl @schema.ToElementValue for Event with to_element_value(self) {
+      #|  match self {
+      #|    Created(field0) => 
+      #|      @schema.make_variant_value(0U, Some(@schema.to_element_value_as(field0)))
+      #|    Updated(title=title, priority=priority) => {
+      #|      @schema.make_variant_value(
+      #|        1U,
+      #|        Some(
+      #|          @schema.make_record_value([
+      #|            @schema.to_element_value_as(title),
+      #|            @schema.to_element_value_as(priority),
+      #|          ]),
+      #|        ),
+      #|      )
+      #|    }
+      #|    Deleted => @schema.make_variant_value(2U, None)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "generate impls for struct with cross-package field types" {
+  let types : Array[ValueTypeInfo] = [
+    {
+      name: "Order",
+      kind: Record([
+        ("id", Simple("UInt64")),
+        ("status", Simple("@types.OrderStatus")),
+        ("items", List(Simple("@types.Item"))),
+        ("note", Optional(Simple("@types.Note"))),
+      ]),
+    },
+  ]
+  let impls = generate_value_type_impls(types)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @schema.HasElementSchema for Order with element_schema() {
+      #|  @schema.make_record_schema([
+      #|    (
+      #|      "id",
+      #|      @schema.schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[UInt64])),
+      #|    ),
+      #|    (
+      #|      "status",
+      #|      @schema.schema_of_tag(
+      #|        (@schema.TypeTag::{  } : @schema.TypeTag[@types.OrderStatus]),
+      #|      ),
+      #|    ),
+      #|    (
+      #|      "items",
+      #|      @schema.schema_of_tag(
+      #|        (@schema.TypeTag::{  } : @schema.TypeTag[Array[@types.Item]]),
+      #|      ),
+      #|    ),
+      #|    (
+      #|      "note",
+      #|      @schema.schema_of_tag(
+      #|        (@schema.TypeTag::{  } : @schema.TypeTag[@types.Note?]),
+      #|      ),
+      #|    ),
+      #|  ])
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromExtractor for Order with from_extractor(e) {
+      #|  let id :UInt64 = @schema.extract_field(e, 0)
+      #|  let status :@types.OrderStatus = @schema.extract_field(e, 1)
+      #|  let items :Array[@types.Item] = @schema.extract_field(e, 2)
+      #|  let note :@types.Note? = @schema.extract_field(e, 3)
+      #|  { id, status, items, note }
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromElementValue for Order with from_element_value(v) {
+      #|  @schema.from_extractor_as(@extractor.extract_component_model_value(v))
+      #|}
+      #|
+      #|///|
+      #|impl @schema.ToElementValue for Order with to_element_value(self) {
+      #|  @schema.make_record_value([
+      #|    @schema.to_element_value_as(self.id),
+      #|    @schema.to_element_value_as(self.status),
+      #|    @schema.to_element_value_as(self.items),
+      #|    @schema.to_element_value_as(self.note),
+      #|  ])
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "generate impls for variant enum with cross-package payload" {
+  let types : Array[ValueTypeInfo] = [
+    {
+      name: "Event",
+      kind: VariantEnum([
+        ("Created", Single(Simple("@types.Info"))),
+        ("Deleted", VariantPayload::None),
+      ]),
+    },
+  ]
+  let impls = generate_value_type_impls(types)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @schema.HasElementSchema for Event with element_schema() {
+      #|  @schema.make_variant_schema([
+      #|    (
+      #|      "Created",
+      #|      Some(
+      #|        @schema.schema_of_tag(
+      #|          (@schema.TypeTag::{  } : @schema.TypeTag[@types.Info]),
+      #|        ),
+      #|      ),
+      #|    ),
+      #|    ("Deleted", None),
+      #|  ])
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromExtractor for Event with from_extractor(e) {
+      #|  let (idx, payload) = @schema.extract_variant(e)
+      #|  match idx {
+      #|    0 => {
+      #|      guard payload is Some(p) else {
+      #|        raise  @common.AgentError::InvalidInput(
+      #|          "Expected payload for Event::Created",
+      #|        )
+      #|      }
+      #|      let field0 :@types.Info = @schema.from_extractor_as(p)
+      #|      Created(field0)
+      #|    }
+      #|    1 => Deleted
+      #|    _ => raise  @common.AgentError::InvalidInput("Unknown Event case")
+      #|  }
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromElementValue for Event with from_element_value(v) {
+      #|  @schema.from_extractor_as(@extractor.extract_component_model_value(v))
+      #|}
+      #|
+      #|///|
+      #|impl @schema.ToElementValue for Event with to_element_value(self) {
+      #|  match self {
+      #|    Created(field0) => 
+      #|      @schema.make_variant_value(0U, Some(@schema.to_element_value_as(field0)))
+      #|    Deleted => @schema.make_variant_value(1U, None)
+      #|  }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "generate impls for struct with type alias fields" {
+  let types : Array[ValueTypeInfo] = [
+    {
+      name: "UserRecord",
+      kind: Record([
+        ("id", Simple("UserId")),
+        ("name", Simple("UserName")),
+        ("tags", List(Simple("Tag"))),
+      ]),
+    },
+  ]
+  let impls = generate_value_type_impls(types)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|///|
+      #|impl @schema.HasElementSchema for UserRecord with element_schema() {
+      #|  @schema.make_record_schema([
+      #|    (
+      #|      "id",
+      #|      @schema.schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[UserId])),
+      #|    ),
+      #|    (
+      #|      "name",
+      #|      @schema.schema_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[UserName])),
+      #|    ),
+      #|    (
+      #|      "tags",
+      #|      @schema.schema_of_tag(
+      #|        (@schema.TypeTag::{  } : @schema.TypeTag[Array[Tag]]),
+      #|      ),
+      #|    ),
+      #|  ])
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromExtractor for UserRecord with from_extractor(e) {
+      #|  let id :UserId = @schema.extract_field(e, 0)
+      #|  let name :UserName = @schema.extract_field(e, 1)
+      #|  let tags :Array[Tag] = @schema.extract_field(e, 2)
+      #|  { id, name, tags }
+      #|}
+      #|
+      #|///|
+      #|impl @schema.FromElementValue for UserRecord with from_element_value(v) {
+      #|  @schema.from_extractor_as(@extractor.extract_component_model_value(v))
+      #|}
+      #|
+      #|///|
+      #|impl @schema.ToElementValue for UserRecord with to_element_value(self) {
+      #|  @schema.make_record_value([
+      #|    @schema.to_element_value_as(self.id),
+      #|    @schema.to_element_value_as(self.name),
+      #|    @schema.to_element_value_as(self.tags),
+      #|  ])
       #|}
       #|
       #|
