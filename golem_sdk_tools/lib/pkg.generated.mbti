@@ -38,6 +38,7 @@ pub(all) struct AgentInfo {
   description : String
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
+  constructor_prompt_hint : String?
   methods : Array[MethodInfo]
   has_init : Bool
 }
@@ -53,6 +54,7 @@ pub(all) struct FnSignature {
 pub(all) struct MethodInfo {
   name : String
   description : String
+  prompt_hint : String?
   params : Array[(String, ParamType)]
   return_type : ParamType?
 }

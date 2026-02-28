@@ -123,10 +123,14 @@ fn build_method_record(info : MethodInfo) -> @syntax.Expr {
         make_array([]),
       ])
   }
+  let hint_expr = match info.prompt_hint {
+    Some(s) => make_apply(make_constr_no_args("Some"), [make_string_expr(s)])
+    None => make_constr_no_args("None")
+  }
   make_record([
     make_field("name", make_string_expr(info.name)),
     make_field("description", make_string_expr(info.description)),
-    make_field("prompt_hint", make_constr_no_args("None")),
+    make_field("prompt_hint", hint_expr),
     make_field("input_schema", input_schema),
     make_field("output_schema", output_schema),
   ])
@@ -142,13 +146,17 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
     make_qualified_constr("common", "DataSchema", "Tuple"),
     [make_array(schema_elems)],
   )
+  let ctor_hint_expr = match agent.constructor_prompt_hint {
+    Some(s) => make_apply(make_constr_no_args("Some"), [make_string_expr(s)])
+    None => make_constr_no_args("None")
+  }
   let constructor_record = make_record([
     make_field(
       "name",
       make_apply(make_constr_no_args("Some"), [make_string_expr("new")]),
     ),
     make_field("description", make_string_expr(agent.constructor_description)),
-    make_field("prompt_hint", make_constr_no_args("None")),
+    make_field("prompt_hint", ctor_hint_expr),
     make_field("input_schema", input_schema),
   ])
   let method_records = agent.methods.map(fn(m) { build_method_record(m) })

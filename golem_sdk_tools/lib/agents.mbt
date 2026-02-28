@@ -10,6 +10,7 @@ pub(all) enum ParamType {
 pub(all) struct MethodInfo {
   name : String
   description : String
+  prompt_hint : String?
   params : Array[(String, ParamType)]
   return_type : ParamType?
 } derive(Show)
@@ -20,6 +21,7 @@ pub(all) struct AgentInfo {
   description : String
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
+  constructor_prompt_hint : String?
   methods : Array[MethodInfo]
   has_init : Bool
 } derive(Show)
@@ -97,6 +99,24 @@ fn extract_doc_string(doc : @syntax.DocString) -> String {
 }
 
 ///|
+fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
+  let mut result : String? = None
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "prompt_hint" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) => result = Some(s)
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
 fn extract_method_params(
   fun_decl : @syntax.FunDecl,
 ) -> Array[(String, ParamType)] raise AgentParseError {
@@ -142,7 +162,10 @@ pub fn parse_agents(
   files : Array[(String, String)],
 ) -> Array[AgentInfo] raise AgentParseError {
   let agent_names : Map[String, String] = {}
-  let agent_constructors : Map[String, (Array[(String, ParamType)], String)] = {}
+  let agent_constructors : Map[
+    String,
+    (Array[(String, ParamType)], String, String?),
+  ] = {}
   let agent_methods : Map[String, Array[MethodInfo]] = {}
   let mut has_init = false
   for pair in files {
@@ -189,7 +212,8 @@ pub fn parse_agents(
                   } else {
                     doc
                   }
-                  agent_constructors[name] = (params, desc)
+                  let hint = extract_prompt_hint(fun_decl.attrs)
+                  agent_constructors[name] = (params, desc, hint)
                 } else if fun_decl.vis is Pub(..) {
                   // Public method — check if first param is Self
                   let mut is_method = false
@@ -231,11 +255,13 @@ pub fn parse_agents(
                     let doc = extract_doc_string(fun_decl.doc)
                     let method_name = fun_decl.name.name
                     let desc = if doc == "" { method_name } else { doc }
+                    let hint = extract_prompt_hint(fun_decl.attrs)
                     match agent_methods.get(name) {
                       Some(methods) =>
                         methods.push({
                           name: method_name,
                           description: desc,
+                          prompt_hint: hint,
                           params,
                           return_type,
                         })
@@ -255,12 +281,13 @@ pub fn parse_agents(
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
     match agent_constructors.get(name) {
-      Some((params, ctor_desc)) =>
+      Some((params, ctor_desc, ctor_hint)) =>
         agents.push({
           name,
           description,
           constructor_params: params,
           constructor_description: ctor_desc,
+          constructor_prompt_hint: ctor_hint,
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
         })

@@ -143,6 +143,7 @@ test "generate_agent_registration for simple agent" {
       description: "A counter agent",
       constructor_params: [("name", Simple("String"))],
       constructor_description: "Creates a new counter",
+      constructor_prompt_hint: None,
       methods: [],
       has_init: false,
     },
@@ -204,16 +205,19 @@ test "generate_agent_registration with methods" {
       description: "A counter agent",
       constructor_params: [("name", Simple("String"))],
       constructor_description: "Creates a new counter",
+      constructor_prompt_hint: None,
       methods: [
         {
           name: "increment",
           description: "Increments the counter",
+          prompt_hint: None,
           params: [],
           return_type: None,
         },
         {
           name: "add",
           description: "Adds a value",
+          prompt_hint: None,
           params: [("value", Simple("UInt64"))],
           return_type: Some(Simple("UInt64")),
         },
@@ -273,6 +277,123 @@ test "generate_agent_registration with methods" {
       #|              ),
       #|            ),
       #|          ]),
+      #|        },
+      #|      ],
+      #|      dependencies: [],
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        let name :String = @schema.from_element_value_as(elements[0])
+      #|        Ok(Counter::new(name))
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
+test "parse_agents extracts prompt_hint from constructor and method" {
+  let content =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|///| Creates a new counter
+    #|#derive.prompt_hint("Provide a unique name for the counter")
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name, value: 0 }
+    #|}
+    #|
+    #|///| Increments the counter
+    #|#derive.prompt_hint("Call this to increase the value by one")
+    #|pub fn Counter::increment(self : Self) -> Unit {
+    #|  self.value += 1
+    #|}
+    #|
+    #|///| Decrements the counter
+    #|pub fn Counter::decrement(self : Self) -> Unit {
+    #|  self.value -= 1
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(
+    agents[0].constructor_prompt_hint,
+    content="Some(\"Provide a unique name for the counter\")",
+  )
+  inspect(agents[0].methods.length(), content="2")
+  inspect(
+    agents[0].methods[0].prompt_hint,
+    content="Some(\"Call this to increase the value by one\")",
+  )
+  inspect(agents[0].methods[1].prompt_hint, content="None")
+}
+
+///|
+test "generate_agent_registration with prompt_hints" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "Counter",
+      description: "A counter agent",
+      constructor_params: [("name", Simple("String"))],
+      constructor_description: "Creates a new counter",
+      constructor_prompt_hint: Some("Provide a unique name"),
+      methods: [
+        {
+          name: "increment",
+          description: "Increments the counter",
+          prompt_hint: Some("Call to increase"),
+          params: [],
+          return_type: None,
+        },
+      ],
+      has_init: false,
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  @agents.register_agent({
+      #|    name: "Counter",
+      #|    agent_type: {
+      #|      type_name: "Counter",
+      #|      description: "A counter agent",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a new counter",
+      #|        prompt_hint: Some("Provide a unique name"),
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "name",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|      methods: [
+      #|        {
+      #|          name: "increment",
+      #|          description: "Increments the counter",
+      #|          prompt_hint: Some("Call to increase"),
+      #|          input_schema: @common.DataSchema::Tuple([]),
+      #|          output_schema: @common.DataSchema::Tuple([]),
       #|        },
       #|      ],
       #|      dependencies: [],
