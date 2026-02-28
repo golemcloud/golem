@@ -49,7 +49,7 @@ pub struct PersistedDurableFunctionInvocation {
     function_name: String,
     response: HostResponse,
     function_type: DurableFunctionType,
-    oplog_entry_version: OplogEntryVersion,
+    entry_version: OplogEntryVersion,
 }
 
 #[async_trait]
@@ -145,10 +145,8 @@ impl From<DurableFunctionType> for durability::DurableFunctionType {
 
 impl From<OplogEntryVersion> for durability::OplogEntryVersion {
     fn from(value: OplogEntryVersion) -> Self {
-        match value {
-            OplogEntryVersion::V1 => durability::OplogEntryVersion::V1,
-            OplogEntryVersion::V2 => durability::OplogEntryVersion::V2,
-        }
+        let _ = value;
+        durability::OplogEntryVersion::V2
     }
 }
 
@@ -159,7 +157,7 @@ impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFu
             function_name: value.function_name,
             response: value.response.into_value_and_type().into(),
             function_type: value.function_type.into(),
-            entry_version: value.oplog_entry_version.into(),
+            entry_version: value.entry_version.into(),
         }
     }
 }
@@ -384,7 +382,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         function_name: function_name.to_string(),
                         response,
                         function_type: durable_function_type,
-                        oplog_entry_version: OplogEntryVersion::V2,
+                        entry_version: OplogEntryVersion::V2,
                     })
                 }
                 _ => Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -428,7 +426,6 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
 
 #[derive(Debug)]
 pub enum OplogEntryVersion {
-    V1,
     V2,
 }
 

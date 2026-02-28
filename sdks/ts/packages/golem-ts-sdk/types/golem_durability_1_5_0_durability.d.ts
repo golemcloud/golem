@@ -69,11 +69,8 @@ declare module 'golem:durability/durability@1.5.0' {
     /** The currently active persistence level */
     persistenceLevel: PersistenceLevel;
   };
-  /**
-   * Represents the oplog entry version; this is for backward compatibility and most use cases should always use
-   * (and expect) the latest version.
-   */
-  export type OplogEntryVersion = "v1" | "v2";
+  /** Represents the oplog entry version. */
+  export type OplogEntryVersion = "v2";
   /**
    * Represents a persisted durable function invocation. The `response` field
    * contains a value and its type information together, making the user-defined payload observable by external tools.

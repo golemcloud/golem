@@ -18,10 +18,8 @@ interface durability {
         persistence-level: persistence-level,
     }
 
-    /// Represents the oplog entry version; this is for backward compatibility and most use cases should always use
-    /// (and expect) the latest version.
+    /// Represents the oplog entry version.
     enum oplog-entry-version {
-        v1,
         v2
     }
 
