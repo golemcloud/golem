@@ -16,9 +16,16 @@ pub(all) struct MethodInfo {
 } derive(Show)
 
 ///|
+pub(all) enum AgentMode {
+  Durable
+  Ephemeral
+} derive(Show, Eq)
+
+///|
 pub(all) struct AgentInfo {
   name : String
   description : String
+  mode : AgentMode
   constructor_params : Array[(String, ParamType)]
   constructor_description : String
   constructor_prompt_hint : String?
@@ -99,6 +106,31 @@ fn extract_doc_string(doc : @syntax.DocString) -> String {
 }
 
 ///|
+fn extract_agent_mode(
+  attrs : @list.List[@attribute.Attribute],
+) -> AgentMode raise AgentParseError {
+  let mut result = Durable
+  attrs.each(fn(attr) {
+    match attr.parsed {
+      Some(Apply({ qual: Some("derive"), name: "agent" }, props)) =>
+        props.each(fn(prop) {
+          match prop {
+            Expr(String(s)) =>
+              if s == "ephemeral" {
+                result = Ephemeral
+              } else if s == "durable" {
+                result = Durable
+              }
+            _ => ()
+          }
+        })
+      _ => ()
+    }
+  })
+  result
+}
+
+///|
 fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
@@ -162,6 +194,7 @@ pub fn parse_agents(
   files : Array[(String, String)],
 ) -> Array[AgentInfo] raise AgentParseError {
   let agent_names : Map[String, String] = {}
+  let agent_modes : Map[String, AgentMode] = {}
   let agent_constructors : Map[
     String,
     (Array[(String, ParamType)], String, String?),
@@ -177,7 +210,8 @@ pub fn parse_agents(
         TopTypeDef(type_decl) => {
           let mut is_agent = false
           type_decl.attrs.each(fn(attr) {
-            if attr.raw == "#derive.agent" {
+            if attr.raw == "#derive.agent" ||
+              attr.raw.has_prefix("#derive.agent(") {
               is_agent = true
             }
           })
@@ -185,7 +219,11 @@ pub fn parse_agents(
             let name = type_decl.tycon
             let description = extract_doc_string(type_decl.doc)
             let desc = if description == "" { name } else { description }
+            let mode = extract_agent_mode(type_decl.attrs) catch {
+              _ => Durable
+            }
             agent_names[name] = desc
+            agent_modes[name] = mode
             agent_methods[name] = []
           }
         }
@@ -285,6 +323,7 @@ pub fn parse_agents(
         agents.push({
           name,
           description,
+          mode: agent_modes.get(name).unwrap_or(Durable),
           constructor_params: params,
           constructor_description: ctor_desc,
           constructor_prompt_hint: ctor_hint,

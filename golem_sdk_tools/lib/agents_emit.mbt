@@ -168,7 +168,14 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
     make_field("dependencies", make_array([])),
     make_field(
       "mode",
-      make_qualified_constr("common", "AgentMode", "DURABLE"),
+      make_qualified_constr(
+        "common",
+        "AgentMode",
+        match agent.mode {
+          Durable => "DURABLE"
+          Ephemeral => "EPHEMERAL"
+        },
+      ),
     ),
   ])
 }

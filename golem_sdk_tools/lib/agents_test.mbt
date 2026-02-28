@@ -141,6 +141,7 @@ test "generate_agent_registration for simple agent" {
     {
       name: "Counter",
       description: "A counter agent",
+      mode: Durable,
       constructor_params: [("name", Simple("String"))],
       constructor_description: "Creates a new counter",
       constructor_prompt_hint: None,
@@ -217,6 +218,7 @@ test "generate_agent_registration with methods" {
     {
       name: "Counter",
       description: "A counter agent",
+      mode: Durable,
       constructor_params: [("name", Simple("String"))],
       constructor_description: "Creates a new counter",
       constructor_prompt_hint: None,
@@ -398,6 +400,7 @@ test "generate_agent_registration with prompt_hints" {
     {
       name: "Counter",
       description: "A counter agent",
+      mode: Durable,
       constructor_params: [("name", Simple("String"))],
       constructor_description: "Creates a new counter",
       constructor_prompt_hint: Some("Provide a unique name"),
@@ -942,6 +945,7 @@ test "build_raw_agent_impl for counter-like agent" {
   let agent : AgentInfo = {
     name: "Counter",
     description: "A counter agent",
+    mode: Durable,
     constructor_params: [("name", Simple("String"))],
     constructor_description: "Creates a new counter",
     constructor_prompt_hint: None,
@@ -1039,5 +1043,122 @@ test "param_type_to_type_string for various types" {
   inspect(
     param_type_to_type_string(Optional(List(Simple("String")))),
     content="Array[String]?",
+  )
+}
+
+///|
+test "parse_agents defaults to durable mode" {
+  let content =
+    #|///| A counter agent
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name }
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents[0].mode, content="Durable")
+}
+
+///|
+test "parse_agents with explicit durable mode" {
+  let content =
+    #|///| A counter agent
+    #|#derive.agent("durable")
+    #|pub(all) struct Counter {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn Counter::new(name : String) -> Counter {
+    #|  { name }
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents[0].mode, content="Durable")
+}
+
+///|
+test "parse_agents with ephemeral mode" {
+  let content =
+    #|///| An ephemeral agent
+    #|#derive.agent("ephemeral")
+    #|pub(all) struct EphemeralAgent {
+    #|  name : String
+    #|}
+    #|
+    #|pub fn EphemeralAgent::new(name : String) -> EphemeralAgent {
+    #|  { name }
+    #|}
+  let agents = parse_agents([("agent.mbt", content)])
+  inspect(agents[0].mode, content="Ephemeral")
+}
+
+///|
+test "generate_agent_registration with ephemeral mode" {
+  let agents : Array[AgentInfo] = [
+    {
+      name: "Worker",
+      description: "An ephemeral worker",
+      mode: Ephemeral,
+      constructor_params: [],
+      constructor_description: "Creates a worker",
+      constructor_prompt_hint: None,
+      methods: [],
+      has_init: false,
+    },
+  ]
+  let impls = generate_agent_registration(agents)
+  let output = @formatter.impls_to_string(impls)
+  inspect(
+    output,
+    content=(
+      #|fn init{
+      #|  @agents.register_agent({
+      #|    name: "Worker",
+      #|    agent_type: {
+      #|      type_name: "Worker",
+      #|      description: "An ephemeral worker",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a worker",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([]),
+      #|      },
+      #|      methods: [],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::EPHEMERAL,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
+      #|        }
+      #|        Ok(Worker::new())
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
+      #|}
+      #|
+      #|///|
+      #|impl @agents.RawAgent for Worker with invoke(self, method_name, input) {
+      #|  try {
+      #|    match method_name {
+      #|      other => Err(@common.AgentError::InvalidMethod(other))
+      #|    }
+      #|  } catch{
+      #|    e => Err(e)
+      #|  }
+      #|}
+      #|
+      #|
+
+
+    ),
   )
 }
