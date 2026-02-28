@@ -7,3 +7,4 @@
 - mbti files in the source tree are noise
 - another `pre-build` hook that runs earlier so it can alter `pkg` files (needed for reexports link section generation)
 - `post-build` hook
+- having to build a cli tool for 'derivation'

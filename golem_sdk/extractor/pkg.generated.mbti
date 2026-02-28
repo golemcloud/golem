@@ -1,0 +1,55 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/extractor"
+
+import {
+  "vigoo/golem_sdk/interface/golem/agent/common",
+  "vigoo/golem_sdk/interface/golem/rpc/types",
+}
+
+// Values
+pub fn expect_single_element(Array[@common.ElementValue]) -> @common.ElementValue
+
+pub fn extract(@types.WitValue) -> &Extractor
+
+pub fn extract_component_model_value(@common.ElementValue) -> &Extractor
+
+pub fn extract_multimodal(@common.DataValue) -> Array[(String, @common.ElementValue)]
+
+pub fn extract_tuple(@common.DataValue) -> Array[@common.ElementValue]
+
+pub fn extract_unstructured_binary(@common.ElementValue) -> @common.BinaryReference
+
+pub fn extract_unstructured_text(@common.ElementValue) -> @common.TextReference
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+pub(open) trait Extractor {
+  u8(Self) -> Byte?
+  u16(Self) -> UInt?
+  u32(Self) -> UInt?
+  u64(Self) -> UInt64?
+  s8(Self) -> Int?
+  s16(Self) -> Int?
+  s32(Self) -> Int?
+  s64(Self) -> Int64?
+  f32(Self) -> Float?
+  f64(Self) -> Double?
+  bool(Self) -> Bool?
+  char(Self) -> Char?
+  string(Self) -> String?
+  field(Self, Int) -> &Extractor?
+  variant(Self) -> (UInt, &Extractor?)?
+  enum_value(Self) -> UInt?
+  flags(Self) -> Array[Bool]?
+  tuple_element(Self, Int) -> &Extractor?
+  list_elements(Self) -> Array[&Extractor]?
+  option(Self) -> &Extractor??
+  result(Self) -> Result[&Extractor?, &Extractor?]?
+  handle(Self) -> (@types.Uri, UInt64)?
+}
+

@@ -4,3 +4,4 @@ target/
 .moonagent/
 _build/
 golem_reexports.mbt
+golem_agents.mbt

@@ -1,0 +1,71 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/schema"
+
+import {
+  "vigoo/golem_sdk/extractor",
+  "vigoo/golem_sdk/interface/golem/agent/common",
+}
+
+// Values
+pub fn[T : FromElementValue] from_element_value_as(@common.ElementValue) -> T raise @common.AgentError
+
+pub fn[T : HasElementSchema] schema_of(T) -> @common.ElementSchema
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+pub(open) trait FromElementValue {
+  from_element_value(@common.ElementValue) -> Self raise @common.AgentError
+}
+pub impl FromElementValue for Bool
+pub impl FromElementValue for Byte
+pub impl FromElementValue for Char
+pub impl FromElementValue for Int
+pub impl FromElementValue for Int64
+pub impl FromElementValue for UInt
+pub impl FromElementValue for UInt64
+pub impl FromElementValue for Float
+pub impl FromElementValue for Double
+pub impl FromElementValue for String
+pub impl[T : FromExtractor] FromElementValue for T?
+pub impl[T : FromExtractor, E : FromExtractor] FromElementValue for Result[T, E]
+pub impl[T : FromExtractor] FromElementValue for Array[T]
+
+pub(open) trait FromExtractor {
+  from_extractor(&@extractor.Extractor) -> Self raise @common.AgentError
+}
+pub impl FromExtractor for Bool
+pub impl FromExtractor for Byte
+pub impl FromExtractor for Char
+pub impl FromExtractor for Int
+pub impl FromExtractor for Int64
+pub impl FromExtractor for UInt
+pub impl FromExtractor for UInt64
+pub impl FromExtractor for Float
+pub impl FromExtractor for Double
+pub impl FromExtractor for String
+pub impl[T : FromExtractor] FromExtractor for T?
+pub impl[T : FromExtractor, E : FromExtractor] FromExtractor for Result[T, E]
+pub impl[T : FromExtractor] FromExtractor for Array[T]
+
+pub(open) trait HasElementSchema {
+  element_schema() -> @common.ElementSchema
+}
+pub impl HasElementSchema for Bool
+pub impl HasElementSchema for Byte
+pub impl HasElementSchema for Char
+pub impl HasElementSchema for Int
+pub impl HasElementSchema for Int64
+pub impl HasElementSchema for UInt
+pub impl HasElementSchema for UInt64
+pub impl HasElementSchema for Float
+pub impl HasElementSchema for Double
+pub impl HasElementSchema for String
+pub impl[T : HasElementSchema] HasElementSchema for T?
+pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result[T, E]
+pub impl[T : HasElementSchema] HasElementSchema for Array[T]
+

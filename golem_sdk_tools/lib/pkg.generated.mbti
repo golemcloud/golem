@@ -7,25 +7,56 @@ import {
 }
 
 // Values
+pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
+
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
+
+pub fn param_type_to_schema_expr(ParamType) -> @syntax.Expr
+
+pub fn param_type_to_type_string(ParamType) -> String
+
+pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
 pub fn parse_mbt_source(String) -> Array[FnSignature]
 
 pub fn parse_pkg_exports(String) -> Array[String]
+
+pub fn syntax_type_to_param_type(@syntax.Type) -> ParamType raise AgentParseError
 
 pub fn transform_exports(Array[String]) -> Array[String]
 
 pub fn update_pkg_link(String, Array[String]) -> String
 
 // Errors
+pub suberror AgentParseError {
+  AgentParseError(String)
+}
 
 // Types and methods
+pub(all) struct AgentInfo {
+  name : String
+  description : String
+  constructor_params : Array[(String, ParamType)]
+  constructor_description : String
+  has_init : Bool
+}
+pub impl Show for AgentInfo
+
 pub(all) struct FnSignature {
   gen_name : String
   user_name : String
   params : Array[String]
   return_type : String
 }
+
+pub(all) enum ParamType {
+  Simple(String)
+  Optional(ParamType)
+  List(ParamType)
+  ResultType(ParamType, ParamType)
+}
+pub impl Eq for ParamType
+pub impl Show for ParamType
 
 // Type aliases
 

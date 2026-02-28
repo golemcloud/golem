@@ -1,0 +1,88 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/builder"
+
+import {
+  "vigoo/golem_sdk/interface/golem/rpc/types",
+}
+
+// Values
+
+// Errors
+pub suberror BuilderError {
+  BuilderError(String)
+}
+
+// Types and methods
+type Builder
+pub fn Builder::add_bool(Self, Bool) -> Int
+pub fn Builder::bool(Self, Bool) -> @types.WitValue
+pub fn Builder::char(Self, Char) -> @types.WitValue
+pub fn Builder::enum_value(Self, UInt) -> @types.WitValue
+pub fn Builder::f32(Self, Float) -> @types.WitValue
+pub fn Builder::f64(Self, Double) -> @types.WitValue
+pub fn Builder::flags(Self, Array[Bool]) -> @types.WitValue
+pub fn Builder::handle(Self, @types.Uri, UInt64) -> @types.WitValue
+pub fn Builder::list(Self, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::new() -> Self
+pub fn Builder::option(Self, ((ItemBuilder) -> Unit raise BuilderError)?) -> @types.WitValue raise BuilderError
+pub fn Builder::option_none(Self) -> @types.WitValue
+pub fn Builder::option_some(Self, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::record(Self, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::result(Self, Result[((ItemBuilder) -> Unit raise BuilderError)?, ((ItemBuilder) -> Unit raise BuilderError)?]) -> @types.WitValue raise BuilderError
+pub fn Builder::result_err(Self, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::result_err_unit(Self) -> @types.WitValue
+pub fn Builder::result_ok(Self, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::result_ok_unit(Self) -> @types.WitValue
+pub fn Builder::s16(Self, Int) -> @types.WitValue
+pub fn Builder::s32(Self, Int) -> @types.WitValue
+pub fn Builder::s64(Self, Int64) -> @types.WitValue
+pub fn Builder::s8(Self, Int) -> @types.WitValue
+pub fn Builder::string(Self, String) -> @types.WitValue
+pub fn Builder::tuple(Self, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::u16(Self, UInt) -> @types.WitValue
+pub fn Builder::u32(Self, UInt) -> @types.WitValue
+pub fn Builder::u64(Self, UInt64) -> @types.WitValue
+pub fn Builder::u8(Self, Byte) -> @types.WitValue
+pub fn Builder::variant(Self, UInt, (ItemBuilder) -> Unit raise BuilderError) -> @types.WitValue raise BuilderError
+pub fn Builder::variant_option(Self, UInt, ((ItemBuilder) -> Unit raise BuilderError)?) -> @types.WitValue raise BuilderError
+pub fn Builder::variant_unit(Self, UInt) -> @types.WitValue
+
+type ChildItemsBuilder
+pub fn ChildItemsBuilder::items(Self, (ItemBuilder) -> Unit raise BuilderError) -> Unit raise BuilderError
+
+type ItemBuilder
+pub fn ItemBuilder::bool(Self, Bool) -> Unit raise BuilderError
+pub fn ItemBuilder::char(Self, Char) -> Unit raise BuilderError
+pub fn ItemBuilder::enum_value(Self, UInt) -> Unit raise BuilderError
+pub fn ItemBuilder::f32(Self, Float) -> Unit raise BuilderError
+pub fn ItemBuilder::f64(Self, Double) -> Unit raise BuilderError
+pub fn ItemBuilder::flags(Self, Array[Bool]) -> Unit raise BuilderError
+pub fn ItemBuilder::handle(Self, @types.Uri, UInt64) -> Unit raise BuilderError
+pub fn ItemBuilder::list(Self, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::option(Self, ((Self) -> Unit raise BuilderError)?) -> Unit raise BuilderError
+pub fn ItemBuilder::option_none(Self) -> Unit raise BuilderError
+pub fn ItemBuilder::option_some(Self, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::record(Self, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::result(Self, Result[((Self) -> Unit raise BuilderError)?, ((Self) -> Unit raise BuilderError)?]) -> Unit raise BuilderError
+pub fn ItemBuilder::result_err(Self, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::result_err_unit(Self) -> Unit raise BuilderError
+pub fn ItemBuilder::result_ok(Self, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::result_ok_unit(Self) -> Unit raise BuilderError
+pub fn ItemBuilder::s16(Self, Int) -> Unit raise BuilderError
+pub fn ItemBuilder::s32(Self, Int) -> Unit raise BuilderError
+pub fn ItemBuilder::s64(Self, Int64) -> Unit raise BuilderError
+pub fn ItemBuilder::s8(Self, Int) -> Unit raise BuilderError
+pub fn ItemBuilder::string(Self, String) -> Unit raise BuilderError
+pub fn ItemBuilder::tuple(Self, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::u16(Self, UInt) -> Unit raise BuilderError
+pub fn ItemBuilder::u32(Self, UInt) -> Unit raise BuilderError
+pub fn ItemBuilder::u64(Self, UInt64) -> Unit raise BuilderError
+pub fn ItemBuilder::u8(Self, Byte) -> Unit raise BuilderError
+pub fn ItemBuilder::variant(Self, UInt, (Self) -> Unit raise BuilderError) -> Unit raise BuilderError
+pub fn ItemBuilder::variant_option(Self, UInt, ((Self) -> Unit raise BuilderError)?) -> Unit raise BuilderError
+pub fn ItemBuilder::variant_unit(Self, UInt) -> Unit raise BuilderError
+
+// Type aliases
+
+// Traits
+
