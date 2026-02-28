@@ -72,10 +72,12 @@ moonbit-golem/
 │   │   └── agentGuest/                # agent-guest world imports and type re-exports
 │   ├── agents/                        # SDK's agent registry
 │   │   ├── agents.mbt                 # AgentState, RegisteredAgent, RawAgent trait, register_agent
-│   │   └── types/                     # User-facing unstructured data types
+│   │   └── types/                     # User-facing unstructured & multimodal data types
 │   │       ├── top.mbt                # UnstructuredText, UnstructuredBinary enums + constructors
+│   │       ├── multimodal.mbt         # Multimodal[T], TextOrBinary, CustomModality[T] types
+│   │       ├── multimodal_schema.mbt  # MultimodalModality trait + impls for TextOrBinary, CustomModality
 │   │       ├── schema.mbt             # HasElementSchema/FromElementValue/ToElementValue impls
-│   │       └── tests.mbt              # Roundtrip and schema tests
+│   │       └── tests.mbt              # Roundtrip, schema, and multimodal tests
 │   ├── builder/                       # WitValue & WitType builder API
 │   │   ├── top.mbt                    # Builder struct, primitive add_* methods, build()
 │   │   ├── item_builder.mbt           # ItemBuilder for single-child nodes (option, result, variant)
@@ -115,12 +117,13 @@ moonbit-golem/
     ├── moon.mod.json                  # Module: vigoo/golem_sdk_example1 (deps on local golem_sdk)
     ├── build.sh                       # Build script: reexports + agents codegen + moon build + wasm-tools
     ├── golem.yaml                     # Golem 1.4.2 application definition with build pipeline
-    └── counter/                       # Example agents: Counter and TaskManager
+    └── counter/                       # Example agents: Counter, TaskManager, and VisionAgent
         ├── moon.pkg                   # is-main, WASM export link config (auto-updated by tools)
         ├── counter.mbt               # Counter agent: #derive.agent struct with increment/decrement/get_value
         ├── task_manager.mbt          # TaskManager agent: custom types with #derive.golem_schema
+        ├── multimodal_agent.mbt      # VisionAgent: multimodal input with #derive.multimodal enum
         ├── golem_reexports.mbt       # Generated — re-exports WASM entry points from SDK gen package
-        ├── golem_derive.mbt          # Generated — HasElementSchema/FromExtractor/ToElementValue for custom types
+        ├── golem_derive.mbt          # Generated — HasElementSchema/FromExtractor/ToElementValue + MultimodalModality for custom types
         └── golem_agents.mbt          # Generated — agent registration, RawAgent impls, init block
 ```
 
@@ -257,17 +260,20 @@ primitive and compound MoonBit types. This is the SDK's equivalent of the Rust S
 
 **Helper functions**:
 - `schema_of(v)` — infers `HasElementSchema` from a value
-- `schema_of_tag(TypeTag[T], options~)` — gets schema for a type without needing a value instance;
-  accepts optional `SchemaOptions` for applying language/MIME restrictions to unstructured types
+- `schema_of_tag(TypeTag[T])` — gets schema for a type without needing a value instance (non-raising)
+- `schema_of_tag_with_options(TypeTag[T], SchemaOptions)` — gets schema with language/MIME
+  restrictions applied; raises `AgentError` if the options don't match the schema kind (e.g.,
+  `text_languages` on a non-`UnstructuredText` type)
 - `from_element_value_as[T](ElementValue) -> T` — typed deserialization
 - `to_element_value_as[T](v) -> ElementValue` — typed serialization
 - `from_extractor_as[T](&Extractor) -> T` — typed low-level deserialization
 
 **SchemaOptions** (`schema.mbt`):
-- `SchemaOptions { text_languages, binary_mime_types }` — passed to `schema_of_tag` to apply
-  restrictions. When `text_languages` is non-empty and the base schema is `UnstructuredText`,
-  the restrictions are injected into the `TextDescriptor`. Similarly for `binary_mime_types` /
-  `UnstructuredBinary`. Options are silently ignored for `ComponentModel` schemas.
+- `SchemaOptions { text_languages, binary_mime_types }` — passed to `schema_of_tag_with_options`
+  to apply restrictions. When `text_languages` is non-empty and the base schema is
+  `UnstructuredText`, the restrictions are injected into the `TextDescriptor`. Similarly for
+  `binary_mime_types` / `UnstructuredBinary`. If the schema kind doesn't match the options,
+  `AgentError::InvalidInput` is raised (detected via trait dispatch, not name-based checks).
 
 **Primitive implementations** (`primitives.mbt`):
 All four traits are implemented for: `String`, `Bool`, `Int` (S32), `UInt` (U32), `Int64` (S64),
@@ -312,7 +318,9 @@ section (creating or replacing it as needed).
 Generates two files from user source code annotations:
 
 1. **`golem_agents.mbt`** — agent registration and dispatch code:
-   - `fn init {}` block that calls `register_agent(...)` for each agent
+   - `fn init {}` block wrapped in `try { ... } catch { e => abort(e.to_string()) }` that calls
+     `register_agent(...)` for each agent (the try/catch captures any `schema_of_tag_with_options`
+     errors from schema option validation and aborts at startup with a clear message)
    - `AgentType` definitions with schemas derived from method signatures
    - Constructor deserialization (extracts tuple elements, deserializes via `@schema`)
    - `impl RawAgent for AgentName` with method dispatch (`match method_name { ... }`)
@@ -335,6 +343,7 @@ moon run cmd -- agents <package-dir>
 - `#derive.agent` on a struct — marks it as a Golem agent. Supports `#derive.agent("ephemeral")`
   for ephemeral mode (default is durable).
 - `#derive.golem_schema` on a struct or enum — generates serialization impls for custom data types.
+- `#derive.multimodal` on an enum — generates `MultimodalModality` trait impl for custom modality types.
 - `#derive.prompt_hint("...")` on methods — adds a prompt hint to the method's agent definition.
 - `#derive.text_languages("param_name", "en", "de")` on methods — applies language restrictions
   to an `UnstructuredText` parameter's schema.
@@ -347,11 +356,13 @@ moon run cmd -- agents <package-dir>
 - Finds the `::new` constructor (required) and extracts parameters
 - Finds all public methods with `Self` as first parameter
 - Extracts return types, parameter types, doc strings, mode, prompt hints, and schema restrictions
-- Supports types: `Simple(name)`, `Optional(T)`, `List(T)`, `ResultType(T, E)`, `Tuple(elems)`
-- Validates that `UnstructuredText`/`UnstructuredBinary` are not nested inside `Option`/`Array`/
-  `Result`/`Tuple` — they must be direct parameter or return types
+- Supports types: `Simple(name)`, `Optional(T)`, `List(T)`, `ResultType(T, E)`, `Tuple(elems)`,
+  `MultimodalType(T)`, `Parameterized(name, params)`
+- The code generator does **not** recognize types like `UnstructuredText`/`UnstructuredBinary` by
+  name — all type-level decisions (schema options validation, nesting restrictions) are handled at
+  runtime via trait dispatch (`HasElementSchema`, `FromElementValue`, `ToElementValue`)
 - Validates that `#derive.text_languages` / `#derive.mime_types` annotations reference existing
-  parameters of the correct unstructured type
+  parameters (type correctness is validated at runtime by `schema_of_tag_with_options`)
 
 **Value type parsing** (`value_types.mbt`):
 - Finds types annotated with `#derive.golem_schema`
@@ -443,7 +454,7 @@ The pattern for wrapping any side-effecting call:
 - **Schema traits are implemented** — `HasElementSchema`, `FromExtractor`, `FromElementValue`, `ToElementValue` for all MoonBit primitives and compound types (`Option[T]`, `Array[T]`, `Result[T, E]`), plus record/enum/variant helpers for custom types
 - **Agent code generation is complete** — the `agents` subcommand parses `#derive.agent` and `#derive.golem_schema` annotations, generates `golem_agents.mbt` (registration + RawAgent dispatch) and `golem_derive.mbt` (serialization impls)
 - **Reexport generation is complete** — the `reexports` subcommand generates `golem_reexports.mbt` and auto-updates `moon.pkg` link sections
-- **Two working example agents** — `Counter` (simple state, primitive types) and `TaskManager` (custom types: `Priority` enum, `TaskInfo` struct with optional fields)
+- **Three working example agents** — `Counter` (simple state, primitive types), `TaskManager` (custom types: `Priority` enum, `TaskInfo` struct with optional fields), and `VisionAgent` (multimodal input with custom `#derive.multimodal` enum)
 - The build pipeline works: codegen → `moon build --target wasm` → `wasm-tools component embed` → `wasm-tools component new`
 - A `golem.yaml` application definition is set up for Golem 1.4.2 with the full build pipeline
 - Snapshot save/load stubs exist but are not yet functional
@@ -453,8 +464,8 @@ The pattern for wrapping any side-effecting call:
   enums in `agents/types/` with full schema trait impls. Uses `Bytes` for binary data (idiomatic
   MoonBit). The code generator treats them like any other type via trait dispatch (no name-based
   recognition). Language/MIME restrictions via `#derive.text_languages`/`#derive.mime_types`
-  annotations on methods, validated at codegen time. Nesting inside `Option`/`Array`/`Result`/
-  `Tuple` is detected and rejected with clear error messages.
+  annotations on methods, validated at runtime via `schema_of_tag_with_options`. Nesting inside
+  `Option`/`Array`/`Result`/`Tuple` is detected and rejected at runtime with clear error messages.
 
 ## What Needs To Be Built
 

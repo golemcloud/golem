@@ -30,8 +30,15 @@ pub(all) struct SchemaOptions {
 ///|
 pub fn[T : HasElementSchema] schema_of_tag(
   _ : TypeTag[T],
-  options? : SchemaOptions = { text_languages: [], binary_mime_types: [] },
 ) -> @common.ElementSchema {
+  T::element_schema()
+}
+
+///|
+pub fn[T : HasElementSchema] schema_of_tag_with_options(
+  _ : TypeTag[T],
+  options : SchemaOptions,
+) -> @common.ElementSchema raise @common.AgentError {
   let base = T::element_schema()
   apply_schema_options(base, options)
 }
@@ -40,11 +47,12 @@ pub fn[T : HasElementSchema] schema_of_tag(
 fn apply_schema_options(
   schema : @common.ElementSchema,
   options : SchemaOptions,
-) -> @common.ElementSchema {
-  match schema {
-    @common.ElementSchema::UnstructuredText(desc) =>
-      if options.text_languages.length() > 0 {
-        @common.ElementSchema::UnstructuredText(@common.TextDescriptor::{
+) -> @common.ElementSchema raise @common.AgentError {
+  let mut result = schema
+  if options.text_languages.length() > 0 {
+    match schema {
+      @common.ElementSchema::UnstructuredText(desc) =>
+        result = @common.ElementSchema::UnstructuredText(@common.TextDescriptor::{
           ..desc,
           restrictions: Some(
             options.text_languages.map(fn(code) {
@@ -52,12 +60,16 @@ fn apply_schema_options(
             }),
           ),
         })
-      } else {
-        schema
-      }
-    @common.ElementSchema::UnstructuredBinary(desc) =>
-      if options.binary_mime_types.length() > 0 {
-        @common.ElementSchema::UnstructuredBinary(@common.BinaryDescriptor::{
+      _ =>
+        raise @common.AgentError::InvalidInput(
+          "#derive.text_languages requires the parameter type to implement HasElementSchema with UnstructuredText schema",
+        )
+    }
+  }
+  if options.binary_mime_types.length() > 0 {
+    match result {
+      @common.ElementSchema::UnstructuredBinary(desc) =>
+        result = @common.ElementSchema::UnstructuredBinary(@common.BinaryDescriptor::{
           ..desc,
           restrictions: Some(
             options.binary_mime_types.map(fn(mime) {
@@ -65,11 +77,13 @@ fn apply_schema_options(
             }),
           ),
         })
-      } else {
-        schema
-      }
-    _ => schema
+      _ =>
+        raise @common.AgentError::InvalidInput(
+          "#derive.mime_types requires the parameter type to implement HasElementSchema with UnstructuredBinary schema",
+        )
+    }
   }
+  result
 }
 
 ///|

@@ -68,9 +68,9 @@ test "unstructured_binary_schema" {
 
 ///|
 test "unstructured_text_schema_with_restrictions" {
-  let schema = @schema.schema_of_tag(
+  let schema = @schema.schema_of_tag_with_options(
     (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredText]),
-    options={ text_languages: ["en", "de"], binary_mime_types: [] },
+    { text_languages: ["en", "de"], binary_mime_types: [] },
   )
   inspect(
     schema,
@@ -80,12 +80,9 @@ test "unstructured_text_schema_with_restrictions" {
 
 ///|
 test "unstructured_binary_schema_with_restrictions" {
-  let schema = @schema.schema_of_tag(
+  let schema = @schema.schema_of_tag_with_options(
     (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredBinary]),
-    options={
-      text_languages: [],
-      binary_mime_types: ["image/png", "image/jpeg"],
-    },
+    { text_languages: [], binary_mime_types: ["image/png", "image/jpeg"] },
   )
   inspect(
     schema,
@@ -94,14 +91,112 @@ test "unstructured_binary_schema_with_restrictions" {
 }
 
 ///|
-test "schema_options_ignored_for_component_model" {
-  let schema = @schema.schema_of_tag(
+test "schema_options_rejected_for_component_model" {
+  let result : Result[_, _] = try? @schema.schema_of_tag_with_options(
     (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-    options={ text_languages: ["en"], binary_mime_types: [] },
+    { text_languages: ["en"], binary_mime_types: [] },
   )
   inspect(
-    schema,
-    content="ComponentModel({nodes: [{name: None, owner: None, type_: PrimStringType}]})",
+    result,
+    content=(
+      #|Err(InvalidInput("#derive.text_languages requires the parameter type to implement HasElementSchema with UnstructuredText schema"))
+    ),
+  )
+}
+
+///|
+test "option_unstructured_text_deserialization_rejected" {
+  // Build a valid Option(Some(string)) WitValue, then try to deserialize as Option[UnstructuredText]
+  let wit_value = @builder.Builder::new().option_some(builder => {
+    builder.string("hello")
+  })
+  let element = @common.ElementValue::ComponentModel(wit_value)
+  let result : Result[UnstructuredText?, _] = try? @schema.from_element_value_as(
+    element,
+  )
+  inspect(
+    result,
+    content="Err(InvalidInput(\"UnstructuredText does not use the Extractor path\"))",
+  )
+}
+
+///|
+test "array_unstructured_binary_deserialization_rejected" {
+  // Build a valid List([u8]) WitValue, then try to deserialize as Array[UnstructuredBinary]
+  let wit_value = @builder.Builder::new().list(builder => builder.u8(0))
+  let element = @common.ElementValue::ComponentModel(wit_value)
+  let result : Result[Array[UnstructuredBinary], _] = try? @schema.from_element_value_as(
+    element,
+  )
+  inspect(
+    result,
+    content="Err(InvalidInput(\"UnstructuredBinary does not use the Extractor path\"))",
+  )
+}
+
+///|
+test "option_unstructured_text_serialization_rejected" {
+  let val : UnstructuredText? = Some(
+    UnstructuredText::from_url("https://x.com"),
+  )
+  let result : Result[_, _] = try? @schema.to_element_value_as(val)
+  inspect(
+    result,
+    content="Err(InvalidInput(\"Expected ComponentModel for Option inner value\"))",
+  )
+}
+
+///|
+test "array_unstructured_binary_serialization_rejected" {
+  let val : Array[UnstructuredBinary] = [
+    UnstructuredBinary::from_url("https://x.com"),
+  ]
+  let result : Result[_, _] = try? @schema.to_element_value_as(val)
+  inspect(
+    result,
+    content="Err(InvalidInput(\"Expected ComponentModel for Array element\"))",
+  )
+}
+
+///|
+test "schema_of_tag_rejects_mime_types_on_string" {
+  let result : Result[_, _] = try? @schema.schema_of_tag_with_options(
+    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+    { text_languages: [], binary_mime_types: ["image/png"] },
+  )
+  inspect(
+    result,
+    content=(
+      #|Err(InvalidInput("#derive.mime_types requires the parameter type to implement HasElementSchema with UnstructuredBinary schema"))
+    ),
+  )
+}
+
+///|
+test "schema_of_tag_rejects_text_languages_on_unstructured_binary" {
+  let result : Result[_, _] = try? @schema.schema_of_tag_with_options(
+    (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredBinary]),
+    { text_languages: ["en"], binary_mime_types: [] },
+  )
+  inspect(
+    result,
+    content=(
+      #|Err(InvalidInput("#derive.text_languages requires the parameter type to implement HasElementSchema with UnstructuredText schema"))
+    ),
+  )
+}
+
+///|
+test "schema_of_tag_rejects_mime_types_on_unstructured_text" {
+  let result : Result[_, _] = try? @schema.schema_of_tag_with_options(
+    (@schema.TypeTag::{  } : @schema.TypeTag[UnstructuredText]),
+    { text_languages: [], binary_mime_types: ["image/png"] },
+  )
+  inspect(
+    result,
+    content=(
+      #|Err(InvalidInput("#derive.mime_types requires the parameter type to implement HasElementSchema with UnstructuredBinary schema"))
+    ),
   )
 }
 

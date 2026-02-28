@@ -12,8 +12,11 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
     }
     MultimodalType(inner) =>
       "@types.Multimodal[\{param_type_to_type_string(inner)}]"
-    MultimodalCustomType(inner) =>
-      "@types.Multimodal[@types.CustomModality[\{param_type_to_type_string(inner)}]]"
+    Parameterized(name, params) => {
+      let param_strs = params.map(param_type_to_type_string)
+      let joined = param_strs.join(", ")
+      "\{name}[\{joined}]"
+    }
   }
 }
 
@@ -38,12 +41,14 @@ fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
       make_qualified_parameterized_type("types", "Multimodal", [
         param_type_to_ast_type(inner),
       ])
-    MultimodalCustomType(inner) =>
-      make_qualified_parameterized_type("types", "Multimodal", [
-        make_qualified_parameterized_type("types", "CustomModality", [
-          param_type_to_ast_type(inner),
-        ]),
-      ])
+    Parameterized(name, params) => {
+      let ast_params = params.map(param_type_to_ast_type)
+      match decode_qualified(name) {
+        Some((pkg, id)) =>
+          make_qualified_parameterized_type(pkg, id, ast_params)
+        None => make_parameterized_type(name, ast_params)
+      }
+    }
   }
 }
 
@@ -79,10 +84,10 @@ pub fn param_type_to_schema_expr(
               make_array(opts.binary_mime_types.map(make_string_expr)),
             ),
           ])
-          make_apply_with_args(make_qualified_expr("schema", "schema_of_tag"), [
-            make_positional_arg(tag_expr),
-            make_labelled_arg("options", options_expr),
-          ])
+          make_apply(
+            make_qualified_expr("schema", "schema_of_tag_with_options"),
+            [tag_expr, options_expr],
+          )
         }
         _ =>
           make_apply(make_qualified_expr("schema", "schema_of_tag"), [tag_expr])
@@ -95,24 +100,16 @@ pub fn param_type_to_schema_expr(
 fn build_multimodal_schema_expr(pt : ParamType) -> @syntax.Expr {
   match pt {
     MultimodalType(inner) => {
-      let type_name = param_type_to_type_string(inner)
-      let method_ref = match decode_qualified(type_name) {
-        Some((pkg, id)) =>
-          make_qualified_method_ref(pkg, id, "multimodal_schema")
-        None => make_method_ref(type_name, "multimodal_schema")
-      }
-      make_apply(method_ref, [])
-    }
-    MultimodalCustomType(inner) => {
-      let text_schema = param_type_to_schema_expr(Simple("UnstructuredText"))
-      let binary_schema = param_type_to_schema_expr(
-        Simple("UnstructuredBinary"),
+      let ty = param_type_to_ast_type(inner)
+      let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [
+        ty,
+      ])
+      let tag_expr = make_constraint_expr(
+        make_record_with_type("schema", "TypeTag", []),
+        type_tag_ty,
       )
-      let structured_schema = param_type_to_schema_expr(inner)
-      make_array([
-        make_tuple([make_string_expr("Text"), text_schema]),
-        make_tuple([make_string_expr("Binary"), binary_schema]),
-        make_tuple([make_string_expr("Structured"), structured_schema]),
+      make_apply(make_qualified_expr("types", "multimodal_schema_of_tag"), [
+        tag_expr,
       ])
     }
     _ => panic()
@@ -590,7 +587,15 @@ pub fn generate_agent_registration(
 ) -> @list.List[@syntax.Impl] {
   let calls = agents.map(fn(a) { build_register_call(a) })
   let impls = agents.map(fn(a) { build_raw_agent_impl(a) })
-  let all : Array[@syntax.Impl] = [make_init_block(make_sequence(calls))]
+  let init_body = make_try_catch(make_sequence(calls), [
+    make_case(
+      make_var_pattern("e"),
+      make_apply(make_ident_expr("abort"), [
+        make_dot_apply(make_ident_expr("e"), "to_string", []),
+      ]),
+    ),
+  ])
+  let all : Array[@syntax.Impl] = [make_init_block(init_body)]
   for impl_ in impls {
     all.push(impl_)
   }

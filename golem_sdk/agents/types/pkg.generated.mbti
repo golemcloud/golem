@@ -8,6 +8,7 @@ import {
 }
 
 // Values
+pub fn[T : MultimodalModality] multimodal_schema_of_tag(@schema.TypeTag[T]) -> Array[(String, @common.ElementSchema)]
 
 // Errors
 

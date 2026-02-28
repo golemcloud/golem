@@ -89,6 +89,14 @@ pub fn[T : MultimodalModality] Multimodal::from_data_value(
 }
 
 ///|
+/// Helper for codegen: returns the multimodal schema for a modality type via TypeTag dispatch.
+pub fn[T : MultimodalModality] multimodal_schema_of_tag(
+  _ : @schema.TypeTag[T],
+) -> Array[(String, @common.ElementSchema)] {
+  T::multimodal_schema()
+}
+
+///|
 /// Serialize a Multimodal to a DataValue::Multimodal
 pub fn[T : MultimodalModality] Multimodal::to_data_value(
   self : Multimodal[T],

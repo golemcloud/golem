@@ -47,8 +47,6 @@ pub fn transform_exports(Array[String]) -> Array[String]
 
 pub fn update_pkg_link(String, Array[String]) -> String
 
-pub fn validate_no_nested_unstructured(String, ParamType) -> Unit raise AgentParseError
-
 // Errors
 pub suberror AgentParseError {
   AgentParseError(String)
@@ -106,7 +104,7 @@ pub(all) enum ParamType {
   ResultType(ParamType, ParamType)
   Tuple(Array[ParamType])
   MultimodalType(ParamType)
-  MultimodalCustomType(ParamType)
+  Parameterized(String, Array[ParamType])
 }
 pub impl Eq for ParamType
 pub impl Show for ParamType

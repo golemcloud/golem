@@ -6,7 +6,7 @@ pub(all) enum ParamType {
   ResultType(ParamType, ParamType)
   Tuple(Array[ParamType])
   MultimodalType(ParamType)
-  MultimodalCustomType(ParamType)
+  Parameterized(String, Array[ParamType])
 } derive(Show, Eq)
 
 ///|
@@ -119,54 +119,39 @@ pub fn syntax_type_to_param_type(
                   "Result type requires two type parameters",
                 )
             }
-          } else if name == "Multimodal" {
-            match tys {
-              More(inner, ..) =>
-                MultimodalType(syntax_type_to_param_type(inner))
-              Empty =>
-                raise AgentParseError(
-                  "Multimodal type requires a type parameter",
-                )
-            }
-          } else if name == "MultimodalCustom" {
-            match tys {
-              More(inner, ..) =>
-                MultimodalCustomType(syntax_type_to_param_type(inner))
-              Empty =>
-                raise AgentParseError(
-                  "MultimodalCustom type requires a type parameter",
-                )
-            }
           } else if tys.is_empty() {
             Simple(name)
           } else {
-            raise AgentParseError("Unsupported parameterized type: \{name}")
+            let params : Array[ParamType] = []
+            tys.each(fn(t) {
+              let pt = syntax_type_to_param_type(t) catch {
+                _ => Simple("Unknown")
+              }
+              params.push(pt)
+            })
+            Parameterized(name, params)
           }
         Dot(pkg~, id~) =>
-          if id == "Multimodal" && not(tys.is_empty()) {
+          if pkg == "types" && id == "Multimodal" {
             match tys {
               More(inner, ..) =>
                 MultimodalType(syntax_type_to_param_type(inner))
               Empty =>
                 raise AgentParseError(
                   "Multimodal type requires a type parameter",
-                )
-            }
-          } else if id == "MultimodalCustom" && not(tys.is_empty()) {
-            match tys {
-              More(inner, ..) =>
-                MultimodalCustomType(syntax_type_to_param_type(inner))
-              Empty =>
-                raise AgentParseError(
-                  "MultimodalCustom type requires a type parameter",
                 )
             }
           } else if tys.is_empty() {
             encode_qualified(pkg, id)
           } else {
-            raise AgentParseError(
-              "Unsupported qualified parameterized type: @\{pkg}.\{id}",
-            )
+            let params : Array[ParamType] = []
+            tys.each(fn(t) {
+              let pt = syntax_type_to_param_type(t) catch {
+                _ => Simple("Unknown")
+              }
+              params.push(pt)
+            })
+            Parameterized("@\{pkg}.\{id}", params)
           }
       }
     _ => raise AgentParseError("Unsupported type syntax")
@@ -232,84 +217,34 @@ fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
 }
 
 ///|
-let unstructured_type_names : Array[String] = [
-  "UnstructuredText", "UnstructuredBinary",
-]
-
-///|
-fn is_unstructured_type_name(name : String) -> Bool {
-  for uname in unstructured_type_names {
-    if name == uname || name.has_suffix(".\{uname}") {
-      return true
-    }
-  }
-  false
-}
-
-///|
 pub fn is_multimodal_type(pt : ParamType) -> Bool {
   match pt {
-    MultimodalType(_) | MultimodalCustomType(_) => true
+    MultimodalType(_) => true
     _ => false
   }
 }
 
 ///|
-pub fn validate_no_nested_unstructured(
+fn validate_no_nested_multimodal(
   param_name : String,
   pt : ParamType,
 ) -> Unit raise AgentParseError {
   match pt {
-    Simple(name) => {
-      let _ = name
-    }
-    MultimodalType(_) | MultimodalCustomType(_) => ()
-    Optional(inner) => {
-      validate_no_unstructured_inside("Option", param_name, inner)
+    Simple(_) | MultimodalType(_) => ()
+    Parameterized(_, params) =>
+      for p in params {
+        validate_no_multimodal_inside("Parameterized", param_name, p)
+      }
+    Optional(inner) =>
       validate_no_multimodal_inside("Option", param_name, inner)
-    }
-    List(inner) => {
-      validate_no_unstructured_inside("Array", param_name, inner)
-      validate_no_multimodal_inside("Array", param_name, inner)
-    }
+    List(inner) => validate_no_multimodal_inside("Array", param_name, inner)
     ResultType(ok, err) => {
-      validate_no_unstructured_inside("Result", param_name, ok)
-      validate_no_unstructured_inside("Result", param_name, err)
       validate_no_multimodal_inside("Result", param_name, ok)
       validate_no_multimodal_inside("Result", param_name, err)
     }
     Tuple(elems) =>
       for elem in elems {
-        validate_no_unstructured_inside("Tuple", param_name, elem)
         validate_no_multimodal_inside("Tuple", param_name, elem)
-      }
-  }
-}
-
-///|
-fn validate_no_unstructured_inside(
-  wrapper : String,
-  param_name : String,
-  pt : ParamType,
-) -> Unit raise AgentParseError {
-  match pt {
-    Simple(name) =>
-      if is_unstructured_type_name(name) {
-        raise AgentParseError(
-          "\{name} cannot be nested inside \{wrapper} for parameter '\{param_name}'; it must be a direct parameter or return type",
-        )
-      }
-    MultimodalType(_) | MultimodalCustomType(_) => ()
-    Optional(inner) =>
-      validate_no_unstructured_inside(wrapper, param_name, inner)
-    List(inner) => validate_no_unstructured_inside(wrapper, param_name, inner)
-    ResultType(ok, err) => {
-      validate_no_unstructured_inside(wrapper, param_name, ok)
-      validate_no_unstructured_inside(wrapper, param_name, err)
-    }
-    Tuple(elems) =>
-      for elem in elems {
-        validate_no_unstructured_inside(wrapper, param_name, elem)
       }
   }
 }
@@ -321,11 +256,15 @@ fn validate_no_multimodal_inside(
   pt : ParamType,
 ) -> Unit raise AgentParseError {
   match pt {
-    MultimodalType(_) | MultimodalCustomType(_) =>
+    MultimodalType(_) =>
       raise AgentParseError(
         "Multimodal cannot be nested inside \{wrapper} for parameter '\{param_name}'; it must be a direct parameter or return type",
       )
     Simple(_) => ()
+    Parameterized(_, params) =>
+      for p in params {
+        validate_no_multimodal_inside(wrapper, param_name, p)
+      }
     Optional(inner) => validate_no_multimodal_inside(wrapper, param_name, inner)
     List(inner) => validate_no_multimodal_inside(wrapper, param_name, inner)
     ResultType(ok, err) => {
@@ -599,12 +538,12 @@ pub fn parse_agents(
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
     }
   }
-  // Validate nesting and restriction targets
+  // Validate multimodal and restriction targets
   for agent in agents {
     // Validate constructor params
     for param in agent.constructor_params {
       let (pname, pt) = param
-      validate_no_nested_unstructured(pname, pt)
+      validate_no_nested_multimodal(pname, pt)
     }
     // Validate multimodal is sole constructor param
     let has_multimodal_ctor = agent.constructor_params
@@ -615,61 +554,24 @@ pub fn parse_agents(
         "Multimodal parameter in constructor of agent '\{agent.name}' must be the only parameter",
       )
     }
-    for rname, opts in agent.constructor_schema_options {
+    for rname, _ in agent.constructor_schema_options {
       let param_type = agent.constructor_params
         .iter()
         .find_first(fn(p) { p.0 == rname })
-      match param_type {
-        None =>
-          raise AgentParseError(
-            "#derive.text_languages/#derive.mime_types references unknown constructor parameter '\{rname}'",
-          )
-        Some((_, pt)) => {
-          if opts.text_languages.length() > 0 {
-            match pt {
-              Simple(name) =>
-                if not(
-                    name == "UnstructuredText" ||
-                    name.has_suffix(".UnstructuredText"),
-                  ) {
-                  raise AgentParseError(
-                    "#derive.text_languages on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredText",
-                  )
-                }
-              _ =>
-                raise AgentParseError(
-                  "#derive.text_languages on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredText",
-                )
-            }
-          }
-          if opts.binary_mime_types.length() > 0 {
-            match pt {
-              Simple(name) =>
-                if not(
-                    name == "UnstructuredBinary" ||
-                    name.has_suffix(".UnstructuredBinary"),
-                  ) {
-                  raise AgentParseError(
-                    "#derive.mime_types on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredBinary",
-                  )
-                }
-              _ =>
-                raise AgentParseError(
-                  "#derive.mime_types on parameter '\{rname}' of constructor requires the parameter type to be UnstructuredBinary",
-                )
-            }
-          }
-        }
+      if param_type is None {
+        raise AgentParseError(
+          "#derive.text_languages/#derive.mime_types references unknown constructor parameter '\{rname}'",
+        )
       }
     }
     // Validate methods
     for meth in agent.methods {
       for param in meth.params {
         let (pname, pt) = param
-        validate_no_nested_unstructured(pname, pt)
+        validate_no_nested_multimodal(pname, pt)
       }
       match meth.return_type {
-        Some(rt) => validate_no_nested_unstructured("return", rt)
+        Some(rt) => validate_no_nested_multimodal("return", rt)
         None => ()
       }
       // Validate multimodal params
@@ -681,49 +583,12 @@ pub fn parse_agents(
           "Multimodal parameter in method '\{meth.name}' must be the only parameter",
         )
       }
-      for rname, opts in meth.param_schema_options {
+      for rname, _ in meth.param_schema_options {
         let param_type = meth.params.iter().find_first(fn(p) { p.0 == rname })
-        match param_type {
-          None =>
-            raise AgentParseError(
-              "#derive.text_languages/#derive.mime_types references unknown parameter '\{rname}' of method '\{meth.name}'",
-            )
-          Some((_, pt)) => {
-            if opts.text_languages.length() > 0 {
-              match pt {
-                Simple(name) =>
-                  if not(
-                      name == "UnstructuredText" ||
-                      name.has_suffix(".UnstructuredText"),
-                    ) {
-                    raise AgentParseError(
-                      "#derive.text_languages on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredText",
-                    )
-                  }
-                _ =>
-                  raise AgentParseError(
-                    "#derive.text_languages on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredText",
-                  )
-              }
-            }
-            if opts.binary_mime_types.length() > 0 {
-              match pt {
-                Simple(name) =>
-                  if not(
-                      name == "UnstructuredBinary" ||
-                      name.has_suffix(".UnstructuredBinary"),
-                    ) {
-                    raise AgentParseError(
-                      "#derive.mime_types on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredBinary",
-                    )
-                  }
-                _ =>
-                  raise AgentParseError(
-                    "#derive.mime_types on parameter '\{rname}' of method '\{meth.name}' requires the parameter type to be UnstructuredBinary",
-                  )
-              }
-            }
-          }
+        if param_type is None {
+          raise AgentParseError(
+            "#derive.text_languages/#derive.mime_types references unknown parameter '\{rname}' of method '\{meth.name}'",
+          )
         }
       }
     }
