@@ -69,11 +69,16 @@ test "generate_agent_registration for simple agent" {
       #|      type_name: "Counter",
       #|      description: "A counter agent",
       #|      constructor_: {
-      #|        name: None,
+      #|        name: Some("new"),
       #|        description: "Creates a new counter",
       #|        prompt_hint: None,
       #|        input_schema: @common.DataSchema::Tuple([
-      #|          ("name", @schema.schema_of(("" : String))),
+      #|          (
+      #|            "name",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|            ),
+      #|          ),
       #|        ]),
       #|      },
       #|      methods: [],
@@ -97,6 +102,8 @@ test "generate_agent_registration for simple agent" {
       #|}
       #|
       #|
+
+
     ),
   )
 }

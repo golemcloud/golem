@@ -51,6 +51,22 @@ fn make_parameterized_type(
 }
 
 ///|
+fn make_qualified_parameterized_type(
+  pkg : String,
+  name : String,
+  type_args : Array[@syntax.Type],
+) -> @syntax.Type {
+  @syntax.Type::Name(
+    constr_id=@syntax.ConstrId::{
+      id: @syntax.LongIdent::Dot(pkg~, id=name),
+      loc: dummy_loc,
+    },
+    tys=to_list(type_args),
+    loc=dummy_loc,
+  )
+}
+
+///|
 fn make_option_type(inner : @syntax.Type) -> @syntax.Type {
   @syntax.Type::Option(ty=inner, loc=dummy_loc, question_loc=dummy_loc)
 }
@@ -65,11 +81,6 @@ fn make_string_expr(s : String) -> @syntax.Expr {
 ///|
 fn make_int_expr(n : Int) -> @syntax.Expr {
   @syntax.Expr::Constant(c=@syntax.Constant::Int(n.to_string()), loc=dummy_loc)
-}
-
-///|
-fn make_bool_expr(b : Bool) -> @syntax.Expr {
-  @syntax.Expr::Constant(c=@syntax.Constant::Bool(b), loc=dummy_loc)
 }
 
 // --- Expressions: Identifiers ---
@@ -190,6 +201,26 @@ fn make_infix(
 fn make_record(fields : Array[@syntax.FieldDef]) -> @syntax.Expr {
   @syntax.Expr::Record(
     type_name=None,
+    fields=to_list(fields),
+    trailing=@syntax.TrailingMark::Comma,
+    loc=dummy_loc,
+  )
+}
+
+///|
+fn make_record_with_type(
+  pkg : String,
+  type_name : String,
+  fields : Array[@syntax.FieldDef],
+) -> @syntax.Expr {
+  @syntax.Expr::Record(
+    type_name=Some(
+      @syntax.TypeName::{
+        name: @syntax.LongIdent::Dot(pkg~, id=type_name),
+        is_object: false,
+        loc: dummy_loc,
+      },
+    ),
     fields=to_list(fields),
     trailing=@syntax.TrailingMark::Comma,
     loc=dummy_loc,

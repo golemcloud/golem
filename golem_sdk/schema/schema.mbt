@@ -19,6 +19,16 @@ pub fn[T : HasElementSchema] schema_of(_v : T) -> @common.ElementSchema {
 }
 
 ///|
+pub(all) struct TypeTag[T] {}
+
+///|
+pub fn[T : HasElementSchema] schema_of_tag(
+  _ : TypeTag[T],
+) -> @common.ElementSchema {
+  T::element_schema()
+}
+
+///|
 pub fn[T : FromElementValue] from_element_value_as(
   v : @common.ElementValue,
 ) -> T raise @common.AgentError {

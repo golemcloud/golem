@@ -25,40 +25,14 @@ fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
 }
 
 ///|
-fn param_type_to_default_ast_expr(pt : ParamType) -> @syntax.Expr {
-  match pt {
-    Simple("String") => make_string_expr("")
-    Simple("Bool") => make_bool_expr(false)
-    Simple("Int") => make_int_expr(0)
-    Simple("UInt") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::UInt("0"), loc=dummy_loc)
-    Simple("Int64") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::Int64("0"), loc=dummy_loc)
-    Simple("UInt64") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::UInt64("0"), loc=dummy_loc)
-    Simple("Float") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::Float("0.0"), loc=dummy_loc)
-    Simple("Double") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::Double("0.0"), loc=dummy_loc)
-    Simple("Byte") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::Byte("\\x00"), loc=dummy_loc)
-    Simple("Char") =>
-      @syntax.Expr::Constant(c=@syntax.Constant::Char("\\x00"), loc=dummy_loc)
-    Simple(_) => make_apply(make_ident_expr("default"), [])
-    Optional(_) => make_constr_no_args("None")
-    List(_) => make_array([])
-    ResultType(ok, _) =>
-      make_apply(make_constr_no_args("Ok"), [param_type_to_default_ast_expr(ok)])
-  }
-}
-
-///|
 pub fn param_type_to_schema_expr(pt : ParamType) -> @syntax.Expr {
-  let default_expr = param_type_to_default_ast_expr(pt)
   let ty = param_type_to_ast_type(pt)
-  make_apply(make_qualified_expr("schema", "schema_of"), [
-    make_constraint_expr(default_expr, ty),
-  ])
+  let type_tag_ty = make_qualified_parameterized_type("schema", "TypeTag", [ty])
+  let tag_expr = make_constraint_expr(
+    make_record_with_type("schema", "TypeTag", []),
+    type_tag_ty,
+  )
+  make_apply(make_qualified_expr("schema", "schema_of_tag"), [tag_expr])
 }
 
 ///|
@@ -138,7 +112,10 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
     [make_array(schema_elems)],
   )
   let constructor_record = make_record([
-    make_field("name", make_constr_no_args("None")),
+    make_field(
+      "name",
+      make_apply(make_constr_no_args("Some"), [make_string_expr("new")]),
+    ),
     make_field("description", make_string_expr(agent.constructor_description)),
     make_field("prompt_hint", make_constr_no_args("None")),
     make_field("input_schema", input_schema),
