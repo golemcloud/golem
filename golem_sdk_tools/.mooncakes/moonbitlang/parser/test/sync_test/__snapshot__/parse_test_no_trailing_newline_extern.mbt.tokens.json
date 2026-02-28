@@ -1,0 +1,79 @@
+[
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "// no trailing newline",
+        "kind": [
+          "Ownline",
+          {
+            "leading_blank_line": false,
+            "trailing_blank_line": false
+          }
+        ],
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "1:1-1:23"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:23-1:24"
+  },
+  {
+    "token": "EXTERN",
+    "loc": "2:1-2:7"
+  },
+  {
+    "token": [
+      "STRING",
+      "js"
+    ],
+    "loc": "2:8-2:12"
+  },
+  {
+    "token": "FN",
+    "loc": "2:13-2:15"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "random"
+    ],
+    "loc": "2:16-2:22"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "2:22-2:23"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "2:23-2:24"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "2:25-2:27"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Double"
+    ],
+    "loc": "2:28-2:34"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "2:35-2:36"
+  },
+  {
+    "token": [
+      "MULTILINE_STRING",
+      " () => Math.random()"
+    ],
+    "loc": "2:37-2:59"
+  },
+  {
+    "token": "EOF",
+    "loc": "2:59-2:59"
+  }
+]

@@ -1,0 +1,84 @@
+[
+  {
+    "token": "PUB",
+    "loc": "1:1-1:4"
+  },
+  {
+    "token": "LET",
+    "loc": "1:5-1:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "constant"
+    ],
+    "loc": "1:9-1:17"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "1:18-1:19"
+  },
+  {
+    "token": [
+      "INT",
+      "1"
+    ],
+    "loc": "1:20-1:21"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "1:21-1:21"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:21-1:22"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:1-2:2"
+  },
+  {
+    "token": "PUB",
+    "loc": "3:1-3:4"
+  },
+  {
+    "token": "LET",
+    "loc": "3:5-3:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "variable"
+    ],
+    "loc": "3:9-3:17"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "3:18-3:19"
+  },
+  {
+    "token": [
+      "INT",
+      "2"
+    ],
+    "loc": "3:20-3:21"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:21-3:21"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:21-3:22"
+  },
+  {
+    "token": "EOF",
+    "loc": "4:1-4:1"
+  }
+]

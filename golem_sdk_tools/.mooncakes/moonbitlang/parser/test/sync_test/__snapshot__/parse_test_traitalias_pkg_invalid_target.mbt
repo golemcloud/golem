@@ -1,0 +1,2 @@
+traitalias @pkg.1
+

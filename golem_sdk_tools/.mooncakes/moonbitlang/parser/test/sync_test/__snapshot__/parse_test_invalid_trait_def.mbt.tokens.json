@@ -1,0 +1,169 @@
+[
+  {
+    "token": "TRAIT",
+    "loc": "1:1-1:6"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Debug"
+    ],
+    "loc": "1:7-1:12"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:13-1:14"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:14-1:15"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "show"
+    ],
+    "loc": "2:3-2:7"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "2:7-2:8"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Self"
+    ],
+    "loc": "2:8-2:12"
+  },
+  {
+    "token": "COMMA",
+    "loc": "2:12-2:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "2:13-2:16"
+  },
+  {
+    "token": "COMMA",
+    "loc": "2:16-2:17"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "2:17-2:20"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "2:20-2:21"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "2:22-2:24"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Double"
+    ],
+    "loc": "2:25-2:31"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "2:31-2:31"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:31-2:32"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:3-3:4"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Self"
+    ],
+    "loc": "3:4-3:8"
+  },
+  {
+    "token": "COMMA",
+    "loc": "3:8-3:9"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "3:9-3:12"
+  },
+  {
+    "token": "COMMA",
+    "loc": "3:12-3:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "UndefinedType"
+    ],
+    "loc": "3:13-3:26"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:26-3:27"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "3:28-3:30"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "3:31-3:34"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//invalid, missing the method name",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "3:35-3:69"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:69-3:70"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "4:1-4:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:2-4:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:2-4:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "5:1-5:1"
+  }
+]

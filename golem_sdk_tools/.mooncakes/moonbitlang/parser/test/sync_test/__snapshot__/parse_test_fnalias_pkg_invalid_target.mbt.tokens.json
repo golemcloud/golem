@@ -1,0 +1,39 @@
+[
+  {
+    "token": "FNALIAS",
+    "loc": "1:1-1:8"
+  },
+  {
+    "token": [
+      "PACKAGE_NAME",
+      "pkg"
+    ],
+    "loc": "1:9-1:13"
+  },
+  {
+    "token": [
+      "DOT_INT",
+      1
+    ],
+    "loc": "1:14-1:15"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "1:15-1:15"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:15-1:16"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:1-2:2"
+  },
+  {
+    "token": "EOF",
+    "loc": "3:1-3:1"
+  }
+]

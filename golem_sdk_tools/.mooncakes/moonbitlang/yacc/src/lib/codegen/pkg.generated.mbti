@@ -1,0 +1,85 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/codegen"
+
+import(
+  "moonbitlang/core/immut/array"
+  "moonbitlang/yacc/lib/elab"
+  "moonbitlang/yacc/lib/grm"
+  "moonbitlang/yacc/lib/lr1"
+  "moonbitlang/yacc/lib/util/array_multimap"
+  "moonbitlang/yacc/lib/util/logger_with_cursor"
+)
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) enum InputMode {
+  Array
+  Pull
+}
+
+pub(all) struct MetaProvider {
+  header : @array.T[(String, (Int, Int)?)]
+  footer : @array.T[(String, (Int, Int)?)]
+  position_data_type : @elab.TypeExpr
+  terminal_meta : (String) -> TerminalMeta
+  nonterminal_meta : (String) -> NonTerminalMeta
+  production_meta : (Int) -> ProductionMeta
+  derive_map : @array_multimap.T[String, String]
+}
+
+pub(all) enum Mode {
+  Default
+  JsonCst
+}
+
+pub(all) struct NonTerminalMeta {
+  data_type : @elab.TypeExpr
+}
+
+pub(all) struct ProductionMeta {
+  action : @elab.Action
+}
+
+pub(all) struct SourceMap {
+  mappings : Array[SourceMapping]
+}
+pub fn SourceMap::new() -> Self
+pub impl ToJson for SourceMap
+pub impl SourceMapBuilder for SourceMap
+
+pub(all) struct SourceMapping {
+  source : String
+  original_offset : Int
+  generated_offset : Int
+  length : Int
+}
+pub impl ToJson for SourceMapping
+
+pub(all) struct TerminalMeta {
+  data_type : @elab.TypeExpr
+  image : String?
+}
+
+pub(all) enum TokenPayloadRewrite {
+  NoPayload
+  JsonPayload
+}
+
+// Type aliases
+pub type CodeFragment = String
+
+// Traits
+pub(open) trait CodeGenerator {
+  void_type(Self) -> String
+  void_action_code(Self) -> String
+  codegen_tokens(Self, Array[@grm.Terminal], (String) -> TerminalMeta, &Logger, no_comments~ : Bool, derive_map~ : @array_multimap.T[String, String]) -> Unit
+  codegen(Self, @grm.Grammar, @lr1.Automaton, MetaProvider, @logger_with_cursor.LoggerWithCursor, source_map_builder~ : &SourceMapBuilder?, grammar_filename~ : String, external_tokens~ : Bool, no_comments~ : Bool, mode~ : Mode, input_mode~ : InputMode) -> Unit
+}
+
+pub trait SourceMapBuilder {
+  add_mapping(Self, String, Int, Int, Int) -> Unit
+}
+

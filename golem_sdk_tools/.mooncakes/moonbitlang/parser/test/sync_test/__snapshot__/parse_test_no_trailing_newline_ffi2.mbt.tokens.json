@@ -1,0 +1,76 @@
+[
+  {
+    "token": "FN",
+    "loc": "1:1-1:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "ffi"
+    ],
+    "loc": "1:4-1:7"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "1:7-1:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "x"
+    ],
+    "loc": "1:8-1:9"
+  },
+  {
+    "token": "COLON",
+    "loc": "1:10-1:11"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "1:12-1:15"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "1:15-1:16"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "1:17-1:19"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "1:20-1:23"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "1:24-1:25"
+  },
+  {
+    "token": [
+      "STRING",
+      "xxx"
+    ],
+    "loc": "1:26-1:31"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//no trailing newline",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "1:32-1:53"
+  },
+  {
+    "token": "EOF",
+    "loc": "1:53-1:53"
+  }
+]

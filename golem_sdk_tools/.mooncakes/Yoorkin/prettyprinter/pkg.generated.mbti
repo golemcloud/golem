@@ -1,0 +1,151 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Yoorkin/prettyprinter"
+
+import(
+  "moonbitlang/core/bigint"
+  "moonbitlang/core/buffer"
+  "moonbitlang/core/deque"
+  "moonbitlang/core/immut/array"
+  "moonbitlang/core/list"
+  "moonbitlang/core/priority_queue"
+  "moonbitlang/core/queue"
+  "moonbitlang/core/set"
+)
+
+// Values
+pub fn braces(Document) -> Document
+
+pub fn brackets(Document) -> Document
+
+pub fn char(Char) -> Document
+
+pub fn concat(Document, Document) -> Document
+
+pub fn ctor(pkg? : String, ty? : String, String, Array[Document], labeled? : Map[String, Document]) -> Document
+
+pub fn dynamic((Context) -> Document) -> Document
+
+pub let empty : Document
+
+pub fn flow(Array[Document]) -> Document
+
+pub fn group(Document) -> Document
+
+pub let hardline : Document
+
+pub let line : Document
+
+pub fn list(Array[Document]) -> Document
+
+pub let mandatory_line : Document
+
+pub let mandatory_space : Document
+
+pub fn nest(indent? : Int, Document) -> Document
+
+pub fn parens(Document) -> Document
+
+pub fn[A : Pretty] pretty(A) -> Document
+
+pub fn record(pkg? : String, ty? : String, Map[String, Document]) -> Document
+
+pub fn[A : Pretty] render(A, width? : Int) -> String
+
+pub fn separate(Document, Array[Document]) -> Document
+
+pub fn[A] separate_map(Document, Array[A], (A) -> Document) -> Document
+
+pub let softline : Document
+
+pub let space : Document
+
+pub fn string(String) -> Document
+
+pub fn surround(Document, Document, Document) -> Document
+
+pub fn switch(Document, Document) -> Document
+
+pub fn text(String) -> Document
+
+pub fn tuple(Array[Document]) -> Document
+
+// Errors
+
+// Types and methods
+pub struct Context {
+  indent : Int
+  next_indent : Int
+  width : Int
+}
+pub fn Context::current_remain(Self) -> Requirement
+pub fn Context::next_remain(Self) -> Requirement
+pub impl Show for Context
+
+type Document
+pub fn Document::requirement(Self) -> Requirement
+pub impl Pretty for Document
+pub impl Add for Document
+pub impl Show for Document
+
+pub(all) enum Requirement {
+  Space(Int)
+  Infinite
+}
+pub impl Add for Requirement
+pub impl Compare for Requirement
+pub impl Eq for Requirement
+pub impl Show for Requirement
+
+// Type aliases
+
+// Traits
+pub(open) trait Pretty {
+  pretty(Self) -> Document
+}
+pub impl Pretty for Unit
+pub impl Pretty for Bool
+pub impl Pretty for Byte
+pub impl Pretty for Char
+pub impl Pretty for Int
+pub impl Pretty for Int16
+pub impl Pretty for Int64
+pub impl Pretty for UInt
+pub impl Pretty for UInt16
+pub impl Pretty for UInt64
+pub impl Pretty for Float
+pub impl Pretty for Double
+pub impl Pretty for String
+pub impl[A : Pretty] Pretty for A?
+pub impl[A : Pretty, B : Pretty] Pretty for Result[A, B]
+pub impl[A : Pretty] Pretty for FixedArray[A]
+pub impl Pretty for Bytes
+pub impl Pretty for @bigint.BigInt
+pub impl Pretty for @buffer.Buffer
+pub impl[A : Pretty] Pretty for Array[A]
+pub impl[A : Pretty] Pretty for Iter[A]
+pub impl[A : Pretty, B : Pretty] Pretty for Iter2[A, B]
+pub impl Pretty for Json
+pub impl[A : Pretty, B : Pretty] Pretty for Map[A, B]
+pub impl[A : Pretty] Pretty for @deque.Deque[A]
+pub impl[A : Pretty, B : Pretty] Pretty for @moonbitlang/core/hashmap.HashMap[A, B]
+pub impl[A : Pretty] Pretty for @moonbitlang/core/hashset.HashSet[A]
+pub impl[A : Pretty] Pretty for @array.T[A]
+pub impl[A : Pretty, B : Pretty] Pretty for @moonbitlang/core/immut/hashmap.HashMap[A, B]
+pub impl[A : Pretty] Pretty for @moonbitlang/core/immut/hashset.HashSet[A]
+pub impl[A : Pretty, B : Pretty] Pretty for @moonbitlang/core/immut/sorted_map.SortedMap[A, B]
+pub impl[A : Pretty] Pretty for @moonbitlang/core/immut/sorted_set.SortedSet[A]
+pub impl[A : Pretty] Pretty for @list.List[A]
+pub impl[A : Pretty + Eq + Compare] Pretty for @priority_queue.T[A]
+pub impl[A : Pretty] Pretty for @queue.Queue[A]
+pub impl[A : Pretty] Pretty for @set.Set[A]
+pub impl[A : Pretty, B : Pretty] Pretty for @moonbitlang/core/sorted_map.SortedMap[A, B]
+pub impl[A : Pretty] Pretty for @moonbitlang/core/sorted_set.SortedSet[A]
+pub impl[A : Pretty, B : Pretty] Pretty for (A, B)
+pub impl[A : Pretty, B : Pretty, C : Pretty] Pretty for (A, B, C)
+pub impl[A : Pretty, B : Pretty, C : Pretty, D : Pretty] Pretty for (A, B, C, D)
+pub impl[A : Pretty, B : Pretty, C : Pretty, D : Pretty, E : Pretty] Pretty for (A, B, C, D, E)
+pub impl[A : Pretty, B : Pretty, C : Pretty, D : Pretty, E : Pretty, F : Pretty] Pretty for (A, B, C, D, E, F)
+pub impl[A : Pretty, B : Pretty, C : Pretty, D : Pretty, E : Pretty, F : Pretty, G : Pretty] Pretty for (A, B, C, D, E, F, G)
+pub impl[A : Pretty, B : Pretty, C : Pretty, D : Pretty, E : Pretty, F : Pretty, G : Pretty, H : Pretty] Pretty for (A, B, C, D, E, F, G, H)
+pub impl[A : Pretty, B : Pretty, C : Pretty, D : Pretty, E : Pretty, F : Pretty, G : Pretty, H : Pretty, I : Pretty] Pretty for (A, B, C, D, E, F, G, H, I)
+

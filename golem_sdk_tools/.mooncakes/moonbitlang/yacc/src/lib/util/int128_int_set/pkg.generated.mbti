@@ -1,0 +1,35 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/util/int128_int_set"
+
+// Values
+pub fn empty() -> Int128IntSet
+
+pub fn from_iter(Iter[Int]) -> Int128IntSet
+
+pub fn singleton(Int) -> Int128IntSet
+
+// Errors
+
+// Types and methods
+#alias(T)
+type Int128IntSet
+pub fn Int128IntSet::add(Self, Int) -> Self
+pub fn Int128IntSet::contains(Self, Int) -> Bool
+pub fn Int128IntSet::difference(Self, Self) -> Self
+pub fn Int128IntSet::disjoint(Self, Self) -> Bool
+pub fn Int128IntSet::intersection(Self, Self) -> Self
+pub fn Int128IntSet::is_empty(Self) -> Bool
+pub fn Int128IntSet::is_singleton(Self, Int) -> Bool
+pub fn Int128IntSet::iter(Self) -> Iter[Int]
+pub fn Int128IntSet::remove(Self, Int) -> Self
+pub fn Int128IntSet::subset(Self, Self) -> Bool
+pub fn Int128IntSet::union(Self, Self) -> Self
+pub impl Compare for Int128IntSet
+pub impl Eq for Int128IntSet
+pub impl Hash for Int128IntSet
+pub impl Show for Int128IntSet
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,2 @@
+///|
+using @basic {type Location}

@@ -1,0 +1,17 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/benchmark/internal/benchmark_ffi"
+
+// Values
+pub fn instant_elapsed_as_secs_f64(Instant) -> Double
+
+pub fn instant_now() -> Instant
+
+// Errors
+
+// Types and methods
+type Instant
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,15 @@
+import {
+  "moonbitlang/parser/syntax",
+  "moonbitlang/parser/handrolled_parser",
+  "moonbitlang/parser/lexer",
+  "moonbitlang/parser/tokens",
+  "moonbitlang/x/fs",
+  "moonbitlang/parser/basic",
+  "moonbitlang/parser/yacc_parser",
+  "moonbitlang/core/list",
+}
+
+import {
+  "moonbitlang/core/test",
+  "moonbitlang/core/json",
+} for "test"

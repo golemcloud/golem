@@ -1,0 +1,89 @@
+[
+  {
+    "token": "FN",
+    "loc": "1:1-1:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "init"
+    ],
+    "loc": "1:4-1:8"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:9-1:10"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:10-1:11"
+  },
+  {
+    "token": "LET",
+    "loc": "2:3-2:6"
+  },
+  {
+    "token": "UNDERSCORE",
+    "loc": "2:7-2:8"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "2:9-2:10"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Option"
+    ],
+    "loc": "2:11-2:17"
+  },
+  {
+    "token": "COLONCOLON",
+    "loc": "2:17-2:19"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "None"
+    ],
+    "loc": "2:19-2:23"
+  },
+  {
+    "token": [
+      "DOT_LIDENT",
+      "unwrap"
+    ],
+    "loc": "2:24-2:30"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "2:30-2:31"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "2:31-2:32"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:32-2:33"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "3:1-3:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:2-3:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:2-3:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "4:1-4:1"
+  }
+]

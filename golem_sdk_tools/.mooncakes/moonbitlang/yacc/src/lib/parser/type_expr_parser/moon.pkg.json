@@ -1,0 +1,18 @@
+{
+  "pre-build": [
+    {
+      "command": "node $mod_dir/boot/moonlex.cjs $input | moonfmt > $output",
+      "input": "lexer.mbtx",
+      "output": "lexer.mbt"
+    },
+    {
+      "command": "node $mod_dir/boot/moonyacc.cjs --input-mode array $input -o $output",
+      "input": "parser.mbty",
+      "output": "parser.mbt"
+    }
+  ],
+  "import": [
+    "moonbitlang/yacc/lib/ast",
+    "moonbitlang/ulex-runtime/lexbuf"
+  ]
+}

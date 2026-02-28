@@ -1,0 +1,493 @@
+[
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "init"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": null,
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": null,
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Let",
+            "loc": null,
+            "children": {
+              "pattern": {
+                "kind": "Pattern::Any",
+                "loc": null,
+                "children": {}
+              },
+              "expr": {
+                "kind": "Expr::Lexmatch",
+                "loc": null,
+                "children": {
+                  "strategy": {
+                    "kind": "Label",
+                    "loc": null,
+                    "children": {
+                      "name": "longest"
+                    }
+                  },
+                  "expr": {
+                    "kind": "Expr::Constant",
+                    "loc": null,
+                    "children": {
+                      "constant": {
+                        "kind": "Constant::String",
+                        "loc": null,
+                        "children": {
+                          "value": ""
+                        }
+                      }
+                    }
+                  },
+                  "cases": {
+                    "kind": "Expr::Lexmatch::CaseList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "LexCase",
+                        "loc": null,
+                        "children": {
+                          "pat": {
+                            "kind": "LexCase::PatternList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "LexTopPattern::Pattern",
+                                "loc": null,
+                                "children": {
+                                  "value": {
+                                    "kind": "LexPattern::Sequence",
+                                    "loc": null,
+                                    "children": {
+                                      "pats": {
+                                        "kind": "LexPattern::Sequence::PatternList",
+                                        "loc": null,
+                                        "children": [
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_hour_str"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Regex",
+                                            "loc": null,
+                                            "children": {
+                                              "lit": ":"
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_minute_str"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "guard": null,
+                          "body": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "1"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "kind": "LexCase",
+                        "loc": null,
+                        "children": {
+                          "pat": {
+                            "kind": "LexCase::PatternList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "LexTopPattern::Pattern",
+                                "loc": null,
+                                "children": {
+                                  "value": {
+                                    "kind": "LexPattern::Sequence",
+                                    "loc": null,
+                                    "children": {
+                                      "pats": {
+                                        "kind": "LexPattern::Sequence::PatternList",
+                                        "loc": null,
+                                        "children": [
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_hour_str"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Regex",
+                                            "loc": null,
+                                            "children": {
+                                              "lit": ":"
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_minute_str"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Regex",
+                                            "loc": null,
+                                            "children": {
+                                              "lit": ":"
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_second_str"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "guard": null,
+                          "body": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "2"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "kind": "LexCase",
+                        "loc": null,
+                        "children": {
+                          "pat": {
+                            "kind": "LexCase::PatternList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "LexTopPattern::Pattern",
+                                "loc": null,
+                                "children": {
+                                  "value": {
+                                    "kind": "LexPattern::Sequence",
+                                    "loc": null,
+                                    "children": {
+                                      "pats": {
+                                        "kind": "LexPattern::Sequence::PatternList",
+                                        "loc": null,
+                                        "children": [
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_hour_str"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Regex",
+                                            "loc": null,
+                                            "children": {
+                                              "lit": ":"
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_minute_str"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Regex",
+                                            "loc": null,
+                                            "children": {
+                                              "lit": ":"
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{2}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_second_str"
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Regex",
+                                            "loc": null,
+                                            "children": {
+                                              "lit": "."
+                                            }
+                                          },
+                                          {
+                                            "kind": "LexPattern::Alias",
+                                            "loc": null,
+                                            "children": {
+                                              "pat": {
+                                                "kind": "LexPattern::Regex",
+                                                "loc": null,
+                                                "children": {
+                                                  "lit": "[0-9]{1,9}"
+                                                }
+                                              },
+                                              "binder": {
+                                                "kind": "Binder",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": "_nanosecond_str"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "guard": null,
+                          "body": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "3"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "kind": "LexCase",
+                        "loc": null,
+                        "children": {
+                          "pat": {
+                            "kind": "LexCase::PatternList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "LexTopPattern::Wildcard",
+                                "loc": null,
+                                "children": {}
+                              }
+                            ]
+                          },
+                          "guard": null,
+                          "body": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "4"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "body": {
+                "kind": "Expr::Unit",
+                "loc": null,
+                "children": {
+                  "faked": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

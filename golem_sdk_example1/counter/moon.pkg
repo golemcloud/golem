@@ -7,6 +7,13 @@ import {
 
 options(
   "is-main": true,
+  "pre-build": [
+    {
+      "input": "../../golem_sdk/gen/ffi.mbt",
+      "output": "golem_reexports.mbt",
+      "command": "cd ../golem_sdk_tools && moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/counter",
+    },
+  ],
   link: {
     "wasm": {
       "export-memory-name": "memory",

@@ -1,0 +1,18 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/driver/util"
+
+// Values
+pub fn[T] exit(Int) -> T
+
+pub fn path_basename(String) -> String
+
+pub fn println_to_stderr(String) -> Unit
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

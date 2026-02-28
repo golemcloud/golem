@@ -1,0 +1,5 @@
+fn init {
+  fn hello (){
+
+  }
+}

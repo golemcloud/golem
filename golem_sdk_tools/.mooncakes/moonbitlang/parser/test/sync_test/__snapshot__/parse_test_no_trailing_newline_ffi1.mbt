@@ -1,0 +1,1 @@
+fn ffi(x : Int) -> Int = "module" "function" //no trailing newline

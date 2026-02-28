@@ -1,0 +1,11 @@
+{
+  "targets": {
+    "util_js.mbt": [
+      "js"
+    ],
+    "util_nonjs.mbt": [
+      "not",
+      "js"
+    ]
+  }
+}

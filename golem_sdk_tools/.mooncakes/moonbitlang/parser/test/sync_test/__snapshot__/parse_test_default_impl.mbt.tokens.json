@@ -1,0 +1,129 @@
+[
+  {
+    "token": "TRAIT",
+    "loc": "1:1-1:6"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "I"
+    ],
+    "loc": "1:7-1:8"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:9-1:10"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:10-1:11"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "f"
+    ],
+    "loc": "2:3-2:4"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "2:4-2:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Self"
+    ],
+    "loc": "2:5-2:9"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "2:9-2:10"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "2:11-2:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Unit"
+    ],
+    "loc": "2:14-2:18"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "2:19-2:20"
+  },
+  {
+    "token": "UNDERSCORE",
+    "loc": "2:21-2:22"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "2:22-2:22"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:22-2:23"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "g"
+    ],
+    "loc": "3:3-3:4"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:4-3:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Self"
+    ],
+    "loc": "3:5-3:9"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:9-3:10"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "3:11-3:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Unit"
+    ],
+    "loc": "3:14-3:18"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:18-3:19"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "4:1-4:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:2-4:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:2-4:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "5:1-5:1"
+  }
+]

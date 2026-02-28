@@ -1,0 +1,14 @@
+import {
+  "moonbitlang/parser/tokens",
+  "moonbitlang/parser/basic",
+  "moonbitlang/parser/attribute",
+  "moonbitlang/core/list",
+  "moonbitlang/core/hashmap",
+}
+
+import {
+  "moonbitlang/core/test",
+  "moonbitlang/core/json",
+} for "test"
+
+warnings = "-28"

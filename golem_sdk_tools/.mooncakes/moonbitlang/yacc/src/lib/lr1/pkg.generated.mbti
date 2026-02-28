@@ -1,0 +1,129 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/lr1"
+
+import(
+  "moonbitlang/core/list"
+  "moonbitlang/core/sorted_map"
+  "moonbitlang/yacc/lib/grm"
+  "moonbitlang/yacc/lib/util/hashmap2"
+  "moonbitlang/yacc/lib/util/stamp"
+)
+
+// Values
+pub fn[LookaheadSet : AbstractLookaheadSet] build_closure_fn(@grm.Grammar) -> (Iter[(EncodedLR0Item, LookaheadSet)]) -> Array[(EncodedLR0Item, LookaheadSet)]
+
+pub fn resolve_conflicts(@hashmap2.T[ConflictLocation, @list.List[Decision]]) -> Array[ResolveConflictError]
+
+// Errors
+
+// Types and methods
+pub(all) struct Automaton {
+  states : Array[LR1State]
+  starts : Array[(@grm.Production, LR1State)]
+  conflicts : @hashmap2.T[ConflictLocation, @list.List[Decision]]
+}
+pub fn Automaton::build(@grm.Grammar, user_eoi~ : Bool) -> Self
+
+pub(all) struct ConflictLocation {
+  state : LR1State
+  input : Lookahead
+}
+pub impl Eq for ConflictLocation
+pub impl Hash for ConflictLocation
+
+pub(all) enum Decision {
+  Shift(LR1State)
+  Reduce(@grm.Production)
+  Accept
+  Conflict(@list.List[Decision])
+}
+pub impl Eq for Decision
+
+pub(all) struct EncodedLR0Item(Int)
+pub fn EncodedLR0Item::decode(Self, @grm.Grammar) -> LR0Item
+pub fn EncodedLR0Item::decode_postdot(Self, @grm.Grammar) -> @grm.Symbol?
+pub fn EncodedLR0Item::decode_production(Self, @grm.Grammar) -> @grm.Production
+#deprecated
+pub fn EncodedLR0Item::inner(Self) -> Int
+pub fn EncodedLR0Item::new(@grm.Production, Int) -> Self
+pub fn EncodedLR0Item::unsafe_shift(Self) -> Self
+pub impl Compare for EncodedLR0Item
+pub impl Eq for EncodedLR0Item
+pub impl Hash for EncodedLR0Item
+
+pub(all) struct EncodedLR0ItemSet {
+  items : Array[EncodedLR0Item]
+  mut hash : Int?
+}
+pub fn EncodedLR0ItemSet::decode_iter(Self, @grm.Grammar) -> Iter[(Int, LR0Item)]
+pub fn EncodedLR0ItemSet::empty() -> Self
+pub fn EncodedLR0ItemSet::from_sorted_array(Array[EncodedLR0Item]) -> Self
+pub impl Default for EncodedLR0ItemSet
+pub impl Eq for EncodedLR0ItemSet
+pub impl Hash for EncodedLR0ItemSet
+
+type EncodedLR1ItemSet
+
+pub(all) struct LR0Item {
+  production : @grm.Production
+  dot : Int
+}
+pub fn LR0Item::new(@grm.Production, Int) -> Self
+pub fn LR0Item::postdot(Self) -> @grm.Symbol?
+pub fn LR0Item::shift(Self) -> Self
+pub impl Compare for LR0Item
+pub impl Eq for LR0Item
+pub impl Hash for LR0Item
+
+pub(all) struct LR1Item {
+  production : @grm.Production
+  dot : Int
+  lookahead : Lookahead
+}
+pub fn LR1Item::core(Self) -> LR0Item
+pub fn LR1Item::postdot(Self) -> @grm.Symbol?
+pub fn LR1Item::shift(Self) -> Self
+pub impl Compare for LR1Item
+pub impl Eq for LR1Item
+pub impl Show for LR1Item
+
+pub(all) struct LR1ItemGroup {
+  core : LR0Item
+  lookahead_set : Iter[Lookahead]
+}
+pub impl Show for LR1ItemGroup
+
+pub(all) struct LR1State {
+  grammar : @grm.Grammar
+  mut num : Int
+  items : EncodedLR1ItemSet
+  goto : @sorted_map.SortedMap[@grm.Symbol, LR1State]
+  action : @sorted_map.SortedMap[Lookahead, Decision]
+  mut stamp : @stamp.Stamp
+}
+pub fn LR1State::iter_item_groups(Self) -> Iter[LR1ItemGroup]
+pub fn LR1State::set_action(Self, Lookahead, Decision) -> Unit
+pub impl Compare for LR1State
+pub impl Eq for LR1State
+pub impl Hash for LR1State
+
+pub(all) enum Lookahead {
+  EndOfInput
+  Input(@grm.Terminal)
+}
+pub impl Compare for Lookahead
+pub impl Eq for Lookahead
+pub impl Hash for Lookahead
+pub impl Show for Lookahead
+
+pub(all) enum ResolveConflictError {
+  Reduce_conflict_resolved_by_presentation_order(LR1State, Lookahead, Array[@grm.Production], @grm.Production)
+  Shift_reduce_conflict_resolved_without_precedence(LR1State, Lookahead, LR1State, @grm.Production)
+  Shift_reduce_conflict_not_resolved_because_of_non_assoc(LR1State, Lookahead, LR1State, @grm.Production)
+}
+
+// Type aliases
+
+// Traits
+trait AbstractLookaheadSet : Eq
+

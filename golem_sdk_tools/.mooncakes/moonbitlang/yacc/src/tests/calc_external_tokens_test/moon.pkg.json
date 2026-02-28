@@ -1,0 +1,14 @@
+{
+  "pre-build": [
+    {
+      "command": "node $mod_dir/boot/moonyacc.cjs $input --mode only-tokens -o $output",
+      "input": "calc.mbty",
+      "output": "calc_tokens.mbt"
+    },
+    {
+      "command": "node $mod_dir/boot/moonyacc.cjs $input --external-tokens -o $output",
+      "input": "calc.mbty",
+      "output": "calc.mbt"
+    }
+  ]
+}

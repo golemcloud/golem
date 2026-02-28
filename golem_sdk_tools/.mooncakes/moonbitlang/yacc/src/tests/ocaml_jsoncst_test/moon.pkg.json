@@ -1,0 +1,36 @@
+{
+  "pre-build": [
+    {
+      "command": ":embed --name binary_search_ml_str -i $input -o $output",
+      "input": "binary_search.ml",
+      "output": "binary_search.mbt"
+    },
+    {
+      "command": "node $mod_dir/boot/moonlex.cjs $input | moonfmt > $output",
+      "input": "lexer.mbtx",
+      "output": "lexer.mbt"
+    },
+    {
+      "command": "node $mod_dir/boot/moonyacc.cjs --compress-table --mode json-cst --input-mode pull --force-token-no-payload --force-int-position $input -o $output && moonfmt -w $output && moonfmt -w $output",
+      "input": "ocaml.mly",
+      "output": "ocaml.mbt"
+    },
+    {
+      "input": [
+        "ocaml.mly"
+      ],
+      "output": [
+        "ocaml_parser_spec_src_test.mbt"
+      ],
+      "command": ":embed --name ocaml_parser_spec_src -i $input -o $output"
+    }
+  ],
+  "warn-list": "-2-6",
+  "test-import": [
+    "moonbitlang/yacc/lib/parser",
+    "moonbitlang/yacc/lib/ast"
+  ],
+  "import": [
+    "moonbitlang/ulex-runtime/lexbuf"
+  ]
+}

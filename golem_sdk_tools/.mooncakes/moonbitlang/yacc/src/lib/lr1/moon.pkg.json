@@ -1,0 +1,8 @@
+{
+  "import": [
+    "moonbitlang/yacc/lib/grm",
+    "moonbitlang/yacc/lib/util/stamp",
+    "moonbitlang/yacc/lib/util/small_int_set",
+    "moonbitlang/yacc/lib/util/hashmap2"
+  ]
+}

@@ -1,0 +1,27 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk_tools/lib"
+
+import {
+  "moonbitlang/core/list",
+  "moonbitlang/parser/syntax",
+}
+
+// Values
+pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
+
+pub fn parse_mbt_source(String) -> Array[FnSignature]
+
+// Errors
+
+// Types and methods
+pub(all) struct FnSignature {
+  gen_name : String
+  user_name : String
+  params : Array[String]
+  return_type : String
+}
+
+// Type aliases
+
+// Traits
+

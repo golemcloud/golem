@@ -1,0 +1,40 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/tests/calc_test"
+
+// Values
+pub fn start(() -> (Token, Int, Int), Int) -> Int raise ParseError
+
+// Errors
+pub suberror ParseError {
+  UnexpectedToken(Token, (Int, Int), Array[TokenKind])
+}
+pub impl Show for ParseError
+
+// Types and methods
+pub(all) enum Token {
+  EOF
+  NUMBER(Int)
+  PLUS
+  MINUS
+  STAR
+  LPAREN
+  RPAREN
+}
+pub fn Token::kind(Self) -> TokenKind
+pub impl Show for Token
+
+pub(all) enum TokenKind {
+  TK_EOF
+  TK_NUMBER
+  TK_PLUS
+  TK_MINUS
+  TK_STAR
+  TK_LPAREN
+  TK_RPAREN
+}
+pub impl Show for TokenKind
+
+// Type aliases
+
+// Traits
+

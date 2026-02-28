@@ -1,0 +1,1 @@
+type A[T,E]//no trailing newline

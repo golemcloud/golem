@@ -1,0 +1,54 @@
+[
+  {
+    "token": "ENUM",
+    "loc": "1:1-1:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Foo"
+    ],
+    "loc": "1:6-1:9"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:9-1:10"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Bar"
+    ],
+    "loc": "1:10-1:13"
+  },
+  {
+    "token": "COMMA",
+    "loc": "1:13-1:14"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Baz"
+    ],
+    "loc": "1:14-1:17"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "1:17-1:18"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//no trailing newline",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "1:19-1:40"
+  },
+  {
+    "token": "EOF",
+    "loc": "1:40-1:40"
+  }
+]

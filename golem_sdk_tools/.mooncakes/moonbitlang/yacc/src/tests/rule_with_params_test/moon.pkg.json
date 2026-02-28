@@ -1,0 +1,10 @@
+{
+  "pre-build": [
+    {
+      "command": "node $mod_dir/boot/moonyacc.cjs $input -o $output",
+      "input": "parser.mbty",
+      "output": "parser.mbt"
+    }
+  ],
+  "warn-list": "-6"
+}

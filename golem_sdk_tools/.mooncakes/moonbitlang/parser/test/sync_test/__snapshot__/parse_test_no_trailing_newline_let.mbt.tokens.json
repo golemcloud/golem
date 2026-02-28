@@ -1,0 +1,39 @@
+[
+  {
+    "token": "LET",
+    "loc": "1:1-1:4"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "a"
+    ],
+    "loc": "1:5-1:6"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "1:7-1:8"
+  },
+  {
+    "token": [
+      "INT",
+      "10"
+    ],
+    "loc": "1:9-1:11"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//no trailing newline",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "1:11-1:32"
+  },
+  {
+    "token": "EOF",
+    "loc": "1:32-1:32"
+  }
+]

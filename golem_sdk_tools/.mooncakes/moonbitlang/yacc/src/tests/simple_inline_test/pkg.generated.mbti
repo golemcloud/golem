@@ -1,0 +1,29 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/tests/simple_inline_test"
+
+// Values
+pub fn start(Array[(Token, Unit, Unit)], initial_pos? : Unit) -> String raise ParseError
+
+// Errors
+pub suberror ParseError {
+  UnexpectedToken(Token, (Unit, Unit), Array[TokenKind])
+  UnexpectedEndOfInput(Unit, Array[TokenKind])
+}
+
+// Types and methods
+pub(all) enum Token {
+  A
+  B
+}
+pub fn Token::kind(Self) -> TokenKind
+
+pub(all) enum TokenKind {
+  TK_A
+  TK_B
+}
+pub impl Show for TokenKind
+
+// Type aliases
+
+// Traits
+

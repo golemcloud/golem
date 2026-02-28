@@ -1,0 +1,140 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/ast"
+
+import(
+  "moonbitlang/core/list"
+)
+
+// Values
+pub fn print_spec(ParserSpec, StringBuilder, actions? : Bool) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) struct ClauseAction {
+  code : CodeWithSubst?
+  loc : (Int, Int)
+}
+pub impl ToJson for ClauseAction
+
+pub(all) struct ClauseItem {
+  binder : String?
+  term : Term
+}
+pub impl ToJson for ClauseItem
+
+pub(all) enum ClauseItemIdent {
+  Dollar(Int)
+  Name(String)
+}
+pub impl Compare for ClauseItemIdent
+pub impl Eq for ClauseItemIdent
+pub impl Show for ClauseItemIdent
+pub impl ToJson for ClauseItemIdent
+
+pub(all) struct ClauseWithoutAction {
+  items : Array[ClauseItem]
+  prec : PrecSymbol?
+  loc : (Int, Int)
+}
+pub impl ToJson for ClauseWithoutAction
+
+pub(all) struct CodeWithSubst {
+  code : String
+  utf8_pos : Int
+  subst : Array[SubstItem]
+}
+pub impl ToJson for CodeWithSubst
+
+pub(all) enum Declaration {
+  Header(String, Int, Int)
+  Trailer(String, Int, Int)
+  Start(Array[SymbolWithLoc], type_~ : String?)
+  Token(Array[SymbolWithLoc], type_~ : String?)
+  Token1(SymbolWithLoc, type_~ : String?, image~ : String)
+  Type(Array[SymbolWithLoc], type_~ : String)
+  Derive(traits~ : String, type_~ : String)
+  Position(type_~ : String)
+  Left(Array[PrecSymbol])
+  Right(Array[PrecSymbol])
+  Nonassoc(Array[PrecSymbol])
+}
+pub impl ToJson for Declaration
+
+pub(all) struct ParserSpec {
+  decls : Array[Declaration]
+  rules : Array[Rule]
+}
+pub impl ToJson for ParserSpec
+
+pub(all) enum PrecSymbol {
+  Symbol(String)
+  Image(String)
+}
+pub impl ToJson for PrecSymbol
+
+pub(all) struct Rule {
+  inline : Bool
+  nonterminal : String
+  generic_params : Array[String]
+  params : Array[(String, TypeExpr?)]
+  type_ : TypeExpr?
+  clauses : Array[(@list.List[ClauseWithoutAction], ClauseAction)]
+}
+pub impl ToJson for Rule
+
+pub(all) struct SubstItem {
+  start : Int
+  end : Int
+  desc : SubstItemDesc
+}
+pub impl Show for SubstItem
+pub impl ToJson for SubstItem
+
+pub(all) enum SubstItemDesc {
+  Dollar(Int)
+  StartPos
+  EndPos
+  Loc
+  StartPosOf(ClauseItemIdent)
+  EndPosOf(ClauseItemIdent)
+  LocOf(ClauseItemIdent)
+  SymbolStartPos
+  Sloc
+}
+pub impl Compare for SubstItemDesc
+pub impl Eq for SubstItemDesc
+pub impl Show for SubstItemDesc
+pub impl ToJson for SubstItemDesc
+
+pub(all) struct SymbolWithLoc {
+  symbol : String
+  loc : (Int, Int)
+}
+pub impl ToJson for SymbolWithLoc
+
+pub(all) enum Term {
+  Symbol(String, loc~ : (Int, Int))
+  Image(String, loc~ : (Int, Int))
+  RuleCall(String, symbol_loc~ : (Int, Int), Array[Term])
+}
+pub impl ToJson for Term
+
+pub(all) enum TypeExpr {
+  Constr(pkg~ : String?, String, Array[TypeExpr])
+  Option(TypeExpr)
+  Tuple(Array[TypeExpr])
+  Arrow(Array[TypeExpr], TypeExpr)
+}
+pub impl Show for TypeExpr
+pub impl ToJson for TypeExpr
+
+// Type aliases
+pub type Code = String
+
+pub type Symbol = String
+
+pub type TypeString = String
+
+// Traits
+

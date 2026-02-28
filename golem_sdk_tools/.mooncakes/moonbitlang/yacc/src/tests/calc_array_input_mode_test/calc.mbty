@@ -1,0 +1,51 @@
+%derive<Show> Token
+%derive<Show> ParseError
+%position<Int>
+%start start
+
+%token<Int> NUMBER
+%token PLUS         "+"
+%token MINUS        "-"
+%token STAR         "*"
+%token LPAREN       "("
+%token RPAREN       ")"
+
+%type<Int> start
+%type<Int> add
+%type<Int> factor
+%type<Int> term
+
+%%
+
+start
+  : add             { $1 }
+  ;
+
+add
+  : add "+" factor  { $1 + $3 }
+  | add "-" factor  { $1 - $3 }
+  | factor          { $1 }
+  ;
+
+factor
+  : factor "*" term { $1 * $3 }
+  | term            { $1 }
+  ;
+
+term
+  : NUMBER          { $1 }
+  | "(" add ")"     { $2 }
+  ;
+
+(* OCaml style comment (* can be nested *) *)
+/* C style comment */
+
+%%
+
+fn footer() -> Unit {
+  ()
+}
+
+fn init {
+  ignore(footer)
+}

@@ -1,0 +1,31 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/parser/syntax/util"
+
+import(
+  "moonbitlang/core/list"
+  "moonbitlang/parser/basic"
+  "moonbitlang/parser/syntax"
+)
+
+// Values
+
+// Errors
+
+// Types and methods
+pub(all) enum Statement {
+  StmtExpr(@syntax.Expr)
+  StmtLet(pat~ : @syntax.Pattern, expr~ : @syntax.Expr, loc~ : @basic.Location)
+  StmtGuard(cond~ : @syntax.Expr, otherwise~ : @syntax.Expr?, loc~ : @basic.Location)
+  StmtLetmut(binder~ : @syntax.Binder, ty_opt~ : @syntax.Type?, expr~ : @syntax.Expr, loc~ : @basic.Location)
+  StmtFunc(binder~ : @syntax.Binder, func~ : @syntax.Func, loc~ : @basic.Location)
+  StmtLetand(bindings~ : @list.List[(@syntax.Binder, @syntax.Type?, @syntax.Func)], loc~ : @basic.Location)
+  StmtDefer(expr~ : @syntax.Expr, loc~ : @basic.Location)
+}
+fn Statement::collect_letrec(loc~ : @basic.Location, @list.List[(@syntax.Binder, @syntax.Func)], @list.List[Self], @syntax.Expr) -> @syntax.Expr
+fn Statement::collect_rev(@list.List[Self], @syntax.Expr) -> @syntax.Expr
+fn Statement::compact_rev(@list.List[Self], loc~ : @basic.Location) -> @syntax.Expr
+
+// Type aliases
+
+// Traits
+

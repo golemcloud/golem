@@ -1,0 +1,6 @@
+{
+    "import": [
+        "moonbitlang/core/double",
+        "moonbitlang/core/strconv"
+    ]
+}

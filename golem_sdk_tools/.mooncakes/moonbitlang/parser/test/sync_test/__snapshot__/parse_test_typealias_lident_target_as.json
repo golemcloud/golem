@@ -1,0 +1,47 @@
+[
+  {
+    "kind": "Impl::BatchTypeAlias",
+    "loc": null,
+    "children": {
+      "pkg": null,
+      "targets": {
+        "kind": "Impl::BatchTypeAlias::TargetList",
+        "loc": null,
+        "children": [
+          {
+            "kind": "AliasTarget",
+            "loc": null,
+            "children": {
+              "binder": {
+                "kind": "Binder",
+                "loc": null,
+                "children": {
+                  "name": "Bar"
+                }
+              },
+              "target": {
+                "kind": "Label",
+                "loc": null,
+                "children": {
+                  "name": "foo"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "vis": {
+        "kind": "Visibility::Default",
+        "loc": null,
+        "children": {}
+      },
+      "attrs": {
+        "kind": "Impl::BatchTypeAlias::AttrList",
+        "loc": null,
+        "children": []
+      },
+      "is_list": false,
+      "doc": ""
+    }
+  }
+]

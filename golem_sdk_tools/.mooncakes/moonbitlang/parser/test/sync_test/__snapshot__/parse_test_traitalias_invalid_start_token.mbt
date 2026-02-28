@@ -1,0 +1,2 @@
+traitalias 1
+

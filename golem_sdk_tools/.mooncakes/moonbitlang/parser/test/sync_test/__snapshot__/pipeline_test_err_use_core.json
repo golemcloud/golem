@@ -1,0 +1,139 @@
+[
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "init"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": null,
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": null,
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Let",
+            "loc": null,
+            "children": {
+              "pattern": {
+                "kind": "Pattern::Any",
+                "loc": null,
+                "children": {}
+              },
+              "expr": {
+                "kind": "Expr::DotApply",
+                "loc": null,
+                "children": {
+                  "self": {
+                    "kind": "Expr::Constr",
+                    "loc": null,
+                    "children": {
+                      "constr": {
+                        "kind": "Constructor",
+                        "loc": null,
+                        "children": {
+                          "name": {
+                            "kind": "ConstrName",
+                            "loc": null,
+                            "children": {
+                              "name": "None"
+                            }
+                          },
+                          "extra_info": {
+                            "kind": "ConstructorExtraInfo::TypeName",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "TypeName",
+                                "loc": null,
+                                "children": {
+                                  "name": {
+                                    "kind": "LongIdent::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "Option"
+                                    }
+                                  },
+                                  "is_object": false
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "method_name": {
+                    "kind": "Label",
+                    "loc": null,
+                    "children": {
+                      "name": "unwrap"
+                    }
+                  },
+                  "args": {
+                    "kind": "Expr::DotApply::ArgList",
+                    "loc": null,
+                    "children": []
+                  },
+                  "return_self": false,
+                  "attr": {
+                    "kind": "ApplyAttr::NoAttr",
+                    "loc": null,
+                    "children": {}
+                  }
+                }
+              },
+              "body": {
+                "kind": "Expr::Unit",
+                "loc": null,
+                "children": {
+                  "faked": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

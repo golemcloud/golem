@@ -1,0 +1,1 @@
+enum Foo{Bar,Baz} //no trailing newline

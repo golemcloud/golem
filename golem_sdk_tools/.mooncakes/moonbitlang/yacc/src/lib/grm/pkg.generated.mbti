@@ -1,0 +1,83 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/grm"
+
+// Values
+pub fn build((BuilderContext) -> Unit) -> Grammar
+
+// Errors
+
+// Types and methods
+pub(all) enum Associativity {
+  LeftAssoc
+  RightAssoc
+  NonAssoc
+}
+pub impl Eq for Associativity
+
+pub struct BuilderContext {
+  // private fields
+}
+pub fn BuilderContext::add_production(Self, String, Array[String]) -> Int
+pub fn BuilderContext::set_prec(Self, String, Associativity, Int) -> Unit
+pub fn BuilderContext::set_start(Self, String) -> Unit
+
+pub(all) struct Grammar {
+  starts : Array[Production]
+  terminals : Array[Terminal]
+  nonterminals : Array[Nonterminal]
+  productions : Array[Production]
+}
+
+pub(all) struct Nonterminal {
+  mut num : Int
+  name : String
+  productions : Array[Production]
+}
+pub impl Compare for Nonterminal
+pub impl Eq for Nonterminal
+pub impl Hash for Nonterminal
+pub impl Show for Nonterminal
+
+pub(all) enum Nullability {
+  Null
+  Nullable
+  NonNullable
+}
+pub impl Eq for Nullability
+
+pub(all) struct Production {
+  mut num : Int
+  lhs : Nonterminal
+  rhs : Array[Symbol]
+  mut prec : Int?
+}
+pub fn[Logger : Logger] Production::output_with_opt_dot(Self, Logger, dot? : Int) -> Unit
+pub impl Compare for Production
+pub impl Eq for Production
+pub impl Hash for Production
+pub impl Show for Production
+
+pub(all) enum Symbol {
+  T(Terminal)
+  NT(Nonterminal)
+}
+pub impl Compare for Symbol
+pub impl Eq for Symbol
+pub impl Hash for Symbol
+pub impl Show for Symbol
+
+pub(all) struct Terminal {
+  mut num : Int
+  name : String
+  mut prec : (Int, Associativity)?
+}
+pub impl Compare for Terminal
+pub impl Eq for Terminal
+pub impl Hash for Terminal
+pub impl Show for Terminal
+
+// Type aliases
+pub type BuilderSymbol = String
+
+// Traits
+

@@ -1,0 +1,91 @@
+[
+  {
+    "token": "STRUCT",
+    "loc": "1:1-1:7"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Foo"
+    ],
+    "loc": "1:8-1:11"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:12-1:13"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:14-1:15"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "foo"
+    ],
+    "loc": "2:3-2:6"
+  },
+  {
+    "token": "COLON",
+    "loc": "2:7-2:8"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "2:9-2:12"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "2:12-2:12"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:13-2:14"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "bar"
+    ],
+    "loc": "3:3-3:6"
+  },
+  {
+    "token": "COLON",
+    "loc": "3:7-3:8"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Bool"
+    ],
+    "loc": "3:9-3:13"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:13-3:14"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "4:1-4:2"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//no trailing newline",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "4:2-4:23"
+  },
+  {
+    "token": "EOF",
+    "loc": "4:23-4:23"
+  }
+]

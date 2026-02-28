@@ -1,0 +1,89 @@
+[
+  {
+    "token": "TEST",
+    "loc": "1:1-1:5"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "1:6-1:7"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "it"
+    ],
+    "loc": "1:7-1:9"
+  },
+  {
+    "token": "COLON",
+    "loc": "1:10-1:11"
+  },
+  {
+    "token": [
+      "PACKAGE_NAME",
+      "test"
+    ],
+    "loc": "1:12-1:17"
+  },
+  {
+    "token": [
+      "DOT_UIDENT",
+      "T"
+    ],
+    "loc": "1:18-1:19"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "1:19-1:20"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:21-1:22"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:22-1:23"
+  },
+  {
+    "token": "LET",
+    "loc": "2:3-2:6"
+  },
+  {
+    "token": "UNDERSCORE",
+    "loc": "2:7-2:8"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "2:9-2:10"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "it"
+    ],
+    "loc": "2:11-2:13"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:13-2:14"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "3:1-3:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:2-3:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:2-3:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "4:1-4:1"
+  }
+]

@@ -1,0 +1,431 @@
+[
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "init"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": null,
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": null,
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Let",
+            "loc": null,
+            "children": {
+              "pattern": {
+                "kind": "Pattern::Var",
+                "loc": null,
+                "children": {
+                  "value": {
+                    "kind": "Binder",
+                    "loc": null,
+                    "children": {
+                      "name": "record"
+                    }
+                  }
+                }
+              },
+              "expr": {
+                "kind": "Expr::Map",
+                "loc": null,
+                "children": {
+                  "elems": {
+                    "kind": "Expr::Map::ElemList",
+                    "loc": null,
+                    "children": []
+                  }
+                }
+              },
+              "body": {
+                "kind": "Expr::Let",
+                "loc": null,
+                "children": {
+                  "pattern": {
+                    "kind": "Pattern::Var",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "Binder",
+                        "loc": null,
+                        "children": {
+                          "name": "map"
+                        }
+                      }
+                    }
+                  },
+                  "expr": {
+                    "kind": "Expr::Map",
+                    "loc": null,
+                    "children": {
+                      "elems": {
+                        "kind": "Expr::Map::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "MapExprElem",
+                            "loc": null,
+                            "children": {
+                              "key": {
+                                "kind": "Constant::String",
+                                "loc": null,
+                                "children": {
+                                  "value": "1"
+                                }
+                              },
+                              "expr": {
+                                "kind": "Expr::Ident",
+                                "loc": null,
+                                "children": {
+                                  "id": {
+                                    "kind": "Var",
+                                    "loc": null,
+                                    "children": {
+                                      "name": {
+                                        "kind": "LongIdent::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "value": "x"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "kind": "MapExprElem",
+                            "loc": null,
+                            "children": {
+                              "key": {
+                                "kind": "Constant::String",
+                                "loc": null,
+                                "children": {
+                                  "value": "2"
+                                }
+                              },
+                              "expr": {
+                                "kind": "Expr::Infix",
+                                "loc": null,
+                                "children": {
+                                  "op": {
+                                    "kind": "Var",
+                                    "loc": null,
+                                    "children": {
+                                      "name": {
+                                        "kind": "LongIdent::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "value": "+"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "lhs": {
+                                    "kind": "Expr::Constant",
+                                    "loc": null,
+                                    "children": {
+                                      "constant": {
+                                        "kind": "Constant::Int",
+                                        "loc": null,
+                                        "children": {
+                                          "value": "3"
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "rhs": {
+                                    "kind": "Expr::Constant",
+                                    "loc": null,
+                                    "children": {
+                                      "constant": {
+                                        "kind": "Constant::Int",
+                                        "loc": null,
+                                        "children": {
+                                          "value": "4"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "body": {
+                    "kind": "Expr::Let",
+                    "loc": null,
+                    "children": {
+                      "pattern": {
+                        "kind": "Pattern::Any",
+                        "loc": null,
+                        "children": {}
+                      },
+                      "expr": {
+                        "kind": "Expr::Map",
+                        "loc": null,
+                        "children": {
+                          "elems": {
+                            "kind": "Expr::Map::ElemList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "MapExprElem",
+                                "loc": null,
+                                "children": {
+                                  "key": {
+                                    "kind": "Constant::Bool",
+                                    "loc": null,
+                                    "children": {
+                                      "value": true
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "x"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "MapExprElem",
+                                "loc": null,
+                                "children": {
+                                  "key": {
+                                    "kind": "Constant::Char",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "a"
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "y"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "MapExprElem",
+                                "loc": null,
+                                "children": {
+                                  "key": {
+                                    "kind": "Constant::Int64",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "1"
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "z"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "MapExprElem",
+                                "loc": null,
+                                "children": {
+                                  "key": {
+                                    "kind": "Constant::Int",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "4"
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "w"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "MapExprElem",
+                                "loc": null,
+                                "children": {
+                                  "key": {
+                                    "kind": "Constant::Double",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "1.0"
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "x"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "MapExprElem",
+                                "loc": null,
+                                "children": {
+                                  "key": {
+                                    "kind": "Constant::Double",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "-1.0"
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "y"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "body": {
+                        "kind": "Expr::Unit",
+                        "loc": null,
+                        "children": {
+                          "faked": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

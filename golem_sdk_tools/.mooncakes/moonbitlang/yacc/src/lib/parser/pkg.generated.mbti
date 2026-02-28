@@ -1,0 +1,99 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/parser"
+
+import(
+  "moonbitlang/yacc/lib/ast"
+)
+
+// Values
+pub fn new_lexer(String) -> Lexer
+
+pub fn spec(() -> (Token, Int, Int), Int) -> @ast.ParserSpec raise ParseError
+
+// Errors
+pub suberror LexError {
+  UnexpectedEndOfFile
+  Unrecognized(Char, Int)
+}
+
+pub suberror ParseError {
+  UnexpectedToken(Token, (Int, Int), Array[TokenKind])
+}
+
+// Types and methods
+type Lexer
+pub fn Lexer::next_token(Self) -> (Token, Int, Int) raise LexError
+
+pub(all) enum Token {
+  EOF
+  IDENT(String)
+  STRING(String)
+  LANGLE_CODE_RANGLE(String)
+  LBRACE_CODE_RBRACE((String, Int, Array[@ast.SubstItem]))
+  PERCENT_LBRACE_CODE_PERCENT_RBRACE((String, Int, Int))
+  PERCENT_PERCENT_CODE_EOF((String, Int, Int))
+  PKG_AND_IDENT((String, String))
+  PERCENT_PERCENT
+  PERCENT_START
+  PERCENT_TOKEN
+  PERCENT_TYPE
+  PERCENT_POSITION
+  PERCENT_LEFT
+  PERCENT_RIGHT
+  PERCENT_NONASSOC
+  PERCENT_PREC
+  PERCENT_DERIVE
+  PERCENT_INLINE
+  LBRACKET
+  RBRACKET
+  LPAREN
+  RPAREN
+  COMMA
+  ARROW
+  QUESTION
+  COLON
+  BAR
+  EQ
+  SEMI
+}
+pub fn Token::kind(Self) -> TokenKind
+pub impl Show for Token
+
+pub(all) enum TokenKind {
+  TK_EOF
+  TK_IDENT
+  TK_STRING
+  TK_LANGLE_CODE_RANGLE
+  TK_LBRACE_CODE_RBRACE
+  TK_PERCENT_LBRACE_CODE_PERCENT_RBRACE
+  TK_PERCENT_PERCENT_CODE_EOF
+  TK_PKG_AND_IDENT
+  TK_PERCENT_PERCENT
+  TK_PERCENT_START
+  TK_PERCENT_TOKEN
+  TK_PERCENT_TYPE
+  TK_PERCENT_POSITION
+  TK_PERCENT_LEFT
+  TK_PERCENT_RIGHT
+  TK_PERCENT_NONASSOC
+  TK_PERCENT_PREC
+  TK_PERCENT_DERIVE
+  TK_PERCENT_INLINE
+  TK_LBRACKET
+  TK_RBRACKET
+  TK_LPAREN
+  TK_RPAREN
+  TK_COMMA
+  TK_ARROW
+  TK_QUESTION
+  TK_COLON
+  TK_BAR
+  TK_EQ
+  TK_SEMI
+}
+pub impl Show for TokenKind
+
+// Type aliases
+
+// Traits
+

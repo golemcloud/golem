@@ -1,0 +1,5 @@
+{
+  "import": [
+    "moonbitlang/yacc/lib/util/hashmap2"
+  ]
+}

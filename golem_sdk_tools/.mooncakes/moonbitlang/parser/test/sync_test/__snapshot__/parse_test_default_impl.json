@@ -1,0 +1,230 @@
+[
+  {
+    "kind": "Impl::TopTrait",
+    "loc": null,
+    "children": {
+      "value": {
+        "kind": "TraitDecl",
+        "loc": null,
+        "children": {
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "I"
+            }
+          },
+          "supers": {
+            "kind": "TraitDecl::SuperList",
+            "loc": null,
+            "children": []
+          },
+          "methods": {
+            "kind": "TraitDecl::MethodList",
+            "loc": null,
+            "children": [
+              {
+                "kind": "TraitMethodDecl",
+                "loc": null,
+                "children": {
+                  "name": {
+                    "kind": "Binder",
+                    "loc": null,
+                    "children": {
+                      "name": "f"
+                    }
+                  },
+                  "has_error": null,
+                  "is_async": null,
+                  "quantifiers": {
+                    "kind": "TraitMethodDecl::QuantifierList",
+                    "loc": null,
+                    "children": []
+                  },
+                  "params": {
+                    "kind": "TraitMethodDecl::ParamList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "Parameter::DiscardPositional",
+                        "loc": null,
+                        "children": {
+                          "ty": {
+                            "kind": "Type::Name",
+                            "loc": null,
+                            "children": {
+                              "constr_id": {
+                                "kind": "ConstrId",
+                                "loc": null,
+                                "children": {
+                                  "id": {
+                                    "kind": "LongIdent::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "Self"
+                                    }
+                                  }
+                                }
+                              },
+                              "tys": {
+                                "kind": "Type::Name::TypeList",
+                                "loc": null,
+                                "children": []
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "return_type": {
+                    "kind": "Type::Name",
+                    "loc": null,
+                    "children": {
+                      "constr_id": {
+                        "kind": "ConstrId",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "LongIdent::Ident",
+                            "loc": null,
+                            "children": {
+                              "value": "Unit"
+                            }
+                          }
+                        }
+                      },
+                      "tys": {
+                        "kind": "Type::Name::TypeList",
+                        "loc": null,
+                        "children": []
+                      }
+                    }
+                  },
+                  "error_type": {
+                    "kind": "ErrorType::NoErrorType",
+                    "loc": null,
+                    "children": {}
+                  },
+                  "has_default": {
+                    "kind": "TraitMethodDecl::HasDefault",
+                    "loc": null,
+                    "children": {}
+                  },
+                  "attrs": {
+                    "kind": "TraitMethodDecl::AttrList",
+                    "loc": null,
+                    "children": []
+                  }
+                }
+              },
+              {
+                "kind": "TraitMethodDecl",
+                "loc": null,
+                "children": {
+                  "name": {
+                    "kind": "Binder",
+                    "loc": null,
+                    "children": {
+                      "name": "g"
+                    }
+                  },
+                  "has_error": null,
+                  "is_async": null,
+                  "quantifiers": {
+                    "kind": "TraitMethodDecl::QuantifierList",
+                    "loc": null,
+                    "children": []
+                  },
+                  "params": {
+                    "kind": "TraitMethodDecl::ParamList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "Parameter::DiscardPositional",
+                        "loc": null,
+                        "children": {
+                          "ty": {
+                            "kind": "Type::Name",
+                            "loc": null,
+                            "children": {
+                              "constr_id": {
+                                "kind": "ConstrId",
+                                "loc": null,
+                                "children": {
+                                  "id": {
+                                    "kind": "LongIdent::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "Self"
+                                    }
+                                  }
+                                }
+                              },
+                              "tys": {
+                                "kind": "Type::Name::TypeList",
+                                "loc": null,
+                                "children": []
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "return_type": {
+                    "kind": "Type::Name",
+                    "loc": null,
+                    "children": {
+                      "constr_id": {
+                        "kind": "ConstrId",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "LongIdent::Ident",
+                            "loc": null,
+                            "children": {
+                              "value": "Unit"
+                            }
+                          }
+                        }
+                      },
+                      "tys": {
+                        "kind": "Type::Name::TypeList",
+                        "loc": null,
+                        "children": []
+                      }
+                    }
+                  },
+                  "error_type": {
+                    "kind": "ErrorType::NoErrorType",
+                    "loc": null,
+                    "children": {}
+                  },
+                  "has_default": null,
+                  "attrs": {
+                    "kind": "TraitMethodDecl::AttrList",
+                    "loc": null,
+                    "children": []
+                  }
+                }
+              }
+            ]
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "is_declare": false,
+          "attrs": {
+            "kind": "TraitDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      }
+    }
+  }
+]

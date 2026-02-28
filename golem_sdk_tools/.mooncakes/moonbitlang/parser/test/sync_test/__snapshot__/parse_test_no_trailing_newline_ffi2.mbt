@@ -1,0 +1,1 @@
+fn ffi(x : Int) -> Int = "xxx" //no trailing newline

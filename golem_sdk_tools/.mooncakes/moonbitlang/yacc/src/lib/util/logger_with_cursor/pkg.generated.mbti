@@ -1,0 +1,17 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/util/logger_with_cursor"
+
+// Values
+pub fn new(&Logger, cursor? : Int) -> LoggerWithCursor
+
+// Errors
+
+// Types and methods
+type LoggerWithCursor
+pub fn LoggerWithCursor::cursor(Self) -> Int
+pub impl Logger for LoggerWithCursor
+
+// Type aliases
+
+// Traits
+

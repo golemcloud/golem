@@ -1,0 +1,2 @@
+typealias foo as Bar
+

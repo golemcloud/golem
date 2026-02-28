@@ -1,0 +1,285 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/tests/ocaml_jsoncst_test"
+
+import(
+  "moonbitlang/ulex-runtime/lexbuf"
+)
+
+// Values
+pub fn implementation(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+pub fn interface(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+pub fn new_lexer(String) -> Lexer
+
+pub fn parse_core_type(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+pub fn parse_expression(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+pub fn parse_pattern(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+pub fn toplevel_phrase(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+pub fn use_file(() -> (Token, Int, Int), Int) -> Json raise ParseError
+
+// Errors
+pub suberror ParseError {
+  UnexpectedToken(Token, (Int, Int), Array[TokenKind])
+}
+
+// Types and methods
+pub(all) struct Lexer(@lexbuf.StringLexbuf)
+#deprecated
+pub fn Lexer::inner(Self) -> @lexbuf.StringLexbuf
+pub fn Lexer::next_token(Self) -> (Token, Int, Int)
+
+pub(all) enum Token {
+  AMPERAMPER
+  AMPERSAND
+  AND
+  AS
+  ASSERT
+  BACKQUOTE
+  BANG
+  BAR
+  BARBAR
+  BARRBRACKET
+  BEGIN
+  CHAR
+  CLASS
+  COLON
+  COLONCOLON
+  COLONEQUAL
+  COLONGREATER
+  COMMA
+  CONSTRAINT
+  DO
+  DONE
+  DOT
+  DOTDOT
+  DOWNTO
+  ELSE
+  END
+  EOF
+  EQUAL
+  EXCEPTION
+  EXTERNAL
+  FALSE
+  FLOAT
+  FOR
+  FUN
+  FUNCTION
+  FUNCTOR
+  GREATER
+  GREATERRBRACE
+  GREATERRBRACKET
+  IF
+  IN
+  INCLUDE
+  INFIXOP0
+  INFIXOP1
+  INFIXOP2
+  INFIXOP3
+  INFIXOP4
+  DOTOP
+  INHERIT
+  INITIALIZER
+  INT
+  LABEL
+  LAZY
+  LBRACE
+  LBRACELESS
+  LBRACKET
+  LBRACKETBAR
+  LBRACKETLESS
+  LBRACKETGREATER
+  LBRACKETPERCENT
+  LBRACKETPERCENTPERCENT
+  LESS
+  LESSMINUS
+  LET
+  LIDENT
+  LPAREN
+  LBRACKETAT
+  LBRACKETATAT
+  LBRACKETATATAT
+  MATCH
+  METHOD
+  MINUS
+  MINUSDOT
+  MINUSGREATER
+  MODULE
+  MUTABLE
+  NEW
+  NONREC
+  OBJECT
+  OF
+  OPEN
+  OPTLABEL
+  OR
+  PERCENT
+  PLUS
+  PLUSDOT
+  PLUSEQ
+  PREFIXOP
+  PRIVATE
+  QUESTION
+  QUOTE
+  RBRACE
+  RBRACKET
+  REC
+  RPAREN
+  SEMI
+  SEMISEMI
+  HASH
+  HASHOP
+  SIG
+  STAR
+  STRING
+  STRUCT
+  THEN
+  TILDE
+  TO
+  TRUE
+  TRY
+  TYPE
+  UIDENT
+  UNDERSCORE
+  VAL
+  VIRTUAL
+  WHEN
+  WHILE
+  WITH
+  COMMENT
+  DOCSTRING
+  EOL
+}
+pub fn Token::kind(Self) -> TokenKind
+
+pub(all) enum TokenKind {
+  TK_AMPERAMPER
+  TK_AMPERSAND
+  TK_AND
+  TK_AS
+  TK_ASSERT
+  TK_BACKQUOTE
+  TK_BANG
+  TK_BAR
+  TK_BARBAR
+  TK_BARRBRACKET
+  TK_BEGIN
+  TK_CHAR
+  TK_CLASS
+  TK_COLON
+  TK_COLONCOLON
+  TK_COLONEQUAL
+  TK_COLONGREATER
+  TK_COMMA
+  TK_CONSTRAINT
+  TK_DO
+  TK_DONE
+  TK_DOT
+  TK_DOTDOT
+  TK_DOWNTO
+  TK_ELSE
+  TK_END
+  TK_EOF
+  TK_EQUAL
+  TK_EXCEPTION
+  TK_EXTERNAL
+  TK_FALSE
+  TK_FLOAT
+  TK_FOR
+  TK_FUN
+  TK_FUNCTION
+  TK_FUNCTOR
+  TK_GREATER
+  TK_GREATERRBRACE
+  TK_GREATERRBRACKET
+  TK_IF
+  TK_IN
+  TK_INCLUDE
+  TK_INFIXOP0
+  TK_INFIXOP1
+  TK_INFIXOP2
+  TK_INFIXOP3
+  TK_INFIXOP4
+  TK_DOTOP
+  TK_INHERIT
+  TK_INITIALIZER
+  TK_INT
+  TK_LABEL
+  TK_LAZY
+  TK_LBRACE
+  TK_LBRACELESS
+  TK_LBRACKET
+  TK_LBRACKETBAR
+  TK_LBRACKETLESS
+  TK_LBRACKETGREATER
+  TK_LBRACKETPERCENT
+  TK_LBRACKETPERCENTPERCENT
+  TK_LESS
+  TK_LESSMINUS
+  TK_LET
+  TK_LIDENT
+  TK_LPAREN
+  TK_LBRACKETAT
+  TK_LBRACKETATAT
+  TK_LBRACKETATATAT
+  TK_MATCH
+  TK_METHOD
+  TK_MINUS
+  TK_MINUSDOT
+  TK_MINUSGREATER
+  TK_MODULE
+  TK_MUTABLE
+  TK_NEW
+  TK_NONREC
+  TK_OBJECT
+  TK_OF
+  TK_OPEN
+  TK_OPTLABEL
+  TK_OR
+  TK_PERCENT
+  TK_PLUS
+  TK_PLUSDOT
+  TK_PLUSEQ
+  TK_PREFIXOP
+  TK_PRIVATE
+  TK_QUESTION
+  TK_QUOTE
+  TK_RBRACE
+  TK_RBRACKET
+  TK_REC
+  TK_RPAREN
+  TK_SEMI
+  TK_SEMISEMI
+  TK_HASH
+  TK_HASHOP
+  TK_SIG
+  TK_STAR
+  TK_STRING
+  TK_STRUCT
+  TK_THEN
+  TK_TILDE
+  TK_TO
+  TK_TRUE
+  TK_TRY
+  TK_TYPE
+  TK_UIDENT
+  TK_UNDERSCORE
+  TK_VAL
+  TK_VIRTUAL
+  TK_WHEN
+  TK_WHILE
+  TK_WITH
+  TK_COMMENT
+  TK_DOCSTRING
+  TK_EOL
+}
+pub impl Show for TokenKind
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,2 @@
+fn f() raise foo {}
+

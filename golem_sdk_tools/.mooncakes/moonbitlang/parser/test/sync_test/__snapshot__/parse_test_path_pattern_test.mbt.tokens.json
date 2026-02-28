@@ -1,0 +1,324 @@
+[
+  {
+    "token": "FN",
+    "loc": "1:1-1:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "testX"
+    ],
+    "loc": "1:4-1:9"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "1:9-1:10"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "x"
+    ],
+    "loc": "1:10-1:11"
+  },
+  {
+    "token": "COLON",
+    "loc": "1:11-1:12"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "1:13-1:14"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "1:14-1:15"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:16-1:17"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:17-1:18"
+  },
+  {
+    "token": "MATCH",
+    "loc": "2:3-2:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "x"
+    ],
+    "loc": "2:9-2:10"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "2:11-2:12"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:12-2:13"
+  },
+  {
+    "token": [
+      "PACKAGE_NAME",
+      "pkg"
+    ],
+    "loc": "3:5-3:9"
+  },
+  {
+    "token": [
+      "DOT_UIDENT",
+      "T"
+    ],
+    "loc": "3:10-3:11"
+  },
+  {
+    "token": "COLONCOLON",
+    "loc": "3:11-3:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Aa"
+    ],
+    "loc": "3:13-3:15"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "3:16-3:18"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "3:19-3:26"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:26-3:27"
+  },
+  {
+    "token": [
+      "STRING",
+      "A"
+    ],
+    "loc": "3:27-3:30"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:30-3:31"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:31-3:31"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:31-3:32"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "4:5-4:6"
+  },
+  {
+    "token": "COLONCOLON",
+    "loc": "4:6-4:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "x"
+    ],
+    "loc": "4:8-4:9"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "4:10-4:12"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "4:13-4:20"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "4:20-4:21"
+  },
+  {
+    "token": [
+      "STRING",
+      "X"
+    ],
+    "loc": "4:21-4:24"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "4:24-4:25"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:25-4:25"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:25-4:26"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "5:5-5:6"
+  },
+  {
+    "token": "COLONCOLON",
+    "loc": "5:6-5:8"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Bbb"
+    ],
+    "loc": "5:8-5:11"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "5:12-5:14"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "5:15-5:22"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "5:22-5:23"
+  },
+  {
+    "token": [
+      "STRING",
+      "B"
+    ],
+    "loc": "5:23-5:26"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "5:26-5:27"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "5:27-5:27"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "5:27-5:28"
+  },
+  {
+    "token": [
+      "PACKAGE_NAME",
+      "pkg"
+    ],
+    "loc": "6:5-6:9"
+  },
+  {
+    "token": [
+      "DOT_UIDENT",
+      "T"
+    ],
+    "loc": "6:10-6:11"
+  },
+  {
+    "token": "COLONCOLON",
+    "loc": "6:11-6:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Cccc"
+    ],
+    "loc": "6:13-6:17"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "6:18-6:20"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "6:21-6:28"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "6:28-6:29"
+  },
+  {
+    "token": [
+      "STRING",
+      "C"
+    ],
+    "loc": "6:29-6:32"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "6:32-6:33"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "6:33-6:34"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "7:3-7:4"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "7:4-7:5"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "8:1-8:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "8:2-8:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "8:2-8:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "9:1-9:2"
+  },
+  {
+    "token": "EOF",
+    "loc": "10:1-10:1"
+  }
+]

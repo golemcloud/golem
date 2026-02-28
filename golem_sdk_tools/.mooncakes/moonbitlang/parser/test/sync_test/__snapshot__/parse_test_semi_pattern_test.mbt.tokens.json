@@ -1,0 +1,307 @@
+[
+  {
+    "token": "ENUM",
+    "loc": "1:1-1:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "1:6-1:7"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:8-1:9"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:9-1:10"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "A"
+    ],
+    "loc": "2:3-2:4"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "2:4-2:4"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:4-2:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "B"
+    ],
+    "loc": "3:3-3:4"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:4-3:4"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:4-3:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "C"
+    ],
+    "loc": "4:3-4:4"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:4-4:5"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "5:1-5:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "5:2-5:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "5:2-5:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "6:1-6:2"
+  },
+  {
+    "token": "FN",
+    "loc": "7:1-7:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "testX"
+    ],
+    "loc": "7:4-7:9"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "7:9-7:10"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "x"
+    ],
+    "loc": "7:10-7:11"
+  },
+  {
+    "token": "COLON",
+    "loc": "7:11-7:12"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "7:13-7:14"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "7:14-7:15"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "7:16-7:17"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "7:17-7:18"
+  },
+  {
+    "token": "MATCH",
+    "loc": "8:3-8:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "x"
+    ],
+    "loc": "8:9-8:10"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "8:11-8:12"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "8:12-8:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "A"
+    ],
+    "loc": "9:5-9:6"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "9:7-9:9"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "9:10-9:17"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "9:17-9:18"
+  },
+  {
+    "token": [
+      "STRING",
+      "A"
+    ],
+    "loc": "9:18-9:21"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "9:21-9:22"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "9:22-9:22"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "9:22-9:23"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "B"
+    ],
+    "loc": "10:5-10:6"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "10:7-10:9"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "10:10-10:17"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "10:17-10:18"
+  },
+  {
+    "token": [
+      "STRING",
+      "B"
+    ],
+    "loc": "10:18-10:21"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "10:21-10:22"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "10:22-10:22"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "10:22-10:23"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "C"
+    ],
+    "loc": "11:5-11:6"
+  },
+  {
+    "token": "FAT_ARROW",
+    "loc": "11:7-11:9"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "11:10-11:17"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "11:17-11:18"
+  },
+  {
+    "token": [
+      "STRING",
+      "C"
+    ],
+    "loc": "11:18-11:21"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "11:21-11:22"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "11:22-11:23"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "12:3-12:4"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "12:4-12:5"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "13:1-13:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "13:2-13:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "13:2-13:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "14:1-14:2"
+  },
+  {
+    "token": "EOF",
+    "loc": "15:1-15:1"
+  }
+]

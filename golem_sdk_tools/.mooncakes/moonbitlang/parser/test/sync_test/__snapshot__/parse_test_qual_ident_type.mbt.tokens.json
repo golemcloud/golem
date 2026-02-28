@@ -1,0 +1,157 @@
+[
+  {
+    "token": "FN",
+    "loc": "1:1-1:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "f"
+    ],
+    "loc": "1:4-1:5"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "1:5-1:6"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "elems"
+    ],
+    "loc": "1:6-1:11"
+  },
+  {
+    "token": "COLON",
+    "loc": "1:12-1:13"
+  },
+  {
+    "token": [
+      "PACKAGE_NAME",
+      "syntax"
+    ],
+    "loc": "1:14-1:21"
+  },
+  {
+    "token": [
+      "DOT_UIDENT",
+      "MultilineStringElem"
+    ],
+    "loc": "1:22-1:41"
+  },
+  {
+    "token": "LBRACKET",
+    "loc": "1:41-1:42"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "A"
+    ],
+    "loc": "1:42-1:43"
+  },
+  {
+    "token": "COMMA",
+    "loc": "1:43-1:44"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "B"
+    ],
+    "loc": "1:44-1:45"
+  },
+  {
+    "token": "COMMA",
+    "loc": "1:45-1:46"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "C"
+    ],
+    "loc": "1:46-1:47"
+  },
+  {
+    "token": "RBRACKET",
+    "loc": "1:47-1:48"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "1:48-1:49"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "1:50-1:52"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Unit"
+    ],
+    "loc": "1:53-1:57"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:58-1:59"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:60-1:61"
+  },
+  {
+    "token": [
+      "INFIX3",
+      "*"
+    ],
+    "loc": "2:3-2:4"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "error"
+    ],
+    "loc": "2:4-2:9"
+  },
+  {
+    "token": [
+      "INFIX3",
+      "*"
+    ],
+    "loc": "2:9-2:10"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//force to use handrolled parser",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "2:11-2:43"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:43-2:44"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "3:1-3:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:2-3:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:2-3:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "4:1-4:1"
+  }
+]

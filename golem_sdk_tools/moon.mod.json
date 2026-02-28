@@ -1,0 +1,14 @@
+{
+  "name": "vigoo/golem_sdk_tools",
+  "version": "0.1.0",
+  "deps": {
+    "moonbitlang/x": "0.4.39",
+    "moonbitlang/parser": "0.1.16",
+    "moonbitlang/formatter": { "path": "../../moonbit-formatter" }
+  },
+  "readme": "README.mbt.md",
+  "repository": "",
+  "license": "Apache-2.0",
+  "keywords": [],
+  "description": "Code generation tools for the Golem SDK for MoonBit"
+}

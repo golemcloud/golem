@@ -1,0 +1,191 @@
+[
+  {
+    "token": "TEST",
+    "loc": "1:1-1:5"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:6-1:7"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:7-1:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "2:3-2:10"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "2:10-2:11"
+  },
+  {
+    "token": [
+      "STRING",
+      "\\g"
+    ],
+    "loc": "2:11-2:15"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "2:15-2:16"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "2:16-2:16"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:16-2:17"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "3:3-3:10"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:10-3:11"
+  },
+  {
+    "token": [
+      "STRING",
+      "\\o477"
+    ],
+    "loc": "3:11-3:18"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:18-3:19"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "3:19-3:19"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:19-3:20"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "4:3-4:10"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "4:10-4:11"
+  },
+  {
+    "token": [
+      "STRING",
+      "\\u{xyz}"
+    ],
+    "loc": "4:11-4:20"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "4:20-4:21"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:21-4:21"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:21-4:22"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "5:3-5:10"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "5:10-5:11"
+  },
+  {
+    "token": [
+      "STRING",
+      "\\u{fffffffff}"
+    ],
+    "loc": "5:11-5:26"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "5:26-5:27"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "5:27-5:27"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "5:27-5:28"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "6:3-6:10"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "6:10-6:11"
+  },
+  {
+    "token": [
+      "STRING",
+      "\\uDC00"
+    ],
+    "loc": "6:11-6:19"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "6:19-6:20"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "6:20-6:21"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "7:1-7:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "7:2-7:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "7:2-7:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "8:1-8:1"
+  }
+]

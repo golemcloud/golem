@@ -1,0 +1,19 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "Yoorkin/prettyprinter/example"
+
+import(
+  "Yoorkin/prettyprinter"
+)
+
+// Values
+
+// Errors
+
+// Types and methods
+type Tree[A]
+pub impl[A : @prettyprinter.Pretty] @prettyprinter.Pretty for Tree[A]
+
+// Type aliases
+
+// Traits
+

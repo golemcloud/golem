@@ -1,0 +1,207 @@
+[
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "f"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "Unit"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Group",
+            "loc": null,
+            "children": {
+              "expr": {
+                "kind": "Expr::Try",
+                "loc": null,
+                "children": {
+                  "body": {
+                    "kind": "Expr::Group",
+                    "loc": null,
+                    "children": {
+                      "expr": {
+                        "kind": "Expr::Pipe",
+                        "loc": null,
+                        "children": {
+                          "lhs": {
+                            "kind": "Expr::Ident",
+                            "loc": null,
+                            "children": {
+                              "id": {
+                                "kind": "Var",
+                                "loc": null,
+                                "children": {
+                                  "name": {
+                                    "kind": "LongIdent::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "x"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "rhs": {
+                            "kind": "Expr::Constr",
+                            "loc": null,
+                            "children": {
+                              "constr": {
+                                "kind": "Constructor",
+                                "loc": null,
+                                "children": {
+                                  "name": {
+                                    "kind": "ConstrName",
+                                    "loc": null,
+                                    "children": {
+                                      "name": "Ok"
+                                    }
+                                  },
+                                  "extra_info": {
+                                    "kind": "ConstructorExtraInfo::NoExtraInfo",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "group": {
+                        "kind": "Group::Brace",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  "catch": {
+                    "kind": "Expr::Try::CaseList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "Case",
+                        "loc": null,
+                        "children": {
+                          "pattern": {
+                            "kind": "Pattern::Any",
+                            "loc": null,
+                            "children": {}
+                          },
+                          "guard": null,
+                          "body": {
+                            "kind": "Expr::Constr",
+                            "loc": null,
+                            "children": {
+                              "constr": {
+                                "kind": "Constructor",
+                                "loc": null,
+                                "children": {
+                                  "name": {
+                                    "kind": "ConstrName",
+                                    "loc": null,
+                                    "children": {
+                                      "name": "Err"
+                                    }
+                                  },
+                                  "extra_info": {
+                                    "kind": "ConstructorExtraInfo::NoExtraInfo",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "catch_all": false,
+                  "try_else": null,
+                  "has_try": true
+                }
+              },
+              "group": {
+                "kind": "Group::Paren",
+                "loc": null,
+                "children": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

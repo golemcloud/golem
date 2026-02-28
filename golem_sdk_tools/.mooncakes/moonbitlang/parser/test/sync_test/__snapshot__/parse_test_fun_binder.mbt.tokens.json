@@ -1,0 +1,89 @@
+[
+  {
+    "token": "NEWLINE",
+    "loc": "1:1-1:2"
+  },
+  {
+    "token": "FN",
+    "loc": "2:1-2:3"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "2:4-2:7"
+  },
+  {
+    "token": "COLONCOLON",
+    "loc": "2:7-2:9"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "method"
+    ],
+    "loc": "2:9-2:15"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "2:16-2:17"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "2:17-2:18"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "2:18-2:19"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:19-2:20"
+  },
+  {
+    "token": [
+      "INT",
+      "1"
+    ],
+    "loc": "3:3-3:4"
+  },
+  {
+    "token": "PLUS",
+    "loc": "3:5-3:6"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "// force parser to use handwritten parser",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "3:7-3:48"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:48-3:49"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "4:1-4:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:2-4:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:2-4:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "5:1-5:1"
+  }
+]

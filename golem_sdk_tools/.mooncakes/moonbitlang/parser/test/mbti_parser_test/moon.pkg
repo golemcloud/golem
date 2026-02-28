@@ -1,0 +1,10 @@
+import {
+  "moonbitlang/parser/tokens",
+  "moonbitlang/parser/basic",
+  "moonbitlang/x/fs",
+  "moonbitlang/parser/lexer",
+  "moonbitlang/parser/mbti_parser",
+  "moonbitlang/core/test",
+} for "test"
+
+warnings = "-1-6"

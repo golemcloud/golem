@@ -1,0 +1,28 @@
+%start start
+
+%token A
+%token B
+
+%type<String> start
+%type<String> a
+%type<String> b
+%type<String> x
+
+%%
+
+start
+  : a=a b=b x x b { a + b + $3 + $4 + $5 }
+  ;
+
+%inline a
+  : A { "a" }
+  ;
+
+b
+  : B { "b" }
+  ;
+
+%inline x
+  : A { "a" }
+  | B { "b" }
+  ;

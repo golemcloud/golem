@@ -1,0 +1,173 @@
+%derive<Show> Token
+%derive<Eq> TokenKind
+%derive<Hash> TokenKind
+%derive<Compare> TokenKind
+%position<Position>
+%derive<Show> ParseError
+
+%start payloads
+
+%token<CharLiteral> CHAR
+%token<String> INT
+%token<CharLiteral> BYTE
+%token<StringLiteral> BYTES
+%token<String> FLOAT
+%token<String> DOUBLE
+%token<StringLiteral> STRING
+%token<String> MULTILINE_STRING
+%token<InterpLiteral> MULTILINE_INTERP
+%token<InterpLiteral> INTERP
+%token<String> REGEX_LITERAL
+%token<InterpLiteral> REGEX_INTERP
+%token<(String, String?, String)> ATTRIBUTE
+%token<String> LIDENT
+%token<String> UIDENT
+%token<String> POST_LABEL
+%token<Comment> COMMENT
+%token NEWLINE
+%token<String> INFIX1
+%token<String> INFIX2
+%token<String> INFIX3
+%token<String> INFIX4
+%token<String> AUGMENTED_ASSIGNMENT
+%token EOF
+%token FALSE
+%token TRUE
+%token PUB "pub"
+%token PRIV "priv"
+%token READONLY "readonly"
+%token IMPORT "import"
+%token EXTERN "extern"
+%token BREAK "break"
+%token CONTINUE "continue"
+%token STRUCT "struct"
+%token ENUM "enum"
+%token TRAIT "trait"
+%token DERIVE "derive"
+%token IMPL "impl"
+%token WITH "with"
+%token RAISE "raise"
+%token THROW "throw"
+%token TRY "try"
+%token CATCH "catch"
+%token ASYNC "async"
+%token TYPEALIAS "typealias"
+%token TRAITALIAS "traitalias"
+%token FNALIAS "fnalias"
+%token EQUAL "="
+%token LPAREN "("
+%token RPAREN ")"
+%token COMMA ","
+%token MINUS "-"
+%token QUESTION "?"
+%token EXCLAMATION "!"
+%token<String> DOT_LIDENT
+%token<String> DOT_UIDENT
+%token<Int> DOT_INT
+%token DOT_LPAREN ".("
+%token COLONCOLON "::"
+%token COLON ":"
+%token<Bool> SEMI
+%token LBRACKET "["
+%token PLUS "+"
+%token RBRACKET "]"
+%token UNDERSCORE "_"
+%token BAR "|"
+%token LBRACE "{"
+%token RBRACE "}"
+%token AMPERAMPER "&&"
+%token AMPER "&"
+%token CARET "^"
+%token BARBAR "||"
+%token<String> PACKAGE_NAME
+%token AS "as"
+%token PIPE "|>"
+%token ELSE "else"
+%token FN "fn"
+%token IF "if"
+%token LET "let"
+%token CONST "const"
+%token MATCH "match"
+%token USING "using"
+%token MUTABLE "mut"
+%token TYPE "type"
+%token FAT_ARROW "=>"
+%token THIN_ARROW "->"
+%token WHILE "while"
+%token RETURN "return"
+%token DOTDOT ".."
+%token RANGE_INCLUSIVE "..="
+%token RANGE_LT_INCLUSIVE  "..<="
+%token RANGE_EXCLUSIVE "..<"
+%token RANGE_INCLUSIVE_REV ">=.."
+%token RANGE_EXCLUSIVE_REV ">.."
+%token ELLIPSIS "..."
+%token TEST "test"
+%token LOOP "loop"
+%token GUARD "guard"
+%token DEFER "defer"
+%token FOR "for"
+%token IN "in"
+%token IS "is"
+%token SUBERROR "suberror"
+%token AND "and"
+%token LETREC "letrec"
+%token ENUMVIEW "enumview"
+%token DECLARE         "declare"
+%token NORAISE "noraise"
+%token WHERE           "where"
+%token TRY_QUESTION    "try?"
+%token TRY_EXCLAMATION "try!"
+%token LEXMATCH        "lexmatch"
+%token LEXMATCH_QUESTION "lexmatch?"
+
+%right BARBAR
+%right AMPERAMPER
+%left BAR
+%left CARET
+%left AMPER
+%nonassoc prec_field
+%nonassoc LPAREN
+%left INFIX1
+%left INFIX2
+%left PLUS MINUS
+%left INFIX3
+%left INFIX4
+%nonassoc prec_lower_than_as
+%nonassoc "as"
+%nonassoc prec_apply_non_ident_fn
+%nonassoc "!"
+%nonassoc "?"
+%nonassoc prec_lower_than_arrow_fn
+%nonassoc ","
+%nonassoc ")"
+%nonassoc ":"
+
+
+%%
+
+payloads -> List[Prop]: 
+  | EOF { @list.empty() }
+  | properties { $1 }
+
+property -> Prop:
+  | name=LIDENT "=" expr   { Labeled(name, $3) }
+  | expr                   { Expr($1) }
+
+expr -> Expr:
+  | name=LIDENT                                  { Ident({qual: None, name}) }
+  | qual=LIDENT name=DOT_LIDENT                  { Ident({qual: Some(qual), name}) }
+  | name=LIDENT props=properties                 { Apply({qual: None, name}, props) }
+  | qual=LIDENT name=DOT_LIDENT props=properties { Apply({qual: Some(qual), name}, props) }
+  | STRING                                       { String($1) }
+  | TRUE                                         { Bool(true) }
+  | FALSE                                        { Bool(false) }
+
+properties -> List[Prop]:
+  | "(" ")"                      { @list.empty() }
+  | "(" non_empty_properties ")" { $2 }
+
+non_empty_properties -> List[Prop]:
+  | property { @list.from_array([$1]) }
+  | x=property "," xs=non_empty_properties{ xs.add(x) }
+

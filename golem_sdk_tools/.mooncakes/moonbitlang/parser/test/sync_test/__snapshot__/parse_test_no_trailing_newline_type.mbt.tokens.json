@@ -1,0 +1,54 @@
+[
+  {
+    "token": "TYPE",
+    "loc": "1:1-1:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "A"
+    ],
+    "loc": "1:6-1:7"
+  },
+  {
+    "token": "LBRACKET",
+    "loc": "1:7-1:8"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "1:8-1:9"
+  },
+  {
+    "token": "COMMA",
+    "loc": "1:9-1:10"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "E"
+    ],
+    "loc": "1:10-1:11"
+  },
+  {
+    "token": "RBRACKET",
+    "loc": "1:11-1:12"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "//no trailing newline",
+        "kind": "InlineTrailing",
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "1:12-1:33"
+  },
+  {
+    "token": "EOF",
+    "loc": "1:33-1:33"
+  }
+]

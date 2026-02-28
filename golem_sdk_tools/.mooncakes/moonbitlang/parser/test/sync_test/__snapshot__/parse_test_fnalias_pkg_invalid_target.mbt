@@ -1,0 +1,2 @@
+fnalias @pkg.1
+

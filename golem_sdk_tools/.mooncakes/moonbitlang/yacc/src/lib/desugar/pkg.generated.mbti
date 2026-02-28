@@ -1,0 +1,20 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/desugar"
+
+import(
+  "moonbitlang/yacc/lib/elab"
+)
+
+// Values
+pub fn eliminate_inline(@elab.ParserSpec) -> @elab.ParserSpec
+
+pub fn eliminate_rule_args(@elab.ParserSpec, json_cst~ : @elab.JsonCst) -> @elab.ParserSpec
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

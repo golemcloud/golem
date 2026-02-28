@@ -1,0 +1,2919 @@
+[
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "template2"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " line1"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " line2"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " line3"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp1 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'a'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp2 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'b'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp3"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " line4"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " line5"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp4 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'c'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp5 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'d'"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp6 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'e'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp7 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'f'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp8"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": ""
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "all_raw_string"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line1"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line2"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": ""
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line3"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line4"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line5"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "all_raw_string_with_trailing_newline"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line1"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line2"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line3"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line4"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": " line5"
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": ""
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "all_interp_string"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp1 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'a'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp2 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'b'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp3"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": ""
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp4 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'c'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp5 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'d'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " "
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp6 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'e'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp7 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'f'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " "
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "all_interp_string_with_trailing_newline"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp1 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'a'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'b'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'c'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp2 interp3"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp4 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'c'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp5 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'d'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " "
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp6 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'e'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " interp7 "
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Source",
+                            "loc": null,
+                            "children": {
+                              "source": "'f'"
+                            }
+                          },
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": " "
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": ""
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "empty_raw_string"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::String",
+                    "loc": null,
+                    "children": {
+                      "value": ""
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "empty_interp_string"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::MultilineString",
+            "loc": null,
+            "children": {
+              "elems": {
+                "kind": "Expr::MultilineString::ElemList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "MultilineString::Interp",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "MultilineString::Interp::ElemList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "InterpElem::Literal",
+                            "loc": null,
+                            "children": {
+                              "repr": ""
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopLetDef",
+    "loc": null,
+    "children": {
+      "binder": {
+        "kind": "Binder",
+        "loc": null,
+        "children": {
+          "name": "str1"
+        }
+      },
+      "ty": null,
+      "expr": {
+        "kind": "Expr::MultilineString",
+        "loc": null,
+        "children": {
+          "elems": {
+            "kind": "Expr::MultilineString::ElemList",
+            "loc": null,
+            "children": [
+              {
+                "kind": "MultilineString::String",
+                "loc": null,
+                "children": {
+                  "value": " Hello, "
+                }
+              },
+              {
+                "kind": "MultilineString::String",
+                "loc": null,
+                "children": {
+                  "value": " World."
+                }
+              }
+            ]
+          }
+        }
+      },
+      "vis": {
+        "kind": "Visibility::Default",
+        "loc": null,
+        "children": {}
+      },
+      "is_constant": false,
+      "is_declare": false,
+      "attrs": {
+        "kind": "Impl::TopLetDef::AttrList",
+        "loc": null,
+        "children": []
+      },
+      "doc": " toplevel multiline string without annotation. \n Typer will infer the type."
+    }
+  },
+  {
+    "kind": "Impl::TopLetDef",
+    "loc": null,
+    "children": {
+      "binder": {
+        "kind": "Binder",
+        "loc": null,
+        "children": {
+          "name": "str2"
+        }
+      },
+      "ty": null,
+      "expr": {
+        "kind": "Expr::MultilineString",
+        "loc": null,
+        "children": {
+          "elems": {
+            "kind": "Expr::MultilineString::ElemList",
+            "loc": null,
+            "children": [
+              {
+                "kind": "MultilineString::Interp",
+                "loc": null,
+                "children": {
+                  "value": {
+                    "kind": "MultilineString::Interp::ElemList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "InterpElem::Literal",
+                        "loc": null,
+                        "children": {
+                          "repr": " Hello "
+                        }
+                      },
+                      {
+                        "kind": "InterpElem::Source",
+                        "loc": null,
+                        "children": {
+                          "source": "str1"
+                        }
+                      },
+                      {
+                        "kind": "InterpElem::Literal",
+                        "loc": null,
+                        "children": {
+                          "repr": ","
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "kind": "MultilineString::Interp",
+                "loc": null,
+                "children": {
+                  "value": {
+                    "kind": "MultilineString::Interp::ElemList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "InterpElem::Literal",
+                        "loc": null,
+                        "children": {
+                          "repr": " World."
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "vis": {
+        "kind": "Visibility::Default",
+        "loc": null,
+        "children": {}
+      },
+      "is_constant": false,
+      "is_declare": false,
+      "attrs": {
+        "kind": "Impl::TopLetDef::AttrList",
+        "loc": null,
+        "children": []
+      },
+      "doc": ""
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "interp_with_dict"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": {
+            "kind": "FunDecl::ParameterList",
+            "loc": null,
+            "children": []
+          },
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": {
+            "kind": "Type::Name",
+            "loc": null,
+            "children": {
+              "constr_id": {
+                "kind": "ConstrId",
+                "loc": null,
+                "children": {
+                  "id": {
+                    "kind": "LongIdent::Ident",
+                    "loc": null,
+                    "children": {
+                      "value": "String"
+                    }
+                  }
+                }
+              },
+              "tys": {
+                "kind": "Type::Name::TypeList",
+                "loc": null,
+                "children": []
+              }
+            }
+          },
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Let",
+            "loc": null,
+            "children": {
+              "pattern": {
+                "kind": "Pattern::Var",
+                "loc": null,
+                "children": {
+                  "value": {
+                    "kind": "Binder",
+                    "loc": null,
+                    "children": {
+                      "name": "dict"
+                    }
+                  }
+                }
+              },
+              "expr": {
+                "kind": "Expr::Map",
+                "loc": null,
+                "children": {
+                  "elems": {
+                    "kind": "Expr::Map::ElemList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "MapExprElem",
+                        "loc": null,
+                        "children": {
+                          "key": {
+                            "kind": "Constant::String",
+                            "loc": null,
+                            "children": {
+                              "value": "key1"
+                            }
+                          },
+                          "expr": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "100"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "kind": "MapExprElem",
+                        "loc": null,
+                        "children": {
+                          "key": {
+                            "kind": "Constant::String",
+                            "loc": null,
+                            "children": {
+                              "value": "key2"
+                            }
+                          },
+                          "expr": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "200"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              },
+              "body": {
+                "kind": "Expr::Let",
+                "loc": null,
+                "children": {
+                  "pattern": {
+                    "kind": "Pattern::Var",
+                    "loc": null,
+                    "children": {
+                      "value": {
+                        "kind": "Binder",
+                        "loc": null,
+                        "children": {
+                          "name": "r"
+                        }
+                      }
+                    }
+                  },
+                  "expr": {
+                    "kind": "Expr::Group",
+                    "loc": null,
+                    "children": {
+                      "expr": {
+                        "kind": "Expr::MultilineString",
+                        "loc": null,
+                        "children": {
+                          "elems": {
+                            "kind": "Expr::MultilineString::ElemList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "MultilineString::Interp",
+                                "loc": null,
+                                "children": {
+                                  "value": {
+                                    "kind": "MultilineString::Interp::ElemList",
+                                    "loc": null,
+                                    "children": [
+                                      {
+                                        "kind": "InterpElem::Literal",
+                                        "loc": null,
+                                        "children": {
+                                          "repr": " key1: "
+                                        }
+                                      },
+                                      {
+                                        "kind": "InterpElem::Source",
+                                        "loc": null,
+                                        "children": {
+                                          "source": "dict[\"key1\"]"
+                                        }
+                                      },
+                                      {
+                                        "kind": "InterpElem::Literal",
+                                        "loc": null,
+                                        "children": {
+                                          "repr": " "
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "MultilineString::Interp",
+                                "loc": null,
+                                "children": {
+                                  "value": {
+                                    "kind": "MultilineString::Interp::ElemList",
+                                    "loc": null,
+                                    "children": [
+                                      {
+                                        "kind": "InterpElem::Literal",
+                                        "loc": null,
+                                        "children": {
+                                          "repr": " key2: "
+                                        }
+                                      },
+                                      {
+                                        "kind": "InterpElem::Source",
+                                        "loc": null,
+                                        "children": {
+                                          "source": "dict[\"key2\"]"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "group": {
+                        "kind": "Group::Brace",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  "body": {
+                    "kind": "Expr::Ident",
+                    "loc": null,
+                    "children": {
+                      "id": {
+                        "kind": "Var",
+                        "loc": null,
+                        "children": {
+                          "name": {
+                            "kind": "LongIdent::Ident",
+                            "loc": null,
+                            "children": {
+                              "value": "r"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "main"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": null,
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": null,
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Sequence",
+            "loc": null,
+            "children": {
+              "exprs": {
+                "kind": "Expr::Sequence::ExprList",
+                "loc": null,
+                "children": [
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "template2"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "all_raw_string"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "all_raw_string_with_trailing_newline"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "all_interp_string"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "all_interp_string_with_trailing_newline"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "empty_raw_string"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Apply",
+                                "loc": null,
+                                "children": {
+                                  "func": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "empty_interp_string"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "args": {
+                                    "kind": "Expr::Apply::ArgumentList",
+                                    "loc": null,
+                                    "children": []
+                                  },
+                                  "attr": {
+                                    "kind": "ApplyAttr::NoAttr",
+                                    "loc": null,
+                                    "children": {}
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  {
+                    "kind": "Expr::Apply",
+                    "loc": null,
+                    "children": {
+                      "func": {
+                        "kind": "Expr::Ident",
+                        "loc": null,
+                        "children": {
+                          "id": {
+                            "kind": "Var",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "args": {
+                        "kind": "Expr::Apply::ArgumentList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "Argument",
+                            "loc": null,
+                            "children": {
+                              "value": {
+                                "kind": "Expr::Constant",
+                                "loc": null,
+                                "children": {
+                                  "constant": {
+                                    "kind": "Constant::String",
+                                    "loc": null,
+                                    "children": {
+                                      "value": "---------------------------------------"
+                                    }
+                                  }
+                                }
+                              },
+                              "kind": {
+                                "kind": "ArgumentKind::Positional",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "attr": {
+                        "kind": "ApplyAttr::NoAttr",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  }
+                ]
+              },
+              "last_expr": {
+                "kind": "Expr::Apply",
+                "loc": null,
+                "children": {
+                  "func": {
+                    "kind": "Expr::Ident",
+                    "loc": null,
+                    "children": {
+                      "id": {
+                        "kind": "Var",
+                        "loc": null,
+                        "children": {
+                          "name": {
+                            "kind": "LongIdent::Ident",
+                            "loc": null,
+                            "children": {
+                              "value": "println"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "args": {
+                    "kind": "Expr::Apply::ArgumentList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "Argument",
+                        "loc": null,
+                        "children": {
+                          "value": {
+                            "kind": "Expr::Apply",
+                            "loc": null,
+                            "children": {
+                              "func": {
+                                "kind": "Expr::Ident",
+                                "loc": null,
+                                "children": {
+                                  "id": {
+                                    "kind": "Var",
+                                    "loc": null,
+                                    "children": {
+                                      "name": {
+                                        "kind": "LongIdent::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "value": "interp_with_dict"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "args": {
+                                "kind": "Expr::Apply::ArgumentList",
+                                "loc": null,
+                                "children": []
+                              },
+                              "attr": {
+                                "kind": "ApplyAttr::NoAttr",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          },
+                          "kind": {
+                            "kind": "ArgumentKind::Positional",
+                            "loc": null,
+                            "children": {}
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "attr": {
+                    "kind": "ApplyAttr::NoAttr",
+                    "loc": null,
+                    "children": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

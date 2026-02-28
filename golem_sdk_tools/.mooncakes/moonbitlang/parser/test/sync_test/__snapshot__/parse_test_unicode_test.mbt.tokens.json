@@ -1,0 +1,732 @@
+[
+  {
+    "token": "NEWLINE",
+    "loc": "1:1-1:2"
+  },
+  {
+    "token": "ENUM",
+    "loc": "2:1-2:5"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T_类型"
+    ],
+    "loc": "2:6-2:10"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "2:11-2:12"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:12-2:13"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "3:5-3:6"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:6-3:7"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "3:7-3:10"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:10-3:11"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:11-3:12"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "4:1-4:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:2-4:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:2-4:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "5:1-5:2"
+  },
+  {
+    "token": "FN",
+    "loc": "6:1-6:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "斐波那契数列"
+    ],
+    "loc": "6:4-6:10"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "6:10-6:11"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "第几个数"
+    ],
+    "loc": "6:11-6:15"
+  },
+  {
+    "token": "COLON",
+    "loc": "6:15-6:16"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "6:17-6:20"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "6:20-6:21"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "6:22-6:24"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "Int"
+    ],
+    "loc": "6:25-6:28"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "6:29-6:30"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "6:30-6:31"
+  },
+  {
+    "token": "LET",
+    "loc": "7:5-7:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "内部循环"
+    ],
+    "loc": "7:9-7:13"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "7:14-7:15"
+  },
+  {
+    "token": "FN",
+    "loc": "7:16-7:18"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "7:18-7:19"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "前一个"
+    ],
+    "loc": "7:19-7:22"
+  },
+  {
+    "token": "COMMA",
+    "loc": "7:22-7:23"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "后一个"
+    ],
+    "loc": "7:24-7:27"
+  },
+  {
+    "token": "COMMA",
+    "loc": "7:27-7:28"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "计数器"
+    ],
+    "loc": "7:29-7:32"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "7:32-7:33"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "7:34-7:35"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "7:35-7:36"
+  },
+  {
+    "token": "IF",
+    "loc": "8:9-8:11"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "计数器"
+    ],
+    "loc": "8:12-8:15"
+  },
+  {
+    "token": [
+      "INFIX1",
+      ">="
+    ],
+    "loc": "8:16-8:18"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "第几个数"
+    ],
+    "loc": "8:19-8:23"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "8:24-8:25"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "8:25-8:26"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "前一个"
+    ],
+    "loc": "9:13-9:16"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "9:16-9:17"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "10:9-10:10"
+  },
+  {
+    "token": "ELSE",
+    "loc": "10:11-10:15"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "10:16-10:17"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "10:17-10:18"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "内部循环"
+    ],
+    "loc": "11:13-11:17"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "11:17-11:18"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "后一个"
+    ],
+    "loc": "11:18-11:21"
+  },
+  {
+    "token": "COMMA",
+    "loc": "11:21-11:22"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "前一个"
+    ],
+    "loc": "11:23-11:26"
+  },
+  {
+    "token": "PLUS",
+    "loc": "11:27-11:28"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "后一个"
+    ],
+    "loc": "11:29-11:32"
+  },
+  {
+    "token": "COMMA",
+    "loc": "11:32-11:33"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "计数器"
+    ],
+    "loc": "11:34-11:37"
+  },
+  {
+    "token": "PLUS",
+    "loc": "11:38-11:39"
+  },
+  {
+    "token": [
+      "INT",
+      "1"
+    ],
+    "loc": "11:40-11:41"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "11:41-11:42"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "11:42-11:43"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "12:9-12:10"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "12:10-12:11"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "13:5-13:6"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "13:6-13:7"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "14:1-14:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "14:2-14:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "14:2-14:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "15:1-15:2"
+  },
+  {
+    "token": "FN",
+    "loc": "16:1-16:3"
+  },
+  {
+    "token": "LBRACKET",
+    "loc": "16:3-16:4"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T_数字类型"
+    ],
+    "loc": "16:4-16:10"
+  },
+  {
+    "token": "RBRACKET",
+    "loc": "16:10-16:11"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "相加"
+    ],
+    "loc": "16:12-16:14"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "16:14-16:15"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "左"
+    ],
+    "loc": "16:15-16:16"
+  },
+  {
+    "token": "COLON",
+    "loc": "16:16-16:17"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T_数字类型"
+    ],
+    "loc": "16:18-16:24"
+  },
+  {
+    "token": "COMMA",
+    "loc": "16:24-16:25"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "右"
+    ],
+    "loc": "16:26-16:27"
+  },
+  {
+    "token": "COLON",
+    "loc": "16:27-16:28"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T_数字类型"
+    ],
+    "loc": "16:29-16:35"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "16:35-16:36"
+  },
+  {
+    "token": "THIN_ARROW",
+    "loc": "16:37-16:39"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T_数字类型"
+    ],
+    "loc": "16:40-16:46"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "16:47-16:48"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "16:48-16:49"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "左"
+    ],
+    "loc": "17:5-17:6"
+  },
+  {
+    "token": "PLUS",
+    "loc": "17:7-17:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "右"
+    ],
+    "loc": "17:9-17:10"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "17:10-17:11"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "18:1-18:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "18:2-18:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "18:2-18:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "19:1-19:2"
+  },
+  {
+    "token": "FN",
+    "loc": "20:1-20:3"
+  },
+  {
+    "token": "LBRACKET",
+    "loc": "20:3-20:4"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "20:4-20:5"
+  },
+  {
+    "token": "RBRACKET",
+    "loc": "20:5-20:6"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "打印"
+    ],
+    "loc": "20:7-20:9"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "20:9-20:10"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "self"
+    ],
+    "loc": "20:10-20:14"
+  },
+  {
+    "token": "COLON",
+    "loc": "20:14-20:15"
+  },
+  {
+    "token": [
+      "UIDENT",
+      "T"
+    ],
+    "loc": "20:16-20:17"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "20:17-20:18"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "20:19-20:20"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "20:20-20:21"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "println"
+    ],
+    "loc": "21:5-21:12"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "21:12-21:13"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "self"
+    ],
+    "loc": "21:13-21:17"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "21:17-21:18"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "21:18-21:19"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "22:1-22:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "22:2-22:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "22:2-22:3"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "23:1-23:2"
+  },
+  {
+    "token": "FN",
+    "loc": "24:1-24:3"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "init"
+    ],
+    "loc": "24:4-24:8"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "24:9-24:10"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "24:10-24:11"
+  },
+  {
+    "token": "LET",
+    "loc": "25:5-25:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "答案"
+    ],
+    "loc": "25:9-25:11"
+  },
+  {
+    "token": "EQUAL",
+    "loc": "25:12-25:13"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "斐波那契数列"
+    ],
+    "loc": "25:14-25:20"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "25:20-25:21"
+  },
+  {
+    "token": [
+      "INT",
+      "20"
+    ],
+    "loc": "25:21-25:23"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "25:23-25:24"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "25:24-25:24"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "25:24-25:25"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "相加"
+    ],
+    "loc": "26:5-26:7"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "26:7-26:8"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "答案"
+    ],
+    "loc": "26:8-26:10"
+  },
+  {
+    "token": "COMMA",
+    "loc": "26:10-26:11"
+  },
+  {
+    "token": [
+      "INT",
+      "42"
+    ],
+    "loc": "26:12-26:14"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "26:14-26:15"
+  },
+  {
+    "token": [
+      "DOT_LIDENT",
+      "打印"
+    ],
+    "loc": "26:16-26:18"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "26:18-26:19"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "26:19-26:20"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "26:20-26:21"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "27:1-27:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "27:2-27:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "27:2-27:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "28:1-28:1"
+  }
+]

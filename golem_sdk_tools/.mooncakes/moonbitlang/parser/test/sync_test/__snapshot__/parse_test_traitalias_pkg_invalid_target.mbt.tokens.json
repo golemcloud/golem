@@ -1,0 +1,39 @@
+[
+  {
+    "token": "TRAITALIAS",
+    "loc": "1:1-1:11"
+  },
+  {
+    "token": [
+      "PACKAGE_NAME",
+      "pkg"
+    ],
+    "loc": "1:12-1:16"
+  },
+  {
+    "token": [
+      "DOT_INT",
+      1
+    ],
+    "loc": "1:17-1:18"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "1:18-1:18"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:18-1:19"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:1-2:2"
+  },
+  {
+    "token": "EOF",
+    "loc": "3:1-3:1"
+  }
+]

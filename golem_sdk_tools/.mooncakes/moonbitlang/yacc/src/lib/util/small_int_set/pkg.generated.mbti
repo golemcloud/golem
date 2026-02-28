@@ -1,0 +1,35 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/util/small_int_set"
+
+// Values
+pub fn empty() -> SmallIntSet
+
+pub fn from_iter(Iter[Int]) -> SmallIntSet
+
+pub fn singleton(Int) -> SmallIntSet
+
+// Errors
+
+// Types and methods
+#alias(T)
+type SmallIntSet
+pub fn SmallIntSet::add(Self, Int) -> Self
+pub fn SmallIntSet::contains(Self, Int) -> Bool
+pub fn SmallIntSet::difference(Self, Self) -> Self
+pub fn SmallIntSet::disjoint(Self, Self) -> Bool
+pub fn SmallIntSet::intersection(Self, Self) -> Self
+pub fn SmallIntSet::is_empty(Self) -> Bool
+pub fn SmallIntSet::is_singleton(Self, Int) -> Bool
+pub fn SmallIntSet::iter(Self) -> Iter[Int]
+pub fn SmallIntSet::remove(Self, Int) -> Self
+pub fn SmallIntSet::subset(Self, Self) -> Bool
+pub fn SmallIntSet::union(Self, Self) -> Self
+pub impl Compare for SmallIntSet
+pub impl Eq for SmallIntSet
+pub impl Hash for SmallIntSet
+pub impl Show for SmallIntSet
+
+// Type aliases
+
+// Traits
+

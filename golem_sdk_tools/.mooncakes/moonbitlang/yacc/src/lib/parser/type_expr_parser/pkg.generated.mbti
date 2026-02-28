@@ -1,0 +1,61 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/parser/type_expr_parser"
+
+import(
+  "moonbitlang/yacc/lib/ast"
+)
+
+// Values
+pub fn parse(String) -> @ast.TypeExpr raise ParseOrLexError
+
+pub fn parse_type_expr(Array[(Token, Int, Int)], initial_pos? : Int) -> @ast.TypeExpr raise ParseError
+
+// Errors
+pub suberror LexError {
+  Unrecognized(Char, Int)
+}
+pub impl Show for LexError
+
+pub suberror ParseError {
+  UnexpectedToken(Token, (Int, Int), Array[TokenKind])
+  UnexpectedEndOfInput(Int, Array[TokenKind])
+}
+pub impl Show for ParseError
+
+type ParseOrLexError
+pub impl Show for ParseOrLexError
+
+// Types and methods
+pub(all) enum Token {
+  EOF
+  LPAREN
+  RPAREN
+  LBRACKET
+  RBRACKET
+  COMMA
+  ARROW
+  QUESTION
+  IDENT(String)
+  PKG_AND_IDENT((String, String))
+}
+pub fn Token::kind(Self) -> TokenKind
+pub impl Show for Token
+
+pub(all) enum TokenKind {
+  TK_EOF
+  TK_LPAREN
+  TK_RPAREN
+  TK_LBRACKET
+  TK_RBRACKET
+  TK_COMMA
+  TK_ARROW
+  TK_QUESTION
+  TK_IDENT
+  TK_PKG_AND_IDENT
+}
+pub impl Show for TokenKind
+
+// Type aliases
+
+// Traits
+

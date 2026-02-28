@@ -1,0 +1,7 @@
+{
+  "import": [
+    "moonbitlang/x/encoding",
+    "moonbitlang/core/random",
+    "moonbitlang/core/buffer"
+  ]
+}

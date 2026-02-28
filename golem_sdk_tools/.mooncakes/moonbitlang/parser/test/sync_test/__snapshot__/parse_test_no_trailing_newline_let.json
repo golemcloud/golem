@@ -1,0 +1,42 @@
+[
+  {
+    "kind": "Impl::TopLetDef",
+    "loc": null,
+    "children": {
+      "binder": {
+        "kind": "Binder",
+        "loc": null,
+        "children": {
+          "name": "a"
+        }
+      },
+      "ty": null,
+      "expr": {
+        "kind": "Expr::Constant",
+        "loc": null,
+        "children": {
+          "constant": {
+            "kind": "Constant::Int",
+            "loc": null,
+            "children": {
+              "value": "10"
+            }
+          }
+        }
+      },
+      "vis": {
+        "kind": "Visibility::Default",
+        "loc": null,
+        "children": {}
+      },
+      "is_constant": false,
+      "is_declare": false,
+      "attrs": {
+        "kind": "Impl::TopLetDef::AttrList",
+        "loc": null,
+        "children": []
+      },
+      "doc": ""
+    }
+  }
+]

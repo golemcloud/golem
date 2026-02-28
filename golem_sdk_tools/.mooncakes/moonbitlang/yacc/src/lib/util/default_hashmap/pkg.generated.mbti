@@ -1,0 +1,17 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/yacc/lib/util/default_hashmap"
+
+// Values
+pub fn[K, V] new((K) -> V) -> DefaultHashMap[K, V]
+
+// Errors
+
+// Types and methods
+#alias(T)
+type DefaultHashMap[K, V]
+pub fn[K : Eq + Hash, V] DefaultHashMap::get(Self[K, V], K) -> V
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,128 @@
+[
+  {
+    "token": "TEST",
+    "loc": "1:1-1:5"
+  },
+  {
+    "token": "LBRACE",
+    "loc": "1:6-1:7"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "1:7-1:8"
+  },
+  {
+    "token": [
+      "COMMENT",
+      {
+        "content": "// This will test whether the byte literal is correctly in the first token set of simple expression",
+        "kind": [
+          "Ownline",
+          {
+            "leading_blank_line": false,
+            "trailing_blank_line": false
+          }
+        ],
+        "consumed_by_docstring": false
+      }
+    ],
+    "loc": "2:3-2:102"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "2:102-2:103"
+  },
+  {
+    "token": [
+      "LIDENT",
+      "assert_eq"
+    ],
+    "loc": "3:3-3:12"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:12-3:13"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:13-3:14"
+  },
+  {
+    "token": [
+      "BYTE",
+      "\\xFF"
+    ],
+    "loc": "3:14-3:21"
+  },
+  {
+    "token": [
+      "INFIX2",
+      "<<"
+    ],
+    "loc": "3:22-3:24"
+  },
+  {
+    "token": [
+      "INT",
+      "8"
+    ],
+    "loc": "3:25-3:26"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:26-3:27"
+  },
+  {
+    "token": [
+      "DOT_LIDENT",
+      "to_int"
+    ],
+    "loc": "3:28-3:34"
+  },
+  {
+    "token": "LPAREN",
+    "loc": "3:34-3:35"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:35-3:36"
+  },
+  {
+    "token": "COMMA",
+    "loc": "3:36-3:37"
+  },
+  {
+    "token": [
+      "INT",
+      "0"
+    ],
+    "loc": "3:38-3:39"
+  },
+  {
+    "token": "RPAREN",
+    "loc": "3:39-3:40"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "3:40-3:41"
+  },
+  {
+    "token": "RBRACE",
+    "loc": "4:1-4:2"
+  },
+  {
+    "token": [
+      "SEMI",
+      false
+    ],
+    "loc": "4:2-4:2"
+  },
+  {
+    "token": "NEWLINE",
+    "loc": "4:2-4:3"
+  },
+  {
+    "token": "EOF",
+    "loc": "5:1-5:1"
+  }
+]

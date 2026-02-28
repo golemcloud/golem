@@ -1,0 +1,24 @@
+%start start
+
+%token A
+%token B
+
+%type<String> start
+%type<String> x
+%type<String> y
+
+%%
+
+start
+  : x { $1 }
+  ;
+
+%inline x
+  : A { "a" }
+  | A y B { "a" + $2 + "b" }
+  ;
+
+%inline y
+  : A A { "ya" }
+  | B B { "yb" }
+  ;

@@ -1,0 +1,566 @@
+[
+  {
+    "kind": "Impl::TopFuncDef",
+    "loc": null,
+    "children": {
+      "fun_decl": {
+        "kind": "FunDecl",
+        "loc": null,
+        "children": {
+          "type_name": null,
+          "name": {
+            "kind": "Binder",
+            "loc": null,
+            "children": {
+              "name": "init"
+            }
+          },
+          "has_error": null,
+          "is_async": null,
+          "decl_params": null,
+          "quantifiers": {
+            "kind": "FunDecl::QuantifierList",
+            "loc": null,
+            "children": []
+          },
+          "return_type": null,
+          "error_type": {
+            "kind": "ErrorType::NoErrorType",
+            "loc": null,
+            "children": {}
+          },
+          "vis": {
+            "kind": "Visibility::Default",
+            "loc": null,
+            "children": {}
+          },
+          "attrs": {
+            "kind": "FunDecl::AttrList",
+            "loc": null,
+            "children": []
+          },
+          "doc": ""
+        }
+      },
+      "decl_body": {
+        "kind": "DeclBody::DeclBody",
+        "loc": null,
+        "children": {
+          "local_types": {
+            "kind": "DeclBody::DeclBody::LocalTypeList",
+            "loc": null,
+            "children": []
+          },
+          "expr": {
+            "kind": "Expr::Let",
+            "loc": null,
+            "children": {
+              "pattern": {
+                "kind": "Pattern::Any",
+                "loc": null,
+                "children": {}
+              },
+              "expr": {
+                "kind": "Expr::Record",
+                "loc": null,
+                "children": {
+                  "type_name": {
+                    "kind": "TypeName",
+                    "loc": null,
+                    "children": {
+                      "name": {
+                        "kind": "LongIdent::Ident",
+                        "loc": null,
+                        "children": {
+                          "value": "T"
+                        }
+                      },
+                      "is_object": false
+                    }
+                  },
+                  "fields": {
+                    "kind": "Expr::Record::FieldList",
+                    "loc": null,
+                    "children": [
+                      {
+                        "kind": "FieldDef",
+                        "loc": null,
+                        "children": {
+                          "label": {
+                            "kind": "Label",
+                            "loc": null,
+                            "children": {
+                              "name": "x"
+                            }
+                          },
+                          "expr": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "1"
+                                }
+                              }
+                            }
+                          },
+                          "is_pun": false
+                        }
+                      },
+                      {
+                        "kind": "FieldDef",
+                        "loc": null,
+                        "children": {
+                          "label": {
+                            "kind": "Label",
+                            "loc": null,
+                            "children": {
+                              "name": "y"
+                            }
+                          },
+                          "expr": {
+                            "kind": "Expr::Constant",
+                            "loc": null,
+                            "children": {
+                              "constant": {
+                                "kind": "Constant::Int",
+                                "loc": null,
+                                "children": {
+                                  "value": "2"
+                                }
+                              }
+                            }
+                          },
+                          "is_pun": false
+                        }
+                      }
+                    ]
+                  },
+                  "trailing": {
+                    "kind": "Trailing::None",
+                    "loc": null,
+                    "children": {}
+                  }
+                }
+              },
+              "body": {
+                "kind": "Expr::Let",
+                "loc": null,
+                "children": {
+                  "pattern": {
+                    "kind": "Pattern::Any",
+                    "loc": null,
+                    "children": {}
+                  },
+                  "expr": {
+                    "kind": "Expr::Record",
+                    "loc": null,
+                    "children": {
+                      "type_name": {
+                        "kind": "TypeName",
+                        "loc": null,
+                        "children": {
+                          "name": {
+                            "kind": "LongIdent::Ident",
+                            "loc": null,
+                            "children": {
+                              "value": "T"
+                            }
+                          },
+                          "is_object": false
+                        }
+                      },
+                      "fields": {
+                        "kind": "Expr::Record::FieldList",
+                        "loc": null,
+                        "children": [
+                          {
+                            "kind": "FieldDef",
+                            "loc": null,
+                            "children": {
+                              "label": {
+                                "kind": "Label",
+                                "loc": null,
+                                "children": {
+                                  "name": "x"
+                                }
+                              },
+                              "expr": {
+                                "kind": "Expr::Ident",
+                                "loc": null,
+                                "children": {
+                                  "id": {
+                                    "kind": "Var",
+                                    "loc": null,
+                                    "children": {
+                                      "name": {
+                                        "kind": "LongIdent::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "value": "x"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "is_pun": true
+                            }
+                          }
+                        ]
+                      },
+                      "trailing": {
+                        "kind": "Trailing::None",
+                        "loc": null,
+                        "children": {}
+                      }
+                    }
+                  },
+                  "body": {
+                    "kind": "Expr::Let",
+                    "loc": null,
+                    "children": {
+                      "pattern": {
+                        "kind": "Pattern::Any",
+                        "loc": null,
+                        "children": {}
+                      },
+                      "expr": {
+                        "kind": "Expr::Record",
+                        "loc": null,
+                        "children": {
+                          "type_name": {
+                            "kind": "TypeName",
+                            "loc": null,
+                            "children": {
+                              "name": {
+                                "kind": "LongIdent::Ident",
+                                "loc": null,
+                                "children": {
+                                  "value": "T"
+                                }
+                              },
+                              "is_object": false
+                            }
+                          },
+                          "fields": {
+                            "kind": "Expr::Record::FieldList",
+                            "loc": null,
+                            "children": [
+                              {
+                                "kind": "FieldDef",
+                                "loc": null,
+                                "children": {
+                                  "label": {
+                                    "kind": "Label",
+                                    "loc": null,
+                                    "children": {
+                                      "name": "x"
+                                    }
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "x"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "is_pun": true
+                                }
+                              }
+                            ]
+                          },
+                          "trailing": {
+                            "kind": "Trailing::None",
+                            "loc": null,
+                            "children": {}
+                          }
+                        }
+                      },
+                      "body": {
+                        "kind": "Expr::Let",
+                        "loc": null,
+                        "children": {
+                          "pattern": {
+                            "kind": "Pattern::Any",
+                            "loc": null,
+                            "children": {}
+                          },
+                          "expr": {
+                            "kind": "Expr::Record",
+                            "loc": null,
+                            "children": {
+                              "type_name": {
+                                "kind": "TypeName",
+                                "loc": null,
+                                "children": {
+                                  "name": {
+                                    "kind": "LongIdent::Dot",
+                                    "loc": null,
+                                    "children": {
+                                      "pkg": "pkg",
+                                      "id": "T"
+                                    }
+                                  },
+                                  "is_object": false
+                                }
+                              },
+                              "fields": {
+                                "kind": "Expr::Record::FieldList",
+                                "loc": null,
+                                "children": [
+                                  {
+                                    "kind": "FieldDef",
+                                    "loc": null,
+                                    "children": {
+                                      "label": {
+                                        "kind": "Label",
+                                        "loc": null,
+                                        "children": {
+                                          "name": "x"
+                                        }
+                                      },
+                                      "expr": {
+                                        "kind": "Expr::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "id": {
+                                            "kind": "Var",
+                                            "loc": null,
+                                            "children": {
+                                              "name": {
+                                                "kind": "LongIdent::Ident",
+                                                "loc": null,
+                                                "children": {
+                                                  "value": "x"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "is_pun": true
+                                    }
+                                  },
+                                  {
+                                    "kind": "FieldDef",
+                                    "loc": null,
+                                    "children": {
+                                      "label": {
+                                        "kind": "Label",
+                                        "loc": null,
+                                        "children": {
+                                          "name": "y"
+                                        }
+                                      },
+                                      "expr": {
+                                        "kind": "Expr::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "id": {
+                                            "kind": "Var",
+                                            "loc": null,
+                                            "children": {
+                                              "name": {
+                                                "kind": "LongIdent::Ident",
+                                                "loc": null,
+                                                "children": {
+                                                  "value": "y"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "is_pun": true
+                                    }
+                                  }
+                                ]
+                              },
+                              "trailing": {
+                                "kind": "Trailing::None",
+                                "loc": null,
+                                "children": {}
+                              }
+                            }
+                          },
+                          "body": {
+                            "kind": "Expr::Let",
+                            "loc": null,
+                            "children": {
+                              "pattern": {
+                                "kind": "Pattern::Any",
+                                "loc": null,
+                                "children": {}
+                              },
+                              "expr": {
+                                "kind": "Expr::RecordUpdate",
+                                "loc": null,
+                                "children": {
+                                  "type_name": {
+                                    "kind": "TypeName",
+                                    "loc": null,
+                                    "children": {
+                                      "name": {
+                                        "kind": "LongIdent::Dot",
+                                        "loc": null,
+                                        "children": {
+                                          "pkg": "pkg",
+                                          "id": "T"
+                                        }
+                                      },
+                                      "is_object": false
+                                    }
+                                  },
+                                  "record": {
+                                    "kind": "Expr::Ident",
+                                    "loc": null,
+                                    "children": {
+                                      "id": {
+                                        "kind": "Var",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "value": "r"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "fields": {
+                                    "kind": "Expr::RecordUpdate::FieldList",
+                                    "loc": null,
+                                    "children": [
+                                      {
+                                        "kind": "FieldDef",
+                                        "loc": null,
+                                        "children": {
+                                          "label": {
+                                            "kind": "Label",
+                                            "loc": null,
+                                            "children": {
+                                              "name": "x"
+                                            }
+                                          },
+                                          "expr": {
+                                            "kind": "Expr::Ident",
+                                            "loc": null,
+                                            "children": {
+                                              "id": {
+                                                "kind": "Var",
+                                                "loc": null,
+                                                "children": {
+                                                  "name": {
+                                                    "kind": "LongIdent::Ident",
+                                                    "loc": null,
+                                                    "children": {
+                                                      "value": "x"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          },
+                                          "is_pun": true
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "body": {
+                                "kind": "Expr::Let",
+                                "loc": null,
+                                "children": {
+                                  "pattern": {
+                                    "kind": "Pattern::Any",
+                                    "loc": null,
+                                    "children": {}
+                                  },
+                                  "expr": {
+                                    "kind": "Expr::RecordUpdate",
+                                    "loc": null,
+                                    "children": {
+                                      "type_name": {
+                                        "kind": "TypeName",
+                                        "loc": null,
+                                        "children": {
+                                          "name": {
+                                            "kind": "LongIdent::Dot",
+                                            "loc": null,
+                                            "children": {
+                                              "pkg": "pkg",
+                                              "id": "T"
+                                            }
+                                          },
+                                          "is_object": false
+                                        }
+                                      },
+                                      "record": {
+                                        "kind": "Expr::Ident",
+                                        "loc": null,
+                                        "children": {
+                                          "id": {
+                                            "kind": "Var",
+                                            "loc": null,
+                                            "children": {
+                                              "name": {
+                                                "kind": "LongIdent::Ident",
+                                                "loc": null,
+                                                "children": {
+                                                  "value": "r"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "fields": {
+                                        "kind": "Expr::RecordUpdate::FieldList",
+                                        "loc": null,
+                                        "children": []
+                                      }
+                                    }
+                                  },
+                                  "body": {
+                                    "kind": "Expr::Unit",
+                                    "loc": null,
+                                    "children": {
+                                      "faked": true
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

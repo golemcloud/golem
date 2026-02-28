@@ -1,0 +1,2 @@
+type Foo[_] = Int
+
