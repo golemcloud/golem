@@ -84,6 +84,18 @@ pub fn ItemBuilder::variant_option(Self, UInt, ((Self) -> Unit raise BuilderErro
 pub fn ItemBuilder::variant_unit(Self, UInt) -> Unit raise BuilderError
 pub fn ItemBuilder::wit_value(Self, @types.WitValue) -> Unit raise BuilderError
 
+pub struct TypeBuilder {
+  nodes : Array[@types.NamedWitTypeNode]
+}
+pub fn TypeBuilder::add_wit_type(Self, @types.WitType) -> Int
+pub fn TypeBuilder::enum_type(Self, Array[String]) -> @types.WitType
+pub fn TypeBuilder::list_type(Self, @types.WitType) -> @types.WitType
+pub fn TypeBuilder::new() -> Self
+pub fn TypeBuilder::option_type(Self, @types.WitType) -> @types.WitType
+pub fn TypeBuilder::record_type(Self, Array[(String, @types.WitType)]) -> @types.WitType
+pub fn TypeBuilder::result_type(Self, @types.WitType, @types.WitType) -> @types.WitType
+pub fn TypeBuilder::variant_type(Self, Array[(String, @types.WitType?)]) -> @types.WitType
+
 // Type aliases
 
 // Traits

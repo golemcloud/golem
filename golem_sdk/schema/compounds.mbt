@@ -4,16 +4,9 @@ pub impl[T : HasElementSchema] HasElementSchema for T? with element_schema() {
   guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
     inner
   }
-  let nodes : Array[@types.NamedWitTypeNode] = [
-    { name: None, owner: None, type_: @types.WitTypeNode::OptionType(0) },
-  ]
-  let inner_root = merge_wit_type(nodes, inner_wit_type)
-  nodes[0] = {
-    name: None,
-    owner: None,
-    type_: @types.WitTypeNode::OptionType(inner_root),
-  }
-  @common.ElementSchema::ComponentModel({ nodes, })
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().option_type(inner_wit_type),
+  )
 }
 
 ///|
@@ -61,16 +54,9 @@ pub impl[T : HasElementSchema] HasElementSchema for Array[T] with element_schema
   guard inner is @common.ElementSchema::ComponentModel(inner_wit_type) else {
     inner
   }
-  let nodes : Array[@types.NamedWitTypeNode] = [
-    { name: None, owner: None, type_: @types.WitTypeNode::ListType(0) },
-  ]
-  let inner_root = merge_wit_type(nodes, inner_wit_type)
-  nodes[0] = {
-    name: None,
-    owner: None,
-    type_: @types.WitTypeNode::ListType(inner_root),
-  }
-  @common.ElementSchema::ComponentModel({ nodes, })
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().list_type(inner_wit_type),
+  )
 }
 
 ///|
@@ -129,21 +115,9 @@ pub impl[T : HasElementSchema, E : HasElementSchema] HasElementSchema for Result
   guard err_schema is @common.ElementSchema::ComponentModel(err_wit_type) else {
     err_schema
   }
-  let nodes : Array[@types.NamedWitTypeNode] = [
-    {
-      name: None,
-      owner: None,
-      type_: @types.WitTypeNode::ResultType((None, None)),
-    },
-  ]
-  let ok_root = merge_wit_type(nodes, ok_wit_type)
-  let err_root = merge_wit_type(nodes, err_wit_type)
-  nodes[0] = {
-    name: None,
-    owner: None,
-    type_: @types.WitTypeNode::ResultType((Some(ok_root), Some(err_root))),
-  }
-  @common.ElementSchema::ComponentModel({ nodes, })
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().result_type(ok_wit_type, err_wit_type),
+  )
 }
 
 ///|

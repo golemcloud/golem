@@ -2,24 +2,17 @@
 pub fn make_record_schema(
   fields : Array[(String, @common.ElementSchema)],
 ) -> @common.ElementSchema {
-  let nodes : Array[@types.NamedWitTypeNode] = [
-    { name: None, owner: None, type_: @types.WitTypeNode::RecordType([]) },
-  ]
-  let field_entries : Array[(String, Int)] = []
+  let wit_fields : Array[(String, @types.WitType)] = []
   for i in 0..<fields.length() {
     let (name, schema) = fields[i]
     guard schema is @common.ElementSchema::ComponentModel(inner_wit_type) else {
       abort("make_record_schema: field \{name} is not a ComponentModel schema")
     }
-    let root = merge_wit_type(nodes, inner_wit_type)
-    field_entries.push((name, root))
+    wit_fields.push((name, inner_wit_type))
   }
-  nodes[0] = {
-    name: None,
-    owner: None,
-    type_: @types.WitTypeNode::RecordType(field_entries),
-  }
-  @common.ElementSchema::ComponentModel({ nodes, })
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().record_type(wit_fields),
+  )
 }
 
 ///|
@@ -60,11 +53,9 @@ pub fn[T : FromExtractor] extract_field(
 
 ///|
 pub fn make_enum_schema(cases : Array[String]) -> @common.ElementSchema {
-  @common.ElementSchema::ComponentModel({
-    nodes: [
-      { name: None, owner: None, type_: @types.WitTypeNode::EnumType(cases) },
-    ],
-  })
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().enum_type(cases),
+  )
 }
 
 ///|
@@ -84,31 +75,24 @@ pub fn extract_enum(e : &@extractor.Extractor) -> UInt raise @common.AgentError 
 pub fn make_variant_schema(
   cases : Array[(String, @common.ElementSchema?)],
 ) -> @common.ElementSchema {
-  let nodes : Array[@types.NamedWitTypeNode] = [
-    { name: None, owner: None, type_: @types.WitTypeNode::VariantType([]) },
-  ]
-  let case_entries : Array[(String, Int?)] = []
+  let wit_cases : Array[(String, @types.WitType?)] = []
   for i in 0..<cases.length() {
     let (name, payload) = cases[i]
     match payload {
-      None => case_entries.push((name, None))
+      None => wit_cases.push((name, None))
       Some(schema) => {
         guard schema is @common.ElementSchema::ComponentModel(inner_wit_type) else {
           abort(
             "make_variant_schema: case \{name} payload is not a ComponentModel schema",
           )
         }
-        let root = merge_wit_type(nodes, inner_wit_type)
-        case_entries.push((name, Some(root)))
+        wit_cases.push((name, Some(inner_wit_type)))
       }
     }
   }
-  nodes[0] = {
-    name: None,
-    owner: None,
-    type_: @types.WitTypeNode::VariantType(case_entries),
-  }
-  @common.ElementSchema::ComponentModel({ nodes, })
+  @common.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().variant_type(wit_cases),
+  )
 }
 
 ///|
