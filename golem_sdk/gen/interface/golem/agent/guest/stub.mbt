@@ -17,13 +17,14 @@ pub fn initialize(
           "Agent type not found: \{agent_type}",
         )
       Some(registered_agent) => {
-        let raw = (registered_agent.construct)(input)
-        match raw {
-          Ok(raw) => {
+        let constructed = (registered_agent.construct)(input)
+        match constructed {
+          Ok(constructed) => {
             @agents.set_agent_instance({
               name: registered_agent.name,
               agent_type: registered_agent.agent_type,
-              interface: raw,
+              interface: constructed.raw,
+              snapshottable: constructed.snapshottable,
             })
             Ok(())
           }

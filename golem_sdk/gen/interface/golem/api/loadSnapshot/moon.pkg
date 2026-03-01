@@ -1,2 +1,3 @@
 import {
+  "vigoo/golem_sdk/agents" @agents,
 }

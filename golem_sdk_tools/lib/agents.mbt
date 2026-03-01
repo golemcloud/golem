@@ -75,6 +75,7 @@ pub(all) struct AgentInfo {
   methods : Array[MethodInfo]
   has_init : Bool
   constructor_schema_options : Map[String, SchemaOptions]
+  has_snapshottable : Bool
 } derive(Show)
 
 ///|
@@ -444,126 +445,148 @@ pub fn parse_agents(
     (Array[(String, ParamType)], String, String?, Map[String, SchemaOptions]),
   ] = {}
   let agent_methods : Map[String, Array[MethodInfo]] = {}
+  let agent_snapshottable : Map[String, Bool] = {}
   let mut has_init = false
+  // Parse all files first, then run passes over all AST nodes
+  // to avoid file-ordering dependencies
+  let all_impls : Array[@syntax.Impl] = []
   for pair in files {
     let (_filename, content) = pair
     let (impls, _reports) = @parser.parse_string(content)
-    // First pass: find #derive.agent annotated structs
-    impls.each(fn(impl_) {
-      match impl_ {
-        TopTypeDef(type_decl) => {
-          let mut is_agent = false
-          type_decl.attrs.each(fn(attr) {
-            if attr.raw == "#derive.agent" ||
-              attr.raw.has_prefix("#derive.agent(") {
-              is_agent = true
-            }
-          })
-          if is_agent {
-            let name = type_decl.tycon
-            let description = extract_doc_string(type_decl.doc)
-            let desc = if description == "" { name } else { description }
-            let mode = extract_agent_mode(type_decl.attrs) catch {
-              _ => Durable
-            }
-            agent_names[name] = desc
-            agent_modes[name] = mode
-            agent_methods[name] = []
+    impls.each(fn(impl_) { all_impls.push(impl_) })
+  }
+  // First pass: find #derive.agent annotated structs
+  all_impls.each(fn(impl_) {
+    match impl_ {
+      TopTypeDef(type_decl) => {
+        let mut is_agent = false
+        type_decl.attrs.each(fn(attr) {
+          if attr.raw == "#derive.agent" ||
+            attr.raw.has_prefix("#derive.agent(") {
+            is_agent = true
           }
+        })
+        if is_agent {
+          let name = type_decl.tycon
+          let description = extract_doc_string(type_decl.doc)
+          let desc = if description == "" { name } else { description }
+          let mode = extract_agent_mode(type_decl.attrs) catch { _ => Durable }
+          agent_names[name] = desc
+          agent_modes[name] = mode
+          agent_methods[name] = []
         }
-        _ => ()
       }
-    })
-    // Second pass: find ::new constructors, public methods, and fn init
-    impls.each(fn(impl_) {
-      match impl_ {
-        TopFuncDef(fun_decl~, ..) => {
-          // Check for fn init
-          if fun_decl.type_name is None && fun_decl.name.name == "init" {
-            has_init = true
-          }
-          match fun_decl.type_name {
-            Some({ name: Ident(name~), .. }) =>
-              if agent_names.contains(name) {
-                if fun_decl.name.name == "new" {
-                  // Constructor
-                  let params = extract_method_params(fun_decl) catch { _ => [] }
-                  let doc = extract_doc_string(fun_decl.doc)
-                  let desc = if doc == "" {
-                    "Creates a new \{name}"
-                  } else {
-                    doc
+      _ => ()
+    }
+  })
+  // Second pass: find ::new constructors, public methods, and fn init
+  all_impls.each(fn(impl_) {
+    match impl_ {
+      TopFuncDef(fun_decl~, ..) => {
+        // Check for fn init
+        if fun_decl.type_name is None && fun_decl.name.name == "init" {
+          has_init = true
+        }
+        match fun_decl.type_name {
+          Some({ name: Ident(name~), .. }) =>
+            if agent_names.contains(name) {
+              if fun_decl.name.name == "new" {
+                // Constructor
+                let params = extract_method_params(fun_decl) catch { _ => [] }
+                let doc = extract_doc_string(fun_decl.doc)
+                let desc = if doc == "" { "Creates a new \{name}" } else { doc }
+                let hint = extract_prompt_hint(fun_decl.attrs)
+                let restrictions = extract_schema_restrictions(fun_decl.attrs)
+                agent_constructors[name] = (params, desc, hint, restrictions)
+              } else if fun_decl.vis is Pub(..) {
+                // Public method — check if first param is Self
+                let mut is_method = false
+                match fun_decl.decl_params {
+                  Some(ps) => {
+                    let mut first = true
+                    ps.each(fn(p) {
+                      if first {
+                        first = false
+                        match p {
+                          Positional(ty=Some(Name(constr_id~, ..)), ..) =>
+                            match constr_id.id {
+                              Ident(name~) =>
+                                if name == "Self" {
+                                  is_method = true
+                                }
+                              _ => ()
+                            }
+                          _ => ()
+                        }
+                      }
+                    })
                   }
+                  None => ()
+                }
+                if is_method {
+                  // Extract params (skip self)
+                  let all_params = extract_method_params(fun_decl) catch {
+                    _ => []
+                  }
+                  // Remove the first param (self : Self)
+                  let params : Array[(String, ParamType)] = []
+                  for i in 1..<all_params.length() {
+                    params.push(all_params[i])
+                  }
+                  let return_type = extract_return_type(fun_decl) catch {
+                    _ => None
+                  }
+                  let doc = extract_doc_string(fun_decl.doc)
+                  let method_name = fun_decl.name.name
+                  let desc = if doc == "" { method_name } else { doc }
                   let hint = extract_prompt_hint(fun_decl.attrs)
                   let restrictions = extract_schema_restrictions(fun_decl.attrs)
-                  agent_constructors[name] = (params, desc, hint, restrictions)
-                } else if fun_decl.vis is Pub(..) {
-                  // Public method — check if first param is Self
-                  let mut is_method = false
-                  match fun_decl.decl_params {
-                    Some(ps) => {
-                      let mut first = true
-                      ps.each(fn(p) {
-                        if first {
-                          first = false
-                          match p {
-                            Positional(ty=Some(Name(constr_id~, ..)), ..) =>
-                              match constr_id.id {
-                                Ident(name~) =>
-                                  if name == "Self" {
-                                    is_method = true
-                                  }
-                                _ => ()
-                              }
-                            _ => ()
-                          }
-                        }
+                  match agent_methods.get(name) {
+                    Some(methods) =>
+                      methods.push({
+                        name: method_name,
+                        description: desc,
+                        prompt_hint: hint,
+                        params,
+                        return_type,
+                        param_schema_options: restrictions,
                       })
-                    }
                     None => ()
                   }
-                  if is_method {
-                    // Extract params (skip self)
-                    let all_params = extract_method_params(fun_decl) catch {
-                      _ => []
-                    }
-                    // Remove the first param (self : Self)
-                    let params : Array[(String, ParamType)] = []
-                    for i in 1..<all_params.length() {
-                      params.push(all_params[i])
-                    }
-                    let return_type = extract_return_type(fun_decl) catch {
-                      _ => None
-                    }
-                    let doc = extract_doc_string(fun_decl.doc)
-                    let method_name = fun_decl.name.name
-                    let desc = if doc == "" { method_name } else { doc }
-                    let hint = extract_prompt_hint(fun_decl.attrs)
-                    let restrictions = extract_schema_restrictions(
-                      fun_decl.attrs,
-                    )
-                    match agent_methods.get(name) {
-                      Some(methods) =>
-                        methods.push({
-                          name: method_name,
-                          description: desc,
-                          prompt_hint: hint,
-                          params,
-                          return_type,
-                          param_schema_options: restrictions,
-                        })
-                      None => ()
-                    }
-                  }
                 }
+              }
+            }
+          _ => ()
+        }
+      }
+      _ => ()
+    }
+  })
+  // Third pass: detect Snapshottable trait implementations
+  all_impls.each(fn(impl_) {
+    match impl_ {
+      TopImpl(trait_~, self_ty~, ..) => {
+        let is_snapshottable = match trait_.name {
+          Ident(name~) => name == "Snapshottable"
+          Dot(pkg~, id~) => id == "Snapshottable" && pkg == "agents"
+        }
+        if is_snapshottable {
+          match self_ty {
+            Some(Name(constr_id~, ..)) =>
+              match constr_id.id {
+                Ident(name~) =>
+                  if agent_names.contains(name) {
+                    agent_snapshottable[name] = true
+                  }
+                _ => ()
               }
             _ => ()
           }
         }
-        _ => ()
       }
-    })
-  }
+      _ => ()
+    }
+  })
   // Validate
   let agents : Array[AgentInfo] = []
   for name, description in agent_names {
@@ -579,6 +602,7 @@ pub fn parse_agents(
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
           constructor_schema_options: ctor_restrictions,
+          has_snapshottable: agent_snapshottable.get(name).unwrap_or(false),
         })
       None => raise AgentParseError("Agent '\{name}' has no ::new constructor")
     }

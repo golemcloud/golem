@@ -48,11 +48,30 @@ pub fn set_agent_instance(instance : AgentInstance) -> Unit {
 }
 
 ///|
+/// Optional trait that agents can implement to support snapshot-based state persistence.
+/// When implemented, the SDK will use these methods to save/load agent state during updates.
+pub(open) trait Snapshottable {
+  save_snapshot(Self) -> Bytes
+  load_snapshot(Self, Bytes) -> Result[Unit, String]
+}
+
+///|
+/// Result of constructing an agent, containing the raw dispatch interface
+/// and optionally the snapshot interface.
+pub(all) struct ConstructedAgent {
+  raw : &RawAgent
+  snapshottable : &Snapshottable?
+}
+
+///|
 /// A registered agent type with its name, type definition, and constructor function.
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@common.DataValue) -> Result[&RawAgent, @common.AgentError]
+  construct : (@common.DataValue) -> Result[
+    ConstructedAgent,
+    @common.AgentError,
+  ]
 }
 
 ///|
@@ -61,6 +80,7 @@ pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
   interface : &RawAgent
+  snapshottable : &Snapshottable?
 }
 
 ///|
@@ -79,3 +99,5 @@ pub(open) trait RawAgent {
     @common.AgentError,
   ]
 }
+
+

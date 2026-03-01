@@ -148,6 +148,7 @@ test "generate_agent_registration for simple agent" {
       methods: [],
       has_init: false,
       constructor_schema_options: {},
+      has_snapshottable: false,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -188,7 +189,10 @@ test "generate_agent_registration for simple agent" {
       #|            )
       #|          }
       #|          let name :String = @schema.from_element_value_as(elements[0])
-      #|          Ok(Counter::new(name))
+      #|          let agent = Counter::new(name)
+      #|          let constructed = 
+      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|          Ok(constructed)
       #|        } catch{
       #|          e => Err(e)
       #|        }
@@ -245,6 +249,7 @@ test "generate_agent_registration with methods" {
       ],
       has_init: false,
       constructor_schema_options: {},
+      has_snapshottable: false,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -314,7 +319,10 @@ test "generate_agent_registration with methods" {
       #|            )
       #|          }
       #|          let name :String = @schema.from_element_value_as(elements[0])
-      #|          Ok(Counter::new(name))
+      #|          let agent = Counter::new(name)
+      #|          let constructed = 
+      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|          Ok(constructed)
       #|        } catch{
       #|          e => Err(e)
       #|        }
@@ -423,6 +431,7 @@ test "generate_agent_registration with prompt_hints" {
       ],
       has_init: false,
       constructor_schema_options: {},
+      has_snapshottable: false,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -471,7 +480,10 @@ test "generate_agent_registration with prompt_hints" {
       #|            )
       #|          }
       #|          let name :String = @schema.from_element_value_as(elements[0])
-      #|          Ok(Counter::new(name))
+      #|          let agent = Counter::new(name)
+      #|          let constructed = 
+      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|          Ok(constructed)
       #|        } catch{
       #|          e => Err(e)
       #|        }
@@ -981,6 +993,7 @@ test "build_raw_agent_impl for counter-like agent" {
     ],
     has_init: false,
     constructor_schema_options: {},
+    has_snapshottable: false,
   }
   let impl_ = build_raw_agent_impl(agent)
   let output = @formatter.impls_to_string(@list.List::from_array([impl_]))
@@ -1209,6 +1222,7 @@ test "generate_agent_registration with cross-package types" {
       ],
       has_init: false,
       constructor_schema_options: {},
+      has_snapshottable: false,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1271,7 +1285,10 @@ test "generate_agent_registration with cross-package types" {
       #|            )
       #|          }
       #|          let config :@types.Config = @schema.from_element_value_as(elements[0])
-      #|          Ok(OrderAgent::new(config))
+      #|          let agent = OrderAgent::new(config)
+      #|          let constructed = 
+      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|          Ok(constructed)
       #|        } catch{
       #|          e => Err(e)
       #|        }
@@ -1434,6 +1451,7 @@ test "generate_agent_registration with ephemeral mode" {
       methods: [],
       has_init: false,
       constructor_schema_options: {},
+      has_snapshottable: false,
     },
   ]
   let impls = generate_agent_registration(agents)
@@ -1466,7 +1484,10 @@ test "generate_agent_registration with ephemeral mode" {
       #|              "Expected 0 elements, got " + elements.length().to_string(),
       #|            )
       #|          }
-      #|          Ok(Worker::new())
+      #|          let agent = Worker::new()
+      #|          let constructed = 
+      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|          Ok(constructed)
       #|        } catch{
       #|          e => Err(e)
       #|        }
@@ -1548,6 +1569,7 @@ test "generate_agent_registration with multimodal return uses to_data_value" {
       ],
       has_init: false,
       constructor_schema_options: {},
+      has_snapshottable: false,
     },
   ]
   let impl_ = build_raw_agent_impl(agents[0])
@@ -1626,4 +1648,72 @@ test "parse_agents rejects restriction on unknown param" {
       #|Err(AgentParseError("#derive.text_languages/#derive.mime_types references unknown parameter 'nonexistent' of method 'process'"))
     ),
   )
+}
+
+///|
+test "parse_agents detects Snapshottable impl" {
+  let content =
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|pub fn Counter::new() -> Counter {
+    #|  { value: 0 }
+    #|}
+    #|
+    #|impl @agents.Snapshottable for Counter with save_snapshot(self) {
+    #|  b""
+    #|}
+    #|
+    #|impl @agents.Snapshottable for Counter with load_snapshot(self, _bytes) {
+    #|  Ok(())
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].has_snapshottable, content="true")
+}
+
+///|
+test "parse_agents detects no Snapshottable when not implemented" {
+  let content =
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|pub fn Counter::new() -> Counter {
+    #|  { value: 0 }
+    #|}
+  let agents = parse_agents([("counter.mbt", content)])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].has_snapshottable, content="false")
+}
+
+///|
+test "parse_agents detects Snapshottable across files regardless of order" {
+  // Snapshottable impl in first file, agent struct in second file
+  let impl_file =
+    #|impl @agents.Snapshottable for Counter with save_snapshot(self) {
+    #|  b""
+    #|}
+    #|
+    #|impl @agents.Snapshottable for Counter with load_snapshot(self, _bytes) {
+    #|  Ok(())
+    #|}
+  let agent_file =
+    #|#derive.agent
+    #|pub(all) struct Counter {
+    #|  mut value : UInt64
+    #|}
+    #|
+    #|pub fn Counter::new() -> Counter {
+    #|  { value: 0 }
+    #|}
+  let agents = parse_agents([
+    ("snapshottable.mbt", impl_file),
+    ("counter.mbt", agent_file),
+  ])
+  inspect(agents.length(), content="1")
+  inspect(agents[0].has_snapshottable, content="true")
 }

@@ -146,13 +146,28 @@ fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
 /// Generates the constructor body for agents with tuple-style (non-multimodal) parameters.
 fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let param_count = agent.constructor_params.length()
-  // Ok(AgentName::new(p1, p2, ...))
   let new_args = agent.constructor_params.map(fn(param) {
     make_ident_expr(param.0)
   })
-  let ok_call = make_apply(make_constr_no_args("Ok"), [
-    make_apply(make_method_ref(agent.name, "new"), new_args),
+  let new_call = make_apply(make_method_ref(agent.name, "new"), new_args)
+  let snapshottable_expr = if agent.has_snapshottable {
+    make_apply(make_constr_no_args("Some"), [make_ident_expr("agent")])
+  } else {
+    make_constr_no_args("None")
+  }
+  let constructed = make_record_with_type("agents", "ConstructedAgent", [
+    make_field("raw", make_ident_expr("agent")),
+    make_field("snapshottable", snapshottable_expr),
   ])
+  let ok_call = make_let(
+    "agent",
+    new_call,
+    make_let(
+      "constructed",
+      constructed,
+      make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
+    ),
+  )
   // Build let bindings for each parameter (from last to first)
   let mut body = ok_call
   for idx in 0..<param_count {
@@ -203,10 +218,27 @@ fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
 /// Generates the constructor body for agents with a single multimodal parameter.
 fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let (param_name, param_type) = agent.constructor_params[0]
-  // Ok(AgentName::new(param_name))
-  let ok_call = make_apply(make_constr_no_args("Ok"), [
-    make_apply(make_method_ref(agent.name, "new"), [make_ident_expr(param_name)]),
+  let new_call = make_apply(make_method_ref(agent.name, "new"), [
+    make_ident_expr(param_name),
   ])
+  let snapshottable_expr = if agent.has_snapshottable {
+    make_apply(make_constr_no_args("Some"), [make_ident_expr("agent")])
+  } else {
+    make_constr_no_args("None")
+  }
+  let constructed = make_record_with_type("agents", "ConstructedAgent", [
+    make_field("raw", make_ident_expr("agent")),
+    make_field("snapshottable", snapshottable_expr),
+  ])
+  let ok_call = make_let(
+    "agent",
+    new_call,
+    make_let(
+      "constructed",
+      constructed,
+      make_apply(make_constr_no_args("Ok"), [make_ident_expr("constructed")]),
+    ),
+  )
   // let param_name : Type = @types.Multimodal::from_data_value(input)
   make_let_typed(
     param_name,
