@@ -238,8 +238,8 @@ tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.0", default-features = true }
-testcontainers = { version = "0.23.3" }
-testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
+testcontainers = { version = "0.27.1" }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "rustfs", "mysql", ] }
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
