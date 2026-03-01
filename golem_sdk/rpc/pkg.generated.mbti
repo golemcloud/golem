@@ -36,9 +36,10 @@ pub(all) struct AgentClient {
 pub fn AgentClient::drop(Self) -> Unit
 pub fn AgentClient::get(String, @common.DataValue) -> Self raise @common.AgentError
 pub fn AgentClient::get_agent_id(Self) -> String
+pub fn AgentClient::get_phantom(String, @common.DataValue, @vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
 pub fn AgentClient::invoke(Self, String, Array[@vigoo/golem_sdk/interface/golem/rpc/types.WitValue]) -> Unit
 pub fn AgentClient::invoke_and_await(Self, String, Array[@vigoo/golem_sdk/interface/golem/rpc/types.WitValue]) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue
-pub fn AgentClient::new_phantom(String, @common.DataValue, @vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
+pub fn AgentClient::new_phantom(String, @common.DataValue) -> Self raise @common.AgentError
 pub fn AgentClient::phantom_id(Self) -> @vigoo/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
 pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, Array[@vigoo/golem_sdk/interface/golem/rpc/types.WitValue]) -> Unit
 

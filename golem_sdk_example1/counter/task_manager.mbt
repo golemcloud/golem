@@ -24,14 +24,19 @@ struct TaskManager {
 }
 
 ///|
+let task_logger : @logging.Logger = @logging.with_name("task-manager")
+
+///|
 /// Creates a new empty task manager
 fn TaskManager::new() -> TaskManager {
+  task_logger.info("Creating new task manager")
   { tasks: [] }
 }
 
 ///|
 /// Adds a new task, returns the total task count
 pub fn TaskManager::add_task(self : Self, task : TaskInfo) -> UInt64 {
+  task_logger.info("Adding task: " + task.title)
   self.tasks.push(task)
   self.tasks.length().reinterpret_as_uint().to_uint64()
 }
@@ -56,5 +61,3 @@ pub fn TaskManager::get_by_priority(
   }
   result
 }
-
-

@@ -1,0 +1,47 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/logging"
+
+// Values
+pub fn critical(String) -> Unit
+
+pub fn debug(String) -> Unit
+
+pub fn error(String) -> Unit
+
+pub fn info(String) -> Unit
+
+pub fn log(@vigoo/golem_sdk/interface/wasi/logging/logging.Level, String) -> Unit
+
+pub fn set_context(String) -> Unit
+
+pub fn set_min_level(@vigoo/golem_sdk/interface/wasi/logging/logging.Level) -> Unit
+
+pub fn trace(String) -> Unit
+
+pub fn warn(String) -> Unit
+
+pub fn with_name(String) -> Logger
+
+// Errors
+
+// Types and methods
+pub(all) struct Logger {
+  context : String
+  min_level : @vigoo/golem_sdk/interface/wasi/logging/logging.Level?
+}
+pub fn Logger::critical(Self, String) -> Unit
+pub fn Logger::debug(Self, String) -> Unit
+pub fn Logger::error(Self, String) -> Unit
+pub fn Logger::info(Self, String) -> Unit
+pub fn Logger::log(Self, @vigoo/golem_sdk/interface/wasi/logging/logging.Level, String) -> Unit
+pub fn Logger::new(context? : String, min_level? : @vigoo/golem_sdk/interface/wasi/logging/logging.Level?) -> Self
+pub fn Logger::trace(Self, String) -> Unit
+pub fn Logger::warn(Self, String) -> Unit
+pub fn Logger::with_min_level(Self, @vigoo/golem_sdk/interface/wasi/logging/logging.Level) -> Self
+pub fn Logger::with_name(Self, String) -> Self
+
+// Type aliases
+pub using @vigoo/golem_sdk/interface/wasi/logging/logging {type Level}
+
+// Traits
+

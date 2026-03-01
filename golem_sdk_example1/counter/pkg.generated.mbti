@@ -1,6 +1,12 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "vigoo/golem_sdk_example1/counter"
 
+import {
+  "vigoo/golem_sdk/interface/golem/agent/common",
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
+  "vigoo/golem_sdk/rpc",
+}
+
 // Values
 pub fn cabi_realloc(Int, Int, Int, Int) -> Int
 
@@ -32,7 +38,122 @@ pub fn wasmExportSavePostReturn(Int) -> Unit
 
 // Types and methods
 type Counter
+pub fn Counter::decrement(Self) -> Unit
+pub fn Counter::get_value(Self) -> UInt64
 pub fn Counter::increment(Self) -> Unit
+
+pub(all) struct CounterClient {
+  client : @rpc.AgentClient
+}
+pub fn CounterClient::decrement(Self) -> Unit
+pub fn CounterClient::drop(Self) -> Unit
+pub fn CounterClient::get(String) -> Self raise @common.AgentError
+pub fn CounterClient::get_agent_id(Self) -> String
+pub fn CounterClient::get_phantom(String, @vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
+pub fn CounterClient::get_value(Self) -> UInt64 raise @common.AgentError
+pub fn CounterClient::increment(Self) -> Unit
+pub fn CounterClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn CounterClient::phantom_id(Self) -> @vigoo/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
+pub fn CounterClient::schedule_decrement(Self, @wallClock.Datetime) -> Unit
+pub fn CounterClient::schedule_get_value(Self, @wallClock.Datetime) -> Unit
+pub fn CounterClient::schedule_increment(Self, @wallClock.Datetime) -> Unit
+pub fn[T] CounterClient::scoped(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] CounterClient::scoped_get_phantom(String, @vigoo/golem_sdk/interface/golem/rpc/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] CounterClient::scoped_new_phantom(String, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn CounterClient::trigger_decrement(Self) -> Unit
+pub fn CounterClient::trigger_get_value(Self) -> Unit
+pub fn CounterClient::trigger_increment(Self) -> Unit
+
+pub(all) enum Priority {
+  Low
+  Medium
+  High
+}
+pub impl Eq for Priority
+
+type RpcExampleAgent
+pub fn RpcExampleAgent::counter_rpc_example(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgent::get_last_value(Self) -> UInt64
+pub fn RpcExampleAgent::task_rpc_example(Self) -> UInt64 raise @common.AgentError
+
+pub(all) struct RpcExampleAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn RpcExampleAgentClient::counter_rpc_example(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgentClient::drop(Self) -> Unit
+pub fn RpcExampleAgentClient::get() -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::get_agent_id(Self) -> String
+pub fn RpcExampleAgentClient::get_last_value(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgentClient::get_phantom(@vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn RpcExampleAgentClient::phantom_id(Self) -> @vigoo/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
+pub fn RpcExampleAgentClient::schedule_counter_rpc_example(Self, @wallClock.Datetime) -> Unit
+pub fn RpcExampleAgentClient::schedule_get_last_value(Self, @wallClock.Datetime) -> Unit
+pub fn RpcExampleAgentClient::schedule_task_rpc_example(Self, @wallClock.Datetime) -> Unit
+pub fn[T] RpcExampleAgentClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] RpcExampleAgentClient::scoped_get_phantom(@vigoo/golem_sdk/interface/golem/rpc/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] RpcExampleAgentClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn RpcExampleAgentClient::task_rpc_example(Self) -> UInt64 raise @common.AgentError
+pub fn RpcExampleAgentClient::trigger_counter_rpc_example(Self) -> Unit
+pub fn RpcExampleAgentClient::trigger_get_last_value(Self) -> Unit
+pub fn RpcExampleAgentClient::trigger_task_rpc_example(Self) -> Unit
+
+pub(all) struct TaskInfo {
+  title : String
+  priority : Priority
+  description : String?
+}
+
+type TaskManager
+pub fn TaskManager::add_task(Self, TaskInfo) -> UInt64
+pub fn TaskManager::get_by_priority(Self, Priority) -> Array[TaskInfo]
+pub fn TaskManager::get_tasks(Self) -> Array[TaskInfo]
+
+pub(all) struct TaskManagerClient {
+  client : @rpc.AgentClient
+}
+pub fn TaskManagerClient::add_task(Self, TaskInfo) -> UInt64 raise @common.AgentError
+pub fn TaskManagerClient::drop(Self) -> Unit
+pub fn TaskManagerClient::get() -> Self raise @common.AgentError
+pub fn TaskManagerClient::get_agent_id(Self) -> String
+pub fn TaskManagerClient::get_by_priority(Self, Priority) -> Array[TaskInfo] raise @common.AgentError
+pub fn TaskManagerClient::get_phantom(@vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
+pub fn TaskManagerClient::get_tasks(Self) -> Array[TaskInfo] raise @common.AgentError
+pub fn TaskManagerClient::new_phantom() -> Self raise @common.AgentError
+pub fn TaskManagerClient::phantom_id(Self) -> @vigoo/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
+pub fn TaskManagerClient::schedule_add_task(Self, @wallClock.Datetime, TaskInfo) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::schedule_get_by_priority(Self, @wallClock.Datetime, Priority) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::schedule_get_tasks(Self, @wallClock.Datetime) -> Unit
+pub fn[T] TaskManagerClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] TaskManagerClient::scoped_get_phantom(@vigoo/golem_sdk/interface/golem/rpc/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] TaskManagerClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn TaskManagerClient::trigger_add_task(Self, TaskInfo) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::trigger_get_by_priority(Self, Priority) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::trigger_get_tasks(Self) -> Unit
+
+pub(all) enum TextOrImage {
+  Text(String)
+  Image(Bytes)
+}
+
+type VisionAgent
+pub fn VisionAgent::analyze(Self, @vigoo/golem_sdk/agents/types.Multimodal[TextOrImage]) -> String
+
+pub(all) struct VisionAgentClient {
+  client : @rpc.AgentClient
+}
+pub fn VisionAgentClient::analyze(Self, @vigoo/golem_sdk/agents/types.Multimodal[TextOrImage]) -> String raise @common.AgentError
+pub fn VisionAgentClient::drop(Self) -> Unit
+pub fn VisionAgentClient::get() -> Self raise @common.AgentError
+pub fn VisionAgentClient::get_agent_id(Self) -> String
+pub fn VisionAgentClient::get_phantom(@vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
+pub fn VisionAgentClient::new_phantom() -> Self raise @common.AgentError
+pub fn VisionAgentClient::phantom_id(Self) -> @vigoo/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
+pub fn VisionAgentClient::schedule_analyze(Self, @wallClock.Datetime, @vigoo/golem_sdk/agents/types.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
+pub fn[T] VisionAgentClient::scoped((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] VisionAgentClient::scoped_get_phantom(@vigoo/golem_sdk/interface/golem/rpc/types.Uuid, (Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn[T] VisionAgentClient::scoped_new_phantom((Self) -> T raise @common.AgentError) -> T raise @common.AgentError
+pub fn VisionAgentClient::trigger_analyze(Self, @vigoo/golem_sdk/agents/types.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 
 // Type aliases
 

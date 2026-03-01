@@ -6,10 +6,6 @@ import {
 }
 
 // Values
-pub fn bytes_to_fixed_array(Bytes) -> FixedArray[Byte]
-
-pub fn fixed_array_to_bytes(FixedArray[Byte]) -> Bytes
-
 pub fn get_agent_instance() -> AgentInstance?
 
 pub fn get_all_registered_agents() -> Array[@common.AgentType]

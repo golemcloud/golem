@@ -32,11 +32,7 @@ pub fn AgentClient::new_phantom(
   constructor_data_value : @common.DataValue,
 ) -> AgentClient raise @common.AgentError {
   let phantom_id = @apiHost.generate_idempotency_key()
-  AgentClient::get_phantom(
-    agent_type_name,
-    constructor_data_value,
-    phantom_id,
-  )
+  AgentClient::get_phantom(agent_type_name, constructor_data_value, phantom_id)
 }
 
 ///|
