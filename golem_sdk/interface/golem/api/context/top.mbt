@@ -48,8 +48,9 @@ pub(all) struct AttributeChain {
 pub fn start_span(name : String) -> Span {
   let ptr = mbt_ffi_str2ptr(name)
   let result : Int = wasmImportStartSpan(ptr, name.length())
+  let ret = Span::Span(result)
   mbt_ffi_free(ptr)
-  return Span::Span(result)
+  return ret
 }
 
 ///|
@@ -59,7 +60,8 @@ pub fn start_span(name : String) -> Span {
 /// reflect that.
 pub fn current_context() -> InvocationContext {
   let result : Int = wasmImportCurrentContext()
-  return InvocationContext::InvocationContext(result)
+  let ret = InvocationContext::InvocationContext(result)
+  return ret
 }
 
 ///|
@@ -74,7 +76,8 @@ pub fn allow_forwarding_trace_context_headers(allow : Bool) -> Bool {
       0
     },
   )
-  return result != 0
+  let ret = result != 0
+  return ret
 }
 
 ///|
@@ -83,11 +86,12 @@ pub fn Span::started_at(self : Span) -> @wallClock.Datetime {
   let Span(handle) = self
   let return_area = mbt_ffi_malloc(16)
   wasmImportMethodSpanStartedAt(handle, return_area)
-  mbt_ffi_free(return_area)
-  return @wallClock.Datetime::{
+  let ret = @wallClock.Datetime::{
     seconds: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
     nanoseconds: mbt_ffi_load32(return_area + 8).reinterpret_as_uint(),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -106,7 +110,7 @@ pub fn Span::set_attribute(
   let (lowered, lowered1, lowered2) = match value {
     String(payload) => {
       let ptr0 = mbt_ffi_str2ptr(payload)
-      mbt_ffi_free(ptr0)
+      cleanup_list.push(ptr0)
 
       (0, ptr0, payload.length())
     }
@@ -120,7 +124,6 @@ pub fn Span::set_attribute(
     lowered2,
   )
   mbt_ffi_free(ptr)
-
   cleanup_list.each(mbt_ffi_free)
 }
 
@@ -147,16 +150,15 @@ pub fn Span::set_attributes(self : Span, attributes : Array[Attribute]) -> Unit 
         let ptr0 = mbt_ffi_str2ptr(payload)
         mbt_ffi_store32(iter_base + 16, payload.length())
         mbt_ffi_store32(iter_base + 12, ptr0)
-        mbt_ffi_free(ptr0)
+        cleanup_list.push(ptr0)
 
         ()
       }
     }
-    mbt_ffi_free(ptr)
+    cleanup_list.push(ptr)
   }
   wasmImportMethodSpanSetAttributes(handle, address, attributes.length())
   mbt_ffi_free(address)
-
   cleanup_list.each(mbt_ffi_free)
 }
 
@@ -178,8 +180,9 @@ pub fn InvocationContext::trace_id(self : InvocationContext) -> String {
     mbt_ffi_load32(return_area + 0),
     mbt_ffi_load32(return_area + 4),
   )
+  let ret = result
   mbt_ffi_free(return_area)
-  return result
+  return ret
 }
 
 ///|
@@ -193,8 +196,9 @@ pub fn InvocationContext::span_id(self : InvocationContext) -> String {
     mbt_ffi_load32(return_area + 0),
     mbt_ffi_load32(return_area + 4),
   )
+  let ret = result
   mbt_ffi_free(return_area)
-  return result
+  return ret
 }
 
 ///|
@@ -217,8 +221,9 @@ pub fn InvocationContext::parent(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -264,9 +269,10 @@ pub fn InvocationContext::get_attribute(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -312,8 +318,9 @@ pub fn InvocationContext::get_attributes(
     array.push(Attribute::{ key: result, value: lifted })
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 0))
+  let ret = array
   mbt_ffi_free(return_area)
-  return array
+  return ret
 }
 
 ///|
@@ -353,9 +360,10 @@ pub fn InvocationContext::get_attribute_chain(
     array.push(lifted)
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 0))
+  let ret = array
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return array
+  return ret
 }
 
 ///|
@@ -399,8 +407,9 @@ pub fn InvocationContext::get_attribute_chains(
     array1.push(AttributeChain::{ key: result, values: array })
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 0))
+  let ret = array1
   mbt_ffi_free(return_area)
-  return array1
+  return ret
 }
 
 ///|
@@ -429,6 +438,7 @@ pub fn InvocationContext::trace_context_headers(
     array.push((result, result0))
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 0))
+  let ret = array
   mbt_ffi_free(return_area)
-  return array
+  return ret
 }

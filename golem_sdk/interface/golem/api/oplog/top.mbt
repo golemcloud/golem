@@ -384,8 +384,9 @@ pub fn GetOplog::get_oplog(
     agent_id.agent_id.length(),
     start.reinterpret_as_int64(),
   )
+  let ret = GetOplog::GetOplog(result)
   mbt_ffi_free(ptr)
-  return GetOplog::GetOplog(result)
+  return ret
 }
 
 ///|
@@ -3442,8 +3443,9 @@ pub fn GetOplog::get_next(self : GetOplog) -> Array[OplogEntry]? {
     }
     _ => panic()
   }
+  let ret = lifted334
   mbt_ffi_free(return_area)
-  return lifted334
+  return ret
 }
 
 ///|
@@ -3462,9 +3464,10 @@ pub fn SearchOplog::search_oplog(
     ptr0,
     text.length(),
   )
+  let ret = SearchOplog::SearchOplog(result)
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
-  return SearchOplog::SearchOplog(result)
+  return ret
 }
 
 ///|
@@ -6526,6 +6529,7 @@ pub fn SearchOplog::get_next(
     }
     _ => panic()
   }
+  let ret = lifted334
   mbt_ffi_free(return_area)
-  return lifted334
+  return ret
 }

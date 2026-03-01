@@ -8,7 +8,8 @@ pub fn wasmExportSave() -> Int {
 
   mbt_ffi_store32(return_area + 4, result.length())
   mbt_ffi_store32(return_area + 0, ptr)
-  return return_area
+  let ret = return_area
+  return ret
 }
 
 ///|

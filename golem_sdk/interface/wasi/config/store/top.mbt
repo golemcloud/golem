@@ -59,9 +59,10 @@ pub fn get(key : String) -> Result[String?, Error_] {
     }
     _ => panic()
   }
+  let ret = lifted3
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted3
+  return ret
 }
 
 ///|
@@ -119,6 +120,7 @@ pub fn get_all() -> Result[Array[(String, String)], Error_] {
     }
     _ => panic()
   }
+  let ret = lifted3
   mbt_ffi_free(return_area)
-  return lifted3
+  return ret
 }

@@ -38,9 +38,10 @@ pub fn get(
       )
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -71,9 +72,10 @@ pub fn set(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -100,9 +102,10 @@ pub fn delete(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -130,7 +133,8 @@ pub fn exists(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }

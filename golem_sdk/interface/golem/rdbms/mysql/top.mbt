@@ -207,8 +207,9 @@ pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn] {
     })
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 0))
+  let ret = array
   mbt_ffi_free(return_area)
-  return array
+  return ret
 }
 
 ///|
@@ -465,8 +466,9 @@ pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]? {
     }
     _ => panic()
   }
+  let ret = lifted19
   mbt_ffi_free(return_area)
-  return lifted19
+  return ret
 }
 
 ///|
@@ -526,9 +528,10 @@ pub fn DbConnection::open(address : String) -> Result[DbConnection, Error_] {
     }
     _ => panic()
   }
+  let ret = lifted4
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted4
+  return ret
 }
 
 ///|
@@ -633,7 +636,7 @@ pub fn DbConnection::query(
         let ptr13 = mbt_ffi_str2ptr(payload12)
         mbt_ffi_store32(iter_base + 12, payload12.length())
         mbt_ffi_store32(iter_base + 8, ptr13)
-        mbt_ffi_free(ptr13)
+        cleanup_list.push(ptr13)
 
         ()
       }
@@ -699,7 +702,7 @@ pub fn DbConnection::query(
         let ptr20 = mbt_ffi_str2ptr(payload19)
         mbt_ffi_store32(iter_base + 12, payload19.length())
         mbt_ffi_store32(iter_base + 8, ptr20)
-        mbt_ffi_free(ptr20)
+        cleanup_list.push(ptr20)
 
         ()
       }
@@ -709,7 +712,7 @@ pub fn DbConnection::query(
         let ptr22 = mbt_ffi_str2ptr(payload21)
         mbt_ffi_store32(iter_base + 12, payload21.length())
         mbt_ffi_store32(iter_base + 8, ptr22)
-        mbt_ffi_free(ptr22)
+        cleanup_list.push(ptr22)
 
         ()
       }
@@ -719,7 +722,7 @@ pub fn DbConnection::query(
         let ptr24 = mbt_ffi_str2ptr(payload23)
         mbt_ffi_store32(iter_base + 12, payload23.length())
         mbt_ffi_store32(iter_base + 8, ptr24)
-        mbt_ffi_free(ptr24)
+        cleanup_list.push(ptr24)
 
         ()
       }
@@ -729,7 +732,7 @@ pub fn DbConnection::query(
         let ptr26 = mbt_ffi_str2ptr(payload25)
         mbt_ffi_store32(iter_base + 12, payload25.length())
         mbt_ffi_store32(iter_base + 8, ptr26)
-        mbt_ffi_free(ptr26)
+        cleanup_list.push(ptr26)
 
         ()
       }
@@ -739,7 +742,7 @@ pub fn DbConnection::query(
         let ptr28 = mbt_ffi_str2ptr(payload27)
         mbt_ffi_store32(iter_base + 12, payload27.length())
         mbt_ffi_store32(iter_base + 8, ptr28)
-        mbt_ffi_free(ptr28)
+        cleanup_list.push(ptr28)
 
         ()
       }
@@ -749,7 +752,7 @@ pub fn DbConnection::query(
         let ptr30 = mbt_ffi_str2ptr(payload29)
         mbt_ffi_store32(iter_base + 12, payload29.length())
         mbt_ffi_store32(iter_base + 8, ptr30)
-        mbt_ffi_free(ptr30)
+        cleanup_list.push(ptr30)
 
         ()
       }
@@ -760,7 +763,7 @@ pub fn DbConnection::query(
 
         mbt_ffi_store32(iter_base + 12, payload31.length())
         mbt_ffi_store32(iter_base + 8, ptr32)
-        mbt_ffi_free(ptr32)
+        cleanup_list.push(ptr32)
 
         ()
       }
@@ -771,7 +774,7 @@ pub fn DbConnection::query(
 
         mbt_ffi_store32(iter_base + 12, payload33.length())
         mbt_ffi_store32(iter_base + 8, ptr34)
-        mbt_ffi_free(ptr34)
+        cleanup_list.push(ptr34)
 
         ()
       }
@@ -782,7 +785,7 @@ pub fn DbConnection::query(
 
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -793,7 +796,7 @@ pub fn DbConnection::query(
 
         mbt_ffi_store32(iter_base + 12, payload37.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -804,7 +807,7 @@ pub fn DbConnection::query(
 
         mbt_ffi_store32(iter_base + 12, payload39.length())
         mbt_ffi_store32(iter_base + 8, ptr40)
-        mbt_ffi_free(ptr40)
+        cleanup_list.push(ptr40)
 
         ()
       }
@@ -815,7 +818,7 @@ pub fn DbConnection::query(
 
         mbt_ffi_store32(iter_base + 12, payload41.length())
         mbt_ffi_store32(iter_base + 8, ptr42)
-        mbt_ffi_free(ptr42)
+        cleanup_list.push(ptr42)
 
         ()
       }
@@ -825,7 +828,7 @@ pub fn DbConnection::query(
         let ptr44 = mbt_ffi_str2ptr(payload43)
         mbt_ffi_store32(iter_base + 12, payload43.length())
         mbt_ffi_store32(iter_base + 8, ptr44)
-        mbt_ffi_free(ptr44)
+        cleanup_list.push(ptr44)
 
         ()
       }
@@ -835,7 +838,7 @@ pub fn DbConnection::query(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 12, payload45.length())
         mbt_ffi_store32(iter_base + 8, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -850,7 +853,7 @@ pub fn DbConnection::query(
         }
         mbt_ffi_store32(iter_base + 12, payload47.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -860,7 +863,7 @@ pub fn DbConnection::query(
         let ptr49 = mbt_ffi_str2ptr(payload48)
         mbt_ffi_store32(iter_base + 12, payload48.length())
         mbt_ffi_store32(iter_base + 8, ptr49)
-        mbt_ffi_free(ptr49)
+        cleanup_list.push(ptr49)
 
         ()
       }
@@ -1239,12 +1242,12 @@ pub fn DbConnection::query(
     }
     _ => panic()
   }
+  let ret = lifted84
   mbt_ffi_free(ptr)
   mbt_ffi_free(address51)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted84
+  return ret
 }
 
 ///|
@@ -1349,7 +1352,7 @@ pub fn DbConnection::query_stream(
         let ptr13 = mbt_ffi_str2ptr(payload12)
         mbt_ffi_store32(iter_base + 12, payload12.length())
         mbt_ffi_store32(iter_base + 8, ptr13)
-        mbt_ffi_free(ptr13)
+        cleanup_list.push(ptr13)
 
         ()
       }
@@ -1415,7 +1418,7 @@ pub fn DbConnection::query_stream(
         let ptr20 = mbt_ffi_str2ptr(payload19)
         mbt_ffi_store32(iter_base + 12, payload19.length())
         mbt_ffi_store32(iter_base + 8, ptr20)
-        mbt_ffi_free(ptr20)
+        cleanup_list.push(ptr20)
 
         ()
       }
@@ -1425,7 +1428,7 @@ pub fn DbConnection::query_stream(
         let ptr22 = mbt_ffi_str2ptr(payload21)
         mbt_ffi_store32(iter_base + 12, payload21.length())
         mbt_ffi_store32(iter_base + 8, ptr22)
-        mbt_ffi_free(ptr22)
+        cleanup_list.push(ptr22)
 
         ()
       }
@@ -1435,7 +1438,7 @@ pub fn DbConnection::query_stream(
         let ptr24 = mbt_ffi_str2ptr(payload23)
         mbt_ffi_store32(iter_base + 12, payload23.length())
         mbt_ffi_store32(iter_base + 8, ptr24)
-        mbt_ffi_free(ptr24)
+        cleanup_list.push(ptr24)
 
         ()
       }
@@ -1445,7 +1448,7 @@ pub fn DbConnection::query_stream(
         let ptr26 = mbt_ffi_str2ptr(payload25)
         mbt_ffi_store32(iter_base + 12, payload25.length())
         mbt_ffi_store32(iter_base + 8, ptr26)
-        mbt_ffi_free(ptr26)
+        cleanup_list.push(ptr26)
 
         ()
       }
@@ -1455,7 +1458,7 @@ pub fn DbConnection::query_stream(
         let ptr28 = mbt_ffi_str2ptr(payload27)
         mbt_ffi_store32(iter_base + 12, payload27.length())
         mbt_ffi_store32(iter_base + 8, ptr28)
-        mbt_ffi_free(ptr28)
+        cleanup_list.push(ptr28)
 
         ()
       }
@@ -1465,7 +1468,7 @@ pub fn DbConnection::query_stream(
         let ptr30 = mbt_ffi_str2ptr(payload29)
         mbt_ffi_store32(iter_base + 12, payload29.length())
         mbt_ffi_store32(iter_base + 8, ptr30)
-        mbt_ffi_free(ptr30)
+        cleanup_list.push(ptr30)
 
         ()
       }
@@ -1476,7 +1479,7 @@ pub fn DbConnection::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload31.length())
         mbt_ffi_store32(iter_base + 8, ptr32)
-        mbt_ffi_free(ptr32)
+        cleanup_list.push(ptr32)
 
         ()
       }
@@ -1487,7 +1490,7 @@ pub fn DbConnection::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload33.length())
         mbt_ffi_store32(iter_base + 8, ptr34)
-        mbt_ffi_free(ptr34)
+        cleanup_list.push(ptr34)
 
         ()
       }
@@ -1498,7 +1501,7 @@ pub fn DbConnection::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -1509,7 +1512,7 @@ pub fn DbConnection::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload37.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -1520,7 +1523,7 @@ pub fn DbConnection::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload39.length())
         mbt_ffi_store32(iter_base + 8, ptr40)
-        mbt_ffi_free(ptr40)
+        cleanup_list.push(ptr40)
 
         ()
       }
@@ -1531,7 +1534,7 @@ pub fn DbConnection::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload41.length())
         mbt_ffi_store32(iter_base + 8, ptr42)
-        mbt_ffi_free(ptr42)
+        cleanup_list.push(ptr42)
 
         ()
       }
@@ -1541,7 +1544,7 @@ pub fn DbConnection::query_stream(
         let ptr44 = mbt_ffi_str2ptr(payload43)
         mbt_ffi_store32(iter_base + 12, payload43.length())
         mbt_ffi_store32(iter_base + 8, ptr44)
-        mbt_ffi_free(ptr44)
+        cleanup_list.push(ptr44)
 
         ()
       }
@@ -1551,7 +1554,7 @@ pub fn DbConnection::query_stream(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 12, payload45.length())
         mbt_ffi_store32(iter_base + 8, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -1566,7 +1569,7 @@ pub fn DbConnection::query_stream(
         }
         mbt_ffi_store32(iter_base + 12, payload47.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -1576,7 +1579,7 @@ pub fn DbConnection::query_stream(
         let ptr49 = mbt_ffi_str2ptr(payload48)
         mbt_ffi_store32(iter_base + 12, payload48.length())
         mbt_ffi_store32(iter_base + 8, ptr49)
-        mbt_ffi_free(ptr49)
+        cleanup_list.push(ptr49)
 
         ()
       }
@@ -1651,12 +1654,12 @@ pub fn DbConnection::query_stream(
     }
     _ => panic()
   }
+  let ret = lifted57
   mbt_ffi_free(ptr)
   mbt_ffi_free(address51)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted57
+  return ret
 }
 
 ///|
@@ -1761,7 +1764,7 @@ pub fn DbConnection::execute(
         let ptr13 = mbt_ffi_str2ptr(payload12)
         mbt_ffi_store32(iter_base + 12, payload12.length())
         mbt_ffi_store32(iter_base + 8, ptr13)
-        mbt_ffi_free(ptr13)
+        cleanup_list.push(ptr13)
 
         ()
       }
@@ -1827,7 +1830,7 @@ pub fn DbConnection::execute(
         let ptr20 = mbt_ffi_str2ptr(payload19)
         mbt_ffi_store32(iter_base + 12, payload19.length())
         mbt_ffi_store32(iter_base + 8, ptr20)
-        mbt_ffi_free(ptr20)
+        cleanup_list.push(ptr20)
 
         ()
       }
@@ -1837,7 +1840,7 @@ pub fn DbConnection::execute(
         let ptr22 = mbt_ffi_str2ptr(payload21)
         mbt_ffi_store32(iter_base + 12, payload21.length())
         mbt_ffi_store32(iter_base + 8, ptr22)
-        mbt_ffi_free(ptr22)
+        cleanup_list.push(ptr22)
 
         ()
       }
@@ -1847,7 +1850,7 @@ pub fn DbConnection::execute(
         let ptr24 = mbt_ffi_str2ptr(payload23)
         mbt_ffi_store32(iter_base + 12, payload23.length())
         mbt_ffi_store32(iter_base + 8, ptr24)
-        mbt_ffi_free(ptr24)
+        cleanup_list.push(ptr24)
 
         ()
       }
@@ -1857,7 +1860,7 @@ pub fn DbConnection::execute(
         let ptr26 = mbt_ffi_str2ptr(payload25)
         mbt_ffi_store32(iter_base + 12, payload25.length())
         mbt_ffi_store32(iter_base + 8, ptr26)
-        mbt_ffi_free(ptr26)
+        cleanup_list.push(ptr26)
 
         ()
       }
@@ -1867,7 +1870,7 @@ pub fn DbConnection::execute(
         let ptr28 = mbt_ffi_str2ptr(payload27)
         mbt_ffi_store32(iter_base + 12, payload27.length())
         mbt_ffi_store32(iter_base + 8, ptr28)
-        mbt_ffi_free(ptr28)
+        cleanup_list.push(ptr28)
 
         ()
       }
@@ -1877,7 +1880,7 @@ pub fn DbConnection::execute(
         let ptr30 = mbt_ffi_str2ptr(payload29)
         mbt_ffi_store32(iter_base + 12, payload29.length())
         mbt_ffi_store32(iter_base + 8, ptr30)
-        mbt_ffi_free(ptr30)
+        cleanup_list.push(ptr30)
 
         ()
       }
@@ -1888,7 +1891,7 @@ pub fn DbConnection::execute(
 
         mbt_ffi_store32(iter_base + 12, payload31.length())
         mbt_ffi_store32(iter_base + 8, ptr32)
-        mbt_ffi_free(ptr32)
+        cleanup_list.push(ptr32)
 
         ()
       }
@@ -1899,7 +1902,7 @@ pub fn DbConnection::execute(
 
         mbt_ffi_store32(iter_base + 12, payload33.length())
         mbt_ffi_store32(iter_base + 8, ptr34)
-        mbt_ffi_free(ptr34)
+        cleanup_list.push(ptr34)
 
         ()
       }
@@ -1910,7 +1913,7 @@ pub fn DbConnection::execute(
 
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -1921,7 +1924,7 @@ pub fn DbConnection::execute(
 
         mbt_ffi_store32(iter_base + 12, payload37.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -1932,7 +1935,7 @@ pub fn DbConnection::execute(
 
         mbt_ffi_store32(iter_base + 12, payload39.length())
         mbt_ffi_store32(iter_base + 8, ptr40)
-        mbt_ffi_free(ptr40)
+        cleanup_list.push(ptr40)
 
         ()
       }
@@ -1943,7 +1946,7 @@ pub fn DbConnection::execute(
 
         mbt_ffi_store32(iter_base + 12, payload41.length())
         mbt_ffi_store32(iter_base + 8, ptr42)
-        mbt_ffi_free(ptr42)
+        cleanup_list.push(ptr42)
 
         ()
       }
@@ -1953,7 +1956,7 @@ pub fn DbConnection::execute(
         let ptr44 = mbt_ffi_str2ptr(payload43)
         mbt_ffi_store32(iter_base + 12, payload43.length())
         mbt_ffi_store32(iter_base + 8, ptr44)
-        mbt_ffi_free(ptr44)
+        cleanup_list.push(ptr44)
 
         ()
       }
@@ -1963,7 +1966,7 @@ pub fn DbConnection::execute(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 12, payload45.length())
         mbt_ffi_store32(iter_base + 8, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -1978,7 +1981,7 @@ pub fn DbConnection::execute(
         }
         mbt_ffi_store32(iter_base + 12, payload47.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -1988,7 +1991,7 @@ pub fn DbConnection::execute(
         let ptr49 = mbt_ffi_str2ptr(payload48)
         mbt_ffi_store32(iter_base + 12, payload48.length())
         mbt_ffi_store32(iter_base + 8, ptr49)
-        mbt_ffi_free(ptr49)
+        cleanup_list.push(ptr49)
 
         ()
       }
@@ -2060,12 +2063,12 @@ pub fn DbConnection::execute(
     }
     _ => panic()
   }
+  let ret = lifted57
   mbt_ffi_free(ptr)
   mbt_ffi_free(address51)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted57
+  return ret
 }
 
 ///|
@@ -2128,8 +2131,9 @@ pub fn DbConnection::begin_transaction(
     }
     _ => panic()
   }
+  let ret = lifted4
   mbt_ffi_free(return_area)
-  return lifted4
+  return ret
 }
 
 ///|
@@ -2234,7 +2238,7 @@ pub fn DbTransaction::query(
         let ptr13 = mbt_ffi_str2ptr(payload12)
         mbt_ffi_store32(iter_base + 12, payload12.length())
         mbt_ffi_store32(iter_base + 8, ptr13)
-        mbt_ffi_free(ptr13)
+        cleanup_list.push(ptr13)
 
         ()
       }
@@ -2300,7 +2304,7 @@ pub fn DbTransaction::query(
         let ptr20 = mbt_ffi_str2ptr(payload19)
         mbt_ffi_store32(iter_base + 12, payload19.length())
         mbt_ffi_store32(iter_base + 8, ptr20)
-        mbt_ffi_free(ptr20)
+        cleanup_list.push(ptr20)
 
         ()
       }
@@ -2310,7 +2314,7 @@ pub fn DbTransaction::query(
         let ptr22 = mbt_ffi_str2ptr(payload21)
         mbt_ffi_store32(iter_base + 12, payload21.length())
         mbt_ffi_store32(iter_base + 8, ptr22)
-        mbt_ffi_free(ptr22)
+        cleanup_list.push(ptr22)
 
         ()
       }
@@ -2320,7 +2324,7 @@ pub fn DbTransaction::query(
         let ptr24 = mbt_ffi_str2ptr(payload23)
         mbt_ffi_store32(iter_base + 12, payload23.length())
         mbt_ffi_store32(iter_base + 8, ptr24)
-        mbt_ffi_free(ptr24)
+        cleanup_list.push(ptr24)
 
         ()
       }
@@ -2330,7 +2334,7 @@ pub fn DbTransaction::query(
         let ptr26 = mbt_ffi_str2ptr(payload25)
         mbt_ffi_store32(iter_base + 12, payload25.length())
         mbt_ffi_store32(iter_base + 8, ptr26)
-        mbt_ffi_free(ptr26)
+        cleanup_list.push(ptr26)
 
         ()
       }
@@ -2340,7 +2344,7 @@ pub fn DbTransaction::query(
         let ptr28 = mbt_ffi_str2ptr(payload27)
         mbt_ffi_store32(iter_base + 12, payload27.length())
         mbt_ffi_store32(iter_base + 8, ptr28)
-        mbt_ffi_free(ptr28)
+        cleanup_list.push(ptr28)
 
         ()
       }
@@ -2350,7 +2354,7 @@ pub fn DbTransaction::query(
         let ptr30 = mbt_ffi_str2ptr(payload29)
         mbt_ffi_store32(iter_base + 12, payload29.length())
         mbt_ffi_store32(iter_base + 8, ptr30)
-        mbt_ffi_free(ptr30)
+        cleanup_list.push(ptr30)
 
         ()
       }
@@ -2361,7 +2365,7 @@ pub fn DbTransaction::query(
 
         mbt_ffi_store32(iter_base + 12, payload31.length())
         mbt_ffi_store32(iter_base + 8, ptr32)
-        mbt_ffi_free(ptr32)
+        cleanup_list.push(ptr32)
 
         ()
       }
@@ -2372,7 +2376,7 @@ pub fn DbTransaction::query(
 
         mbt_ffi_store32(iter_base + 12, payload33.length())
         mbt_ffi_store32(iter_base + 8, ptr34)
-        mbt_ffi_free(ptr34)
+        cleanup_list.push(ptr34)
 
         ()
       }
@@ -2383,7 +2387,7 @@ pub fn DbTransaction::query(
 
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -2394,7 +2398,7 @@ pub fn DbTransaction::query(
 
         mbt_ffi_store32(iter_base + 12, payload37.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -2405,7 +2409,7 @@ pub fn DbTransaction::query(
 
         mbt_ffi_store32(iter_base + 12, payload39.length())
         mbt_ffi_store32(iter_base + 8, ptr40)
-        mbt_ffi_free(ptr40)
+        cleanup_list.push(ptr40)
 
         ()
       }
@@ -2416,7 +2420,7 @@ pub fn DbTransaction::query(
 
         mbt_ffi_store32(iter_base + 12, payload41.length())
         mbt_ffi_store32(iter_base + 8, ptr42)
-        mbt_ffi_free(ptr42)
+        cleanup_list.push(ptr42)
 
         ()
       }
@@ -2426,7 +2430,7 @@ pub fn DbTransaction::query(
         let ptr44 = mbt_ffi_str2ptr(payload43)
         mbt_ffi_store32(iter_base + 12, payload43.length())
         mbt_ffi_store32(iter_base + 8, ptr44)
-        mbt_ffi_free(ptr44)
+        cleanup_list.push(ptr44)
 
         ()
       }
@@ -2436,7 +2440,7 @@ pub fn DbTransaction::query(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 12, payload45.length())
         mbt_ffi_store32(iter_base + 8, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -2451,7 +2455,7 @@ pub fn DbTransaction::query(
         }
         mbt_ffi_store32(iter_base + 12, payload47.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -2461,7 +2465,7 @@ pub fn DbTransaction::query(
         let ptr49 = mbt_ffi_str2ptr(payload48)
         mbt_ffi_store32(iter_base + 12, payload48.length())
         mbt_ffi_store32(iter_base + 8, ptr49)
-        mbt_ffi_free(ptr49)
+        cleanup_list.push(ptr49)
 
         ()
       }
@@ -2840,12 +2844,12 @@ pub fn DbTransaction::query(
     }
     _ => panic()
   }
+  let ret = lifted84
   mbt_ffi_free(ptr)
   mbt_ffi_free(address51)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted84
+  return ret
 }
 
 ///|
@@ -2950,7 +2954,7 @@ pub fn DbTransaction::query_stream(
         let ptr13 = mbt_ffi_str2ptr(payload12)
         mbt_ffi_store32(iter_base + 12, payload12.length())
         mbt_ffi_store32(iter_base + 8, ptr13)
-        mbt_ffi_free(ptr13)
+        cleanup_list.push(ptr13)
 
         ()
       }
@@ -3016,7 +3020,7 @@ pub fn DbTransaction::query_stream(
         let ptr20 = mbt_ffi_str2ptr(payload19)
         mbt_ffi_store32(iter_base + 12, payload19.length())
         mbt_ffi_store32(iter_base + 8, ptr20)
-        mbt_ffi_free(ptr20)
+        cleanup_list.push(ptr20)
 
         ()
       }
@@ -3026,7 +3030,7 @@ pub fn DbTransaction::query_stream(
         let ptr22 = mbt_ffi_str2ptr(payload21)
         mbt_ffi_store32(iter_base + 12, payload21.length())
         mbt_ffi_store32(iter_base + 8, ptr22)
-        mbt_ffi_free(ptr22)
+        cleanup_list.push(ptr22)
 
         ()
       }
@@ -3036,7 +3040,7 @@ pub fn DbTransaction::query_stream(
         let ptr24 = mbt_ffi_str2ptr(payload23)
         mbt_ffi_store32(iter_base + 12, payload23.length())
         mbt_ffi_store32(iter_base + 8, ptr24)
-        mbt_ffi_free(ptr24)
+        cleanup_list.push(ptr24)
 
         ()
       }
@@ -3046,7 +3050,7 @@ pub fn DbTransaction::query_stream(
         let ptr26 = mbt_ffi_str2ptr(payload25)
         mbt_ffi_store32(iter_base + 12, payload25.length())
         mbt_ffi_store32(iter_base + 8, ptr26)
-        mbt_ffi_free(ptr26)
+        cleanup_list.push(ptr26)
 
         ()
       }
@@ -3056,7 +3060,7 @@ pub fn DbTransaction::query_stream(
         let ptr28 = mbt_ffi_str2ptr(payload27)
         mbt_ffi_store32(iter_base + 12, payload27.length())
         mbt_ffi_store32(iter_base + 8, ptr28)
-        mbt_ffi_free(ptr28)
+        cleanup_list.push(ptr28)
 
         ()
       }
@@ -3066,7 +3070,7 @@ pub fn DbTransaction::query_stream(
         let ptr30 = mbt_ffi_str2ptr(payload29)
         mbt_ffi_store32(iter_base + 12, payload29.length())
         mbt_ffi_store32(iter_base + 8, ptr30)
-        mbt_ffi_free(ptr30)
+        cleanup_list.push(ptr30)
 
         ()
       }
@@ -3077,7 +3081,7 @@ pub fn DbTransaction::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload31.length())
         mbt_ffi_store32(iter_base + 8, ptr32)
-        mbt_ffi_free(ptr32)
+        cleanup_list.push(ptr32)
 
         ()
       }
@@ -3088,7 +3092,7 @@ pub fn DbTransaction::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload33.length())
         mbt_ffi_store32(iter_base + 8, ptr34)
-        mbt_ffi_free(ptr34)
+        cleanup_list.push(ptr34)
 
         ()
       }
@@ -3099,7 +3103,7 @@ pub fn DbTransaction::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -3110,7 +3114,7 @@ pub fn DbTransaction::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload37.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -3121,7 +3125,7 @@ pub fn DbTransaction::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload39.length())
         mbt_ffi_store32(iter_base + 8, ptr40)
-        mbt_ffi_free(ptr40)
+        cleanup_list.push(ptr40)
 
         ()
       }
@@ -3132,7 +3136,7 @@ pub fn DbTransaction::query_stream(
 
         mbt_ffi_store32(iter_base + 12, payload41.length())
         mbt_ffi_store32(iter_base + 8, ptr42)
-        mbt_ffi_free(ptr42)
+        cleanup_list.push(ptr42)
 
         ()
       }
@@ -3142,7 +3146,7 @@ pub fn DbTransaction::query_stream(
         let ptr44 = mbt_ffi_str2ptr(payload43)
         mbt_ffi_store32(iter_base + 12, payload43.length())
         mbt_ffi_store32(iter_base + 8, ptr44)
-        mbt_ffi_free(ptr44)
+        cleanup_list.push(ptr44)
 
         ()
       }
@@ -3152,7 +3156,7 @@ pub fn DbTransaction::query_stream(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 12, payload45.length())
         mbt_ffi_store32(iter_base + 8, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -3167,7 +3171,7 @@ pub fn DbTransaction::query_stream(
         }
         mbt_ffi_store32(iter_base + 12, payload47.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -3177,7 +3181,7 @@ pub fn DbTransaction::query_stream(
         let ptr49 = mbt_ffi_str2ptr(payload48)
         mbt_ffi_store32(iter_base + 12, payload48.length())
         mbt_ffi_store32(iter_base + 8, ptr49)
-        mbt_ffi_free(ptr49)
+        cleanup_list.push(ptr49)
 
         ()
       }
@@ -3252,12 +3256,12 @@ pub fn DbTransaction::query_stream(
     }
     _ => panic()
   }
+  let ret = lifted57
   mbt_ffi_free(ptr)
   mbt_ffi_free(address51)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted57
+  return ret
 }
 
 ///|
@@ -3362,7 +3366,7 @@ pub fn DbTransaction::execute(
         let ptr13 = mbt_ffi_str2ptr(payload12)
         mbt_ffi_store32(iter_base + 12, payload12.length())
         mbt_ffi_store32(iter_base + 8, ptr13)
-        mbt_ffi_free(ptr13)
+        cleanup_list.push(ptr13)
 
         ()
       }
@@ -3428,7 +3432,7 @@ pub fn DbTransaction::execute(
         let ptr20 = mbt_ffi_str2ptr(payload19)
         mbt_ffi_store32(iter_base + 12, payload19.length())
         mbt_ffi_store32(iter_base + 8, ptr20)
-        mbt_ffi_free(ptr20)
+        cleanup_list.push(ptr20)
 
         ()
       }
@@ -3438,7 +3442,7 @@ pub fn DbTransaction::execute(
         let ptr22 = mbt_ffi_str2ptr(payload21)
         mbt_ffi_store32(iter_base + 12, payload21.length())
         mbt_ffi_store32(iter_base + 8, ptr22)
-        mbt_ffi_free(ptr22)
+        cleanup_list.push(ptr22)
 
         ()
       }
@@ -3448,7 +3452,7 @@ pub fn DbTransaction::execute(
         let ptr24 = mbt_ffi_str2ptr(payload23)
         mbt_ffi_store32(iter_base + 12, payload23.length())
         mbt_ffi_store32(iter_base + 8, ptr24)
-        mbt_ffi_free(ptr24)
+        cleanup_list.push(ptr24)
 
         ()
       }
@@ -3458,7 +3462,7 @@ pub fn DbTransaction::execute(
         let ptr26 = mbt_ffi_str2ptr(payload25)
         mbt_ffi_store32(iter_base + 12, payload25.length())
         mbt_ffi_store32(iter_base + 8, ptr26)
-        mbt_ffi_free(ptr26)
+        cleanup_list.push(ptr26)
 
         ()
       }
@@ -3468,7 +3472,7 @@ pub fn DbTransaction::execute(
         let ptr28 = mbt_ffi_str2ptr(payload27)
         mbt_ffi_store32(iter_base + 12, payload27.length())
         mbt_ffi_store32(iter_base + 8, ptr28)
-        mbt_ffi_free(ptr28)
+        cleanup_list.push(ptr28)
 
         ()
       }
@@ -3478,7 +3482,7 @@ pub fn DbTransaction::execute(
         let ptr30 = mbt_ffi_str2ptr(payload29)
         mbt_ffi_store32(iter_base + 12, payload29.length())
         mbt_ffi_store32(iter_base + 8, ptr30)
-        mbt_ffi_free(ptr30)
+        cleanup_list.push(ptr30)
 
         ()
       }
@@ -3489,7 +3493,7 @@ pub fn DbTransaction::execute(
 
         mbt_ffi_store32(iter_base + 12, payload31.length())
         mbt_ffi_store32(iter_base + 8, ptr32)
-        mbt_ffi_free(ptr32)
+        cleanup_list.push(ptr32)
 
         ()
       }
@@ -3500,7 +3504,7 @@ pub fn DbTransaction::execute(
 
         mbt_ffi_store32(iter_base + 12, payload33.length())
         mbt_ffi_store32(iter_base + 8, ptr34)
-        mbt_ffi_free(ptr34)
+        cleanup_list.push(ptr34)
 
         ()
       }
@@ -3511,7 +3515,7 @@ pub fn DbTransaction::execute(
 
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -3522,7 +3526,7 @@ pub fn DbTransaction::execute(
 
         mbt_ffi_store32(iter_base + 12, payload37.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -3533,7 +3537,7 @@ pub fn DbTransaction::execute(
 
         mbt_ffi_store32(iter_base + 12, payload39.length())
         mbt_ffi_store32(iter_base + 8, ptr40)
-        mbt_ffi_free(ptr40)
+        cleanup_list.push(ptr40)
 
         ()
       }
@@ -3544,7 +3548,7 @@ pub fn DbTransaction::execute(
 
         mbt_ffi_store32(iter_base + 12, payload41.length())
         mbt_ffi_store32(iter_base + 8, ptr42)
-        mbt_ffi_free(ptr42)
+        cleanup_list.push(ptr42)
 
         ()
       }
@@ -3554,7 +3558,7 @@ pub fn DbTransaction::execute(
         let ptr44 = mbt_ffi_str2ptr(payload43)
         mbt_ffi_store32(iter_base + 12, payload43.length())
         mbt_ffi_store32(iter_base + 8, ptr44)
-        mbt_ffi_free(ptr44)
+        cleanup_list.push(ptr44)
 
         ()
       }
@@ -3564,7 +3568,7 @@ pub fn DbTransaction::execute(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 12, payload45.length())
         mbt_ffi_store32(iter_base + 8, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -3579,7 +3583,7 @@ pub fn DbTransaction::execute(
         }
         mbt_ffi_store32(iter_base + 12, payload47.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -3589,7 +3593,7 @@ pub fn DbTransaction::execute(
         let ptr49 = mbt_ffi_str2ptr(payload48)
         mbt_ffi_store32(iter_base + 12, payload48.length())
         mbt_ffi_store32(iter_base + 8, ptr49)
-        mbt_ffi_free(ptr49)
+        cleanup_list.push(ptr49)
 
         ()
       }
@@ -3661,12 +3665,12 @@ pub fn DbTransaction::execute(
     }
     _ => panic()
   }
+  let ret = lifted57
   mbt_ffi_free(ptr)
   mbt_ffi_free(address51)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted57
+  return ret
 }
 
 ///|
@@ -3726,8 +3730,9 @@ pub fn DbTransaction::commit(self : DbTransaction) -> Result[Unit, Error_] {
     }
     _ => panic()
   }
+  let ret = lifted4
   mbt_ffi_free(return_area)
-  return lifted4
+  return ret
 }
 
 ///|
@@ -3787,6 +3792,7 @@ pub fn DbTransaction::rollback(self : DbTransaction) -> Result[Unit, Error_] {
     }
     _ => panic()
   }
+  let ret = lifted4
   mbt_ffi_free(return_area)
-  return lifted4
+  return ret
 }

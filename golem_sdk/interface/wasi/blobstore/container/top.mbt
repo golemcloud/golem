@@ -48,8 +48,9 @@ pub fn Container::name(self : Container) -> Result[String, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -83,8 +84,9 @@ pub fn Container::info(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -126,9 +128,10 @@ pub fn Container::get_data(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -164,9 +167,10 @@ pub fn Container::write_data(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -193,8 +197,9 @@ pub fn Container::list_objects(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -222,9 +227,10 @@ pub fn Container::delete_object(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -245,7 +251,7 @@ pub fn Container::delete_objects(
     let ptr = mbt_ffi_str2ptr(iter_elem)
     mbt_ffi_store32(iter_base + 4, iter_elem.length())
     mbt_ffi_store32(iter_base + 0, ptr)
-    mbt_ffi_free(ptr)
+    cleanup_list.push(ptr)
   }
   let return_area = mbt_ffi_malloc(12)
   wasmImportMethodContainerDeleteObjects(
@@ -267,11 +273,11 @@ pub fn Container::delete_objects(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(address)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted
+  return ret
 }
 
 ///|
@@ -298,9 +304,10 @@ pub fn Container::has_object(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -344,9 +351,10 @@ pub fn Container::object_info(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -368,8 +376,9 @@ pub fn Container::clear(self : Container) -> Result[Unit, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -415,8 +424,9 @@ pub fn StreamObjectNames::read_stream_object_names(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -453,6 +463,7 @@ pub fn StreamObjectNames::skip_stream_object_names(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }

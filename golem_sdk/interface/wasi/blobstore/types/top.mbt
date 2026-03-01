@@ -59,7 +59,8 @@ pub fn IncomingValue::drop(self : IncomingValue) -> Unit {
 ///|
 pub fn OutgoingValue::new_outgoing_value() -> OutgoingValue {
   let result : Int = wasmImportStaticOutgoingValueNewOutgoingValue()
-  return OutgoingValue::OutgoingValue(result)
+  let ret = OutgoingValue::OutgoingValue(result)
+  return ret
 }
 
 ///|
@@ -78,8 +79,9 @@ pub fn OutgoingValue::outgoing_value_write_body(
     1 => Result::Err(())
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -109,8 +111,9 @@ pub fn IncomingValue::incoming_value_consume_sync(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -136,13 +139,15 @@ pub fn IncomingValue::incoming_value_consume_async(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
 pub fn IncomingValue::size(self : IncomingValue) -> UInt64 {
   let IncomingValue(handle) = self
   let result : Int64 = wasmImportMethodIncomingValueSize(handle)
-  return result.reinterpret_as_uint64()
+  let ret = result.reinterpret_as_uint64()
+  return ret
 }

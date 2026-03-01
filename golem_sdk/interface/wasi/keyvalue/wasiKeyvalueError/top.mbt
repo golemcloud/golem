@@ -37,6 +37,7 @@ pub fn Error_::trace(self : Error_) -> String {
     mbt_ffi_load32(return_area + 0),
     mbt_ffi_load32(return_area + 4),
   )
+  let ret = result
   mbt_ffi_free(return_area)
-  return result
+  return ret
 }

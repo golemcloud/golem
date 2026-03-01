@@ -39,9 +39,13 @@ pub fn generate_client_code(
     impls.push(build_client_struct(client_name))
     impls.push(build_client_get(agent, client_name))
     impls.push(build_client_new_phantom(agent, client_name))
+    impls.push(build_client_get_phantom(agent, client_name))
     impls.push(build_client_get_agent_id(client_name))
     impls.push(build_client_phantom_id(client_name))
     impls.push(build_client_drop(client_name))
+    impls.push(build_client_scoped(agent, client_name))
+    impls.push(build_client_scoped_new_phantom(agent, client_name))
+    impls.push(build_client_scoped_get_phantom(agent, client_name))
     for meth in agent.methods {
       // Skip methods with RPC-incompatible params/return types
       if method_has_rpc_incompatible_types(meth) {
@@ -115,8 +119,39 @@ fn build_client_get(agent : AgentInfo, client_name : String) -> @syntax.Impl {
 }
 
 ///|
-/// Generates the `new_phantom` constructor that creates a phantom client with a given UUID.
+/// Generates the `new_phantom` constructor that creates a phantom client with an auto-generated UUID.
 fn build_client_new_phantom(
+  agent : AgentInfo,
+  client_name : String,
+) -> @syntax.Impl {
+  let params : Array[@syntax.Parameter] = agent.constructor_params.map(fn(p) {
+    make_typed_param(p.0, param_type_to_ast_type(p.1))
+  })
+  let body = make_let(
+    "constructor_data",
+    build_constructor_data_expr(agent),
+    make_let(
+      "client",
+      make_apply(
+        make_qualified_method_ref("rpc", "AgentClient", "new_phantom"),
+        [make_string_expr(agent.name), make_ident_expr("constructor_data")],
+      ),
+      make_record([make_field("client", make_ident_expr("client"))]),
+    ),
+  )
+  make_top_func(
+    Some(client_name),
+    "new_phantom",
+    params,
+    Some(make_type(client_name)),
+    true,
+    body,
+  )
+}
+
+///|
+/// Generates the `get_phantom` constructor that creates a phantom client with a caller-supplied UUID.
+fn build_client_get_phantom(
   agent : AgentInfo,
   client_name : String,
 ) -> @syntax.Impl {
@@ -135,7 +170,7 @@ fn build_client_new_phantom(
     make_let(
       "client",
       make_apply(
-        make_qualified_method_ref("rpc", "AgentClient", "new_phantom"),
+        make_qualified_method_ref("rpc", "AgentClient", "get_phantom"),
         [
           make_string_expr(agent.name),
           make_ident_expr("constructor_data"),
@@ -147,7 +182,7 @@ fn build_client_new_phantom(
   )
   make_top_func(
     Some(client_name),
-    "new_phantom",
+    "get_phantom",
     params,
     Some(make_type(client_name)),
     true,
@@ -209,6 +244,127 @@ fn build_client_drop(client_name : String) -> @syntax.Impl {
     [make_self_param(client_name)],
     Some(make_type("Unit")),
     false,
+    body,
+  )
+}
+
+///|
+/// Builds a function type: (ClientType) -> T raise @common.AgentError
+fn make_callback_type(client_name : String) -> @syntax.Type {
+  @syntax.Type::Arrow(
+    args=to_list([make_type(client_name)]),
+    res=make_type("T"),
+    err=@syntax.ErrorType::ErrorType(
+      ty=make_qualified_parameterized_type("common", "AgentError", []),
+    ),
+    is_async=None,
+    loc=dummy_loc,
+  )
+}
+
+///|
+/// Generates the `scoped` convenience method that acquires a client via `get`,
+/// defers `drop`, and calls a callback.
+fn build_client_scoped(agent : AgentInfo, client_name : String) -> @syntax.Impl {
+  let params : Array[@syntax.Parameter] = agent.constructor_params.map(fn(p) {
+    make_typed_param(p.0, param_type_to_ast_type(p.1))
+  })
+  params.push(make_typed_param("f", make_callback_type(client_name)))
+  // Build body: let client = ClientName::get(args...); defer client.drop(); f(client)
+  let get_args : Array[@syntax.Expr] = agent.constructor_params.map(fn(p) {
+    make_ident_expr(p.0)
+  })
+  let body = make_let(
+    "client",
+    make_apply(make_method_ref(client_name, "get"), get_args),
+    make_defer(
+      make_dot_apply(make_ident_expr("client"), "drop", []),
+      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
+    ),
+  )
+  make_top_func_generic(
+    Some(client_name),
+    "scoped",
+    ["T"],
+    params,
+    Some(make_type("T")),
+    true,
+    body,
+  )
+}
+
+///|
+/// Generates the `scoped_new_phantom` convenience method that acquires a client via
+/// `new_phantom` (auto-generated UUID), defers `drop`, and calls a callback.
+fn build_client_scoped_new_phantom(
+  agent : AgentInfo,
+  client_name : String,
+) -> @syntax.Impl {
+  let params : Array[@syntax.Parameter] = agent.constructor_params.map(fn(p) {
+    make_typed_param(p.0, param_type_to_ast_type(p.1))
+  })
+  params.push(make_typed_param("f", make_callback_type(client_name)))
+  let new_phantom_args : Array[@syntax.Expr] = agent.constructor_params.map(
+    fn(p) { make_ident_expr(p.0) },
+  )
+  let body = make_let(
+    "client",
+    make_apply(make_method_ref(client_name, "new_phantom"), new_phantom_args),
+    make_defer(
+      make_dot_apply(make_ident_expr("client"), "drop", []),
+      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
+    ),
+  )
+  make_top_func_generic(
+    Some(client_name),
+    "scoped_new_phantom",
+    ["T"],
+    params,
+    Some(make_type("T")),
+    true,
+    body,
+  )
+}
+
+///|
+/// Generates the `scoped_get_phantom` convenience method that acquires a client via
+/// `get_phantom` (caller-supplied UUID), defers `drop`, and calls a callback.
+fn build_client_scoped_get_phantom(
+  agent : AgentInfo,
+  client_name : String,
+) -> @syntax.Impl {
+  let params : Array[@syntax.Parameter] = agent.constructor_params.map(fn(p) {
+    make_typed_param(p.0, param_type_to_ast_type(p.1))
+  })
+  params.push(
+    make_typed_param(
+      "phantom_id",
+      make_qualified_parameterized_type("rpcTypes", "Uuid", []),
+    ),
+  )
+  params.push(make_typed_param("f", make_callback_type(client_name)))
+  let get_phantom_args : Array[@syntax.Expr] = agent.constructor_params.map(
+    fn(p) { make_ident_expr(p.0) },
+  )
+  get_phantom_args.push(make_ident_expr("phantom_id"))
+  let body = make_let(
+    "client",
+    make_apply(
+      make_method_ref(client_name, "get_phantom"),
+      get_phantom_args,
+    ),
+    make_defer(
+      make_dot_apply(make_ident_expr("client"), "drop", []),
+      make_apply(make_ident_expr("f"), [make_ident_expr("client")]),
+    ),
+  )
+  make_top_func_generic(
+    Some(client_name),
+    "scoped_get_phantom",
+    ["T"],
+    params,
+    Some(make_type("T")),
+    true,
     body,
   )
 }

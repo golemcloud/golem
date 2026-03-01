@@ -7,7 +7,8 @@
 /// produce a sequence of non-decreasing values.
 pub fn now() -> UInt64 {
   let result : Int64 = wasmImportNow()
-  return result.reinterpret_as_uint64()
+  let ret = result.reinterpret_as_uint64()
+  return ret
 }
 
 ///|
@@ -15,7 +16,8 @@ pub fn now() -> UInt64 {
 /// corresponding to a clock tick.
 pub fn resolution() -> UInt64 {
   let result : Int64 = wasmImportResolution()
-  return result.reinterpret_as_uint64()
+  let ret = result.reinterpret_as_uint64()
+  return ret
 }
 
 ///|
@@ -23,7 +25,8 @@ pub fn resolution() -> UInt64 {
 /// has occurred.
 pub fn subscribe_instant(when : UInt64) -> @poll.Pollable {
   let result : Int = wasmImportSubscribeInstant(when.reinterpret_as_int64())
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }
 
 ///|
@@ -31,5 +34,6 @@ pub fn subscribe_instant(when : UInt64) -> @poll.Pollable {
 /// elapsed from the time this function is invoked.
 pub fn subscribe_duration(when : UInt64) -> @poll.Pollable {
   let result : Int = wasmImportSubscribeDuration(when.reinterpret_as_int64())
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }

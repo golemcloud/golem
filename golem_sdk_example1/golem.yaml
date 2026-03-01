@@ -18,7 +18,7 @@ componentTemplates:
         build:
           - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/counter # TODO: directory name from template
             dir: ../golem_sdk_tools
-          - command: moon run cmd -- agents ../golem_sdk ../golem_sdk_example1/counter # TODO: directory name from template
+          - command: moon run cmd -- agents ../golem_sdk_example1/counter # TODO: directory name from template
             dir: ../golem_sdk_tools
           - command: moon build --target wasm --release # Debug mode: NEW_MOON=0 moon build --target wasm works, but golem CLI infinite-recurses on debug WASM during generateAgentWrapper
           - command: wasm-tools component embed ../golem_sdk/wit _build/wasm/release/build/counter/counter.wasm --encoding utf16 --output _build/wasm/debug/counter.embed.wasm #: TODO: template vars
@@ -36,7 +36,7 @@ componentTemplates:
         build:
           - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/counter # TODO: directory name from template
             dir: ../golem_sdk_tools
-          - command: moon run cmd -- agents ../golem_sdk ../golem_sdk_example1/counter # TODO: directory name from template
+          - command: moon run cmd -- agents ../golem_sdk_example1/counter # TODO: directory name from template
             dir: ../golem_sdk_tools
           - command: moon build --target wasm --release
           - command: wasm-tools component embed ../golem_sdk/wit _build/wasm/release/build/counter/counter.wasm --encoding utf16 --output _build/wasm/release/counter.embed.wasm #: TODO: template vars

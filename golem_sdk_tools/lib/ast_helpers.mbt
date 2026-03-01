@@ -461,6 +461,14 @@ fn make_lambda(
   )
 }
 
+// --- Expressions: Defer ---
+
+///|
+/// Creates a `defer cleanup; body` expression.
+fn make_defer(cleanup : @syntax.Expr, body : @syntax.Expr) -> @syntax.Expr {
+  @syntax.Expr::Defer(expr=cleanup, body~, loc=dummy_loc)
+}
+
 // --- Expressions: Sequences ---
 
 ///|
@@ -589,6 +597,63 @@ fn make_top_func(
     decl_params: Some(to_list(params)),
     params_loc: dummy_loc,
     quantifiers: to_list([]),
+    return_type,
+    error_type: if raises {
+      @syntax.ErrorType::ErrorType(
+        ty=make_qualified_parameterized_type("common", "AgentError", []),
+      )
+    } else {
+      @syntax.ErrorType::NoErrorType
+    },
+    vis: @syntax.Visibility::Pub(attr=None, loc=dummy_loc),
+    attrs: to_list([]),
+    doc: @syntax.DocString::empty(),
+  }
+  @syntax.Impl::TopFuncDef(
+    fun_decl~,
+    decl_body=@syntax.DeclBody::DeclBody(local_types=to_list([]), expr=body),
+    loc=dummy_loc,
+  )
+}
+
+///|
+/// Creates a top-level function with generic type parameters (quantifiers).
+fn make_top_func_generic(
+  type_name : String?,
+  fn_name : String,
+  quantifiers : Array[String],
+  params : Array[@syntax.Parameter],
+  return_type : @syntax.Type?,
+  raises : Bool,
+  body : @syntax.Expr,
+) -> @syntax.Impl {
+  let type_var_binders = quantifiers.map(fn(name) {
+    @syntax.TypeVarBinder::{
+      name,
+      name_loc: dummy_loc,
+      constraints: to_list([]),
+    }
+  })
+  let fun_decl : @syntax.FunDecl = {
+    type_name: match type_name {
+      Some(tn) =>
+        Some(@syntax.TypeName::{
+          name: @syntax.LongIdent::Ident(name=tn),
+          is_object: false,
+          loc: dummy_loc,
+        })
+      None => None
+    },
+    name: make_binder(fn_name),
+    has_error: if raises {
+      Some(dummy_loc)
+    } else {
+      None
+    },
+    is_async: None,
+    decl_params: Some(to_list(params)),
+    params_loc: dummy_loc,
+    quantifiers: to_list(type_var_binders),
     return_type,
     error_type: if raises {
       @syntax.ErrorType::ErrorType(

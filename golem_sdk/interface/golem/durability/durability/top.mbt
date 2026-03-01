@@ -100,7 +100,8 @@ pub fn begin_durable_function(
   let result : Int64 = wasmImportBeginDurableFunction(
     lowered12, lowered13, lowered14,
   )
-  return result.reinterpret_as_uint64()
+  let ret = result.reinterpret_as_uint64()
+  return ret
 }
 
 ///|
@@ -164,11 +165,12 @@ pub fn current_durable_execution_state() -> DurableExecutionState {
     2 => @host.PersistenceLevel::Smart
     _ => panic()
   }
-  mbt_ffi_free(return_area)
-  return DurableExecutionState::{
+  let ret = DurableExecutionState::{
     is_live: mbt_ffi_load8_u(return_area + 0) != 0,
     persistence_level: lifted,
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -203,7 +205,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload.length())
         mbt_ffi_store32(iter_base + 8, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
 
         ()
       }
@@ -244,7 +246,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload4.length())
         mbt_ffi_store32(iter_base + 8, address5)
-        mbt_ffi_free(address5)
+        cleanup_list.push(address5)
 
         ()
       }
@@ -259,7 +261,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload7.length())
         mbt_ffi_store32(iter_base + 8, address8)
-        mbt_ffi_free(address8)
+        cleanup_list.push(address8)
 
         ()
       }
@@ -274,7 +276,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload10.length())
         mbt_ffi_store32(iter_base + 8, address11)
-        mbt_ffi_free(address11)
+        cleanup_list.push(address11)
 
         ()
       }
@@ -421,7 +423,7 @@ pub fn persist_durable_function_invocation(
         let ptr36 = mbt_ffi_str2ptr(payload35)
         mbt_ffi_store32(iter_base + 12, payload35.length())
         mbt_ffi_store32(iter_base + 8, ptr36)
-        mbt_ffi_free(ptr36)
+        cleanup_list.push(ptr36)
 
         ()
       }
@@ -432,7 +434,7 @@ pub fn persist_durable_function_invocation(
         mbt_ffi_store32(iter_base + 12, payload37.0.value.length())
         mbt_ffi_store32(iter_base + 8, ptr38)
         mbt_ffi_store64(iter_base + 16, payload37.1.reinterpret_as_int64())
-        mbt_ffi_free(ptr38)
+        cleanup_list.push(ptr38)
 
         ()
       }
@@ -456,7 +458,7 @@ pub fn persist_durable_function_invocation(
         let ptr43 = mbt_ffi_str2ptr(payload42)
         mbt_ffi_store32(iter_base + 8, payload42.length())
         mbt_ffi_store32(iter_base + 4, ptr43)
-        mbt_ffi_free(ptr43)
+        cleanup_list.push(ptr43)
 
         ()
       }
@@ -474,7 +476,7 @@ pub fn persist_durable_function_invocation(
         let ptr46 = mbt_ffi_str2ptr(payload45)
         mbt_ffi_store32(iter_base + 20, payload45.length())
         mbt_ffi_store32(iter_base + 16, ptr46)
-        mbt_ffi_free(ptr46)
+        cleanup_list.push(ptr46)
 
         ()
       }
@@ -493,11 +495,11 @@ pub fn persist_durable_function_invocation(
           mbt_ffi_store32(iter_base + 4, iter_elem.0.length())
           mbt_ffi_store32(iter_base + 0, ptr48)
           mbt_ffi_store32(iter_base + 8, iter_elem.1)
-          mbt_ffi_free(ptr48)
+          cleanup_list.push(ptr48)
         }
         mbt_ffi_store32(iter_base + 36, payload47.length())
         mbt_ffi_store32(iter_base + 32, address49)
-        mbt_ffi_free(address49)
+        cleanup_list.push(address49)
 
         ()
       }
@@ -526,11 +528,11 @@ pub fn persist_durable_function_invocation(
               ()
             }
           }
-          mbt_ffi_free(ptr52)
+          cleanup_list.push(ptr52)
         }
         mbt_ffi_store32(iter_base + 36, payload51.length())
         mbt_ffi_store32(iter_base + 32, address55)
-        mbt_ffi_free(address55)
+        cleanup_list.push(address55)
 
         ()
       }
@@ -545,11 +547,11 @@ pub fn persist_durable_function_invocation(
           let ptr58 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
           mbt_ffi_store32(iter_base + 0, ptr58)
-          mbt_ffi_free(ptr58)
+          cleanup_list.push(ptr58)
         }
         mbt_ffi_store32(iter_base + 36, payload57.length())
         mbt_ffi_store32(iter_base + 32, address59)
-        mbt_ffi_free(address59)
+        cleanup_list.push(address59)
 
         ()
       }
@@ -564,11 +566,11 @@ pub fn persist_durable_function_invocation(
           let ptr62 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
           mbt_ffi_store32(iter_base + 0, ptr62)
-          mbt_ffi_free(ptr62)
+          cleanup_list.push(ptr62)
         }
         mbt_ffi_store32(iter_base + 36, payload61.length())
         mbt_ffi_store32(iter_base + 32, address63)
-        mbt_ffi_free(address63)
+        cleanup_list.push(address63)
 
         ()
       }
@@ -583,7 +585,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 36, payload65.length())
         mbt_ffi_store32(iter_base + 32, address66)
-        mbt_ffi_free(address66)
+        cleanup_list.push(address66)
 
         ()
       }
@@ -726,7 +728,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload91.length())
         mbt_ffi_store32(iter_base + 8, address92)
-        mbt_ffi_free(address92)
+        cleanup_list.push(address92)
 
         ()
       }
@@ -767,7 +769,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload98.length())
         mbt_ffi_store32(iter_base + 8, address99)
-        mbt_ffi_free(address99)
+        cleanup_list.push(address99)
 
         ()
       }
@@ -784,7 +786,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload101.length())
         mbt_ffi_store32(iter_base + 8, address102)
-        mbt_ffi_free(address102)
+        cleanup_list.push(address102)
 
         ()
       }
@@ -801,7 +803,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 12, payload104.length())
         mbt_ffi_store32(iter_base + 8, address105)
-        mbt_ffi_free(address105)
+        cleanup_list.push(address105)
 
         ()
       }
@@ -948,7 +950,7 @@ pub fn persist_durable_function_invocation(
         let ptr130 = mbt_ffi_str2ptr(payload129)
         mbt_ffi_store32(iter_base + 12, payload129.length())
         mbt_ffi_store32(iter_base + 8, ptr130)
-        mbt_ffi_free(ptr130)
+        cleanup_list.push(ptr130)
 
         ()
       }
@@ -959,7 +961,7 @@ pub fn persist_durable_function_invocation(
         mbt_ffi_store32(iter_base + 12, payload131.0.value.length())
         mbt_ffi_store32(iter_base + 8, ptr132)
         mbt_ffi_store64(iter_base + 16, payload131.1.reinterpret_as_int64())
-        mbt_ffi_free(ptr132)
+        cleanup_list.push(ptr132)
 
         ()
       }
@@ -985,7 +987,7 @@ pub fn persist_durable_function_invocation(
         let ptr137 = mbt_ffi_str2ptr(payload136)
         mbt_ffi_store32(iter_base + 8, payload136.length())
         mbt_ffi_store32(iter_base + 4, ptr137)
-        mbt_ffi_free(ptr137)
+        cleanup_list.push(ptr137)
 
         ()
       }
@@ -1003,7 +1005,7 @@ pub fn persist_durable_function_invocation(
         let ptr140 = mbt_ffi_str2ptr(payload139)
         mbt_ffi_store32(iter_base + 20, payload139.length())
         mbt_ffi_store32(iter_base + 16, ptr140)
-        mbt_ffi_free(ptr140)
+        cleanup_list.push(ptr140)
 
         ()
       }
@@ -1024,11 +1026,11 @@ pub fn persist_durable_function_invocation(
           mbt_ffi_store32(iter_base + 4, iter_elem.0.length())
           mbt_ffi_store32(iter_base + 0, ptr142)
           mbt_ffi_store32(iter_base + 8, iter_elem.1)
-          mbt_ffi_free(ptr142)
+          cleanup_list.push(ptr142)
         }
         mbt_ffi_store32(iter_base + 36, payload141.length())
         mbt_ffi_store32(iter_base + 32, address143)
-        mbt_ffi_free(address143)
+        cleanup_list.push(address143)
 
         ()
       }
@@ -1059,11 +1061,11 @@ pub fn persist_durable_function_invocation(
               ()
             }
           }
-          mbt_ffi_free(ptr146)
+          cleanup_list.push(ptr146)
         }
         mbt_ffi_store32(iter_base + 36, payload145.length())
         mbt_ffi_store32(iter_base + 32, address149)
-        mbt_ffi_free(address149)
+        cleanup_list.push(address149)
 
         ()
       }
@@ -1080,11 +1082,11 @@ pub fn persist_durable_function_invocation(
           let ptr152 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
           mbt_ffi_store32(iter_base + 0, ptr152)
-          mbt_ffi_free(ptr152)
+          cleanup_list.push(ptr152)
         }
         mbt_ffi_store32(iter_base + 36, payload151.length())
         mbt_ffi_store32(iter_base + 32, address153)
-        mbt_ffi_free(address153)
+        cleanup_list.push(address153)
 
         ()
       }
@@ -1101,11 +1103,11 @@ pub fn persist_durable_function_invocation(
           let ptr156 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
           mbt_ffi_store32(iter_base + 0, ptr156)
-          mbt_ffi_free(ptr156)
+          cleanup_list.push(ptr156)
         }
         mbt_ffi_store32(iter_base + 36, payload155.length())
         mbt_ffi_store32(iter_base + 32, address157)
-        mbt_ffi_free(address157)
+        cleanup_list.push(address157)
 
         ()
       }
@@ -1122,7 +1124,7 @@ pub fn persist_durable_function_invocation(
         }
         mbt_ffi_store32(iter_base + 36, payload159.length())
         mbt_ffi_store32(iter_base + 32, address160)
-        mbt_ffi_free(address160)
+        cleanup_list.push(address160)
 
         ()
       }
@@ -1288,7 +1290,6 @@ pub fn persist_durable_function_invocation(
   mbt_ffi_free(address89)
   mbt_ffi_free(address133)
   mbt_ffi_free(address183)
-
   cleanup_list.each(mbt_ffi_free)
 }
 
@@ -1660,8 +1661,7 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
     }
     _ => panic()
   }
-  mbt_ffi_free(return_area)
-  return PersistedDurableFunctionInvocation::{
+  let ret = PersistedDurableFunctionInvocation::{
     timestamp: @wallClock.Datetime::{
       seconds: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
       nanoseconds: mbt_ffi_load32(return_area + 8).reinterpret_as_uint(),
@@ -1674,6 +1674,8 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
     function_type: lifted41,
     entry_version: OplogEntryVersion::from(mbt_ffi_load8_u(return_area + 64)),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -1681,7 +1683,8 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
 /// using `set-lazy-initialized-pollable`.
 pub fn LazyInitializedPollable::lazy_initialized_pollable() -> LazyInitializedPollable {
   let result : Int = wasmImportConstructorLazyInitializedPollable()
-  return LazyInitializedPollable::LazyInitializedPollable(result)
+  let ret = LazyInitializedPollable::LazyInitializedPollable(result)
+  return ret
 }
 
 ///|
@@ -1702,5 +1705,6 @@ pub fn LazyInitializedPollable::subscribe(
 ) -> @poll.Pollable {
   let LazyInitializedPollable(handle) = self
   let result : Int = wasmImportMethodLazyInitializedPollableSubscribe(handle)
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }

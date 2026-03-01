@@ -327,7 +327,7 @@ pub fn GetAgents::get_agents(
               let ptr = mbt_ffi_str2ptr(payload1.value)
               mbt_ffi_store32(iter_base + 16, payload1.value.length())
               mbt_ffi_store32(iter_base + 12, ptr)
-              mbt_ffi_free(ptr)
+              cleanup_list.push(ptr)
 
               ()
             }
@@ -369,8 +369,8 @@ pub fn GetAgents::get_agents(
               let ptr7 = mbt_ffi_str2ptr(payload5.value)
               mbt_ffi_store32(iter_base + 24, payload5.value.length())
               mbt_ffi_store32(iter_base + 20, ptr7)
-              mbt_ffi_free(ptr6)
-              mbt_ffi_free(ptr7)
+              cleanup_list.push(ptr6)
+              cleanup_list.push(ptr7)
 
               ()
             }
@@ -385,8 +385,8 @@ pub fn GetAgents::get_agents(
               let ptr10 = mbt_ffi_str2ptr(payload8.value)
               mbt_ffi_store32(iter_base + 24, payload8.value.length())
               mbt_ffi_store32(iter_base + 20, ptr10)
-              mbt_ffi_free(ptr9)
-              mbt_ffi_free(ptr10)
+              cleanup_list.push(ptr9)
+              cleanup_list.push(ptr10)
 
               ()
             }
@@ -394,9 +394,9 @@ pub fn GetAgents::get_agents(
         }
         mbt_ffi_store32(iter_base + 4, iter_elem.filters.length())
         mbt_ffi_store32(iter_base + 0, address)
-        mbt_ffi_free(address)
+        cleanup_list.push(address)
       }
-      mbt_ffi_free(address11)
+      cleanup_list.push(address11)
 
       (1, address11, payload0.filters.length())
     }
@@ -413,9 +413,9 @@ pub fn GetAgents::get_agents(
       0
     },
   )
-
+  let ret = GetAgents::GetAgents(result)
   cleanup_list.each(mbt_ffi_free)
-  return GetAgents::GetAgents(result)
+  return ret
 }
 
 ///|
@@ -516,8 +516,9 @@ pub fn GetAgents::get_next(self : GetAgents) -> Array[AgentMetadata]? {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -525,7 +526,8 @@ pub fn GetAgents::get_next(self : GetAgents) -> Array[AgentMetadata]? {
 pub fn GetPromiseResult::subscribe(self : GetPromiseResult) -> @poll.Pollable {
   let GetPromiseResult(handle) = self
   let result : Int = wasmImportMethodGetPromiseResultSubscribe(handle)
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }
 
 ///|
@@ -547,8 +549,9 @@ pub fn GetPromiseResult::get(self : GetPromiseResult) -> FixedArray[Byte]? {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -561,8 +564,7 @@ pub fn create_promise() -> PromiseId {
     mbt_ffi_load32(return_area + 16),
     mbt_ffi_load32(return_area + 20),
   )
-  mbt_ffi_free(return_area)
-  return PromiseId::{
+  let ret = PromiseId::{
     agent_id: @types.AgentId::{
       component_id: @types.ComponentId::{
         uuid: @types.Uuid::{
@@ -574,6 +576,8 @@ pub fn create_promise() -> PromiseId {
     },
     oplog_idx: mbt_ffi_load64(return_area + 24).reinterpret_as_uint64(),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -587,8 +591,9 @@ pub fn get_promise(promise_id : PromiseId) -> GetPromiseResult {
     promise_id.agent_id.agent_id.length(),
     promise_id.oplog_idx.reinterpret_as_int64(),
   )
+  let ret = GetPromiseResult::GetPromiseResult(result)
   mbt_ffi_free(ptr)
-  return GetPromiseResult::GetPromiseResult(result)
+  return ret
 }
 
 ///|
@@ -611,16 +616,18 @@ pub fn complete_promise(
     ptr0,
     data.length(),
   )
+  let ret = result != 0
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
-  return result != 0
+  return ret
 }
 
 ///|
 /// Returns the current position in the persistent op log
 pub fn get_oplog_index() -> UInt64 {
   let result : Int64 = wasmImportGetOplogIndex()
-  return result.reinterpret_as_uint64()
+  let ret = result.reinterpret_as_uint64()
+  return ret
 }
 
 ///|
@@ -644,7 +651,8 @@ pub fn oplog_commit(replicas : Byte) -> Unit {
 /// The end of the region is when `mark-end-operation` is called with the returned oplog-index.
 pub fn mark_begin_operation() -> UInt64 {
   let result : Int64 = wasmImportMarkBeginOperation()
-  return result.reinterpret_as_uint64()
+  let ret = result.reinterpret_as_uint64()
+  return ret
 }
 
 ///|
@@ -665,14 +673,15 @@ pub fn get_retry_policy() -> RetryPolicy {
     1 => Option::Some(mbt_ffi_loadf64(return_area + 40))
     _ => panic()
   }
-  mbt_ffi_free(return_area)
-  return RetryPolicy::{
+  let ret = RetryPolicy::{
     max_attempts: mbt_ffi_load32(return_area + 0).reinterpret_as_uint(),
     min_delay: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
     max_delay: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
     multiplier: mbt_ffi_loadf64(return_area + 24),
     max_jitter_factor: lifted,
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -704,7 +713,8 @@ pub fn get_oplog_persistence_level() -> PersistenceLevel {
     2 => PersistenceLevel::Smart
     _ => panic()
   }
-  return lifted
+  let ret = lifted
+  return ret
 }
 
 ///|
@@ -725,7 +735,8 @@ pub fn set_oplog_persistence_level(
 /// Gets the current idempotence mode. See `set-idempotence-mode` for details.
 pub fn get_idempotence_mode() -> Bool {
   let result : Int = wasmImportGetIdempotenceMode()
-  return result != 0
+  let ret = result != 0
+  return ret
 }
 
 ///|
@@ -744,11 +755,12 @@ pub fn set_idempotence_mode(idempotent : Bool) -> Unit {
 pub fn generate_idempotency_key() -> @types.Uuid {
   let return_area = mbt_ffi_malloc(16)
   wasmImportGenerateIdempotencyKey(return_area)
-  mbt_ffi_free(return_area)
-  return @types.Uuid::{
+  let ret = @types.Uuid::{
     high_bits: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
     low_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -830,8 +842,7 @@ pub fn get_self_metadata() -> AgentMetadata {
     array7.push((result5, result6))
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 40))
-  mbt_ffi_free(return_area)
-  return AgentMetadata::{
+  let ret = AgentMetadata::{
     agent_id: @types.AgentId::{
       component_id: @types.ComponentId::{
         uuid: @types.Uuid::{
@@ -848,6 +859,8 @@ pub fn get_self_metadata() -> AgentMetadata {
     component_revision: mbt_ffi_load64(return_area + 56).reinterpret_as_uint64(),
     retry_count: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -944,9 +957,10 @@ pub fn get_agent_metadata(agent_id : @types.AgentId) -> AgentMetadata? {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -1025,9 +1039,10 @@ pub fn resolve_component_id(
       })
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -1069,10 +1084,11 @@ pub fn resolve_agent_id(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -1114,10 +1130,11 @@ pub fn resolve_agent_id_strict(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -1146,6 +1163,7 @@ pub fn fork() -> ForkResult {
       })
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }

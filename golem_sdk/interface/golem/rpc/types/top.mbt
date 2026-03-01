@@ -197,9 +197,10 @@ pub fn parse_uuid(uuid : String) -> Result[Uuid, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -216,8 +217,9 @@ pub fn uuid_to_string(uuid : Uuid) -> String {
     mbt_ffi_load32(return_area + 0),
     mbt_ffi_load32(return_area + 4),
   )
+  let ret = result
   mbt_ffi_free(return_area)
-  return result
+  return ret
 }
 
 ///|
@@ -230,8 +232,9 @@ pub fn WasmRpc::wasm_rpc(agent_id : AgentId) -> WasmRpc {
     ptr,
     agent_id.agent_id.length(),
   )
+  let ret = WasmRpc::WasmRpc(result)
   mbt_ffi_free(ptr)
-  return WasmRpc::WasmRpc(result)
+  return ret
 }
 
 ///|
@@ -269,7 +272,7 @@ pub fn WasmRpc::invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload.length())
           mbt_ffi_store32(iter_base + 8, address)
-          mbt_ffi_free(address)
+          cleanup_list.push(address)
 
           ()
         }
@@ -310,7 +313,7 @@ pub fn WasmRpc::invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload4.length())
           mbt_ffi_store32(iter_base + 8, address5)
-          mbt_ffi_free(address5)
+          cleanup_list.push(address5)
 
           ()
         }
@@ -325,7 +328,7 @@ pub fn WasmRpc::invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload7.length())
           mbt_ffi_store32(iter_base + 8, address8)
-          mbt_ffi_free(address8)
+          cleanup_list.push(address8)
 
           ()
         }
@@ -340,7 +343,7 @@ pub fn WasmRpc::invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload10.length())
           mbt_ffi_store32(iter_base + 8, address11)
-          mbt_ffi_free(address11)
+          cleanup_list.push(address11)
 
           ()
         }
@@ -487,7 +490,7 @@ pub fn WasmRpc::invoke_and_await(
           let ptr36 = mbt_ffi_str2ptr(payload35)
           mbt_ffi_store32(iter_base + 12, payload35.length())
           mbt_ffi_store32(iter_base + 8, ptr36)
-          mbt_ffi_free(ptr36)
+          cleanup_list.push(ptr36)
 
           ()
         }
@@ -498,7 +501,7 @@ pub fn WasmRpc::invoke_and_await(
           mbt_ffi_store32(iter_base + 12, payload37.0.value.length())
           mbt_ffi_store32(iter_base + 8, ptr38)
           mbt_ffi_store64(iter_base + 16, payload37.1.reinterpret_as_int64())
-          mbt_ffi_free(ptr38)
+          cleanup_list.push(ptr38)
 
           ()
         }
@@ -506,7 +509,7 @@ pub fn WasmRpc::invoke_and_await(
     }
     mbt_ffi_store32(iter_base + 4, iter_elem.nodes.length())
     mbt_ffi_store32(iter_base + 0, address39)
-    mbt_ffi_free(address39)
+    cleanup_list.push(address39)
   }
   let return_area = mbt_ffi_malloc(16)
   wasmImportMethodWasmRpcInvokeAndAwait(
@@ -723,12 +726,12 @@ pub fn WasmRpc::invoke_and_await(
     }
     _ => panic()
   }
+  let ret = lifted63
   mbt_ffi_free(ptr)
   mbt_ffi_free(address41)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted63
+  return ret
 }
 
 ///|
@@ -766,7 +769,7 @@ pub fn WasmRpc::invoke(
           }
           mbt_ffi_store32(iter_base + 12, payload.length())
           mbt_ffi_store32(iter_base + 8, address)
-          mbt_ffi_free(address)
+          cleanup_list.push(address)
 
           ()
         }
@@ -807,7 +810,7 @@ pub fn WasmRpc::invoke(
           }
           mbt_ffi_store32(iter_base + 12, payload4.length())
           mbt_ffi_store32(iter_base + 8, address5)
-          mbt_ffi_free(address5)
+          cleanup_list.push(address5)
 
           ()
         }
@@ -822,7 +825,7 @@ pub fn WasmRpc::invoke(
           }
           mbt_ffi_store32(iter_base + 12, payload7.length())
           mbt_ffi_store32(iter_base + 8, address8)
-          mbt_ffi_free(address8)
+          cleanup_list.push(address8)
 
           ()
         }
@@ -837,7 +840,7 @@ pub fn WasmRpc::invoke(
           }
           mbt_ffi_store32(iter_base + 12, payload10.length())
           mbt_ffi_store32(iter_base + 8, address11)
-          mbt_ffi_free(address11)
+          cleanup_list.push(address11)
 
           ()
         }
@@ -984,7 +987,7 @@ pub fn WasmRpc::invoke(
           let ptr36 = mbt_ffi_str2ptr(payload35)
           mbt_ffi_store32(iter_base + 12, payload35.length())
           mbt_ffi_store32(iter_base + 8, ptr36)
-          mbt_ffi_free(ptr36)
+          cleanup_list.push(ptr36)
 
           ()
         }
@@ -995,7 +998,7 @@ pub fn WasmRpc::invoke(
           mbt_ffi_store32(iter_base + 12, payload37.0.value.length())
           mbt_ffi_store32(iter_base + 8, ptr38)
           mbt_ffi_store64(iter_base + 16, payload37.1.reinterpret_as_int64())
-          mbt_ffi_free(ptr38)
+          cleanup_list.push(ptr38)
 
           ()
         }
@@ -1003,7 +1006,7 @@ pub fn WasmRpc::invoke(
     }
     mbt_ffi_store32(iter_base + 4, iter_elem.nodes.length())
     mbt_ffi_store32(iter_base + 0, address39)
-    mbt_ffi_free(address39)
+    cleanup_list.push(address39)
   }
   let return_area = mbt_ffi_malloc(16)
   wasmImportMethodWasmRpcInvoke(
@@ -1058,12 +1061,12 @@ pub fn WasmRpc::invoke(
     }
     _ => panic()
   }
+  let ret = lifted46
   mbt_ffi_free(ptr)
   mbt_ffi_free(address41)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted46
+  return ret
 }
 
 ///|
@@ -1104,7 +1107,7 @@ pub fn WasmRpc::async_invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload.length())
           mbt_ffi_store32(iter_base + 8, address)
-          mbt_ffi_free(address)
+          cleanup_list.push(address)
 
           ()
         }
@@ -1145,7 +1148,7 @@ pub fn WasmRpc::async_invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload4.length())
           mbt_ffi_store32(iter_base + 8, address5)
-          mbt_ffi_free(address5)
+          cleanup_list.push(address5)
 
           ()
         }
@@ -1160,7 +1163,7 @@ pub fn WasmRpc::async_invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload7.length())
           mbt_ffi_store32(iter_base + 8, address8)
-          mbt_ffi_free(address8)
+          cleanup_list.push(address8)
 
           ()
         }
@@ -1175,7 +1178,7 @@ pub fn WasmRpc::async_invoke_and_await(
           }
           mbt_ffi_store32(iter_base + 12, payload10.length())
           mbt_ffi_store32(iter_base + 8, address11)
-          mbt_ffi_free(address11)
+          cleanup_list.push(address11)
 
           ()
         }
@@ -1322,7 +1325,7 @@ pub fn WasmRpc::async_invoke_and_await(
           let ptr36 = mbt_ffi_str2ptr(payload35)
           mbt_ffi_store32(iter_base + 12, payload35.length())
           mbt_ffi_store32(iter_base + 8, ptr36)
-          mbt_ffi_free(ptr36)
+          cleanup_list.push(ptr36)
 
           ()
         }
@@ -1333,7 +1336,7 @@ pub fn WasmRpc::async_invoke_and_await(
           mbt_ffi_store32(iter_base + 12, payload37.0.value.length())
           mbt_ffi_store32(iter_base + 8, ptr38)
           mbt_ffi_store64(iter_base + 16, payload37.1.reinterpret_as_int64())
-          mbt_ffi_free(ptr38)
+          cleanup_list.push(ptr38)
 
           ()
         }
@@ -1341,7 +1344,7 @@ pub fn WasmRpc::async_invoke_and_await(
     }
     mbt_ffi_store32(iter_base + 4, iter_elem.nodes.length())
     mbt_ffi_store32(iter_base + 0, address39)
-    mbt_ffi_free(address39)
+    cleanup_list.push(address39)
   }
   let result : Int = wasmImportMethodWasmRpcAsyncInvokeAndAwait(
     handle,
@@ -1350,11 +1353,11 @@ pub fn WasmRpc::async_invoke_and_await(
     address41,
     function_params.length(),
   )
+  let ret = FutureInvokeResult::FutureInvokeResult(result)
   mbt_ffi_free(ptr)
   mbt_ffi_free(address41)
-
   cleanup_list.each(mbt_ffi_free)
-  return FutureInvokeResult::FutureInvokeResult(result)
+  return ret
 }
 
 ///|
@@ -1393,7 +1396,7 @@ pub fn WasmRpc::schedule_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload.length())
           mbt_ffi_store32(iter_base + 8, address)
-          mbt_ffi_free(address)
+          cleanup_list.push(address)
 
           ()
         }
@@ -1434,7 +1437,7 @@ pub fn WasmRpc::schedule_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload4.length())
           mbt_ffi_store32(iter_base + 8, address5)
-          mbt_ffi_free(address5)
+          cleanup_list.push(address5)
 
           ()
         }
@@ -1449,7 +1452,7 @@ pub fn WasmRpc::schedule_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload7.length())
           mbt_ffi_store32(iter_base + 8, address8)
-          mbt_ffi_free(address8)
+          cleanup_list.push(address8)
 
           ()
         }
@@ -1464,7 +1467,7 @@ pub fn WasmRpc::schedule_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload10.length())
           mbt_ffi_store32(iter_base + 8, address11)
-          mbt_ffi_free(address11)
+          cleanup_list.push(address11)
 
           ()
         }
@@ -1611,7 +1614,7 @@ pub fn WasmRpc::schedule_invocation(
           let ptr36 = mbt_ffi_str2ptr(payload35)
           mbt_ffi_store32(iter_base + 12, payload35.length())
           mbt_ffi_store32(iter_base + 8, ptr36)
-          mbt_ffi_free(ptr36)
+          cleanup_list.push(ptr36)
 
           ()
         }
@@ -1622,7 +1625,7 @@ pub fn WasmRpc::schedule_invocation(
           mbt_ffi_store32(iter_base + 12, payload37.0.value.length())
           mbt_ffi_store32(iter_base + 8, ptr38)
           mbt_ffi_store64(iter_base + 16, payload37.1.reinterpret_as_int64())
-          mbt_ffi_free(ptr38)
+          cleanup_list.push(ptr38)
 
           ()
         }
@@ -1630,7 +1633,7 @@ pub fn WasmRpc::schedule_invocation(
     }
     mbt_ffi_store32(iter_base + 4, iter_elem.nodes.length())
     mbt_ffi_store32(iter_base + 0, address39)
-    mbt_ffi_free(address39)
+    cleanup_list.push(address39)
   }
   wasmImportMethodWasmRpcScheduleInvocation(
     handle,
@@ -1643,7 +1646,6 @@ pub fn WasmRpc::schedule_invocation(
   )
   mbt_ffi_free(ptr)
   mbt_ffi_free(address41)
-
   cleanup_list.each(mbt_ffi_free)
 }
 
@@ -1683,7 +1685,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload.length())
           mbt_ffi_store32(iter_base + 8, address)
-          mbt_ffi_free(address)
+          cleanup_list.push(address)
 
           ()
         }
@@ -1724,7 +1726,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload4.length())
           mbt_ffi_store32(iter_base + 8, address5)
-          mbt_ffi_free(address5)
+          cleanup_list.push(address5)
 
           ()
         }
@@ -1739,7 +1741,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload7.length())
           mbt_ffi_store32(iter_base + 8, address8)
-          mbt_ffi_free(address8)
+          cleanup_list.push(address8)
 
           ()
         }
@@ -1754,7 +1756,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
           }
           mbt_ffi_store32(iter_base + 12, payload10.length())
           mbt_ffi_store32(iter_base + 8, address11)
-          mbt_ffi_free(address11)
+          cleanup_list.push(address11)
 
           ()
         }
@@ -1901,7 +1903,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
           let ptr36 = mbt_ffi_str2ptr(payload35)
           mbt_ffi_store32(iter_base + 12, payload35.length())
           mbt_ffi_store32(iter_base + 8, ptr36)
-          mbt_ffi_free(ptr36)
+          cleanup_list.push(ptr36)
 
           ()
         }
@@ -1912,7 +1914,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
           mbt_ffi_store32(iter_base + 12, payload37.0.value.length())
           mbt_ffi_store32(iter_base + 8, ptr38)
           mbt_ffi_store64(iter_base + 16, payload37.1.reinterpret_as_int64())
-          mbt_ffi_free(ptr38)
+          cleanup_list.push(ptr38)
 
           ()
         }
@@ -1920,7 +1922,7 @@ pub fn WasmRpc::schedule_cancelable_invocation(
     }
     mbt_ffi_store32(iter_base + 4, iter_elem.nodes.length())
     mbt_ffi_store32(iter_base + 0, address39)
-    mbt_ffi_free(address39)
+    cleanup_list.push(address39)
   }
   let result : Int = wasmImportMethodWasmRpcScheduleCancelableInvocation(
     handle,
@@ -1931,11 +1933,11 @@ pub fn WasmRpc::schedule_cancelable_invocation(
     address41,
     function_params.length(),
   )
+  let ret = CancellationToken::CancellationToken(result)
   mbt_ffi_free(ptr)
   mbt_ffi_free(address41)
-
   cleanup_list.each(mbt_ffi_free)
-  return CancellationToken::CancellationToken(result)
+  return ret
 }
 
 ///|
@@ -1945,7 +1947,8 @@ pub fn FutureInvokeResult::subscribe(
 ) -> @poll.Pollable {
   let FutureInvokeResult(handle) = self
   let result : Int = wasmImportMethodFutureInvokeResultSubscribe(handle)
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }
 
 ///|
@@ -2173,8 +2176,9 @@ pub fn FutureInvokeResult::get(
     }
     _ => panic()
   }
+  let ret = lifted20
   mbt_ffi_free(return_area)
-  return lifted20
+  return ret
 }
 
 ///|

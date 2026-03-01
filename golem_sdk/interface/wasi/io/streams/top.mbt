@@ -109,8 +109,9 @@ pub fn InputStream::read(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -151,8 +152,9 @@ pub fn InputStream::blocking_read(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -188,8 +190,9 @@ pub fn InputStream::skip(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -223,8 +226,9 @@ pub fn InputStream::blocking_skip(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -237,7 +241,8 @@ pub fn InputStream::blocking_skip(
 pub fn InputStream::subscribe(self : InputStream) -> @poll.Pollable {
   let InputStream(handle) = self
   let result : Int = wasmImportMethodInputStreamSubscribe(handle)
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }
 
 ///|
@@ -273,8 +278,9 @@ pub fn OutputStream::check_write(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -318,9 +324,10 @@ pub fn OutputStream::write(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -380,9 +387,10 @@ pub fn OutputStream::blocking_write_and_flush(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -417,8 +425,9 @@ pub fn OutputStream::flush(self : OutputStream) -> Result[Unit, StreamError] {
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -447,8 +456,9 @@ pub fn OutputStream::blocking_flush(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -465,7 +475,8 @@ pub fn OutputStream::blocking_flush(
 pub fn OutputStream::subscribe(self : OutputStream) -> @poll.Pollable {
   let OutputStream(handle) = self
   let result : Int = wasmImportMethodOutputStreamSubscribe(handle)
-  return @poll.Pollable::Pollable(result)
+  let ret = @poll.Pollable::Pollable(result)
+  return ret
 }
 
 ///|
@@ -503,8 +514,9 @@ pub fn OutputStream::write_zeroes(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -560,8 +572,9 @@ pub fn OutputStream::blocking_write_zeroes_and_flush(
     }
     _ => panic()
   }
+  let ret = lifted0
   mbt_ffi_free(return_area)
-  return lifted0
+  return ret
 }
 
 ///|
@@ -610,8 +623,9 @@ pub fn OutputStream::splice(
     }
     _ => panic()
   }
+  let ret = lifted1
   mbt_ffi_free(return_area)
-  return lifted1
+  return ret
 }
 
 ///|
@@ -652,6 +666,7 @@ pub fn OutputStream::blocking_splice(
     }
     _ => panic()
   }
+  let ret = lifted1
   mbt_ffi_free(return_area)
-  return lifted1
+  return ret
 }

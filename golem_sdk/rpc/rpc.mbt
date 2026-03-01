@@ -30,6 +30,19 @@ pub fn AgentClient::get(
 pub fn AgentClient::new_phantom(
   agent_type_name : String,
   constructor_data_value : @common.DataValue,
+) -> AgentClient raise @common.AgentError {
+  let phantom_id = @apiHost.generate_idempotency_key()
+  AgentClient::get_phantom(
+    agent_type_name,
+    constructor_data_value,
+    phantom_id,
+  )
+}
+
+///|
+pub fn AgentClient::get_phantom(
+  agent_type_name : String,
+  constructor_data_value : @common.DataValue,
   phantom_id : @types.Uuid,
 ) -> AgentClient raise @common.AgentError {
   let registered = @agentHost.get_agent_type(agent_type_name)

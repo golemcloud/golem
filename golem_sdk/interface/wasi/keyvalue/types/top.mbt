@@ -81,15 +81,17 @@ pub fn Bucket::open_bucket(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
 pub fn OutgoingValue::new_outgoing_value() -> OutgoingValue {
   let result : Int = wasmImportStaticOutgoingValueNewOutgoingValue()
-  return OutgoingValue::OutgoingValue(result)
+  let ret = OutgoingValue::OutgoingValue(result)
+  return ret
 }
 
 ///|
@@ -113,8 +115,9 @@ pub fn OutgoingValue::outgoing_value_write_body_async(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -144,9 +147,10 @@ pub fn OutgoingValue::outgoing_value_write_body_sync(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -174,8 +178,9 @@ pub fn IncomingValue::incoming_value_consume_sync(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -199,8 +204,9 @@ pub fn IncomingValue::incoming_value_consume_async(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -221,6 +227,7 @@ pub fn IncomingValue::incoming_value_size(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }

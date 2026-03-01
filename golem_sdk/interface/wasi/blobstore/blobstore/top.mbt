@@ -22,9 +22,10 @@ pub fn create_container(name : String) -> Result[@container.Container, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -49,9 +50,10 @@ pub fn get_container(name : String) -> Result[@container.Container, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -73,9 +75,10 @@ pub fn delete_container(name : String) -> Result[Unit, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -97,9 +100,10 @@ pub fn container_exists(name : String) -> Result[Bool, String] {
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -142,12 +146,13 @@ pub fn copy_object(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
   mbt_ffi_free(ptr1)
   mbt_ffi_free(ptr2)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -190,10 +195,11 @@ pub fn move_object(
     }
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
   mbt_ffi_free(ptr1)
   mbt_ffi_free(ptr2)
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }

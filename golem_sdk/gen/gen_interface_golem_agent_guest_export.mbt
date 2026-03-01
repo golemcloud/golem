@@ -1151,7 +1151,8 @@ pub fn wasmExportInitialize(
       ()
     }
   }
-  return return_area
+  let ret = return_area
+  return ret
 }
 
 ///|
@@ -3245,7 +3246,8 @@ pub fn wasmExportInvoke(
       ()
     }
   }
-  return return_area
+  let ret = return_area
+  return ret
 }
 
 ///|
@@ -8136,7 +8138,8 @@ pub fn wasmExportGetDefinition() -> Int {
   mbt_ffi_store32(return_area + 72, result.dependencies.length())
   mbt_ffi_store32(return_area + 68, address834)
   mbt_ffi_store8(return_area + 76, result.mode.ordinal())
-  return return_area
+  let ret = return_area
+  return ret
 }
 
 ///|
@@ -15157,7 +15160,8 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
       ()
     }
   }
-  return return_area
+  let ret = return_area
+  return ret
 }
 
 ///|

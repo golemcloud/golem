@@ -3616,8 +3616,9 @@ pub fn get_all_agent_types() -> Array[RegisteredAgentType] {
     })
   }
   mbt_ffi_free(mbt_ffi_load32(return_area + 0))
+  let ret = array463
   mbt_ffi_free(return_area)
-  return array463
+  return ret
 }
 
 ///|
@@ -7260,9 +7261,10 @@ pub fn get_agent_type(agent_type_name : String) -> RegisteredAgentType? {
     }
     _ => panic()
   }
+  let ret = lifted463
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted463
+  return ret
 }
 
 ///|
@@ -7307,7 +7309,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload1.length())
                   mbt_ffi_store32(iter_base + 8, address)
-                  mbt_ffi_free(address)
+                  cleanup_list.push(address)
 
                   ()
                 }
@@ -7353,7 +7355,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload6.length())
                   mbt_ffi_store32(iter_base + 8, address7)
-                  mbt_ffi_free(address7)
+                  cleanup_list.push(address7)
 
                   ()
                 }
@@ -7370,7 +7372,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload9.length())
                   mbt_ffi_store32(iter_base + 8, address10)
-                  mbt_ffi_free(address10)
+                  cleanup_list.push(address10)
 
                   ()
                 }
@@ -7387,7 +7389,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload12.length())
                   mbt_ffi_store32(iter_base + 8, address13)
-                  mbt_ffi_free(address13)
+                  cleanup_list.push(address13)
 
                   ()
                 }
@@ -7537,7 +7539,7 @@ pub fn make_agent_id(
                   let ptr38 = mbt_ffi_str2ptr(payload37)
                   mbt_ffi_store32(iter_base + 12, payload37.length())
                   mbt_ffi_store32(iter_base + 8, ptr38)
-                  mbt_ffi_free(ptr38)
+                  cleanup_list.push(ptr38)
 
                   ()
                 }
@@ -7551,7 +7553,7 @@ pub fn make_agent_id(
                     iter_base + 16,
                     payload39.1.reinterpret_as_int64(),
                   )
-                  mbt_ffi_free(ptr40)
+                  cleanup_list.push(ptr40)
 
                   ()
                 }
@@ -7559,7 +7561,7 @@ pub fn make_agent_id(
             }
             mbt_ffi_store32(iter_base + 8, payload0.nodes.length())
             mbt_ffi_store32(iter_base + 4, address41)
-            mbt_ffi_free(address41)
+            cleanup_list.push(address41)
 
             ()
           }
@@ -7573,7 +7575,7 @@ pub fn make_agent_id(
                 let ptr45 = mbt_ffi_str2ptr(payload44)
                 mbt_ffi_store32(iter_base + 12, payload44.length())
                 mbt_ffi_store32(iter_base + 8, ptr45)
-                mbt_ffi_free(ptr45)
+                cleanup_list.push(ptr45)
 
                 ()
               }
@@ -7599,12 +7601,12 @@ pub fn make_agent_id(
                       payload49.language_code.length(),
                     )
                     mbt_ffi_store32(iter_base + 20, ptr50)
-                    mbt_ffi_free(ptr50)
+                    cleanup_list.push(ptr50)
 
                     ()
                   }
                 }
-                mbt_ffi_free(ptr47)
+                cleanup_list.push(ptr47)
 
                 ()
               }
@@ -7622,7 +7624,7 @@ pub fn make_agent_id(
                 let ptr53 = mbt_ffi_str2ptr(payload52)
                 mbt_ffi_store32(iter_base + 12, payload52.length())
                 mbt_ffi_store32(iter_base + 8, ptr53)
-                mbt_ffi_free(ptr53)
+                cleanup_list.push(ptr53)
 
                 ()
               }
@@ -7640,8 +7642,8 @@ pub fn make_agent_id(
                   payload54.binary_type.mime_type.length(),
                 )
                 mbt_ffi_store32(iter_base + 16, ptr56)
-                mbt_ffi_free(ptr55)
-                mbt_ffi_free(ptr56)
+                cleanup_list.push(ptr55)
+                cleanup_list.push(ptr56)
 
                 ()
               }
@@ -7651,7 +7653,7 @@ pub fn make_agent_id(
           }
         }
       }
-      mbt_ffi_free(address57)
+      cleanup_list.push(address57)
 
       (0, address57, payload.length())
     }
@@ -7690,7 +7692,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload62.length())
                   mbt_ffi_store32(iter_base + 8, address63)
-                  mbt_ffi_free(address63)
+                  cleanup_list.push(address63)
 
                   ()
                 }
@@ -7736,7 +7738,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload69.length())
                   mbt_ffi_store32(iter_base + 8, address70)
-                  mbt_ffi_free(address70)
+                  cleanup_list.push(address70)
 
                   ()
                 }
@@ -7753,7 +7755,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload72.length())
                   mbt_ffi_store32(iter_base + 8, address73)
-                  mbt_ffi_free(address73)
+                  cleanup_list.push(address73)
 
                   ()
                 }
@@ -7770,7 +7772,7 @@ pub fn make_agent_id(
                   }
                   mbt_ffi_store32(iter_base + 12, payload75.length())
                   mbt_ffi_store32(iter_base + 8, address76)
-                  mbt_ffi_free(address76)
+                  cleanup_list.push(address76)
 
                   ()
                 }
@@ -7920,7 +7922,7 @@ pub fn make_agent_id(
                   let ptr101 = mbt_ffi_str2ptr(payload100)
                   mbt_ffi_store32(iter_base + 12, payload100.length())
                   mbt_ffi_store32(iter_base + 8, ptr101)
-                  mbt_ffi_free(ptr101)
+                  cleanup_list.push(ptr101)
 
                   ()
                 }
@@ -7934,7 +7936,7 @@ pub fn make_agent_id(
                     iter_base + 16,
                     payload102.1.reinterpret_as_int64(),
                   )
-                  mbt_ffi_free(ptr103)
+                  cleanup_list.push(ptr103)
 
                   ()
                 }
@@ -7942,7 +7944,7 @@ pub fn make_agent_id(
             }
             mbt_ffi_store32(iter_base + 16, payload61.nodes.length())
             mbt_ffi_store32(iter_base + 12, address104)
-            mbt_ffi_free(address104)
+            cleanup_list.push(address104)
 
             ()
           }
@@ -7956,7 +7958,7 @@ pub fn make_agent_id(
                 let ptr108 = mbt_ffi_str2ptr(payload107)
                 mbt_ffi_store32(iter_base + 20, payload107.length())
                 mbt_ffi_store32(iter_base + 16, ptr108)
-                mbt_ffi_free(ptr108)
+                cleanup_list.push(ptr108)
 
                 ()
               }
@@ -7982,12 +7984,12 @@ pub fn make_agent_id(
                       payload112.language_code.length(),
                     )
                     mbt_ffi_store32(iter_base + 28, ptr113)
-                    mbt_ffi_free(ptr113)
+                    cleanup_list.push(ptr113)
 
                     ()
                   }
                 }
-                mbt_ffi_free(ptr110)
+                cleanup_list.push(ptr110)
 
                 ()
               }
@@ -8005,7 +8007,7 @@ pub fn make_agent_id(
                 let ptr116 = mbt_ffi_str2ptr(payload115)
                 mbt_ffi_store32(iter_base + 20, payload115.length())
                 mbt_ffi_store32(iter_base + 16, ptr116)
-                mbt_ffi_free(ptr116)
+                cleanup_list.push(ptr116)
 
                 ()
               }
@@ -8023,8 +8025,8 @@ pub fn make_agent_id(
                   payload117.binary_type.mime_type.length(),
                 )
                 mbt_ffi_store32(iter_base + 24, ptr119)
-                mbt_ffi_free(ptr118)
-                mbt_ffi_free(ptr119)
+                cleanup_list.push(ptr118)
+                cleanup_list.push(ptr119)
 
                 ()
               }
@@ -8033,9 +8035,9 @@ pub fn make_agent_id(
             ()
           }
         }
-        mbt_ffi_free(ptr60)
+        cleanup_list.push(ptr60)
       }
-      mbt_ffi_free(address120)
+      cleanup_list.push(address120)
 
       (1, address120, payload59.length())
     }
@@ -8459,11 +8461,11 @@ pub fn make_agent_id(
     }
     _ => panic()
   }
+  let ret = lifted174
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted174
+  return ret
 }
 
 ///|
@@ -9466,7 +9468,8 @@ pub fn parse_agent_id(
     }
     _ => panic()
   }
+  let ret = lifted107
   mbt_ffi_free(ptr)
   mbt_ffi_free(return_area)
-  return lifted107
+  return ret
 }

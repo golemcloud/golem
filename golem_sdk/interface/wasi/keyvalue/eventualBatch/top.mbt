@@ -28,7 +28,7 @@ pub fn get_many(
     let ptr = mbt_ffi_str2ptr(iter_elem)
     mbt_ffi_store32(iter_base + 4, iter_elem.length())
     mbt_ffi_store32(iter_base + 0, ptr)
-    mbt_ffi_free(ptr)
+    cleanup_list.push(ptr)
   }
   let return_area = mbt_ffi_malloc(12)
   wasmImportGetMany(handle, address, keys.length(), return_area)
@@ -63,11 +63,11 @@ pub fn get_many(
       )
     _ => panic()
   }
+  let ret = lifted1
   mbt_ffi_free(address)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted1
+  return ret
 }
 
 ///|
@@ -110,8 +110,9 @@ pub fn keys(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(return_area)
-  return lifted
+  return ret
 }
 
 ///|
@@ -148,7 +149,7 @@ pub fn set_many(
 
     let @types.OutgoingValue(handle0) = iter_elem.1
     mbt_ffi_store32(iter_base + 8, handle0)
-    mbt_ffi_free(ptr)
+    cleanup_list.push(ptr)
   }
   let return_area = mbt_ffi_malloc(8)
   wasmImportSetMany(handle, address, key_values.length(), return_area)
@@ -161,11 +162,11 @@ pub fn set_many(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(address)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted
+  return ret
 }
 
 ///|
@@ -198,7 +199,7 @@ pub fn delete_many(
     let ptr = mbt_ffi_str2ptr(iter_elem)
     mbt_ffi_store32(iter_base + 4, iter_elem.length())
     mbt_ffi_store32(iter_base + 0, ptr)
-    mbt_ffi_free(ptr)
+    cleanup_list.push(ptr)
   }
   let return_area = mbt_ffi_malloc(8)
   wasmImportDeleteMany(handle, address, keys.length(), return_area)
@@ -211,9 +212,9 @@ pub fn delete_many(
       )
     _ => panic()
   }
+  let ret = lifted
   mbt_ffi_free(address)
   mbt_ffi_free(return_area)
-
   cleanup_list.each(mbt_ffi_free)
-  return lifted
+  return ret
 }

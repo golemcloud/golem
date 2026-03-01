@@ -48,11 +48,19 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|}
       #|
       #|///|
-      #|pub fn CounterClient::new_phantom(name : String, phantom_id : @rpcTypes.Uuid) -> CounterClient raise @common.AgentError {
+      #|pub fn CounterClient::new_phantom(name : String) -> CounterClient raise @common.AgentError {
+      #|  let constructor_data = 
+      #|    @common.DataValue::Tuple([@schema.to_element_value_as(name)])
+      #|  let client = @rpc.AgentClient::new_phantom("Counter", constructor_data)
+      #|  { client, }
+      #|}
+      #|
+      #|///|
+      #|pub fn CounterClient::get_phantom(name : String, phantom_id : @rpcTypes.Uuid) -> CounterClient raise @common.AgentError {
       #|  let constructor_data = 
       #|    @common.DataValue::Tuple([@schema.to_element_value_as(name)])
       #|  let client = 
-      #|    @rpc.AgentClient::new_phantom("Counter", constructor_data, phantom_id)
+      #|    @rpc.AgentClient::get_phantom("Counter", constructor_data, phantom_id)
       #|  { client, }
       #|}
       #|
@@ -69,6 +77,37 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|///|
       #|pub fn CounterClient::drop(self : CounterClient) -> Unit {
       #|  self.client.drop()
+      #|}
+      #|
+      #|///|
+      #|pub fn[T] CounterClient::scoped(
+      #|  name : String,
+      #|  f : (CounterClient) -> T raise @common.AgentError,
+      #|) -> T raise @common.AgentError {
+      #|  let client = CounterClient::get(name)
+      #|  defer client.drop()
+      #|  f(client)
+      #|}
+      #|
+      #|///|
+      #|pub fn[T] CounterClient::scoped_new_phantom(
+      #|  name : String,
+      #|  f : (CounterClient) -> T raise @common.AgentError,
+      #|) -> T raise @common.AgentError {
+      #|  let client = CounterClient::new_phantom(name)
+      #|  defer client.drop()
+      #|  f(client)
+      #|}
+      #|
+      #|///|
+      #|pub fn[T] CounterClient::scoped_get_phantom(
+      #|  name : String,
+      #|  phantom_id : @rpcTypes.Uuid,
+      #|  f : (CounterClient) -> T raise @common.AgentError,
+      #|) -> T raise @common.AgentError {
+      #|  let client = CounterClient::get_phantom(name, phantom_id)
+      #|  defer client.drop()
+      #|  f(client)
       #|}
       #|
       #|///|
@@ -110,6 +149,7 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|}
       #|
       #|
+
     ),
   )
 }
@@ -274,10 +314,17 @@ test "generate_client_code - agent with params" {
       #|}
       #|
       #|///|
-      #|pub fn TaskManagerClient::new_phantom(phantom_id : @rpcTypes.Uuid) -> TaskManagerClient raise @common.AgentError {
+      #|pub fn TaskManagerClient::new_phantom() -> TaskManagerClient raise @common.AgentError {
+      #|  let constructor_data = @common.DataValue::Tuple([])
+      #|  let client = @rpc.AgentClient::new_phantom("TaskManager", constructor_data)
+      #|  { client, }
+      #|}
+      #|
+      #|///|
+      #|pub fn TaskManagerClient::get_phantom(phantom_id : @rpcTypes.Uuid) -> TaskManagerClient raise @common.AgentError {
       #|  let constructor_data = @common.DataValue::Tuple([])
       #|  let client = 
-      #|    @rpc.AgentClient::new_phantom("TaskManager", constructor_data, phantom_id)
+      #|    @rpc.AgentClient::get_phantom("TaskManager", constructor_data, phantom_id)
       #|  { client, }
       #|}
       #|
@@ -294,6 +341,34 @@ test "generate_client_code - agent with params" {
       #|///|
       #|pub fn TaskManagerClient::drop(self : TaskManagerClient) -> Unit {
       #|  self.client.drop()
+      #|}
+      #|
+      #|///|
+      #|pub fn[T] TaskManagerClient::scoped(
+      #|  f : (TaskManagerClient) -> T raise @common.AgentError,
+      #|) -> T raise @common.AgentError {
+      #|  let client = TaskManagerClient::get()
+      #|  defer client.drop()
+      #|  f(client)
+      #|}
+      #|
+      #|///|
+      #|pub fn[T] TaskManagerClient::scoped_new_phantom(
+      #|  f : (TaskManagerClient) -> T raise @common.AgentError,
+      #|) -> T raise @common.AgentError {
+      #|  let client = TaskManagerClient::new_phantom()
+      #|  defer client.drop()
+      #|  f(client)
+      #|}
+      #|
+      #|///|
+      #|pub fn[T] TaskManagerClient::scoped_get_phantom(
+      #|  phantom_id : @rpcTypes.Uuid,
+      #|  f : (TaskManagerClient) -> T raise @common.AgentError,
+      #|) -> T raise @common.AgentError {
+      #|  let client = TaskManagerClient::get_phantom(phantom_id)
+      #|  defer client.drop()
+      #|  f(client)
       #|}
       #|
       #|///|
@@ -326,6 +401,7 @@ test "generate_client_code - agent with params" {
       #|}
       #|
       #|
+
     ),
   )
 }

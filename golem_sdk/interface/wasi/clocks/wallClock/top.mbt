@@ -24,11 +24,12 @@ pub(all) struct Datetime {
 pub fn now() -> Datetime {
   let return_area = mbt_ffi_malloc(16)
   wasmImportNow(return_area)
-  mbt_ffi_free(return_area)
-  return Datetime::{
+  let ret = Datetime::{
     seconds: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
     nanoseconds: mbt_ffi_load32(return_area + 8).reinterpret_as_uint(),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -38,9 +39,10 @@ pub fn now() -> Datetime {
 pub fn resolution() -> Datetime {
   let return_area = mbt_ffi_malloc(16)
   wasmImportResolution(return_area)
-  mbt_ffi_free(return_area)
-  return Datetime::{
+  let ret = Datetime::{
     seconds: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
     nanoseconds: mbt_ffi_load32(return_area + 8).reinterpret_as_uint(),
   }
+  mbt_ffi_free(return_area)
+  return ret
 }

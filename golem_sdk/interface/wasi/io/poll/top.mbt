@@ -18,7 +18,8 @@ pub fn Pollable::drop(self : Pollable) -> Unit {
 pub fn Pollable::ready(self : Pollable) -> Bool {
   let Pollable(handle) = self
   let result : Int = wasmImportMethodPollableReady(handle)
-  return result != 0
+  let ret = result != 0
+  return ret
 }
 
 ///|
@@ -68,7 +69,8 @@ pub fn poll(in_ : Array[Pollable]) -> FixedArray[UInt] {
     mbt_ffi_load32(return_area + 0),
     mbt_ffi_load32(return_area + 4),
   )
+  let ret = result
   mbt_ffi_free(address)
   mbt_ffi_free(return_area)
-  return result
+  return ret
 }

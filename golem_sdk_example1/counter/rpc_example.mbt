@@ -16,15 +16,15 @@ fn RpcExampleAgent::new() -> RpcExampleAgent {
 pub fn RpcExampleAgent::counter_rpc_example(
   self : Self,
 ) -> UInt64 raise @common.AgentError {
-  let counter = CounterClient::get("my-counter")
-  counter.increment()
-  counter.increment()
-  counter.increment()
-  let value = counter.get_value()
-  self.last_value = value
-  counter.trigger_decrement()
-  counter.drop()
-  value
+  CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
+    counter.increment()
+    counter.increment()
+    counter.increment()
+    let value = counter.get_value()
+    self.last_value = value
+    counter.trigger_decrement()
+    value
+  })
 }
 
 ///|
@@ -32,17 +32,17 @@ pub fn RpcExampleAgent::counter_rpc_example(
 pub fn RpcExampleAgent::task_rpc_example(
   self : Self,
 ) -> UInt64 raise @common.AgentError {
-  let tm = TaskManagerClient::get()
-  let count = tm.add_task({
-    title: "Build RPC support",
-    priority: High,
-    description: Some("Implement agent-to-agent communication"),
+  TaskManagerClient::scoped(fn(tm) raise @common.AgentError {
+    let count = tm.add_task({
+      title: "Build RPC support",
+      priority: High,
+      description: Some("Implement agent-to-agent communication"),
+    })
+    self.last_value = count
+    let high_tasks = tm.get_by_priority(High)
+    let _ = high_tasks
+    count
   })
-  self.last_value = count
-  let high_tasks = tm.get_by_priority(High)
-  let _ = high_tasks
-  tm.drop()
-  count
 }
 
 ///|

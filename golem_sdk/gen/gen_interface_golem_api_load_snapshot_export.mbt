@@ -22,7 +22,8 @@ pub fn wasmExportLoad(p0 : Int, p1 : Int) -> Int {
       ()
     }
   }
-  return return_area
+  let ret = return_area
+  return ret
 }
 
 ///|
