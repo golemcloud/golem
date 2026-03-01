@@ -29,6 +29,7 @@ fn main {
 }
 
 ///|
+/// Runs the `agents` subcommand: parses agent source files and generates `golem_agents.mbt`, `golem_derive.mbt`, and `golem_clients.mbt`.
 fn run_agents(package_dir : String) -> Unit raise {
   let entries = @fs.read_dir(package_dir)
   let files : Array[(String, String)] = []
@@ -118,6 +119,7 @@ fn run_agents(package_dir : String) -> Unit raise {
 }
 
 ///|
+/// Checks if any agent uses multimodal types in its constructor or methods.
 fn has_multimodal_agent(agents : Array[@lib.AgentInfo]) -> Bool {
   for a in agents {
     for p in a.constructor_params {
@@ -141,6 +143,7 @@ fn has_multimodal_agent(agents : Array[@lib.AgentInfo]) -> Bool {
 }
 
 ///|
+/// Runs the `reexports` subcommand: parses SDK gen sources and generates `golem_reexports.mbt` plus updates `moon.pkg`.
 fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
   let gen_dir = "\{sdk_path}/gen"
   let entries = @fs.read_dir(gen_dir)

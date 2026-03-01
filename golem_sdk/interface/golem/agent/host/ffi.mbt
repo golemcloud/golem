@@ -106,8 +106,11 @@ extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
+// WORKAROUND: wit-bindgen MoonBit backend calls mbt_ffi_free on intermediate
+// buffers BEFORE the FFI import is called, causing use-after-free when
+// mbt_ffi_malloc reuses the freed memory. Making free a no-op prevents this.
 extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
+  #|(func (param i32))
 
 ///|
 extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =

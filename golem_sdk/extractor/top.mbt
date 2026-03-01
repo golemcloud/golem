@@ -71,6 +71,7 @@ pub fn extract(value : @types.WitValue) -> &Extractor {
 }
 
 ///|
+/// Implements `Extractor` for a complete `WitValue`, delegating to its root node.
 priv struct WitValueExtractor {
   value : @types.WitValue
 }
@@ -213,6 +214,7 @@ impl Extractor for WitValueExtractor with handle(self : WitValueExtractor) -> (
 }
 
 ///|
+/// Creates a `NodeExtractor` for a specific node within this value's context.
 fn WitValueExtractor::extract(
   self : WitValueExtractor,
   node : @types.WitNode,
@@ -221,6 +223,7 @@ fn WitValueExtractor::extract(
 }
 
 ///|
+/// Implements `Extractor` for a single `WitNode` within a `WitValue` context.
 priv struct NodeExtractor {
   node : @types.WitNode
   context : @types.WitValue
@@ -454,6 +457,7 @@ impl Extractor for NodeExtractor with handle(self : NodeExtractor) -> (
 }
 
 ///|
+/// Looks up a child node by index and wraps it in a `NodeExtractor`.
 fn NodeExtractor::extract(self : NodeExtractor, node_idx : Int) -> &Extractor? {
   self.context.nodes
   .get(node_idx)

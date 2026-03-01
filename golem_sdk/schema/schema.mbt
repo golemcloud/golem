@@ -52,6 +52,7 @@ pub fn[T : HasElementSchema] schema_of_tag_with_options(
 }
 
 ///|
+/// Applies text language and binary MIME type restrictions to an `ElementSchema`. Raises if the schema kind is incompatible with the options.
 fn apply_schema_options(
   schema : @common.ElementSchema,
   options : SchemaOptions,

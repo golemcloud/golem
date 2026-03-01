@@ -124,6 +124,7 @@ pub fn parse_value_types(
 }
 
 ///|
+/// Parses a type description AST node into a `ValueTypeKind` (record, simple enum, or variant enum).
 fn parse_type_desc(
   name : String,
   desc : @syntax.TypeDesc,
@@ -175,6 +176,7 @@ fn parse_type_desc(
 }
 
 ///|
+/// Parses a constructor's parameters into a `VariantPayload` (none, single, or multi-field).
 fn parse_constr_payload(
   _case_name : String,
   args : @list.List[@syntax.ConstrParam]?,

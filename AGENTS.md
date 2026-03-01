@@ -160,6 +160,48 @@ FFI helper functions (`mbt_ffi_malloc`, `mbt_ffi_free`, `mbt_ffi_ptr2str`, etc.)
 `wit-bindgen` into each package's `ffi.mbt` that needs them. The `gen/ffi.mbt` file contains
 `mbt_ffi_cabi_realloc` (the Component Model's canonical ABI allocator) and the shared `return_area`.
 
+#### Post-Regeneration Workaround: `mbt_ffi_free` Use-After-Free Fix
+
+**After every `wit-bindgen` regeneration**, you MUST apply the `mbt_ffi_free` no-op workaround.
+The wit-bindgen MoonBit backend generates code that calls `mbt_ffi_free` (which does
+`$moonbit.decref`) on intermediate buffers BEFORE the FFI import is called. When `mbt_ffi_malloc`
+reuses the freed memory (e.g., for `return_area`), it corrupts data the host reads, causing
+"list pointer/length out of bounds of memory" crashes at runtime.
+
+**Fix**: In every `interface/**/ffi.mbt` file that defines `mbt_ffi_free`, replace the original:
+
+```wasm
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
+```
+
+with the no-op version:
+
+```wasm
+// WORKAROUND: wit-bindgen MoonBit backend calls mbt_ffi_free on intermediate
+// buffers BEFORE the FFI import is called, causing use-after-free when
+// mbt_ffi_malloc reuses the freed memory. Making free a no-op prevents this.
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32))
+```
+
+**Automated fix** (run from repo root after regeneration):
+
+```sh
+find golem_sdk/interface -name 'ffi.mbt' -exec sed -i \
+  's/#|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)/#|(func (param i32))/' {} +
+```
+
+**Scope**: The crash has been observed in `interface/golem/agent/host/ffi.mbt` and
+`interface/golem/rpc/types/ffi.mbt` (host imports with nested list types), but the bug can
+potentially affect any host import. Applying the fix to ALL `interface/**/ffi.mbt` files is
+safe — it only causes minor memory leaks of temporary FFI buffers.
+
+**Do NOT patch `gen/ffi.mbt`** — that file uses `mbt_ffi_free` in `mbt_ffi_cabi_realloc` for
+legitimate memory reallocation, not for the problematic pre-call cleanup pattern.
+
+See also: `PROBLEMS.md` and `tmp/wit-bindgen-uaf/` (minimal reproducer for upstream bug report).
+
 ### The Agent Registry Pattern
 
 The core pattern (in `agents/agents.mbt`):

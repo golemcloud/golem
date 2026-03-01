@@ -22,6 +22,7 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
 }
 
 ///|
+/// Converts a `ParamType` to a MoonBit syntax AST `Type` node.
 fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
   match pt {
     Simple(name) =>
@@ -99,6 +100,7 @@ pub fn param_type_to_schema_expr(
 }
 
 ///|
+/// Generates an AST expression that produces the multimodal schema for a `MultimodalType` parameter.
 fn build_multimodal_schema_expr(pt : ParamType) -> @syntax.Expr {
   match pt {
     MultimodalType(inner) => {
@@ -119,6 +121,7 @@ fn build_multimodal_schema_expr(pt : ParamType) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the constructor lambda expression for an agent's `register_agent` call.
 fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
   let is_multimodal_ctor = agent.constructor_params.length() == 1 &&
     is_multimodal_type(agent.constructor_params[0].1)
@@ -140,6 +143,7 @@ fn build_construct_fn(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the constructor body for agents with tuple-style (non-multimodal) parameters.
 fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let param_count = agent.constructor_params.length()
   // Ok(AgentName::new(p1, p2, ...))
@@ -196,6 +200,7 @@ fn build_tuple_construct_body(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the constructor body for agents with a single multimodal parameter.
 fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
   let (param_name, param_type) = agent.constructor_params[0]
   // Ok(AgentName::new(param_name))
@@ -215,6 +220,7 @@ fn build_multimodal_construct_body(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates an AST expression for an `AgentMethod` record literal.
 fn build_method_record(info : MethodInfo) -> @syntax.Expr {
   let is_multimodal_input = info.params.length() == 1 &&
     is_multimodal_type(info.params[0].1)
@@ -329,6 +335,7 @@ pub fn build_agent_type_expr(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the `register_agent(...)` call expression for a single agent.
 fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
   let agent_type = build_agent_type_expr(agent)
   make_apply(make_qualified_expr("agents", "register_agent"), [
@@ -341,6 +348,7 @@ fn build_register_call(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the match arm body for a method invocation, dispatching to tuple or multimodal handling.
 fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
   let is_multimodal_input = info.params.length() == 1 &&
     is_multimodal_type(info.params[0].1)
@@ -358,6 +366,7 @@ fn build_method_arm_body(info : MethodInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the match arm body for a tuple-style method invocation with parameter deserialization and result serialization.
 fn build_tuple_method_arm_body(info : MethodInfo) -> @syntax.Expr {
   let param_count = info.params.length()
   let has_return = info.return_type is Some(_)
@@ -436,6 +445,7 @@ fn build_tuple_method_arm_body(info : MethodInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the match arm body for a method with multimodal input and/or output.
 fn build_multimodal_method_arm_body(
   info : MethodInfo,
   multimodal_input : Bool,

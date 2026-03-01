@@ -1,4 +1,5 @@
 ///|
+/// Index of a node in the `WitValue` node array.
 typealias Int as NodeIndex
 
 ///|
@@ -8,6 +9,7 @@ pub suberror BuilderError {
 }
 
 ///|
+/// Fluent builder for constructing `WitValue` trees (runtime value representations).
 struct Builder {
   nodes : Array[@types.WitNode]
 }
@@ -19,67 +21,80 @@ pub fn Builder::new() -> Builder {
 }
 
 ///|
+/// Appends a node to the builder and returns its index.
 fn Builder::add(self : Builder, node : @types.WitNode) -> NodeIndex {
   self.nodes.push(node)
   self.nodes.length() - 1
 }
 
 ///|
+/// Adds a U8 primitive node and returns its index.
 fn Builder::add_u8(self : Builder, value : Byte) -> NodeIndex {
   self.add(@types.WitNode::PrimU8(value))
 }
 
 ///|
+/// Adds a U16 primitive node and returns its index.
 fn Builder::add_u16(self : Builder, value : UInt) -> NodeIndex {
   self.add(@types.WitNode::PrimU16(value))
 }
 
 ///|
+/// Adds a U32 primitive node and returns its index.
 fn Builder::add_u32(self : Builder, value : UInt) -> NodeIndex {
   self.add(@types.WitNode::PrimU32(value))
 }
 
 ///|
+/// Adds a U64 primitive node and returns its index.
 fn Builder::add_u64(self : Builder, value : UInt64) -> NodeIndex {
   self.add(@types.WitNode::PrimU64(value))
 }
 
 ///|
+/// Adds an S8 primitive node and returns its index.
 fn Builder::add_s8(self : Builder, value : Int) -> NodeIndex {
   self.add(@types.WitNode::PrimS8(value))
 }
 
 ///|
+/// Adds an S16 primitive node and returns its index.
 fn Builder::add_s16(self : Builder, value : Int) -> NodeIndex {
   self.add(@types.WitNode::PrimS16(value))
 }
 
 ///|
+/// Adds an S32 primitive node and returns its index.
 fn Builder::add_s32(self : Builder, value : Int) -> NodeIndex {
   self.add(@types.WitNode::PrimS32(value))
 }
 
 ///|
+/// Adds an S64 primitive node and returns its index.
 fn Builder::add_s64(self : Builder, value : Int64) -> NodeIndex {
   self.add(@types.WitNode::PrimS64(value))
 }
 
 ///|
+/// Adds an F32 primitive node and returns its index.
 fn Builder::add_f32(self : Builder, value : Float) -> NodeIndex {
   self.add(@types.WitNode::PrimFloat32(value))
 }
 
 ///|
+/// Adds an F64 primitive node and returns its index.
 fn Builder::add_f64(self : Builder, value : Double) -> NodeIndex {
   self.add(@types.WitNode::PrimFloat64(value))
 }
 
 ///|
+/// Adds a string primitive node and returns its index.
 fn Builder::add_string(self : Builder, value : String) -> NodeIndex {
   self.add(@types.WitNode::PrimString(value))
 }
 
 ///|
+/// Adds a char primitive node and returns its index.
 fn Builder::add_char(self : Builder, value : Char) -> NodeIndex {
   self.add(@types.WitNode::PrimChar(value))
 }
@@ -91,6 +106,7 @@ pub fn Builder::add_bool(self : Builder, value : Bool) -> NodeIndex {
 }
 
 ///|
+/// Adds a record node with an empty field list and returns its index plus a `ChildItemsBuilder` for adding fields.
 fn Builder::add_record(self : Builder) -> (NodeIndex, ChildItemsBuilder) {
   let idx = self.add(@types.WitNode::RecordValue([]))
   let inner_builder = {
@@ -102,6 +118,7 @@ fn Builder::add_record(self : Builder) -> (NodeIndex, ChildItemsBuilder) {
 }
 
 ///|
+/// Adds a variant node with the given case index and a placeholder child index. Returns the node index plus an `ItemBuilder` for the payload.
 fn Builder::add_variant(
   self : Builder,
   idx : UInt,
@@ -117,21 +134,25 @@ fn Builder::add_variant(
 }
 
 ///|
+/// Adds a unit variant node (no payload) with the given case index.
 fn Builder::add_variant_unit(self : Builder, idx : UInt) -> NodeIndex {
   self.add(@types.WitNode::VariantValue((idx, None)))
 }
 
 ///|
+/// Adds an enum value node with the given case index.
 fn Builder::add_enum_value(self : Builder, value : UInt) -> NodeIndex {
   self.add(@types.WitNode::EnumValue(value))
 }
 
 ///|
+/// Adds a flags value node with the given boolean array.
 fn Builder::add_flags(self : Builder, values : Array[Bool]) -> NodeIndex {
   self.add(@types.WitNode::FlagsValue(values))
 }
 
 ///|
+/// Adds a tuple node with an empty element list and returns its index plus a `ChildItemsBuilder` for adding elements.
 fn Builder::add_tuple(self : Builder) -> (NodeIndex, ChildItemsBuilder) {
   let idx = self.add(@types.WitNode::TupleValue([]))
   let inner_builder = {
@@ -143,6 +164,7 @@ fn Builder::add_tuple(self : Builder) -> (NodeIndex, ChildItemsBuilder) {
 }
 
 ///|
+/// Adds a list node with an empty element list and returns its index plus a `ChildItemsBuilder` for adding elements.
 fn Builder::add_list(self : Builder) -> (NodeIndex, ChildItemsBuilder) {
   let idx = self.add(@types.WitNode::ListValue([]))
   let inner_builder = {
@@ -154,11 +176,13 @@ fn Builder::add_list(self : Builder) -> (NodeIndex, ChildItemsBuilder) {
 }
 
 ///|
+/// Adds a `None` option node.
 fn Builder::add_option_none(self : Builder) -> NodeIndex {
   self.add(@types.WitNode::OptionValue(None))
 }
 
 ///|
+/// Adds a `Some` option node with a placeholder child index. Returns the node index plus an `ItemBuilder` for the inner value.
 fn Builder::add_option_some(self : Builder) -> (NodeIndex, ItemBuilder) {
   let option_idx = self.add(@types.WitNode::OptionValue(Some(-1)))
   let inner_builder = {
@@ -168,6 +192,7 @@ fn Builder::add_option_some(self : Builder) -> (NodeIndex, ItemBuilder) {
 }
 
 ///|
+/// Adds an `Ok` result node with a placeholder child index. Returns the node index plus an `ItemBuilder` for the inner value.
 fn Builder::add_result_ok(self : Builder) -> (NodeIndex, ItemBuilder) {
   let result_idx = self.add(@types.WitNode::ResultValue(Ok(Some(-1))))
   let inner_builder = {
@@ -177,6 +202,7 @@ fn Builder::add_result_ok(self : Builder) -> (NodeIndex, ItemBuilder) {
 }
 
 ///|
+/// Adds an `Err` result node with a placeholder child index. Returns the node index plus an `ItemBuilder` for the inner value.
 fn Builder::add_result_err(self : Builder) -> (NodeIndex, ItemBuilder) {
   let result_idx = self.add(@types.WitNode::ResultValue(Err(Some(-1))))
   let inner_builder = {
@@ -186,16 +212,19 @@ fn Builder::add_result_err(self : Builder) -> (NodeIndex, ItemBuilder) {
 }
 
 ///|
+/// Adds an `Ok(unit)` result node.
 fn Builder::add_result_ok_unit(self : Builder) -> NodeIndex {
   self.add(@types.WitNode::ResultValue(Ok(None)))
 }
 
 ///|
+/// Adds an `Err(unit)` result node.
 fn Builder::add_result_err_unit(self : Builder) -> NodeIndex {
   self.add(@types.WitNode::ResultValue(Err(None)))
 }
 
 ///|
+/// Adds a resource handle node with the given URI and handle value.
 fn Builder::add_handle(
   self : Builder,
   uri : @types.Uri,
@@ -205,6 +234,7 @@ fn Builder::add_handle(
 }
 
 ///|
+/// Finalizes a single-child container node by replacing its placeholder index with the actual child index.
 fn Builder::finish_child(
   self : Builder,
   child : NodeIndex,
@@ -243,6 +273,7 @@ fn Builder::finish_child(
 }
 
 ///|
+/// Finalizes a multi-child container node by appending the collected child indices.
 fn Builder::finish_seq(
   self : Builder,
   items : Array[NodeIndex],
@@ -541,6 +572,7 @@ pub fn Builder::add_wit_value(
 }
 
 ///|
+/// Adjusts all child indices in a `WitNode` by the given offset, used when composing sub-trees.
 fn rebase_wit_node(node : @types.WitNode, offset : Int) -> @types.WitNode {
   match node {
     RecordValue(fields) =>
@@ -562,11 +594,13 @@ fn rebase_wit_node(node : @types.WitNode, offset : Int) -> @types.WitNode {
 }
 
 ///|
+/// Consumes the builder and returns the constructed `WitValue`.
 fn Builder::build(self : Builder) -> @types.WitValue {
   { nodes: self.nodes }
 }
 
 ///|
+/// Internal state for finalizing a single-child container node (option, result, variant).
 priv struct FinishChild {
   builder : Builder
   target : NodeIndex
@@ -595,6 +629,7 @@ impl SingleItemBuilderParent for FinishChild with is_closed(self : FinishChild) 
 }
 
 ///|
+/// Internal state for finalizing a multi-child container node (record, tuple, list).
 priv struct FinishChildren {
   builder : Builder
   target : NodeIndex
@@ -616,12 +651,14 @@ impl ItemSequenceBuilderParent for FinishChildren with add_items(
 }
 
 ///|
+/// Internal trait for builders that accept a sequence of child items.
 priv trait ItemSequenceBuilderParent {
   root_builder(Self) -> Builder
   add_items(Self, items : Array[NodeIndex]) -> Unit raise BuilderError
 }
 
 ///|
+/// Internal trait for builders that accept exactly one child item.
 priv trait SingleItemBuilderParent {
   root_builder(Self) -> Builder
   add_item(Self, item_idx : NodeIndex) -> Unit raise BuilderError

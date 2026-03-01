@@ -50,6 +50,7 @@ pub fn parse_mbt_source(content : String) -> Array[FnSignature] {
 }
 
 ///|
+/// Converts a MoonBit syntax AST type to its string representation.
 fn type_to_string(ty : @syntax.Type) -> String {
   match ty {
     Name(constr_id~, tys~, ..) => {

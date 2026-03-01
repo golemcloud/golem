@@ -33,6 +33,7 @@ pub fn generate_value_type_impls(
 // --- Shared helpers ---
 
 ///|
+/// Creates a punned field definition `{ name }` for record construction.
 fn make_pun_field(name : String) -> @syntax.FieldDef {
   @syntax.FieldDef::{
     label: make_label(name),
@@ -43,6 +44,7 @@ fn make_pun_field(name : String) -> @syntax.FieldDef {
 }
 
 ///|
+/// Creates an integer literal pattern for match arms.
 fn make_int_pattern(n : Int) -> @syntax.Pattern {
   @syntax.Pattern::Constant(
     c=@syntax.Constant::Int(n.to_string()),
@@ -51,11 +53,13 @@ fn make_int_pattern(n : Int) -> @syntax.Pattern {
 }
 
 ///|
+/// Creates a wildcard `_` pattern for match arms.
 fn make_wildcard_pattern() -> @syntax.Pattern {
   @syntax.Pattern::Any(loc=dummy_loc)
 }
 
 ///|
+/// Creates a constructor pattern with positional arguments for match arms.
 fn make_constr_pattern(
   name : String,
   args : Array[@syntax.Pattern],
@@ -81,6 +85,7 @@ fn make_constr_pattern(
 }
 
 ///|
+/// Creates a constructor pattern with labelled arguments for match arms.
 fn make_labelled_constr_pattern(
   name : String,
   fields : Array[(String, @syntax.Pattern)],
@@ -105,11 +110,13 @@ fn make_labelled_constr_pattern(
 }
 
 ///|
+/// Creates an unsigned integer literal expression.
 fn make_uint_expr(n : Int) -> @syntax.Expr {
   @syntax.Expr::Constant(c=@syntax.Constant::UInt(n.to_string()), loc=dummy_loc)
 }
 
 ///|
+/// Generates the `FromElementValue` impl that delegates to `FromExtractor` via `extract_component_model_value`.
 fn build_from_element_value(type_name : String) -> @syntax.Impl {
   // @schema.FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
   let body = make_apply(make_qualified_expr("schema", "from_extractor_as"), [
@@ -131,6 +138,7 @@ fn build_from_element_value(type_name : String) -> @syntax.Impl {
 // --- Record ---
 
 ///|
+/// Generates the `HasElementSchema` impl for a record type.
 fn build_record_has_element_schema(
   type_name : String,
   fields : Array[(String, ParamType)],
@@ -153,6 +161,7 @@ fn build_record_has_element_schema(
 }
 
 ///|
+/// Generates the `FromExtractor` impl for a record type with field-by-field extraction.
 fn build_record_from_extractor(
   type_name : String,
   fields : Array[(String, ParamType)],
@@ -185,6 +194,7 @@ fn build_record_from_extractor(
 }
 
 ///|
+/// Generates the `ToElementValue` impl for a record type with field-by-field serialization.
 fn build_record_to_element_value(
   type_name : String,
   fields : Array[(String, ParamType)],
@@ -211,6 +221,7 @@ fn build_record_to_element_value(
 // --- SimpleEnum ---
 
 ///|
+/// Generates the `HasElementSchema` impl for a simple enum type.
 fn build_enum_has_element_schema(
   type_name : String,
   cases : Array[String],
@@ -230,6 +241,7 @@ fn build_enum_has_element_schema(
 }
 
 ///|
+/// Generates the `FromExtractor` impl for a simple enum type with index-based matching.
 fn build_enum_from_extractor(
   type_name : String,
   cases : Array[String],
@@ -276,6 +288,7 @@ fn build_enum_from_extractor(
 }
 
 ///|
+/// Generates the `ToElementValue` impl for a simple enum type.
 fn build_enum_to_element_value(
   type_name : String,
   cases : Array[String],
@@ -305,6 +318,7 @@ fn build_enum_to_element_value(
 // --- VariantEnum ---
 
 ///|
+/// Generates the schema expression for a variant payload (None, Single, or Multi).
 fn variant_payload_schema_expr(payload : VariantPayload) -> @syntax.Expr {
   match payload {
     None => make_constr_no_args("None")
@@ -325,6 +339,7 @@ fn variant_payload_schema_expr(payload : VariantPayload) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the `HasElementSchema` impl for a variant enum type.
 fn build_variant_has_element_schema(
   type_name : String,
   cases : Array[(String, VariantPayload)],
@@ -347,6 +362,7 @@ fn build_variant_has_element_schema(
 }
 
 ///|
+/// Generates a single match case for the `FromExtractor` impl of a variant enum.
 fn build_variant_from_extractor_case(
   type_name : String,
   idx : Int,
@@ -451,6 +467,7 @@ fn build_variant_from_extractor_case(
 }
 
 ///|
+/// Generates the `FromExtractor` impl for a variant enum type.
 fn build_variant_from_extractor(
   type_name : String,
   cases : Array[(String, VariantPayload)],
@@ -493,6 +510,7 @@ fn build_variant_from_extractor(
 }
 
 ///|
+/// Generates the `ToElementValue` impl for a variant enum type.
 fn build_variant_to_element_value(
   type_name : String,
   cases : Array[(String, VariantPayload)],
@@ -594,6 +612,7 @@ pub fn generate_multimodal_impls(
 }
 
 ///|
+/// Generates the `MultimodalModality::multimodal_schema` impl for a multimodal enum.
 fn build_multimodal_schema(e : MultimodalEnumInfo) -> @syntax.Impl {
   let tuple_exprs = e.variants.map(fn(v) {
     let (name, pt) = v
@@ -611,6 +630,7 @@ fn build_multimodal_schema(e : MultimodalEnumInfo) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the `MultimodalModality::to_named_element` impl for a multimodal enum.
 fn build_multimodal_to_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
   let match_cases : Array[@syntax.Case] = []
   for v in e.variants {
@@ -639,6 +659,7 @@ fn build_multimodal_to_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the `MultimodalModality::from_named_element` impl for a multimodal enum.
 fn build_multimodal_from_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
   let match_cases : Array[@syntax.Case] = []
   for v in e.variants {

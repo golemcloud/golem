@@ -1,4 +1,5 @@
 ///|
+/// Creates a `ComponentModel` element schema containing a single primitive type node.
 fn make_prim_schema(type_node : @types.WitTypeNode) -> @common.ElementSchema {
   @common.ElementSchema::ComponentModel({
     nodes: [{ name: None, owner: None, type_: type_node }],

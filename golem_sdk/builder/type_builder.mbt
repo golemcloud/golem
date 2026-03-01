@@ -11,6 +11,7 @@ pub fn TypeBuilder::new() -> TypeBuilder {
 }
 
 ///|
+/// Adds an unnamed type node and returns its index.
 fn TypeBuilder::add(self : TypeBuilder, type_node : @types.WitTypeNode) -> Int {
   self.nodes.push({ name: None, owner: None, type_: type_node })
   self.nodes.length() - 1
@@ -34,11 +35,13 @@ pub fn TypeBuilder::add_wit_type(
 }
 
 ///|
+/// Consumes the builder and returns the constructed `WitType`.
 fn TypeBuilder::build(self : TypeBuilder) -> @types.WitType {
   { nodes: self.nodes }
 }
 
 ///|
+/// Adjusts all child indices in a `WitTypeNode` by the given offset, used when composing sub-trees.
 fn rebase_type_node(
   node : @types.WitTypeNode,
   offset : Int,

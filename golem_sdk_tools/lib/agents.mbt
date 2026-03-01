@@ -166,6 +166,7 @@ pub fn syntax_type_to_param_type(
 }
 
 ///|
+/// Extracts the content of a doc comment as a trimmed string.
 fn extract_doc_string(doc : @syntax.DocString) -> String {
   let sb = StringBuilder::new()
   let mut first = true
@@ -181,6 +182,7 @@ fn extract_doc_string(doc : @syntax.DocString) -> String {
 }
 
 ///|
+/// Extracts the agent mode (durable or ephemeral) from `#derive.agent` attributes.
 fn extract_agent_mode(
   attrs : @list.List[@attribute.Attribute],
 ) -> AgentMode raise AgentParseError {
@@ -206,6 +208,7 @@ fn extract_agent_mode(
 }
 
 ///|
+/// Extracts the prompt hint string from a `#derive.prompt_hint` attribute, if present.
 fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
   let mut result : String? = None
   attrs.each(fn(attr) {
@@ -260,6 +263,7 @@ pub fn is_unstructured_binary_type(pt : ParamType) -> Bool {
 }
 
 ///|
+/// Validates that a `Multimodal` type is not nested inside another container type.
 fn validate_no_nested_multimodal(
   param_name : String,
   pt : ParamType,
@@ -285,6 +289,7 @@ fn validate_no_nested_multimodal(
 }
 
 ///|
+/// Recursively checks that no `Multimodal` type appears inside a wrapper type.
 fn validate_no_multimodal_inside(
   wrapper : String,
   param_name : String,
@@ -314,6 +319,7 @@ fn validate_no_multimodal_inside(
 }
 
 ///|
+/// Extracts `#derive.text_languages` and `#derive.mime_types` restrictions from attributes, grouped by parameter name.
 fn extract_schema_restrictions(
   attrs : @list.List[@attribute.Attribute],
 ) -> Map[String, SchemaOptions] {
@@ -383,6 +389,7 @@ fn extract_schema_restrictions(
 }
 
 ///|
+/// Extracts method parameter names and types from a function declaration AST.
 fn extract_method_params(
   fun_decl : @syntax.FunDecl,
 ) -> Array[(String, ParamType)] raise AgentParseError {
@@ -407,6 +414,7 @@ fn extract_method_params(
 }
 
 ///|
+/// Extracts the return type from a function declaration, returning `None` for `Unit`.
 fn extract_return_type(
   fun_decl : @syntax.FunDecl,
 ) -> ParamType? raise AgentParseError {

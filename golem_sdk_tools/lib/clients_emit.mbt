@@ -1,4 +1,5 @@
 ///|
+/// Checks if any constructor parameter uses an RPC-incompatible type.
 fn has_rpc_incompatible_constructor(agent : AgentInfo) -> Bool {
   agent.constructor_params
   .iter()
@@ -7,6 +8,7 @@ fn has_rpc_incompatible_constructor(agent : AgentInfo) -> Bool {
 }
 
 ///|
+/// Checks if any parameter or return type of a method uses an RPC-incompatible type.
 fn method_has_rpc_incompatible_types(meth : MethodInfo) -> Bool {
   for p in meth.params {
     if is_rpc_incompatible_type(p.1) {
@@ -54,6 +56,7 @@ pub fn generate_client_code(
 }
 
 ///|
+/// Generates the client struct definition containing an `AgentClient` field.
 fn build_client_struct(client_name : String) -> @syntax.Impl {
   make_struct_def(client_name, [
     ("client", make_qualified_parameterized_type("rpc", "AgentClient", [])),
@@ -61,6 +64,7 @@ fn build_client_struct(client_name : String) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the expression that serializes constructor parameters into a `DataValue`.
 fn build_constructor_data_expr(agent : AgentInfo) -> @syntax.Expr {
   // Check if the constructor has a multimodal parameter (must be the only param)
   let has_multimodal = agent.constructor_params
@@ -83,6 +87,7 @@ fn build_constructor_data_expr(agent : AgentInfo) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the `get` constructor that creates a client by initializing the remote agent.
 fn build_client_get(agent : AgentInfo, client_name : String) -> @syntax.Impl {
   let params : Array[@syntax.Parameter] = agent.constructor_params.map(fn(p) {
     make_typed_param(p.0, param_type_to_ast_type(p.1))
@@ -110,6 +115,7 @@ fn build_client_get(agent : AgentInfo, client_name : String) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the `new_phantom` constructor that creates a phantom client with a given UUID.
 fn build_client_new_phantom(
   agent : AgentInfo,
   client_name : String,
@@ -150,6 +156,7 @@ fn build_client_new_phantom(
 }
 
 ///|
+/// Generates the `get_agent_id` method that returns the remote agent's ID.
 fn build_client_get_agent_id(client_name : String) -> @syntax.Impl {
   let body = make_dot_apply(
     make_field_access(make_ident_expr("self"), "client"),
@@ -167,6 +174,7 @@ fn build_client_get_agent_id(client_name : String) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the `phantom_id` method that returns the phantom UUID, if any.
 fn build_client_phantom_id(client_name : String) -> @syntax.Impl {
   let body = make_dot_apply(
     make_field_access(make_ident_expr("self"), "client"),
@@ -188,6 +196,7 @@ fn build_client_phantom_id(client_name : String) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the `drop` method that releases the remote agent handle.
 fn build_client_drop(client_name : String) -> @syntax.Impl {
   let body = make_dot_apply(
     make_field_access(make_ident_expr("self"), "client"),
@@ -205,6 +214,7 @@ fn build_client_drop(client_name : String) -> @syntax.Impl {
 }
 
 ///|
+/// Generates the expression that serializes a single method parameter to a `WitValue` for RPC.
 fn build_rpc_param_expr(param : (String, ParamType)) -> @syntax.Expr {
   let (name, pt) = param
   if is_multimodal_type(pt) {
@@ -227,11 +237,13 @@ fn build_rpc_param_expr(param : (String, ParamType)) -> @syntax.Expr {
 }
 
 ///|
+/// Generates the array expression containing all serialized method parameters for RPC.
 fn build_rpc_params_expr(meth : MethodInfo) -> @syntax.Expr {
   make_array(meth.params.map(build_rpc_param_expr))
 }
 
 ///|
+/// Generates an invoke-and-await method on the client that calls the remote agent and returns the result.
 fn build_client_method_invoke(
   agent : AgentInfo,
   meth : MethodInfo,
@@ -295,6 +307,7 @@ fn build_client_method_invoke(
 }
 
 ///|
+/// Generates a fire-and-forget trigger method on the client that invokes without waiting for a result.
 fn build_client_method_trigger(
   agent : AgentInfo,
   meth : MethodInfo,
@@ -323,6 +336,7 @@ fn build_client_method_trigger(
 }
 
 ///|
+/// Generates a scheduled invocation method on the client that triggers at a specified time.
 fn build_client_method_schedule(
   agent : AgentInfo,
   meth : MethodInfo,

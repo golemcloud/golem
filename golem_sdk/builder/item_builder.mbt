@@ -6,6 +6,7 @@ struct ItemBuilder {
 }
 
 ///|
+/// Returns the root `Builder` from the parent chain.
 fn ItemBuilder::root_builder(self : ItemBuilder) -> Builder {
   self.parent.root_builder()
 }
