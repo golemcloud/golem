@@ -1,4 +1,5 @@
 ///|
+/// Converts a `ParamType` to its MoonBit source code string representation.
 pub fn param_type_to_type_string(pt : ParamType) -> String {
   match pt {
     Simple(name) => name
@@ -53,6 +54,7 @@ fn param_type_to_ast_type(pt : ParamType) -> @syntax.Type {
 }
 
 ///|
+/// Generates an AST expression that produces the `ElementSchema` for a `ParamType`.
 pub fn param_type_to_schema_expr(
   pt : ParamType,
   options? : SchemaOptions? = None,
@@ -547,6 +549,7 @@ fn build_multimodal_method_arm_body(
 }
 
 ///|
+/// Generates the `impl RawAgent for AgentName` AST node with method dispatch logic.
 pub fn build_raw_agent_impl(agent : AgentInfo) -> @syntax.Impl {
   // Build match arms for each method
   let cases : Array[@syntax.Case] = agent.methods.map(fn(m) {
@@ -582,6 +585,8 @@ pub fn build_raw_agent_impl(agent : AgentInfo) -> @syntax.Impl {
 }
 
 ///|
+/// Generates all agent registration code: the `init` block calling
+/// `register_agent` and all `RawAgent` impls.
 pub fn generate_agent_registration(
   agents : Array[AgentInfo],
 ) -> @list.List[@syntax.Impl] {

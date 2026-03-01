@@ -1,4 +1,5 @@
 ///|
+/// Represents a parsed public function signature from a `.mbt` source file.
 pub(all) struct FnSignature {
   gen_name : String
   user_name : String

@@ -1,4 +1,5 @@
 ///|
+/// Represents a parsed parameter/return type from agent source code.
 pub(all) enum ParamType {
   Simple(String)
   Optional(ParamType)
@@ -38,12 +39,14 @@ pub fn decode_qualified(name : String) -> (String, String)? {
 }
 
 ///|
+/// Schema restriction options parsed from `#derive.text_languages` and `#derive.mime_types` annotations.
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
 } derive(Show, Eq)
 
 ///|
+/// Parsed information about a public agent method.
 pub(all) struct MethodInfo {
   name : String
   description : String
@@ -54,12 +57,14 @@ pub(all) struct MethodInfo {
 } derive(Show)
 
 ///|
+/// Agent execution mode: durable (default) or ephemeral.
 pub(all) enum AgentMode {
   Durable
   Ephemeral
 } derive(Show, Eq)
 
 ///|
+/// Complete parsed information about an agent, including its constructor, methods, and mode.
 pub(all) struct AgentInfo {
   name : String
   description : String
@@ -73,11 +78,13 @@ pub(all) struct AgentInfo {
 } derive(Show)
 
 ///|
+/// Error raised when agent source parsing fails.
 pub suberror AgentParseError {
   AgentParseError(String)
 } derive(Show)
 
 ///|
+/// Converts a MoonBit syntax AST type to the SDK's `ParamType` representation.
 pub fn syntax_type_to_param_type(
   ty : @syntax.Type,
 ) -> ParamType raise AgentParseError {
@@ -217,9 +224,37 @@ fn extract_prompt_hint(attrs : @list.List[@attribute.Attribute]) -> String? {
 }
 
 ///|
+/// Returns true if the parameter type is a `Multimodal[T]`.
 pub fn is_multimodal_type(pt : ParamType) -> Bool {
   match pt {
     MultimodalType(_) => true
+    _ => false
+  }
+}
+
+///|
+/// Returns true if the parameter type cannot be serialized for RPC transport.
+/// Currently always returns false.
+pub fn is_rpc_incompatible_type(_pt : ParamType) -> Bool {
+  false
+}
+
+///|
+/// Returns true if the parameter type is `UnstructuredText`.
+pub fn is_unstructured_text_type(pt : ParamType) -> Bool {
+  match pt {
+    Simple(name) =>
+      name == "UnstructuredText" || name == "@types.UnstructuredText"
+    _ => false
+  }
+}
+
+///|
+/// Returns true if the parameter type is `UnstructuredBinary`.
+pub fn is_unstructured_binary_type(pt : ParamType) -> Bool {
+  match pt {
+    Simple(name) =>
+      name == "UnstructuredBinary" || name == "@types.UnstructuredBinary"
     _ => false
   }
 }
@@ -389,6 +424,8 @@ fn extract_return_type(
 }
 
 ///|
+/// Parses agent definitions from source files. Finds `#derive.agent` structs,
+/// their constructors, and public methods.
 pub fn parse_agents(
   files : Array[(String, String)],
 ) -> Array[AgentInfo] raise AgentParseError {

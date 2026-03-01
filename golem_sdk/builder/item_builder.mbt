@@ -1,4 +1,6 @@
 ///|
+/// Builder for adding a single child item within a container node (option, result, variant).
+/// Mirrors `Builder` methods but delegates to the parent builder.
 struct ItemBuilder {
   parent : &SingleItemBuilderParent
 }

@@ -1,4 +1,6 @@
 ///|
+/// Generates `HasElementSchema`, `FromExtractor`, `FromElementValue`, and
+/// `ToElementValue` trait implementations for all parsed value types.
 pub fn generate_value_type_impls(
   types : Array[ValueTypeInfo],
 ) -> @list.List[@syntax.Impl] {
@@ -578,6 +580,7 @@ fn build_variant_to_element_value(
 // --- MultimodalEnum ---
 
 ///|
+/// Generates `MultimodalModality` trait implementations for all parsed multimodal enums.
 pub fn generate_multimodal_impls(
   enums : Array[MultimodalEnumInfo],
 ) -> @list.List[@syntax.Impl] {

@@ -5,6 +5,7 @@ pub(all) struct Multimodal[T] {
 } derive(Show, Eq)
 
 ///|
+/// Creates a new `Multimodal` collection from an array of items.
 pub fn[T] Multimodal::new(items : Array[T]) -> Multimodal[T] {
   { items, }
 }

@@ -1,33 +1,40 @@
 ///|
+/// Returns the `ElementSchema` (type description) for a MoonBit type. Used by the SDK to generate agent type definitions.
 pub(open) trait HasElementSchema {
   element_schema() -> @common.ElementSchema
 }
 
 ///|
+/// Deserializes a value from a low-level `Extractor` (WitNode level). Implement this for custom types.
 pub(open) trait FromExtractor {
   from_extractor(&@extractor.Extractor) -> Self raise @common.AgentError
 }
 
 ///|
+/// Deserializes a value from an `ElementValue`. Typically delegates to `FromExtractor`.
 pub(open) trait FromElementValue {
   from_element_value(@common.ElementValue) -> Self raise @common.AgentError
 }
 
 ///|
+/// Infers and returns the `ElementSchema` for a value via its `HasElementSchema` implementation.
 pub fn[T : HasElementSchema] schema_of(_v : T) -> @common.ElementSchema {
   T::element_schema()
 }
 
 ///|
+/// Zero-sized type tag used to resolve `HasElementSchema` without needing a value instance.
 pub(all) struct TypeTag[T] {}
 
 ///|
+/// Options for applying restrictions to schemas (e.g., language codes for text, MIME types for binary).
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
 } derive(Show, Eq)
 
 ///|
+/// Returns the `ElementSchema` for a type given its `TypeTag`, without needing a value instance.
 pub fn[T : HasElementSchema] schema_of_tag(
   _ : TypeTag[T],
 ) -> @common.ElementSchema {
@@ -35,6 +42,7 @@ pub fn[T : HasElementSchema] schema_of_tag(
 }
 
 ///|
+/// Returns the `ElementSchema` for a type with schema restrictions applied. Raises `AgentError` if the options are incompatible with the schema kind.
 pub fn[T : HasElementSchema] schema_of_tag_with_options(
   _ : TypeTag[T],
   options : SchemaOptions,
@@ -87,6 +95,7 @@ fn apply_schema_options(
 }
 
 ///|
+/// Typed convenience function to deserialize a value from an `ElementValue`.
 pub fn[T : FromElementValue] from_element_value_as(
   v : @common.ElementValue,
 ) -> T raise @common.AgentError {
@@ -94,11 +103,13 @@ pub fn[T : FromElementValue] from_element_value_as(
 }
 
 ///|
+/// Serializes a value to an `ElementValue`. Implement this for custom types.
 pub(open) trait ToElementValue {
   to_element_value(Self) -> @common.ElementValue raise @common.AgentError
 }
 
 ///|
+/// Typed convenience function to serialize a value to an `ElementValue`.
 pub fn[T : ToElementValue] to_element_value_as(
   v : T,
 ) -> @common.ElementValue raise @common.AgentError {
@@ -106,6 +117,7 @@ pub fn[T : ToElementValue] to_element_value_as(
 }
 
 ///|
+/// Typed convenience function to deserialize a value from an `Extractor`.
 pub fn[T : FromExtractor] from_extractor_as(
   e : &@extractor.Extractor,
 ) -> T raise @common.AgentError {

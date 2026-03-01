@@ -1,9 +1,11 @@
 ///|
+/// Fluent builder for constructing `WitType` trees (type descriptions for schemas).
 pub struct TypeBuilder {
   nodes : Array[@types.NamedWitTypeNode]
 }
 
 ///|
+/// Creates a new empty `WitType` builder.
 pub fn TypeBuilder::new() -> TypeBuilder {
   { nodes: [] }
 }
@@ -15,6 +17,7 @@ fn TypeBuilder::add(self : TypeBuilder, type_node : @types.WitTypeNode) -> Int {
 }
 
 ///|
+/// Appends an existing `WitType`'s nodes into this builder, rebasing indices. Returns the root index.
 pub fn TypeBuilder::add_wit_type(
   self : TypeBuilder,
   wit_type : @types.WitType,
@@ -60,6 +63,7 @@ fn rebase_type_node(
 }
 
 ///|
+/// Builds a `WitType` describing an optional type wrapping the given inner type.
 pub fn TypeBuilder::option_type(
   self : TypeBuilder,
   inner : @types.WitType,
@@ -75,6 +79,7 @@ pub fn TypeBuilder::option_type(
 }
 
 ///|
+/// Builds a `WitType` describing a list type with the given element type.
 pub fn TypeBuilder::list_type(
   self : TypeBuilder,
   inner : @types.WitType,
@@ -90,6 +95,7 @@ pub fn TypeBuilder::list_type(
 }
 
 ///|
+/// Builds a `WitType` describing a result type with the given ok and error types.
 pub fn TypeBuilder::result_type(
   self : TypeBuilder,
   ok : @types.WitType,
@@ -107,6 +113,7 @@ pub fn TypeBuilder::result_type(
 }
 
 ///|
+/// Builds a `WitType` describing a record type with the given named fields.
 pub fn TypeBuilder::record_type(
   self : TypeBuilder,
   fields : Array[(String, @types.WitType)],
@@ -127,6 +134,7 @@ pub fn TypeBuilder::record_type(
 }
 
 ///|
+/// Builds a `WitType` describing a variant type with the given named cases and optional payloads.
 pub fn TypeBuilder::variant_type(
   self : TypeBuilder,
   cases : Array[(String, @types.WitType?)],
@@ -152,6 +160,7 @@ pub fn TypeBuilder::variant_type(
 }
 
 ///|
+/// Builds a `WitType` describing a tuple type with the given element types.
 pub fn TypeBuilder::tuple_type(
   self : TypeBuilder,
   elements : Array[@types.WitType],
@@ -171,6 +180,7 @@ pub fn TypeBuilder::tuple_type(
 }
 
 ///|
+/// Builds a `WitType` describing an enum type with the given case names.
 pub fn TypeBuilder::enum_type(
   self : TypeBuilder,
   cases : Array[String],

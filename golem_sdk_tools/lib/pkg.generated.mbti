@@ -19,6 +19,8 @@ pub fn ensure_pkg_import(String, String, String) -> String
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
+pub fn generate_client_code(Array[AgentInfo]) -> @list.List[@syntax.Impl]
+
 pub fn generate_multimodal_impls(Array[MultimodalEnumInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl]
@@ -26,6 +28,12 @@ pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl
 pub fn generate_value_type_impls(Array[ValueTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn is_multimodal_type(ParamType) -> Bool
+
+pub fn is_rpc_incompatible_type(ParamType) -> Bool
+
+pub fn is_unstructured_binary_type(ParamType) -> Bool
+
+pub fn is_unstructured_text_type(ParamType) -> Bool
 
 pub fn param_type_to_schema_expr(ParamType, options? : SchemaOptions?) -> @syntax.Expr
 
@@ -41,7 +49,11 @@ pub fn parse_pkg_exports(String) -> Array[String]
 
 pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise AgentParseError
 
+pub fn rpc_function_name(String, String) -> String
+
 pub fn syntax_type_to_param_type(@syntax.Type) -> ParamType raise AgentParseError
+
+pub fn to_kebab_case(String) -> String
 
 pub fn transform_exports(Array[String]) -> Array[String]
 

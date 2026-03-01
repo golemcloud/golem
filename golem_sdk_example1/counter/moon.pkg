@@ -5,6 +5,9 @@ import {
   "vigoo/golem_sdk/schema",
   "vigoo/golem_sdk/gen",
   "vigoo/golem_sdk/agents/types" @types,
+  "vigoo/golem_sdk/rpc" @rpc,
+  "vigoo/golem_sdk/interface/golem/rpc/types" @rpcTypes,
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
 }
 
 options(

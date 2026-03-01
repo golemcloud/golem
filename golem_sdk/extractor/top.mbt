@@ -1,4 +1,5 @@
 ///|
+/// Extracts the element array from a `DataValue::Tuple`. Panics if the value is not a tuple.
 pub fn extract_tuple(value : @common.DataValue) -> Array[@common.ElementValue] {
   match value {
     @common.DataValue::Tuple(elements) => elements
@@ -7,6 +8,7 @@ pub fn extract_tuple(value : @common.DataValue) -> Array[@common.ElementValue] {
 }
 
 ///|
+/// Extracts the named element array from a `DataValue::Multimodal`. Panics if the value is not multimodal.
 pub fn extract_multimodal(
   value : @common.DataValue,
 ) -> Array[(String, @common.ElementValue)] {
@@ -17,6 +19,7 @@ pub fn extract_multimodal(
 }
 
 ///|
+/// Asserts that the array has exactly one element and returns it. Panics otherwise.
 pub fn expect_single_element(
   values : Array[@common.ElementValue],
 ) -> @common.ElementValue {
@@ -27,6 +30,7 @@ pub fn expect_single_element(
 }
 
 ///|
+/// Unwraps a `ComponentModel` element value and creates an `Extractor` for it.
 pub fn extract_component_model_value(
   element : @common.ElementValue,
 ) -> &Extractor raise @common.AgentError {
@@ -39,6 +43,7 @@ pub fn extract_component_model_value(
 }
 
 ///|
+/// Extracts a `TextReference` from an `UnstructuredText` element value. Panics on type mismatch.
 pub fn extract_unstructured_text(
   element : @common.ElementValue,
 ) -> @common.TextReference {
@@ -49,6 +54,7 @@ pub fn extract_unstructured_text(
 }
 
 ///|
+/// Extracts a `BinaryReference` from an `UnstructuredBinary` element value. Panics on type mismatch.
 pub fn extract_unstructured_binary(
   element : @common.ElementValue,
 ) -> @common.BinaryReference {
@@ -59,6 +65,7 @@ pub fn extract_unstructured_binary(
 }
 
 ///|
+/// Creates an `Extractor` for reading values from a `WitValue` tree.
 pub fn extract(value : @types.WitValue) -> &Extractor {
   WitValueExtractor::{ value, }
 }
@@ -454,6 +461,8 @@ fn NodeExtractor::extract(self : NodeExtractor, node_idx : Int) -> &Extractor? {
 }
 
 ///|
+/// Trait for reading typed values from a `WitValue` node tree. Provides accessors
+/// for all WIT primitive and compound types, returning `None` on type mismatch.
 pub(open) trait Extractor {
   u8(Self) -> Byte?
   u16(Self) -> UInt?

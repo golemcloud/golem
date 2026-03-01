@@ -10,3 +10,4 @@
 - having to build a cli tool for 'derivation'
 - hard to change and regenerate bindings with wit-bindgen moonbit. many leftovers 
 - wit-bindgen still generating pkg.json that moon fmt then converts, leaving behind the old ones
+- we need moonbit async runtime for wasi pollable

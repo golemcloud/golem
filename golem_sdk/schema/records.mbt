@@ -1,4 +1,5 @@
 ///|
+/// Creates an `ElementSchema` for a record type from an array of (name, schema) field pairs.
 pub fn make_record_schema(
   fields : Array[(String, @common.ElementSchema)],
 ) -> @common.ElementSchema {
@@ -16,6 +17,7 @@ pub fn make_record_schema(
 }
 
 ///|
+/// Creates an `ElementValue` for a record from an array of field values.
 pub fn make_record_value(
   fields : Array[@common.ElementValue],
 ) -> @common.ElementValue raise @common.AgentError {
@@ -39,6 +41,7 @@ pub fn make_record_value(
 }
 
 ///|
+/// Extracts and deserializes a record field by index from an `Extractor`.
 pub fn[T : FromExtractor] extract_field(
   e : &@extractor.Extractor,
   idx : Int,
@@ -52,6 +55,7 @@ pub fn[T : FromExtractor] extract_field(
 }
 
 ///|
+/// Creates an `ElementSchema` for a tuple type from an array of element schemas.
 pub fn make_tuple_schema(
   elements : Array[@common.ElementSchema],
 ) -> @common.ElementSchema {
@@ -70,6 +74,7 @@ pub fn make_tuple_schema(
 }
 
 ///|
+/// Creates an `ElementValue` for a tuple from an array of element values.
 pub fn make_tuple_value(
   elements : Array[@common.ElementValue],
 ) -> @common.ElementValue raise @common.AgentError {
@@ -93,6 +98,7 @@ pub fn make_tuple_value(
 }
 
 ///|
+/// Extracts and deserializes a tuple element by index from an `Extractor`.
 pub fn[T : FromExtractor] extract_tuple_element(
   e : &@extractor.Extractor,
   idx : Int,
@@ -106,6 +112,7 @@ pub fn[T : FromExtractor] extract_tuple_element(
 }
 
 ///|
+/// Creates an `ElementSchema` for a simple enum type from an array of case names.
 pub fn make_enum_schema(cases : Array[String]) -> @common.ElementSchema {
   @common.ElementSchema::ComponentModel(
     @builder.TypeBuilder::new().enum_type(cases),
@@ -113,11 +120,13 @@ pub fn make_enum_schema(cases : Array[String]) -> @common.ElementSchema {
 }
 
 ///|
+/// Creates an `ElementValue` for an enum case by its index.
 pub fn make_enum_value(idx : UInt) -> @common.ElementValue {
   @common.ElementValue::ComponentModel(@builder.Builder::new().enum_value(idx))
 }
 
 ///|
+/// Extracts the enum case index from an `Extractor`.
 pub fn extract_enum(e : &@extractor.Extractor) -> UInt raise @common.AgentError {
   guard e.enum_value() is Some(idx) else {
     raise @common.AgentError::InvalidInput("Expected enum value")
@@ -126,6 +135,7 @@ pub fn extract_enum(e : &@extractor.Extractor) -> UInt raise @common.AgentError 
 }
 
 ///|
+/// Creates an `ElementSchema` for a variant type from an array of (name, optional payload schema) pairs.
 pub fn make_variant_schema(
   cases : Array[(String, @common.ElementSchema?)],
 ) -> @common.ElementSchema {
@@ -150,6 +160,7 @@ pub fn make_variant_schema(
 }
 
 ///|
+/// Creates an `ElementValue` for a variant case with an optional payload.
 pub fn make_variant_value(
   case_idx : UInt,
   payload : @common.ElementValue?,
@@ -177,6 +188,7 @@ pub fn make_variant_value(
 }
 
 ///|
+/// Extracts the variant case index and optional payload extractor from an `Extractor`.
 pub fn extract_variant(
   e : &@extractor.Extractor,
 ) -> (UInt, &@extractor.Extractor?) raise @common.AgentError {

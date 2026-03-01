@@ -1,0 +1,48 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/rpc"
+
+import {
+  "vigoo/golem_sdk/interface/golem/agent/common",
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
+  "vigoo/golem_sdk/schema",
+}
+
+// Values
+pub fn[T : @schema.FromElementValue] from_wit_value(@vigoo/golem_sdk/interface/golem/rpc/types.WitValue) -> T raise @common.AgentError
+
+pub fn[T : @vigoo/golem_sdk/agents/types.MultimodalModality] multimodal_to_wit_value(@vigoo/golem_sdk/agents/types.Multimodal[T]) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+
+pub fn[T : @schema.ToElementValue] to_wit_value(T) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+
+pub fn unstructured_binary_to_wit_value(@vigoo/golem_sdk/agents/types.UnstructuredBinary) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+
+pub fn unstructured_text_to_wit_value(@vigoo/golem_sdk/agents/types.UnstructuredText) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue raise @common.AgentError
+
+pub fn unwrap_wit_tuple(@vigoo/golem_sdk/interface/golem/rpc/types.WitValue) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue
+
+pub fn[T : @vigoo/golem_sdk/agents/types.MultimodalModality] wit_value_to_multimodal(@vigoo/golem_sdk/interface/golem/rpc/types.WitValue) -> @vigoo/golem_sdk/agents/types.Multimodal[T] raise @common.AgentError
+
+pub fn wit_value_to_unstructured_binary(@vigoo/golem_sdk/interface/golem/rpc/types.WitValue) -> @vigoo/golem_sdk/agents/types.UnstructuredBinary raise @common.AgentError
+
+pub fn wit_value_to_unstructured_text(@vigoo/golem_sdk/interface/golem/rpc/types.WitValue) -> @vigoo/golem_sdk/agents/types.UnstructuredText raise @common.AgentError
+
+// Errors
+
+// Types and methods
+pub(all) struct AgentClient {
+  agent_id : @vigoo/golem_sdk/interface/golem/rpc/types.AgentId
+  rpc : @vigoo/golem_sdk/interface/golem/rpc/types.WasmRpc
+}
+pub fn AgentClient::drop(Self) -> Unit
+pub fn AgentClient::get(String, @common.DataValue) -> Self raise @common.AgentError
+pub fn AgentClient::get_agent_id(Self) -> String
+pub fn AgentClient::invoke(Self, String, Array[@vigoo/golem_sdk/interface/golem/rpc/types.WitValue]) -> Unit
+pub fn AgentClient::invoke_and_await(Self, String, Array[@vigoo/golem_sdk/interface/golem/rpc/types.WitValue]) -> @vigoo/golem_sdk/interface/golem/rpc/types.WitValue
+pub fn AgentClient::new_phantom(String, @common.DataValue, @vigoo/golem_sdk/interface/golem/rpc/types.Uuid) -> Self raise @common.AgentError
+pub fn AgentClient::phantom_id(Self) -> @vigoo/golem_sdk/interface/golem/rpc/types.Uuid? raise @common.AgentError
+pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, Array[@vigoo/golem_sdk/interface/golem/rpc/types.WitValue]) -> Unit
+
+// Type aliases
+
+// Traits
+

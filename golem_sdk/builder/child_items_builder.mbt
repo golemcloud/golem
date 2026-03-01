@@ -1,4 +1,6 @@
 ///|
+/// Builder for adding multiple child items within a container node (record, tuple, list).
+/// Collects child indices and finalizes them on the parent.
 struct ChildItemsBuilder {
   parent : &ItemSequenceBuilderParent
   items : Array[NodeIndex]
@@ -6,6 +8,7 @@ struct ChildItemsBuilder {
 }
 
 ///|
+/// Executes the callback to add child items, then finalizes the sequence on the parent node.
 pub fn ChildItemsBuilder::items(
   self : ChildItemsBuilder,
   inner : (ItemBuilder) -> Unit raise BuilderError,

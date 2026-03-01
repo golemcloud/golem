@@ -1,4 +1,5 @@
 ///|
+/// Represents the payload of an enum variant: no payload, single type, or multiple named fields.
 pub(all) enum VariantPayload {
   None
   Single(ParamType)
@@ -6,6 +7,7 @@ pub(all) enum VariantPayload {
 } derive(Show, Eq)
 
 ///|
+/// Discriminates between the three supported custom type shapes: record, simple enum, and variant enum.
 pub(all) enum ValueTypeKind {
   Record(Array[(String, ParamType)])
   SimpleEnum(Array[String])
@@ -13,18 +15,21 @@ pub(all) enum ValueTypeKind {
 } derive(Show, Eq)
 
 ///|
+/// Parsed information about a custom data type annotated with `#derive.golem_schema`.
 pub(all) struct ValueTypeInfo {
   name : String
   kind : ValueTypeKind
 } derive(Show, Eq)
 
 ///|
+/// Parsed information about a multimodal enum annotated with `#derive.multimodal`.
 pub(all) struct MultimodalEnumInfo {
   name : String
   variants : Array[(String, ParamType)]
 } derive(Show)
 
 ///|
+/// Parses `#derive.multimodal` annotated enum types from source files.
 pub fn parse_multimodal_enums(
   files : Array[(String, String)],
 ) -> Array[MultimodalEnumInfo] raise AgentParseError {
@@ -86,6 +91,7 @@ pub fn parse_multimodal_enums(
 }
 
 ///|
+/// Parses `#derive.golem_schema` annotated types from source files.
 pub fn parse_value_types(
   files : Array[(String, String)],
 ) -> Array[ValueTypeInfo] raise AgentParseError {

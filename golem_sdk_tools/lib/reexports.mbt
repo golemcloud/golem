@@ -1,4 +1,6 @@
 ///|
+/// Generates re-export wrapper functions as AST nodes. Each function delegates
+/// to the corresponding function in the SDK's `gen` package.
 pub fn generate_reexports(
   fns : Array[FnSignature],
   gen_pkg : String,

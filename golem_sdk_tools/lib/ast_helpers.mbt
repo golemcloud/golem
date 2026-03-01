@@ -483,6 +483,97 @@ fn make_string_pattern(s : String) -> @syntax.Pattern {
 }
 
 ///|
+fn make_struct_def(
+  name : String,
+  fields : Array[(String, @syntax.Type)],
+) -> @syntax.Impl {
+  let field_decls = fields.map(fn(f) {
+    @syntax.FieldDecl::{
+      name: @syntax.FieldName::{ label: f.0, loc: dummy_loc },
+      ty: f.1,
+      mut_: false,
+      vis: @syntax.Visibility::Default,
+      loc: dummy_loc,
+      attrs: to_list([]),
+      doc: @syntax.DocString::empty(),
+    }
+  })
+  @syntax.Impl::TopTypeDef(@syntax.TypeDecl::{
+    tycon: name,
+    tycon_loc: dummy_loc,
+    params: to_list([]),
+    components: @syntax.TypeDesc::Record(to_list(field_decls)),
+    attrs: to_list([]),
+    doc: @syntax.DocString::empty(),
+    type_vis: @syntax.Visibility::Pub(attr=Some("all"), loc=dummy_loc),
+    deriving: to_list([]),
+    loc: dummy_loc,
+    is_declare: false,
+  })
+}
+
+///|
+fn make_top_func(
+  type_name : String?,
+  fn_name : String,
+  params : Array[@syntax.Parameter],
+  return_type : @syntax.Type?,
+  raises : Bool,
+  body : @syntax.Expr,
+) -> @syntax.Impl {
+  let fun_decl : @syntax.FunDecl = {
+    type_name: match type_name {
+      Some(tn) =>
+        Some(@syntax.TypeName::{
+          name: @syntax.LongIdent::Ident(name=tn),
+          is_object: false,
+          loc: dummy_loc,
+        })
+      None => None
+    },
+    name: make_binder(fn_name),
+    has_error: if raises {
+      Some(dummy_loc)
+    } else {
+      None
+    },
+    is_async: None,
+    decl_params: Some(to_list(params)),
+    params_loc: dummy_loc,
+    quantifiers: to_list([]),
+    return_type,
+    error_type: if raises {
+      @syntax.ErrorType::ErrorType(
+        ty=make_qualified_parameterized_type("common", "AgentError", []),
+      )
+    } else {
+      @syntax.ErrorType::NoErrorType
+    },
+    vis: @syntax.Visibility::Pub(attr=None, loc=dummy_loc),
+    attrs: to_list([]),
+    doc: @syntax.DocString::empty(),
+  }
+  @syntax.Impl::TopFuncDef(
+    fun_decl~,
+    decl_body=@syntax.DeclBody::DeclBody(local_types=to_list([]), expr=body),
+    loc=dummy_loc,
+  )
+}
+
+///|
+fn make_typed_param(name : String, ty : @syntax.Type) -> @syntax.Parameter {
+  @syntax.Parameter::Positional(binder=make_binder(name), ty=Some(ty))
+}
+
+///|
+fn make_self_param(type_name : String) -> @syntax.Parameter {
+  @syntax.Parameter::Positional(
+    binder=make_binder("self"),
+    ty=Some(make_type(type_name)),
+  )
+}
+
+///|
 fn make_top_impl(
   self_type_name : String,
   trait_pkg : String,

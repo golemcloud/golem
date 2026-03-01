@@ -2,6 +2,7 @@
 typealias Int as NodeIndex
 
 ///|
+/// Error type for builder misuse, such as adding to a closed builder.
 pub suberror BuilderError {
   BuilderError(String)
 }
@@ -12,6 +13,7 @@ struct Builder {
 }
 
 ///|
+/// Creates a new empty `WitValue` builder.
 pub fn Builder::new() -> Builder {
   { nodes: [] }
 }
@@ -83,6 +85,7 @@ fn Builder::add_char(self : Builder, value : Char) -> NodeIndex {
 }
 
 ///|
+/// Adds a boolean node to this builder and returns its index.
 pub fn Builder::add_bool(self : Builder, value : Bool) -> NodeIndex {
   self.add(@types.WitNode::PrimBool(value))
 }
@@ -257,96 +260,112 @@ fn Builder::finish_seq(
 }
 
 ///|
+/// Builds a `WitValue` containing a single unsigned 8-bit integer.
 pub fn Builder::u8(self : Builder, value : Byte) -> @types.WitValue {
   let _ = self.add_u8(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single unsigned 16-bit integer.
 pub fn Builder::u16(self : Builder, value : UInt) -> @types.WitValue {
   let _ = self.add_u16(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single unsigned 32-bit integer.
 pub fn Builder::u32(self : Builder, value : UInt) -> @types.WitValue {
   let _ = self.add_u32(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single unsigned 64-bit integer.
 pub fn Builder::u64(self : Builder, value : UInt64) -> @types.WitValue {
   let _ = self.add_u64(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single signed 8-bit integer.
 pub fn Builder::s8(self : Builder, value : Int) -> @types.WitValue {
   let _ = self.add_s8(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single signed 16-bit integer.
 pub fn Builder::s16(self : Builder, value : Int) -> @types.WitValue {
   let _ = self.add_s16(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single signed 32-bit integer.
 pub fn Builder::s32(self : Builder, value : Int) -> @types.WitValue {
   let _ = self.add_s32(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single signed 64-bit integer.
 pub fn Builder::s64(self : Builder, value : Int64) -> @types.WitValue {
   let _ = self.add_s64(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single 32-bit floating point value.
 pub fn Builder::f32(self : Builder, value : Float) -> @types.WitValue {
   let _ = self.add_f32(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single 64-bit floating point value.
 pub fn Builder::f64(self : Builder, value : Double) -> @types.WitValue {
   let _ = self.add_f64(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single string.
 pub fn Builder::string(self : Builder, value : String) -> @types.WitValue {
   let _ = self.add_string(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single character.
 pub fn Builder::char(self : Builder, value : Char) -> @types.WitValue {
   let _ = self.add_char(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single boolean.
 pub fn Builder::bool(self : Builder, value : Bool) -> @types.WitValue {
   let _ = self.add_bool(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a single enum case by index.
 pub fn Builder::enum_value(self : Builder, value : UInt) -> @types.WitValue {
   let _ = self.add_enum_value(value)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a flags value (array of booleans).
 pub fn Builder::flags(self : Builder, values : Array[Bool]) -> @types.WitValue {
   let _ = self.add_flags(values)
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a record. Fields are added via the callback.
 pub fn Builder::record(
   self : Builder,
   inner : (ItemBuilder) -> Unit raise BuilderError,
@@ -357,6 +376,7 @@ pub fn Builder::record(
 }
 
 ///|
+/// Builds a `WitValue` containing a variant with a payload. The callback adds the payload.
 pub fn Builder::variant(
   self : Builder,
   case_idx : UInt,
@@ -368,6 +388,7 @@ pub fn Builder::variant(
 }
 
 ///|
+/// Builds a `WitValue` containing a unit variant (no payload).
 pub fn Builder::variant_unit(
   self : Builder,
   case_idx : UInt,
@@ -377,6 +398,7 @@ pub fn Builder::variant_unit(
 }
 
 ///|
+/// Builds a `WitValue` containing a variant with an optional payload. Pass `None` for a unit variant, or `Some(callback)` for a variant with payload.
 pub fn Builder::variant_option(
   self : Builder,
   case_idx : UInt,
@@ -390,6 +412,7 @@ pub fn Builder::variant_option(
 }
 
 ///|
+/// Builds a `WitValue` containing a tuple. Elements are added via the callback.
 pub fn Builder::tuple(
   self : Builder,
   inner : (ItemBuilder) -> Unit raise BuilderError,
@@ -400,6 +423,7 @@ pub fn Builder::tuple(
 }
 
 ///|
+/// Builds a `WitValue` containing a list. Elements are added via the callback.
 pub fn Builder::list(
   self : Builder,
   inner : (ItemBuilder) -> Unit raise BuilderError,
@@ -410,6 +434,7 @@ pub fn Builder::list(
 }
 
 ///|
+/// Builds a `WitValue` containing `Some(value)`. The callback adds the inner value.
 pub fn Builder::option_some(
   self : Builder,
   inner : (ItemBuilder) -> Unit raise BuilderError,
@@ -420,12 +445,14 @@ pub fn Builder::option_some(
 }
 
 ///|
+/// Builds a `WitValue` containing `None`.
 pub fn Builder::option_none(self : Builder) -> @types.WitValue {
   let _ = self.add_option_none()
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing an optional value. Pass `None` for `None`, or `Some(callback)` for `Some`.
 pub fn Builder::option(
   self : Builder,
   inner : ((ItemBuilder) -> Unit raise BuilderError)?,
@@ -437,6 +464,7 @@ pub fn Builder::option(
 }
 
 ///|
+/// Builds a `WitValue` containing `Ok(value)`. The callback adds the inner value.
 pub fn Builder::result_ok(
   self : Builder,
   inner : (ItemBuilder) -> Unit raise BuilderError,
@@ -447,6 +475,7 @@ pub fn Builder::result_ok(
 }
 
 ///|
+/// Builds a `WitValue` containing `Err(value)`. The callback adds the inner value.
 pub fn Builder::result_err(
   self : Builder,
   inner : (ItemBuilder) -> Unit raise BuilderError,
@@ -457,18 +486,21 @@ pub fn Builder::result_err(
 }
 
 ///|
+/// Builds a `WitValue` containing `Ok(unit)`.
 pub fn Builder::result_ok_unit(self : Builder) -> @types.WitValue {
   let _ = self.add_result_ok_unit()
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing `Err(unit)`.
 pub fn Builder::result_err_unit(self : Builder) -> @types.WitValue {
   let _ = self.add_result_err_unit()
   self.build()
 }
 
 ///|
+/// Builds a `WitValue` containing a result. Pass `Ok(callback?)` or `Err(callback?)`.
 pub fn Builder::result(
   self : Builder,
   inner : Result[
@@ -485,6 +517,7 @@ pub fn Builder::result(
 }
 
 ///|
+/// Builds a `WitValue` containing a resource handle.
 pub fn Builder::handle(
   self : Builder,
   uri : @types.Uri,
@@ -495,6 +528,7 @@ pub fn Builder::handle(
 }
 
 ///|
+/// Appends an existing `WitValue`'s nodes into this builder, rebasing indices. Returns the root index.
 pub fn Builder::add_wit_value(
   self : Builder,
   value : @types.WitValue,

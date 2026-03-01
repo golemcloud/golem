@@ -1,4 +1,5 @@
 import {
+  "justjavac/case" @case,
   "moonbitlang/core/list",
   "moonbitlang/parser",
   "moonbitlang/parser/attribute",
