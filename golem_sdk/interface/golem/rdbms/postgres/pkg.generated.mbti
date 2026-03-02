@@ -1,8 +1,8 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/golem/rdbms/postgres"
+package "golemcloud/golem_sdk/interface/golem/rdbms/postgres"
 
 import {
-  "vigoo/golem_sdk/interface/golem/rdbms/types",
+  "golemcloud/golem_sdk/interface/golem/rdbms/types",
 }
 
 // Values

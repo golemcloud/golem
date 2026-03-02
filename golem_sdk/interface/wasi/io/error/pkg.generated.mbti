@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/wasi/io/error"
+package "golemcloud/golem_sdk/interface/wasi/io/error"
 
 // Values
 

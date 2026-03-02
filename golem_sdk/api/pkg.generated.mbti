@@ -1,10 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/api"
+package "golemcloud/golem_sdk/api"
 
 import {
-  "vigoo/golem_sdk/interface/golem/api/host",
-  "vigoo/golem_sdk/interface/golem/rpc/types",
-  "vigoo/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/golem/api/host",
+  "golemcloud/golem_sdk/interface/golem/rpc/types",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
 
 // Values

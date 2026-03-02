@@ -1,9 +1,9 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/wasi/io/streams"
+package "golemcloud/golem_sdk/interface/wasi/io/streams"
 
 import {
-  "vigoo/golem_sdk/interface/wasi/io/error",
-  "vigoo/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/io/error",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
 
 // Values

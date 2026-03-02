@@ -17,3 +17,4 @@
 - **wit-bindgen MoonBit backend use-after-free bug** (FIXED in https://github.com/vigoo/wit-bindgen/tree/moonbit-fixes-1, not yet upstream): Generated code was calling `mbt_ffi_free` on intermediate buffers before the FFI import was called, causing memory corruption. Fixed by reordering the generated code to defer frees until after the import call.
 - having to explicitly `drop()` the RPC clients (because of having to explicitly drop the underlying WIT resource)
 - `logr` library: no way to extend with new sinks without forking
+- could have some way to override dependencies with local ones for development 

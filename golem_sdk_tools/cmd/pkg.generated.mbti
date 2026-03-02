@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk_tools/cmd"
+package "golemcloud/golem_sdk_tools/cmd"
 
 // Values
 

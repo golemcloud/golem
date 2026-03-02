@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/gen/interface/golem/api/saveSnapshot"
+package "golemcloud/golem_sdk/gen/interface/golem/api/saveSnapshot"
 
 // Values
 pub fn save() -> FixedArray[Byte]

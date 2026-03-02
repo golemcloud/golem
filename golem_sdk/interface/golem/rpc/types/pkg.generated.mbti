@@ -1,9 +1,9 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/golem/rpc/types"
+package "golemcloud/golem_sdk/interface/golem/rpc/types"
 
 import {
-  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
-  "vigoo/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
 }
 
 // Values

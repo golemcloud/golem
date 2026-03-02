@@ -1,8 +1,8 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/context"
+package "golemcloud/golem_sdk/context"
 
 import {
-  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
 }
 
 // Values

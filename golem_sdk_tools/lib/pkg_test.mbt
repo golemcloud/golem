@@ -120,14 +120,14 @@ test "ensure_pkg_import adds import to existing block" {
     #|  "is-main": true,
     #|)
   let result = @lib.ensure_pkg_import(
-    content, "vigoo/golem_sdk/agents/types", "@types",
+    content, "golemcloud/golem_sdk/agents/types", "@types",
   )
   inspect(
     result,
     content=(
       #|import {
       #|  "some/pkg",
-      #|  "vigoo/golem_sdk/agents/types" @types,
+      #|  "golemcloud/golem_sdk/agents/types" @types,
       #|}
       #|
       #|options(
@@ -142,21 +142,21 @@ test "ensure_pkg_import is idempotent" {
   let content =
     #|import {
     #|  "some/pkg",
-    #|  "vigoo/golem_sdk/agents/types" @types,
+    #|  "golemcloud/golem_sdk/agents/types" @types,
     #|}
     #|
     #|options(
     #|  "is-main": true,
     #|)
   let result = @lib.ensure_pkg_import(
-    content, "vigoo/golem_sdk/agents/types", "@types",
+    content, "golemcloud/golem_sdk/agents/types", "@types",
   )
   inspect(
     result,
     content=(
       #|import {
       #|  "some/pkg",
-      #|  "vigoo/golem_sdk/agents/types" @types,
+      #|  "golemcloud/golem_sdk/agents/types" @types,
       #|}
       #|
       #|options(
@@ -173,13 +173,13 @@ test "ensure_pkg_import adds import block when none exists" {
     #|  "is-main": true,
     #|)
   let result = @lib.ensure_pkg_import(
-    content, "vigoo/golem_sdk/agents/types", "@types",
+    content, "golemcloud/golem_sdk/agents/types", "@types",
   )
   inspect(
     result,
     content=(
       #|import {
-      #|  "vigoo/golem_sdk/agents/types" @types,
+      #|  "golemcloud/golem_sdk/agents/types" @types,
       #|}
       #|
       #|options(

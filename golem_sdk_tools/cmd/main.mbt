@@ -99,19 +99,19 @@ fn run_agents(package_dir : String) -> Unit raise {
   let pkg_path = "\{package_dir}/moon.pkg"
   let mut pkg_content = @fs.read_file_to_string(pkg_path)
   pkg_content = @lib.ensure_pkg_import(
-    pkg_content, "vigoo/golem_sdk/rpc", "@rpc",
+    pkg_content, "golemcloud/golem_sdk/rpc", "@rpc",
   )
   pkg_content = @lib.ensure_pkg_import(
-    pkg_content, "vigoo/golem_sdk/interface/golem/rpc/types", "@rpcTypes",
+    pkg_content, "golemcloud/golem_sdk/interface/golem/rpc/types", "@rpcTypes",
   )
   pkg_content = @lib.ensure_pkg_import(
-    pkg_content, "vigoo/golem_sdk/interface/wasi/clocks/wallClock", "@wallClock",
+    pkg_content, "golemcloud/golem_sdk/interface/wasi/clocks/wallClock", "@wallClock",
   )
   // Check if any agent uses multimodal types and auto-add import
   let uses_multimodal = has_multimodal_agent(agents)
   if uses_multimodal || multimodal_enums.length() > 0 {
     pkg_content = @lib.ensure_pkg_import(
-      pkg_content, "vigoo/golem_sdk/agents/types", "@types",
+      pkg_content, "golemcloud/golem_sdk/agents/types", "@types",
     )
     println("Ensured agents/types import in moon.pkg")
   }

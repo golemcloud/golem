@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk_tools/lib"
+package "golemcloud/golem_sdk_tools/lib"
 
 import {
   "moonbitlang/core/list",

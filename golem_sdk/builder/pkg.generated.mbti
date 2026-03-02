@@ -1,8 +1,8 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/builder"
+package "golemcloud/golem_sdk/builder"
 
 import {
-  "vigoo/golem_sdk/interface/golem/rpc/types",
+  "golemcloud/golem_sdk/interface/golem/rpc/types",
 }
 
 // Values

@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/wasi/io/poll"
+package "golemcloud/golem_sdk/interface/wasi/io/poll"
 
 // Values
 pub fn poll(Array[Pollable]) -> FixedArray[UInt]

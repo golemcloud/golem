@@ -1,5 +1,5 @@
 {
-  "name": "vigoo/golem_sdk_tools",
+  "name": "golemcloud/golem_sdk_tools",
   "version": "0.1.0",
   "deps": {
     "justjavac/case": "0.1.5",
@@ -8,8 +8,8 @@
     "moonbitlang/formatter": { "path": "../../moonbit-formatter" }
   },
   "readme": "README.mbt.md",
-  "repository": "",
+  "repository": "https://github.com/golemcloud/moonbit-sdk",
   "license": "Apache-2.0",
-  "keywords": [],
+  "keywords": ["golem", "wasm", "agent", "codegen", "webassembly", "component-model"],
   "description": "Code generation tools for the Golem SDK for MoonBit"
 }

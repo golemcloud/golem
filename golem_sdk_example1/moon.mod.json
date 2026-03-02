@@ -1,5 +1,5 @@
 {
-  "name": "vigoo/golem_sdk_example1",
+  "name": "golemcloud/golem_sdk_example1",
   "version": "0.1.0",
   "readme": "README.mbt.md",
   "repository": "",
@@ -8,7 +8,7 @@
   "description": "",
   "preferred-target": "wasm",
   "deps": {
-    "vigoo/golem_sdk": {
+    "golemcloud/golem_sdk": {
       "path": "../golem_sdk"
     }
   }

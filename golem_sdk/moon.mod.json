@@ -1,14 +1,14 @@
 {
-  "name": "vigoo/golem_sdk",
+  "name": "golemcloud/golem_sdk",
   "version": "0.1.0",
   "deps": {},
   "readme": "README.mbt.md",
-  "repository": "",
+  "repository": "https://github.com/golemcloud/moonbit-sdk",
   "license": "Apache-2.0",
-  "keywords": [],
-  "description": "",
+  "keywords": ["golem", "wasm", "agent", "sdk", "webassembly", "durable", "component-model"],
+  "description": "Golem SDK for MoonBit — build durable, fault-tolerant agents on the Golem platform",
   "scripts": {
-    "bindgen": "wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name vigoo/golem_sdk --ignore-stub"    
+    "bindgen": "wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub"
   },
   "preferred-target": "wasm"
 }

@@ -1,5 +1,5 @@
 import {
-  "vigoo/golem_sdk/interface/golem/rdbms/types" @types,
+  "golemcloud/golem_sdk/interface/golem/rdbms/types" @types,
 }
 
 warnings = "-44"

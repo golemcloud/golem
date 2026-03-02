@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/wasi/logging/logging"
+package "golemcloud/golem_sdk/interface/wasi/logging/logging"
 
 // Values
 pub fn log(Level, String, String) -> Unit

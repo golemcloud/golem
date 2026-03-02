@@ -1,10 +1,10 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/agents/types"
+package "golemcloud/golem_sdk/agents/types"
 
 import {
-  "vigoo/golem_sdk/extractor",
-  "vigoo/golem_sdk/interface/golem/agent/common",
-  "vigoo/golem_sdk/schema",
+  "golemcloud/golem_sdk/extractor",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/schema",
 }
 
 // Values

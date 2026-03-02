@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/gen"
+package "golemcloud/golem_sdk/gen"
 
 // Values
 pub fn mbt_ffi_cabi_realloc(Int, Int, Int, Int) -> Int

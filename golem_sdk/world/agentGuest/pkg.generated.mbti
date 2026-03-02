@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/world/agentGuest"
+package "golemcloud/golem_sdk/world/agentGuest"
 
 // Values
 

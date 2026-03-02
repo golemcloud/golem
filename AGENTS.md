@@ -33,8 +33,9 @@ moonbit-golem/
 ├── AGENTS.md                          # This file
 ├── TODO.md                            # Remaining work items
 ├── PROBLEMS.md                        # MoonBit ecosystem issues encountered
+├── release.sh                         # Release/dev mode toggle script
 ├── golem_sdk/                         # The SDK library (will be published)
-│   ├── moon.mod.json                  # Module: vigoo/golem_sdk
+│   ├── moon.mod.json                  # Module: golemcloud/golem_sdk
 │   ├── moon.pkg                       # Root package (currently empty)
 │   ├── wit/                           # WIT definitions
 │   │   ├── main.wit                   # The `agent-guest` world definition
@@ -95,7 +96,7 @@ moonbit-golem/
 │       ├── schema_test.mbt           # Schema tests (primitives, compounds, roundtrips)
 │       └── records_test.mbt          # Record/enum/variant schema and roundtrip tests
 ├── golem_sdk_tools/                   # Code generation tools (native CLI, not WASM)
-│   ├── moon.mod.json                  # Module: vigoo/golem_sdk_tools (deps: moonbitlang/x, moonbitlang/parser, moonbitlang/formatter)
+│   ├── moon.mod.json                  # Module: golemcloud/golem_sdk_tools (deps: moonbitlang/x, moonbitlang/parser, moonbitlang/formatter)
 │   ├── lib/                           # Library package
 │   │   ├── mbti.mbt                   # Parser for .mbt source files (extracts pub fn signatures)
 │   │   ├── reexports.mbt             # AST construction: generates reexport wrapper functions
@@ -114,7 +115,7 @@ moonbit-golem/
 │   └── cmd/                           # CLI entry point
 │       └── main.mbt                   # `reexports` and `agents` subcommands
 └── golem_sdk_example1/                # Example consumer project
-    ├── moon.mod.json                  # Module: vigoo/golem_sdk_example1 (deps on local golem_sdk)
+    ├── moon.mod.json                  # Module: golemcloud/golem_sdk_example1 (deps on local golem_sdk)
     ├── build.sh                       # Build script: reexports + agents codegen + moon build + wasm-tools
     ├── golem.yaml                     # Golem 1.4.2 application definition with build pipeline
     └── counter/                       # Example agents: Counter, TaskManager, and VisionAgent
@@ -136,7 +137,7 @@ All code under `interface/`, `world/`, and `gen/` (except `gen/interface/*/stub.
 
 ```sh
 cd golem_sdk
-wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name vigoo/golem_sdk --ignore-stub
+wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub
 moon fmt
 ```
 
@@ -537,6 +538,58 @@ moon check --target wasm          # Type-check example
 # The resulting component WASM is at:
 # golem_sdk_example1/_build/wasm/release/counter.agent.wasm
 ```
+
+## Release Script
+
+The `release.sh` script toggles `golem_sdk_example1` between **development mode** (local path
+deps, relative tool paths) and **release/template mode** (versioned mooncakes deps, tools run
+from `.mooncakes/`).
+
+### Preparing a release
+
+```sh
+./release.sh 0.1.0              # same version for SDK and tools
+./release.sh 0.1.0 0.2.0        # different versions for SDK and tools
+```
+
+This modifies three files in `golem_sdk_example1/`:
+
+| File | Change |
+|---|---|
+| `moon.mod.json` | `deps`: path → versioned; adds `bin-deps` with `golemcloud/golem_sdk_tools` |
+| `golem.yaml` | Build commands use `moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd`; `dir: ../golem_sdk_tools` lines removed |
+| `build.sh` | Same tool/SDK path rewrite as `golem.yaml` |
+
+The `bin-deps` field in `moon.mod.json` ensures `golem_sdk_tools` is downloaded to `.mooncakes/`
+when users run `moon install` or `moon build`, making it available to the build commands.
+
+After running, the example directory is a standalone template that users can copy and use with
+only mooncakes dependencies (no sibling SDK/tools directories needed).
+
+### Reverting to development mode
+
+```sh
+./release.sh --dev
+```
+
+Restores local path deps, removes `bin-deps`, and restores `../golem_sdk_tools` references
+for in-repo development.
+
+### Publishing `golem_sdk_tools` as an installable tool
+
+Users can also install the tools globally via:
+
+```sh
+moon install golemcloud/golem_sdk_tools/cmd
+```
+
+This installs the `cmd` package as a binary to `~/.moon/bin/`. However, the template uses the
+project-level `bin-deps` approach (via `.mooncakes/`) so users don't need a global install.
+
+**Note**: Both `golemcloud/golem_sdk` and `golemcloud/golem_sdk_tools` must be published to
+mooncakes.io before the release template will work. The `golem_sdk_tools` module currently
+depends on `moonbitlang/formatter` via a local path (`../../moonbit-formatter`), which must be
+resolved before publishing.
 
 ## Coding Conventions
 

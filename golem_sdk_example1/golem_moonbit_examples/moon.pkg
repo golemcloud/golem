@@ -1,15 +1,15 @@
 import {
-  "vigoo/golem_sdk/agents",
-  "vigoo/golem_sdk/extractor",
-  "vigoo/golem_sdk/interface/golem/agent/common",
-  "vigoo/golem_sdk/schema",
-  "vigoo/golem_sdk/gen",
-  "vigoo/golem_sdk/agents/types" @types,
-  "vigoo/golem_sdk/rpc" @rpc,
-  "vigoo/golem_sdk/interface/golem/rpc/types" @rpcTypes,
-  "vigoo/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
-  "vigoo/golem_sdk/logging" @logging,
-  "vigoo/golem_sdk/context" @context,
+  "golemcloud/golem_sdk/agents",
+  "golemcloud/golem_sdk/extractor",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/gen",
+  "golemcloud/golem_sdk/agents/types" @types,
+  "golemcloud/golem_sdk/rpc" @rpc,
+  "golemcloud/golem_sdk/interface/golem/rpc/types" @rpcTypes,
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock" @wallClock,
+  "golemcloud/golem_sdk/logging" @logging,
+  "golemcloud/golem_sdk/context" @context,
 }
 
 options(

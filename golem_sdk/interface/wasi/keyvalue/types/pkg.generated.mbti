@@ -1,9 +1,9 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "vigoo/golem_sdk/interface/wasi/keyvalue/types"
+package "golemcloud/golem_sdk/interface/wasi/keyvalue/types"
 
 import {
-  "vigoo/golem_sdk/interface/wasi/io/streams",
-  "vigoo/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+  "golemcloud/golem_sdk/interface/wasi/keyvalue/wasiKeyvalueError",
 }
 
 // Values
