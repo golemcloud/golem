@@ -185,20 +185,24 @@ impl Output {
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();
         if !success {
-            let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
-            let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
-            for output in &self.output {
-                match output {
-                    CommandOutput::Stdout(line) => {
-                        println!("{} {}", std_out_prefix, line);
-                    }
-                    CommandOutput::Stderr(line) => {
-                        println!("{} {}", std_err_prefix, line);
-                    }
+            self.dump();
+        }
+        success
+    }
+
+    fn dump(&self) {
+        let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
+        let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
+        for output in &self.output {
+            match output {
+                CommandOutput::Stdout(line) => {
+                    println!("{} {}", std_out_prefix, line);
+                }
+                CommandOutput::Stderr(line) => {
+                    println!("{} {}", std_err_prefix, line);
                 }
             }
         }
-        success
     }
 
     #[must_use]
