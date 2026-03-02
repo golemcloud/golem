@@ -27,11 +27,11 @@ use crate::model::oplog::public_oplog_entry::{
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentInitializationParameters, AgentInvocationOutputParameters, AgentMethodInvocationParameters,
-    JsonSnapshotData, LogLevel,
-    PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicLocalSpanData, PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
+    AgentInitializationParameters, AgentInvocationOutputParameters,
+    AgentMethodInvocationParameters, JsonSnapshotData, LogLevel, PersistenceLevel,
+    PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
+    PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
     PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
     WorkerResourceId,
 };
