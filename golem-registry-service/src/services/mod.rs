@@ -26,6 +26,7 @@ pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_share;
 pub mod http_api_deployment;
+pub mod mcp_deployment;
 pub mod oauth2;
 pub mod oauth2_github_client;
 pub mod plan;
