@@ -1330,14 +1330,24 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
     // Try to delete with old revision (should fail with ConcurrentModification)
     let delete_with_old_revision = deps
         .mcp_deployment_repo
-        .delete(user.revision.account_id, deployment_id, 0)
+        .delete(
+            user.revision.account_id,
+            deployment_id,
+            0,
+            domain.to_string(),
+        )
         .await;
 
     let_assert!(Err(McpDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
 
     // Delete with correct revision
     deps.mcp_deployment_repo
-        .delete(user.revision.account_id, deployment_id, 1)
+        .delete(
+            user.revision.account_id,
+            deployment_id,
+            1,
+            domain.to_string(),
+        )
         .await
         .unwrap();
 

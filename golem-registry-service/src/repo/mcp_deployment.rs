@@ -22,7 +22,6 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
-use golem_service_base::repo::blob::Blob;
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use std::fmt::Debug;
@@ -48,6 +47,7 @@ pub trait McpDeploymentRepo: Send + Sync {
         user_account_id: Uuid,
         mcp_deployment_id: Uuid,
         revision_id: i64,
+        domain: String,
     ) -> Result<(), McpDeploymentRepoError>;
 
     async fn get_staged_by_id(
@@ -116,9 +116,10 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
         user_account_id: Uuid,
         mcp_deployment_id: Uuid,
         revision_id: i64,
+        domain: String,
     ) -> Result<(), McpDeploymentRepoError> {
         self.repo
-            .delete(user_account_id, mcp_deployment_id, revision_id)
+            .delete(user_account_id, mcp_deployment_id, revision_id, domain)
             .instrument(Self::span("delete"))
             .await
     }
@@ -310,65 +311,46 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         mcp_deployment_id: Uuid,
         revision_id: i64,
+        domain: String,
     ) -> Result<(), McpDeploymentRepoError> {
         self.with_tx_err("delete", |tx| {
             async move {
-                // Check that the current revision matches the provided revision
-                let current_revision: (i64,) = tx
+                let revision = McpDeploymentRevisionRecord::deletion(
+                    user_account_id,
+                    mcp_deployment_id,
+                    revision_id,
+                    domain,
+                );
+
+                let revision: McpDeploymentRevisionRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
-                            SELECT current_revision_id
-                            FROM mcp_deployments
-                            WHERE mcp_deployment_id = $1
+                            INSERT INTO mcp_deployment_revisions
+                            (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+                            RETURNING mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted
                         "# })
-                        .bind(mcp_deployment_id),
+                        .bind(revision.mcp_deployment_id)
+                        .bind(revision.revision_id)
+                        .bind(revision.hash)
+                        .bind(&revision.domain)
+                        .bind(&revision.data)
+                        .bind(&revision.audit.created_at)
+                        .bind(revision.audit.created_by),
                     )
-                    .await?;
+                    .await
+                    .to_error_on_unique_violation(McpDeploymentRepoError::ConcurrentModification)?;
 
-                if current_revision.0 != revision_id {
-                    return Err(McpDeploymentRepoError::ConcurrentModification);
-                }
-
-                // Get the current domain from the current revision
-                let current_domain: (String,) = tx
-                    .fetch_one_as(
-                        sqlx::query_as(indoc! { r#"
-                            SELECT domain
-                            FROM mcp_deployment_revisions
-                            WHERE mcp_deployment_id = $1 AND revision_id = $2
-                        "# })
-                        .bind(mcp_deployment_id)
-                        .bind(revision_id),
-                    )
-                    .await?;
-
-                // Insert a deletion revision
-                let deletion_data = Blob::new(crate::repo::model::mcp_deployment::McpDeploymentData { agents: Default::default() });
-                tx.execute(
-                    sqlx::query(indoc! { r#"
-                        INSERT INTO mcp_deployment_revisions
-                        (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
-                        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, true)
-                    "# })
-                    .bind(mcp_deployment_id)
-                    .bind(revision_id + 1)
-                    .bind(crate::repo::model::hash::SqlBlake3Hash::empty())
-                    .bind(&current_domain.0)
-                    .bind(&deletion_data)
-                    .bind(user_account_id),
-                )
-                .await?;
-
-                // Update the main table to point to the deletion revision
                 tx.execute(
                     sqlx::query(indoc! { r#"
                         UPDATE mcp_deployments
-                        SET deleted_at = CURRENT_TIMESTAMP, modified_by = $1, current_revision_id = $2
-                        WHERE mcp_deployment_id = $3
+                        SET deleted_at = $1, modified_by = $2, current_revision_id = $3
+                        WHERE mcp_deployment_id = $4
                     "# })
-                    .bind(user_account_id)
-                    .bind(revision_id + 1)
-                    .bind(mcp_deployment_id),
+                    .bind(&revision.audit.created_at)
+                    .bind(revision.audit.created_by)
+                    .bind(revision.revision_id)
+                    .bind(revision.mcp_deployment_id),
                 )
                 .await?;
 

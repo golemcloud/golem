@@ -263,6 +263,7 @@ impl McpDeploymentService {
                 auth.account_id().0,
                 mcp_deployment_id.0,
                 current_revision.next()?.into(),
+                mcp_deployment.domain.0,
             )
             .await
             .map_err(|err| match err {
