@@ -14,7 +14,7 @@
 
 use crate::app::template::generator::{
     generate_commons_by_template, generate_component_by_template,
-    generate_on_demand_commons_by_template,
+    generate_on_demand_commons_by_template, FileSystemTarget, InMemoryTarget,
 };
 use crate::app::template::metadata::AppTemplateMetadata;
 use crate::model::GuestLanguage;
@@ -107,7 +107,28 @@ impl AppTemplate {
         target_path: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_commons_by_template(self, application_name, target_path, sdk_overrides)
+        generate_commons_by_template(
+            self,
+            application_name,
+            target_path,
+            sdk_overrides,
+            FileSystemTarget::default(),
+        )
+    }
+
+    fn generate_commons_in_memory(
+        &self,
+        application_name: &ApplicationName,
+        target_path: &Path,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<InMemoryTarget> {
+        generate_commons_by_template(
+            self,
+            application_name,
+            target_path,
+            sdk_overrides,
+            InMemoryTarget::new(),
+        )
     }
 
     fn generate_on_demand_commons(
@@ -115,7 +136,25 @@ impl AppTemplate {
         target_path: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_on_demand_commons_by_template(self, target_path, sdk_overrides)
+        generate_on_demand_commons_by_template(
+            self,
+            target_path,
+            sdk_overrides,
+            FileSystemTarget::default(),
+        )
+    }
+
+    fn generate_on_demand_commons_in_memory(
+        &self,
+        target_path: &Path,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<InMemoryTarget> {
+        generate_on_demand_commons_by_template(
+            self,
+            target_path,
+            sdk_overrides,
+            InMemoryTarget::new(),
+        )
     }
 
     fn generate_component(
@@ -131,6 +170,24 @@ impl AppTemplate {
             application_name,
             component_name,
             sdk_overrides,
+            FileSystemTarget::default(),
+        )
+    }
+
+    fn generate_component_in_memory(
+        &self,
+        target_path: &Path,
+        application_name: &ApplicationName,
+        component_name: &ComponentName,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<InMemoryTarget> {
+        generate_component_by_template(
+            self,
+            target_path,
+            application_name,
+            component_name,
+            sdk_overrides,
+            InMemoryTarget::new(),
         )
     }
 }
@@ -148,6 +205,16 @@ impl AppTemplateCommon {
         self.0
             .generate_commons(application_name, target_path, sdk_overrides)
     }
+
+    pub fn generate_in_memory(
+        &self,
+        application_name: &ApplicationName,
+        target_path: &Path,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<InMemoryTarget> {
+        self.0
+            .generate_commons_in_memory(application_name, target_path, sdk_overrides)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +224,15 @@ impl AppTemplateCommonOnDemand {
     pub fn generate(&self, target_path: &Path, sdk_overrides: &SdkOverrides) -> anyhow::Result<()> {
         self.0
             .generate_on_demand_commons(target_path, sdk_overrides)
+    }
+
+    pub fn generate_in_memory(
+        &self,
+        target_path: &Path,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<InMemoryTarget> {
+        self.0
+            .generate_on_demand_commons_in_memory(target_path, sdk_overrides)
     }
 }
 
@@ -173,6 +249,21 @@ impl AppTemplateComponent {
     ) -> anyhow::Result<()> {
         self.0
             .generate_component(target_path, application_name, component_name, sdk_overrides)
+    }
+
+    pub fn generate_in_memory(
+        &self,
+        application_name: &ApplicationName,
+        component_name: &ComponentName,
+        target_path: &Path,
+        sdk_overrides: &SdkOverrides,
+    ) -> anyhow::Result<InMemoryTarget> {
+        self.0.generate_component_in_memory(
+            target_path,
+            application_name,
+            component_name,
+            sdk_overrides,
+        )
     }
 }
 
