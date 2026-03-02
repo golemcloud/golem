@@ -529,29 +529,71 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         worker_id: &WorkerId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
+        use golem_client::model::GetOplogResponse;
+
+        let worker_service = self.deps.worker_service();
+        let base_url = format!(
+            "http://{}:{}",
+            worker_service.http_host(),
+            worker_service.http_port()
+        );
+        let http_client = worker_service.base_http_client().await;
+        let token = self.token.secret().to_string();
 
         let mut result = Vec::new();
-        let mut cursor = None;
+        let mut cursor: Option<golem_client::model::OplogCursor> = None;
 
         loop {
-            let response = client
-                .get_oplog(
-                    &worker_id.component_id.0,
-                    &worker_id.worker_name,
-                    Some(from.as_u64()),
-                    100,
-                    cursor.as_ref(),
-                    None,
-                )
-                .await?;
+            let mut url = format!(
+                "{}/v1/components/{}/workers/{}/oplog?from={}&count=100",
+                base_url,
+                worker_id.component_id.0,
+                worker_id.worker_name,
+                from.as_u64()
+            );
+            if let Some(ref c) = cursor {
+                url.push_str(&format!("&cursor={c}"));
+            }
 
-            result.extend(response.entries);
-            match response.next {
+            let response = http_client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .with_context(|| format!("get_oplog HTTP request failed for worker {worker_id}"))?;
+
+            let status = response.status();
+            let body_bytes = response.bytes().await.with_context(|| {
+                format!("get_oplog: failed to read response body for worker {worker_id}")
+            })?;
+
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "get_oplog failed for worker {worker_id}: status={status}, body={}",
+                    String::from_utf8_lossy(&body_bytes)
+                ));
+            }
+
+            let parsed: GetOplogResponse =
+                serde_json::from_slice(&body_bytes).with_context(|| {
+                    let body_preview = String::from_utf8_lossy(&body_bytes);
+                    let truncated = if body_preview.len() > 4000 {
+                        format!(
+                            "{}... [truncated, total {} bytes]",
+                            &body_preview[..4000],
+                            body_bytes.len()
+                        )
+                    } else {
+                        body_preview.into_owned()
+                    };
+                    format!(
+                        "get_oplog: failed to deserialize response for worker {worker_id}, \
+                         from={from}, cursor={cursor:?}, status={status}, body:\n{truncated}"
+                    )
+                })?;
+
+            result.extend(parsed.entries);
+            match parsed.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
             }
@@ -565,29 +607,76 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         worker_id: &WorkerId,
         query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
+        use golem_client::model::GetOplogResponse;
+
+        let worker_service = self.deps.worker_service();
+        let base_url = format!(
+            "http://{}:{}",
+            worker_service.http_host(),
+            worker_service.http_port()
+        );
+        let http_client = worker_service.base_http_client().await;
+        let token = self.token.secret().to_string();
 
         let mut result = Vec::new();
-        let mut cursor = None;
+        let mut cursor: Option<golem_client::model::OplogCursor> = None;
 
         loop {
-            let response = client
-                .get_oplog(
-                    &worker_id.component_id.0,
-                    &worker_id.worker_name,
-                    None,
-                    100,
-                    cursor.as_ref(),
-                    Some(query),
-                )
-                .await?;
+            let mut url_parsed = url::Url::parse(&format!(
+                "{}/v1/components/{}/workers/{}/oplog",
+                base_url, worker_id.component_id.0, worker_id.worker_name,
+            ))?;
+            {
+                let mut pairs = url_parsed.query_pairs_mut();
+                pairs.append_pair("count", "100");
+                pairs.append_pair("query", query);
+                if let Some(ref c) = cursor {
+                    pairs.append_pair("cursor", &c.to_string());
+                }
+            }
+            let url = url_parsed.to_string();
 
-            result.extend(response.entries);
-            match response.next {
+            let response = http_client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .with_context(|| {
+                    format!("search_oplog HTTP request failed for worker {worker_id}")
+                })?;
+
+            let status = response.status();
+            let body_bytes = response.bytes().await.with_context(|| {
+                format!("search_oplog: failed to read response body for worker {worker_id}")
+            })?;
+
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "search_oplog failed for worker {worker_id}: status={status}, body={}",
+                    String::from_utf8_lossy(&body_bytes)
+                ));
+            }
+
+            let parsed: GetOplogResponse =
+                serde_json::from_slice(&body_bytes).with_context(|| {
+                    let body_preview = String::from_utf8_lossy(&body_bytes);
+                    let truncated = if body_preview.len() > 4000 {
+                        format!(
+                            "{}... [truncated, total {} bytes]",
+                            &body_preview[..4000],
+                            body_bytes.len()
+                        )
+                    } else {
+                        body_preview.into_owned()
+                    };
+                    format!(
+                        "search_oplog: failed to deserialize response for worker {worker_id}, \
+                         query={query}, cursor={cursor:?}, status={status}, body:\n{truncated}"
+                    )
+                })?;
+
+            result.extend(parsed.entries);
+            match parsed.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
             }
