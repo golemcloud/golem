@@ -636,38 +636,53 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        match (from, query) {
-            (Some(_), Some(_)) => Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![
-                    "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                ],
-                cause: None,
-            }))),
+        let response = match (from, query) {
+            (Some(_), Some(_)) => {
+                return Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
+                    errors: vec![
+                        "Cannot specify both the 'from' and the 'query' parameters".to_string(),
+                    ],
+                    cause: None,
+                })));
+            }
             (Some(from), None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(&worker_id, OplogIndex::from_u64(from), cursor, count, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
             (None, Some(query)) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .search_oplog(&worker_id, cursor, count, query, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
             (None, None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(&worker_id, OplogIndex::INITIAL, cursor, count, auth)
-                    .await?;
+                    .await?
+            }
+        };
 
-                Ok(Json(response))
+        // Debug: serialize with poem (to_json_string), then try to deserialize with serde_json
+        // to catch any round-trip mismatch the client would hit
+        {
+            use poem_openapi::types::ToJSON;
+            let poem_body = response.to_json_string();
+            let serde_body = serde_json::to_string(&response).unwrap_or_else(|e| format!("<serde serialization error: {e}>"));
+            match serde_json::from_str::<GetOplogResponse>(&poem_body) {
+                Ok(_) => {}
+                Err(deser_err) => {
+                    tracing::error!(
+                        worker_id = %worker_id,
+                        error = %deser_err,
+                        poem_body = %poem_body,
+                        serde_body = %serde_body,
+                        "get_oplog response round-trip FAILED: poem serialized OK but serde deserialization failed"
+                    );
+                }
             }
         }
+
+        Ok(Json(response))
     }
 
     /// List files in a worker
