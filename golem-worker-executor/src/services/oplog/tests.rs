@@ -17,6 +17,7 @@ use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
+use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
@@ -30,9 +31,11 @@ use golem_common::model::AgentInvocationPayload;
 use golem_common::model::{IdempotencyKey, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{init_tracing, TracingConfig};
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
 use nonempty_collections::nev;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashSet;
 use std::sync::RwLock;
 use std::time::Instant;
@@ -1782,4 +1785,139 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     }
 
     assert_eq!(result.len(), 100);
+}
+
+/// Reproducer for the oplog unique key violation panic during recovery.
+///
+/// The race is in `OpenOplogs::get_or_open`: when two tasks concurrently call
+/// it for the same worker_id, both can observe `entry.initial == true` and both
+/// execute `decrement_strong_count`. This can over-decrement the Arc refcount,
+/// causing premature drop, the Weak becoming un-upgradeable, cache eviction,
+/// and creation of a **second** oplog instance for the same worker. Two instances
+/// means two independent `last_committed_idx` counters, leading to duplicate
+/// INSERT attempts and a unique key violation in SQLite.
+#[test]
+async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &Tracing) {
+    let sqlx_pool = SqlitePoolOptions::new()
+        .max_connections(10)
+        .connect("sqlite::memory:")
+        .await
+        .expect("Cannot create sqlite pool");
+    let pool = SqlitePool::new(sqlx_pool.clone(), sqlx_pool);
+    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(SqliteIndexedStorage::new(pool).await.unwrap());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(indexed_storage, blob_storage, 100, 100, 100).await,
+    );
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "concurrent-test".to_string(),
+    };
+    let owned_worker_id = OwnedWorkerId::new(environment_id, &worker_id);
+
+    // First, create the oplog with an initial entry so it exists in SQLite
+    let initial_oplog = oplog_service
+        .create(
+            &owned_worker_id,
+            OplogEntry::jump(OplogRegion {
+                start: OplogIndex::from_u64(0),
+                end: OplogIndex::from_u64(0),
+            }),
+            WorkerMetadata::default(worker_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    initial_oplog.commit(CommitLevel::Always).await;
+    drop(initial_oplog);
+
+    // Wait for the weak reference to become invalid so the cache entry is evicted
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Now simulate the race: many concurrent tasks open the same oplog and write to it.
+    // This exercises the `initial` flag race in `get_or_open`.
+    // If two tasks get different oplog instances due to the race, they'll have
+    // independent `last_committed_idx` counters and produce duplicate ids on INSERT,
+    // triggering SQLite's UNIQUE constraint violation.
+    let num_tasks = 20;
+    let num_iterations = 50;
+    let barrier = Arc::new(tokio::sync::Barrier::new(num_tasks));
+    let failure_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    let mut handles = Vec::new();
+    for _task_id in 0..num_tasks {
+        let oplog_service = oplog_service.clone();
+        let owned_worker_id = owned_worker_id.clone();
+        let worker_id = worker_id.clone();
+        let barrier = barrier.clone();
+        let failure_count = failure_count.clone();
+
+        handles.push(tokio::spawn(async move {
+            for _iteration in 0..num_iterations {
+                // Synchronize all tasks to maximize contention on get_or_open
+                barrier.wait().await;
+
+                let last_oplog_index =
+                    oplog_service.get_last_index(&owned_worker_id).await;
+                let oplog = oplog_service
+                    .open(
+                        &owned_worker_id,
+                        last_oplog_index,
+                        WorkerMetadata::default(
+                            worker_id.clone(),
+                            account_id,
+                            environment_id,
+                        ),
+                        default_last_known_status(),
+                        default_execution_status(AgentMode::Durable),
+                    )
+                    .await;
+
+                // Each task adds an entry and commits. If two tasks ended up with
+                // different oplog instances (due to the get_or_open race), they'll
+                // have independent last_committed_idx and produce duplicate ids,
+                // causing a unique key violation on commit.
+                oplog.add(OplogEntry::suspend()).await;
+                // Use fallible_add pattern: commit can panic on unique key violation;
+                // we use the Oplog trait method directly and let it propagate.
+                oplog.commit(CommitLevel::Always).await;
+
+                tokio::task::yield_now().await;
+            }
+        }));
+    }
+
+    for handle in handles {
+        match handle.await {
+            Ok(()) => {}
+            Err(e) => {
+                if e.is_panic() {
+                    let panic_msg = if let Some(s) = e.into_panic().downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    if panic_msg.contains("unique key violation")
+                        || panic_msg.contains("Key already exists")
+                        || panic_msg.contains("UNIQUE constraint failed")
+                    {
+                        failure_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        panic!("Unexpected panic: {panic_msg}");
+                    }
+                }
+            }
+        }
+    }
+
+    let failures = failure_count.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        failures, 0,
+        "Got {failures} unique key violations from concurrent oplog access — \
+         the get_or_open initial flag race caused duplicate oplog instances"
+    );
 }

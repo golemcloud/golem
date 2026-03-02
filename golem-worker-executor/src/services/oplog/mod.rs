@@ -486,13 +486,12 @@ impl OpenOplogs {
                 .await
                 .unwrap();
             if let Some(oplog) = entry.oplog.upgrade() {
-                let oplog = if entry.initial.load(Ordering::Acquire) {
+                let oplog = if entry.initial.swap(false, Ordering::AcqRel) {
                     let oplog = unsafe {
                         let ptr = Arc::into_raw(oplog);
                         Arc::decrement_strong_count(ptr);
                         Arc::from_raw(ptr)
                     };
-                    entry.initial.store(false, Ordering::Release);
                     oplog
                 } else {
                     oplog
