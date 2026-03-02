@@ -554,7 +554,10 @@ impl WorkerCommandHandler {
             .list_agent_types(&environment)
             .await?
             .into_iter()
-            .find(|t| t.agent_type.type_name.0 == agent_type_name)
+            .find(|t| {
+                t.agent_type.type_name.0 == agent_type_name
+                    || t.agent_type.wrapper_type_name() == agent_type_name
+            })
         else {
             bail!("Agent type not found: {}", agent_type_name);
         };

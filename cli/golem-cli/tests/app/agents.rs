@@ -66,7 +66,6 @@ async fn test_rust_counter() {
                 &format!("CounterAgent.get(\"{uuid}\").increment()"),
             ])
             .await;
-        outputs.dump();
         assert!(outputs.success_or_dump());
         assert!(outputs.stdout_contains_ordered(vec!["Preparing TypeScript REPL", "1"]));
         assert!(outputs.stderr_contains_ordered(vec!["> awaiting Promise<number>"]));
@@ -86,7 +85,6 @@ async fn test_rust_counter() {
                 &format!("CounterAgent::get(\"{uuid}\").increment()"),
             ])
             .await;
-        outputs.dump();
         assert!(outputs.success_or_dump());
         assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
         assert!(!outputs.stdout_contains("error"));
@@ -552,7 +550,6 @@ async fn test_ts_counter() {
                 &format!("CounterAgent.get(\"{uuid}\").increment()"),
             ])
             .await;
-        outputs.dump();
         assert!(outputs.success_or_dump());
         assert!(outputs.stdout_contains_ordered(vec!["Preparing TypeScript REPL", "1"]));
         assert!(outputs.stderr_contains_ordered(vec!["> awaiting Promise<number>"]));
@@ -572,7 +569,6 @@ async fn test_ts_counter() {
                 &format!("CounterAgent::get(\"{uuid}\").increment()"),
             ])
             .await;
-        outputs.dump();
         assert!(outputs.success_or_dump());
         assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
         assert!(!outputs.stdout_contains("error"));
