@@ -15,17 +15,11 @@
 use crate::mcp::schema::mcp_schema::McpSchema;
 use golem_common::base_model::agent::DataSchema;
 
-pub trait GetMcpSchema {
-    fn get_mcp_schema(&self) -> McpSchema;
-}
-
-impl GetMcpSchema for DataSchema {
-    fn get_mcp_schema(&self) -> McpSchema {
-        match self {
-            DataSchema::Tuple(schemas) => McpSchema::from_named_element_schemas(&schemas.elements),
-            DataSchema::Multimodal(_) => {
-                todo!("Multimodal schema is not supported in this example")
-            }
+pub fn get_mcp_schema(data_schema: &DataSchema) -> McpSchema {
+    match data_schema {
+        DataSchema::Tuple(schemas) => McpSchema::from_named_element_schemas(&schemas.elements),
+        DataSchema::Multimodal(_) => {
+            todo!("Multimodal schema is not supported in this example")
         }
     }
 }

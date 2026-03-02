@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::mcp::schema::mcp_schema::McpSchema;
-use crate::mcp::schema::mcp_schema_mapping::GetMcpSchema;
+use crate::mcp::schema::mcp_schema_mapping::get_mcp_schema;
 use golem_common::base_model::agent::AgentMethod;
 
 pub struct McpToolSchema {
@@ -21,18 +21,12 @@ pub struct McpToolSchema {
     pub output_schema: Option<McpSchema>,
 }
 
-pub trait GetMcpToolSchema {
-    fn get_mcp_tool_schema(&self) -> McpToolSchema;
-}
+pub fn get_mcp_tool_schema(method: &AgentMethod) -> McpToolSchema {
+    let input_schema = get_mcp_schema(&method.input_schema);
+    let output_schema = get_mcp_schema(&method.output_schema);
 
-impl GetMcpToolSchema for AgentMethod {
-    fn get_mcp_tool_schema(&self) -> McpToolSchema {
-        let input_schema: McpSchema = self.input_schema.get_mcp_schema();
-        let output_schema: McpSchema = self.output_schema.get_mcp_schema();
-
-        McpToolSchema {
-            input_schema,
-            output_schema: Some(output_schema),
-        }
+    McpToolSchema {
+        input_schema,
+        output_schema: Some(output_schema),
     }
 }
