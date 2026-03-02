@@ -69,7 +69,7 @@ impl RegistryServiceMcpCapabilityLookup {
 impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
         self.registry_service_client
-            .get_active_mcp_capabilities_for_domain(domain)
+            .get_active_compiled_mcps_for_domain(domain)
             .await
             .map_err(|e| e.into())
     }
