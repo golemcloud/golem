@@ -358,6 +358,7 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<s32>,
         config-vars: list<tuple<string, string>>,
+        local-agent-config: list<local-agent-config-entry>,
         original-phantom-id: option<uuid>
     }
 

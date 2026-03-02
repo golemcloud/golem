@@ -62,6 +62,7 @@ declare_structs! {
     }
 
     #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct ParsedWorkerCreationLocalAgentConfigEntry {
         pub key: Vec<String>,
