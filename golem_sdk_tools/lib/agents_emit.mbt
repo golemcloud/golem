@@ -634,14 +634,37 @@ pub fn generate_agent_registration(
 ) -> @list.List[@syntax.Impl] {
   let calls = agents.map(fn(a) { build_register_call(a) })
   let impls = agents.map(fn(a) { build_raw_agent_impl(a) })
-  let init_body = make_try_catch(make_sequence(calls), [
-    make_case(
-      make_var_pattern("e"),
-      make_apply(make_ident_expr("abort"), [
-        make_dot_apply(make_ident_expr("e"), "to_string", []),
-      ]),
-    ),
-  ])
+  let needs_try_catch = agents
+    .iter()
+    .any(fn(a) {
+      a.constructor_schema_options
+      .iter()
+      .any(fn(kv) {
+        kv.1.text_languages.length() > 0 || kv.1.binary_mime_types.length() > 0
+      }) ||
+      a.methods
+      .iter()
+      .any(fn(m) {
+        m.param_schema_options
+        .iter()
+        .any(fn(kv) {
+          kv.1.text_languages.length() > 0 ||
+          kv.1.binary_mime_types.length() > 0
+        })
+      })
+    })
+  let init_body = if needs_try_catch {
+    make_try_catch(make_sequence(calls), [
+      make_case(
+        make_var_pattern("e"),
+        make_apply(make_ident_expr("abort"), [
+          make_dot_apply(make_ident_expr("e"), "to_string", []),
+        ]),
+      ),
+    ])
+  } else {
+    make_sequence(calls)
+  }
   let all : Array[@syntax.Impl] = [make_init_block(init_body)]
   for impl_ in impls {
     all.push(impl_)

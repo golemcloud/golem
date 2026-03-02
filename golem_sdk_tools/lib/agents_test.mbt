@@ -157,50 +157,46 @@ test "generate_agent_registration for simple agent" {
     output,
     content=(
       #|fn init{
-      #|  try {
-      #|    @agents.register_agent({
-      #|      name: "Counter",
-      #|      agent_type: {
-      #|        type_name: "Counter",
-      #|        description: "A counter agent",
-      #|        constructor_: {
-      #|          name: Some("new"),
-      #|          description: "Creates a new counter",
-      #|          prompt_hint: None,
-      #|          input_schema: @common.DataSchema::Tuple([
-      #|            (
-      #|              "name",
-      #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|              ),
+      #|  @agents.register_agent({
+      #|    name: "Counter",
+      #|    agent_type: {
+      #|      type_name: "Counter",
+      #|      description: "A counter agent",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a new counter",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "name",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
       #|            ),
-      #|          ]),
-      #|        },
-      #|        methods: [],
-      #|        dependencies: [],
-      #|        mode: @common.AgentMode::DURABLE,
+      #|          ),
+      #|        ]),
       #|      },
-      #|      construct: fn(input) {
-      #|        try {
-      #|          let elements = @extractor.extract_tuple(input)
-      #|          guard elements.length() == 1 else {
-      #|            raise  @common.AgentError::InvalidInput(
-      #|              "Expected 1 elements, got " + elements.length().to_string(),
-      #|            )
-      #|          }
-      #|          let name :String = @schema.from_element_value_as(elements[0])
-      #|          let agent = Counter::new(name)
-      #|          let constructed = 
-      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
-      #|          Ok(constructed)
-      #|        } catch{
-      #|          e => Err(e)
+      #|      methods: [],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
       #|        }
-      #|      },
-      #|    })
-      #|  } catch{
-      #|    e => abort(e.to_string())
-      #|  }
+      #|        let name :String = @schema.from_element_value_as(elements[0])
+      #|        let agent = Counter::new(name)
+      #|        let constructed = 
+      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
       #|}
       #|
       #|///|
@@ -258,79 +254,75 @@ test "generate_agent_registration with methods" {
     output,
     content=(
       #|fn init{
-      #|  try {
-      #|    @agents.register_agent({
-      #|      name: "Counter",
-      #|      agent_type: {
-      #|        type_name: "Counter",
-      #|        description: "A counter agent",
-      #|        constructor_: {
-      #|          name: Some("new"),
-      #|          description: "Creates a new counter",
+      #|  @agents.register_agent({
+      #|    name: "Counter",
+      #|    agent_type: {
+      #|      type_name: "Counter",
+      #|      description: "A counter agent",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a new counter",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "name",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|      methods: [
+      #|        {
+      #|          name: "increment",
+      #|          description: "Increments the counter",
+      #|          prompt_hint: None,
+      #|          input_schema: @common.DataSchema::Tuple([]),
+      #|          output_schema: @common.DataSchema::Tuple([]),
+      #|        },
+      #|        {
+      #|          name: "add",
+      #|          description: "Adds a value",
       #|          prompt_hint: None,
       #|          input_schema: @common.DataSchema::Tuple([
       #|            (
-      #|              "name",
+      #|              "value",
       #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+      #|                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+      #|              ),
+      #|            ),
+      #|          ]),
+      #|          output_schema: @common.DataSchema::Tuple([
+      #|            (
+      #|              "result",
+      #|              @schema.schema_of_tag(
+      #|                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
       #|              ),
       #|            ),
       #|          ]),
       #|        },
-      #|        methods: [
-      #|          {
-      #|            name: "increment",
-      #|            description: "Increments the counter",
-      #|            prompt_hint: None,
-      #|            input_schema: @common.DataSchema::Tuple([]),
-      #|            output_schema: @common.DataSchema::Tuple([]),
-      #|          },
-      #|          {
-      #|            name: "add",
-      #|            description: "Adds a value",
-      #|            prompt_hint: None,
-      #|            input_schema: @common.DataSchema::Tuple([
-      #|              (
-      #|                "value",
-      #|                @schema.schema_of_tag(
-      #|                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|                ),
-      #|              ),
-      #|            ]),
-      #|            output_schema: @common.DataSchema::Tuple([
-      #|              (
-      #|                "result",
-      #|                @schema.schema_of_tag(
-      #|                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
-      #|                ),
-      #|              ),
-      #|            ]),
-      #|          },
-      #|        ],
-      #|        dependencies: [],
-      #|        mode: @common.AgentMode::DURABLE,
-      #|      },
-      #|      construct: fn(input) {
-      #|        try {
-      #|          let elements = @extractor.extract_tuple(input)
-      #|          guard elements.length() == 1 else {
-      #|            raise  @common.AgentError::InvalidInput(
-      #|              "Expected 1 elements, got " + elements.length().to_string(),
-      #|            )
-      #|          }
-      #|          let name :String = @schema.from_element_value_as(elements[0])
-      #|          let agent = Counter::new(name)
-      #|          let constructed = 
-      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
-      #|          Ok(constructed)
-      #|        } catch{
-      #|          e => Err(e)
+      #|      ],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
       #|        }
-      #|      },
-      #|    })
-      #|  } catch{
-      #|    e => abort(e.to_string())
-      #|  }
+      #|        let name :String = @schema.from_element_value_as(elements[0])
+      #|        let agent = Counter::new(name)
+      #|        let constructed = 
+      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
       #|}
       #|
       #|///|
@@ -440,58 +432,54 @@ test "generate_agent_registration with prompt_hints" {
     output,
     content=(
       #|fn init{
-      #|  try {
-      #|    @agents.register_agent({
-      #|      name: "Counter",
-      #|      agent_type: {
-      #|        type_name: "Counter",
-      #|        description: "A counter agent",
-      #|        constructor_: {
-      #|          name: Some("new"),
-      #|          description: "Creates a new counter",
-      #|          prompt_hint: Some("Provide a unique name"),
-      #|          input_schema: @common.DataSchema::Tuple([
-      #|            (
-      #|              "name",
-      #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
-      #|              ),
+      #|  @agents.register_agent({
+      #|    name: "Counter",
+      #|    agent_type: {
+      #|      type_name: "Counter",
+      #|      description: "A counter agent",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a new counter",
+      #|        prompt_hint: Some("Provide a unique name"),
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "name",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
       #|            ),
-      #|          ]),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|      methods: [
+      #|        {
+      #|          name: "increment",
+      #|          description: "Increments the counter",
+      #|          prompt_hint: Some("Call to increase"),
+      #|          input_schema: @common.DataSchema::Tuple([]),
+      #|          output_schema: @common.DataSchema::Tuple([]),
       #|        },
-      #|        methods: [
-      #|          {
-      #|            name: "increment",
-      #|            description: "Increments the counter",
-      #|            prompt_hint: Some("Call to increase"),
-      #|            input_schema: @common.DataSchema::Tuple([]),
-      #|            output_schema: @common.DataSchema::Tuple([]),
-      #|          },
-      #|        ],
-      #|        dependencies: [],
-      #|        mode: @common.AgentMode::DURABLE,
-      #|      },
-      #|      construct: fn(input) {
-      #|        try {
-      #|          let elements = @extractor.extract_tuple(input)
-      #|          guard elements.length() == 1 else {
-      #|            raise  @common.AgentError::InvalidInput(
-      #|              "Expected 1 elements, got " + elements.length().to_string(),
-      #|            )
-      #|          }
-      #|          let name :String = @schema.from_element_value_as(elements[0])
-      #|          let agent = Counter::new(name)
-      #|          let constructed = 
-      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
-      #|          Ok(constructed)
-      #|        } catch{
-      #|          e => Err(e)
+      #|      ],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
       #|        }
-      #|      },
-      #|    })
-      #|  } catch{
-      #|    e => abort(e.to_string())
-      #|  }
+      #|        let name :String = @schema.from_element_value_as(elements[0])
+      #|        let agent = Counter::new(name)
+      #|        let constructed = 
+      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
       #|}
       #|
       #|///|
@@ -1231,72 +1219,68 @@ test "generate_agent_registration with cross-package types" {
     output,
     content=(
       #|fn init{
-      #|  try {
-      #|    @agents.register_agent({
-      #|      name: "OrderAgent",
-      #|      agent_type: {
-      #|        type_name: "OrderAgent",
-      #|        description: "An order agent",
-      #|        constructor_: {
-      #|          name: Some("new"),
-      #|          description: "Creates an order agent",
+      #|  @agents.register_agent({
+      #|    name: "OrderAgent",
+      #|    agent_type: {
+      #|      type_name: "OrderAgent",
+      #|      description: "An order agent",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates an order agent",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([
+      #|          (
+      #|            "config",
+      #|            @schema.schema_of_tag(
+      #|              (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),
+      #|            ),
+      #|          ),
+      #|        ]),
+      #|      },
+      #|      methods: [
+      #|        {
+      #|          name: "process",
+      #|          description: "Processes an order",
       #|          prompt_hint: None,
       #|          input_schema: @common.DataSchema::Tuple([
       #|            (
-      #|              "config",
+      #|              "order",
       #|              @schema.schema_of_tag(
-      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Config]),
+      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),
+      #|              ),
+      #|            ),
+      #|          ]),
+      #|          output_schema: @common.DataSchema::Tuple([
+      #|            (
+      #|              "result",
+      #|              @schema.schema_of_tag(
+      #|                (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),
       #|              ),
       #|            ),
       #|          ]),
       #|        },
-      #|        methods: [
-      #|          {
-      #|            name: "process",
-      #|            description: "Processes an order",
-      #|            prompt_hint: None,
-      #|            input_schema: @common.DataSchema::Tuple([
-      #|              (
-      #|                "order",
-      #|                @schema.schema_of_tag(
-      #|                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Order]),
-      #|                ),
-      #|              ),
-      #|            ]),
-      #|            output_schema: @common.DataSchema::Tuple([
-      #|              (
-      #|                "result",
-      #|                @schema.schema_of_tag(
-      #|                  (@schema.TypeTag::{  } : @schema.TypeTag[@types.Result]),
-      #|                ),
-      #|              ),
-      #|            ]),
-      #|          },
-      #|        ],
-      #|        dependencies: [],
-      #|        mode: @common.AgentMode::DURABLE,
-      #|      },
-      #|      construct: fn(input) {
-      #|        try {
-      #|          let elements = @extractor.extract_tuple(input)
-      #|          guard elements.length() == 1 else {
-      #|            raise  @common.AgentError::InvalidInput(
-      #|              "Expected 1 elements, got " + elements.length().to_string(),
-      #|            )
-      #|          }
-      #|          let config :@types.Config = @schema.from_element_value_as(elements[0])
-      #|          let agent = OrderAgent::new(config)
-      #|          let constructed = 
-      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
-      #|          Ok(constructed)
-      #|        } catch{
-      #|          e => Err(e)
+      #|      ],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::DURABLE,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 1 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 1 elements, got " + elements.length().to_string(),
+      #|          )
       #|        }
-      #|      },
-      #|    })
-      #|  } catch{
-      #|    e => abort(e.to_string())
-      #|  }
+      #|        let config :@types.Config = @schema.from_element_value_as(elements[0])
+      #|        let agent = OrderAgent::new(config)
+      #|        let constructed = 
+      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
       #|}
       #|
       #|///|
@@ -1460,42 +1444,38 @@ test "generate_agent_registration with ephemeral mode" {
     output,
     content=(
       #|fn init{
-      #|  try {
-      #|    @agents.register_agent({
-      #|      name: "Worker",
-      #|      agent_type: {
-      #|        type_name: "Worker",
-      #|        description: "An ephemeral worker",
-      #|        constructor_: {
-      #|          name: Some("new"),
-      #|          description: "Creates a worker",
-      #|          prompt_hint: None,
-      #|          input_schema: @common.DataSchema::Tuple([]),
-      #|        },
-      #|        methods: [],
-      #|        dependencies: [],
-      #|        mode: @common.AgentMode::EPHEMERAL,
+      #|  @agents.register_agent({
+      #|    name: "Worker",
+      #|    agent_type: {
+      #|      type_name: "Worker",
+      #|      description: "An ephemeral worker",
+      #|      constructor_: {
+      #|        name: Some("new"),
+      #|        description: "Creates a worker",
+      #|        prompt_hint: None,
+      #|        input_schema: @common.DataSchema::Tuple([]),
       #|      },
-      #|      construct: fn(input) {
-      #|        try {
-      #|          let elements = @extractor.extract_tuple(input)
-      #|          guard elements.length() == 0 else {
-      #|            raise  @common.AgentError::InvalidInput(
-      #|              "Expected 0 elements, got " + elements.length().to_string(),
-      #|            )
-      #|          }
-      #|          let agent = Worker::new()
-      #|          let constructed = 
-      #|            @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
-      #|          Ok(constructed)
-      #|        } catch{
-      #|          e => Err(e)
+      #|      methods: [],
+      #|      dependencies: [],
+      #|      mode: @common.AgentMode::EPHEMERAL,
+      #|    },
+      #|    construct: fn(input) {
+      #|      try {
+      #|        let elements = @extractor.extract_tuple(input)
+      #|        guard elements.length() == 0 else {
+      #|          raise  @common.AgentError::InvalidInput(
+      #|            "Expected 0 elements, got " + elements.length().to_string(),
+      #|          )
       #|        }
-      #|      },
-      #|    })
-      #|  } catch{
-      #|    e => abort(e.to_string())
-      #|  }
+      #|        let agent = Worker::new()
+      #|        let constructed = 
+      #|          @agents.ConstructedAgent::{ raw: agent, snapshottable: None }
+      #|        Ok(constructed)
+      #|      } catch{
+      #|        e => Err(e)
+      #|      }
+      #|    },
+      #|  })
       #|}
       #|
       #|///|

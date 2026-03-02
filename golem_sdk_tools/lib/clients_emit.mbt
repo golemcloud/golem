@@ -304,9 +304,11 @@ fn build_client_scoped_new_phantom(
     make_typed_param(p.0, param_type_to_ast_type(p.1))
   })
   params.push(make_typed_param("f", make_callback_type(client_name)))
-  let new_phantom_args : Array[@syntax.Expr] = agent.constructor_params.map(
-    fn(p) { make_ident_expr(p.0) },
-  )
+  let new_phantom_args : Array[@syntax.Expr] = agent.constructor_params.map(fn(
+    p,
+  ) {
+    make_ident_expr(p.0)
+  })
   let body = make_let(
     "client",
     make_apply(make_method_ref(client_name, "new_phantom"), new_phantom_args),
@@ -343,16 +345,15 @@ fn build_client_scoped_get_phantom(
     ),
   )
   params.push(make_typed_param("f", make_callback_type(client_name)))
-  let get_phantom_args : Array[@syntax.Expr] = agent.constructor_params.map(
-    fn(p) { make_ident_expr(p.0) },
-  )
+  let get_phantom_args : Array[@syntax.Expr] = agent.constructor_params.map(fn(
+    p,
+  ) {
+    make_ident_expr(p.0)
+  })
   get_phantom_args.push(make_ident_expr("phantom_id"))
   let body = make_let(
     "client",
-    make_apply(
-      make_method_ref(client_name, "get_phantom"),
-      get_phantom_args,
-    ),
+    make_apply(make_method_ref(client_name, "get_phantom"), get_phantom_args),
     make_defer(
       make_dot_apply(make_ident_expr("client"), "drop", []),
       make_apply(make_ident_expr("f"), [make_ident_expr("client")]),

@@ -318,9 +318,9 @@ section (creating or replacing it as needed).
 Generates two files from user source code annotations:
 
 1. **`golem_agents.mbt`** — agent registration and dispatch code:
-   - `fn init {}` block wrapped in `try { ... } catch { e => abort(e.to_string()) }` that calls
-     `register_agent(...)` for each agent (the try/catch captures any `schema_of_tag_with_options`
-     errors from schema option validation and aborts at startup with a clear message)
+   - `fn init {}` block that calls `register_agent(...)` for each agent (wrapped in
+     `try { ... } catch { e => abort(e.to_string()) }` only when `schema_of_tag_with_options` is
+     used, i.e., when `#derive.text_languages` or `#derive.mime_types` annotations are present)
    - `AgentType` definitions with schemas derived from method signatures
    - Constructor deserialization (extracts tuple elements, deserializes via `@schema`)
    - `impl RawAgent for AgentName` with method dispatch (`match method_name { ... }`)

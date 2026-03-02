@@ -149,7 +149,6 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|}
       #|
       #|
-
     ),
   )
 }
@@ -401,7 +400,6 @@ test "generate_client_code - agent with params" {
       #|}
       #|
       #|
-
     ),
   )
 }

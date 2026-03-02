@@ -8,8 +8,7 @@
   "keywords": [],
   "description": "",
   "scripts": {
-    "bindgen": "wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name vigoo/golem_sdk --ignore-stub",
-    "componentize": "wasm-tools component embed ./wit target/wasm/release/build/gen/gen.wasm --encoding utf16 --output target/wasm/release/embed.wasm && wasm-tools component new target/wasm/release/embed.wasm --output target/wasm/release/golem_sdk-component.wasm"
+    "bindgen": "wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name vigoo/golem_sdk --ignore-stub"    
   },
   "preferred-target": "wasm"
 }
