@@ -258,7 +258,16 @@ impl DeploymentIdentity {
                     )
                 })
                 .collect(),
-            mcp_deployments: Default::default(),
+            mcp_deployments: self
+                .mcp_deployments
+                .iter()
+                .map(|deployment| {
+                    (
+                        (&deployment.domain).into(),
+                        diff::HashOf::from_blake3_hash(deployment.hash.into()),
+                    )
+                })
+                .collect(),
         }
     }
 }
