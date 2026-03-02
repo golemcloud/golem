@@ -31,7 +31,6 @@ CREATE TABLE mcp_deployment_revisions
     created_by        UUID      NOT NULL,
     deleted           BOOLEAN   NOT NULL,
 
-    domain            TEXT      NOT NULL,
     data              BYTEA     NOT NULL,
 
     CONSTRAINT mcp_deployment_revisions_pk

@@ -47,7 +47,6 @@ pub trait McpDeploymentRepo: Send + Sync {
         user_account_id: Uuid,
         mcp_deployment_id: Uuid,
         revision_id: i64,
-        domain: String,
     ) -> Result<(), McpDeploymentRepoError>;
 
     async fn get_staged_by_id(
@@ -116,10 +115,9 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
         user_account_id: Uuid,
         mcp_deployment_id: Uuid,
         revision_id: i64,
-        domain: String,
     ) -> Result<(), McpDeploymentRepoError> {
         self.repo
-            .delete(user_account_id, mcp_deployment_id, revision_id, domain)
+            .delete(user_account_id, mcp_deployment_id, revision_id)
             .instrument(Self::span("delete"))
             .await
     }
@@ -228,14 +226,13 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, false)
-                            RETURNING mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, false)
+                            RETURNING mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
                         .bind(revision.hash)
-                        .bind(&revision.domain)
                         .bind(&revision.data)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
@@ -244,7 +241,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
 
                 Ok(McpDeploymentExtRevisionRecord {
                     environment_id,
-                    domain: revision.domain.clone(),
+                    domain: domain.clone(),
                     entity_created_at: revision.audit.created_at.clone(),
                     revision,
                 })
@@ -266,37 +263,37 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, false)
-                            RETURNING mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, false)
+                            RETURNING mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
                         .bind(revision.hash)
-                        .bind(&revision.domain)
                         .bind(&revision.data)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
                     )
                     .await?;
 
-                let mcp_deployment: (Uuid,) = tx
+                let mcp_deployment: (Uuid, crate::repo::model::datetime::SqlDateTime, String) = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             UPDATE mcp_deployments
-                            SET current_revision_id = $1, deleted_at = NULL
-                            WHERE mcp_deployment_id = $2
-                            RETURNING environment_id
+                            SET current_revision_id = $1, modified_by = $2, deleted_at = NULL
+                            WHERE mcp_deployment_id = $3
+                            RETURNING environment_id, created_at, domain
                         "# })
                         .bind(revision.revision_id)
+                        .bind(revision.audit.created_by)
                         .bind(revision.mcp_deployment_id),
                     )
                     .await?;
 
                 Ok(McpDeploymentExtRevisionRecord {
                     environment_id: mcp_deployment.0,
-                    domain: revision.domain.clone(),
-                    entity_created_at: revision.audit.created_at.clone(),
+                    domain: mcp_deployment.2,
+                    entity_created_at: mcp_deployment.1,
                     revision,
                 })
             }
@@ -310,7 +307,6 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         mcp_deployment_id: Uuid,
         revision_id: i64,
-        domain: String,
     ) -> Result<(), McpDeploymentRepoError> {
         self.with_tx_err("delete", |tx| {
             async move {
@@ -318,21 +314,19 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     user_account_id,
                     mcp_deployment_id,
                     revision_id,
-                    domain,
                 );
 
                 let revision: McpDeploymentRevisionRecord = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
                             INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, true)
-                            RETURNING mcp_deployment_id, revision_id, hash, domain, data, created_at, created_by, deleted
+                            (mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted)
+                            VALUES ($1, $2, $3, $4, $5, $6, true)
+                            RETURNING mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted
                         "# })
                         .bind(revision.mcp_deployment_id)
                         .bind(revision.revision_id)
                         .bind(revision.hash)
-                        .bind(&revision.domain)
                         .bind(&revision.data)
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by),
@@ -375,13 +369,14 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         mr.created_at,
                         mr.created_by,
                         mr.deleted,
-                        mr.domain,
+                        mr.data,
+                        m.domain,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
                             AND m.current_revision_id = mr.revision_id
-                    WHERE m.mcp_deployment_id = $1 AND mr.deleted = false
+                    WHERE m.mcp_deployment_id = $1 AND m.deleted_at IS NULL
                 "# })
                 .bind(mcp_deployment_id),
             )
@@ -404,13 +399,14 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         mr.created_at,
                         mr.created_by,
                         mr.deleted,
-                        mr.domain,
+                        mr.data,
+                        m.domain,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
                             AND m.current_revision_id = mr.revision_id
-                    WHERE m.environment_id = $1 AND mr.domain = $2 AND mr.deleted = false
+                    WHERE m.environment_id = $1 AND m.domain = $2 AND m.deleted_at IS NULL
                 "# })
                 .bind(environment_id)
                 .bind(domain),
@@ -433,14 +429,14 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         mr.created_at,
                         mr.created_by,
                         mr.deleted,
-                        mr.domain,
+                        m.domain,
                         mr.data,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
                             AND m.current_revision_id = mr.revision_id
-                    WHERE m.environment_id = $1 AND mr.deleted = false
+                    WHERE m.environment_id = $1 AND m.deleted_at IS NULL
                 "# })
                 .bind(environment_id),
             )

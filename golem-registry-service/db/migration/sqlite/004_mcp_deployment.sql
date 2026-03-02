@@ -29,7 +29,6 @@ CREATE TABLE mcp_deployment_revisions
     created_by        TEXT      NOT NULL,
     deleted           BOOLEAN   NOT NULL,
 
-    domain            TEXT      NOT NULL,
     data              BLOB      NOT NULL,
 
     PRIMARY KEY (mcp_deployment_id, revision_id),

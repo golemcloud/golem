@@ -1165,7 +1165,6 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         mcp_deployment_id: deployment_id,
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
-        domain: domain.to_string(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
         }),
@@ -1185,7 +1184,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .unwrap();
     let_assert!(Some(fetched_deployment) = fetched_deployment);
     assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
-    assert!(fetched_deployment.domain == revision_0.domain);
+    assert!(fetched_deployment.domain == domain);
 
     let fetched_by_domain = deps
         .mcp_deployment_repo
@@ -1194,15 +1193,13 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .unwrap();
     let_assert!(Some(fetched_by_domain) = fetched_by_domain);
     assert!(fetched_by_domain.revision.revision_id == revision_0.revision_id);
-    assert!(fetched_by_domain.domain == revision_0.domain);
+    assert!(fetched_by_domain.domain == domain);
 
-    // Update the deployment
-    let new_domain = "updated-mcp.com";
+    // Update the deployment (domain stays the same, only data changes)
     let revision_1 = McpDeploymentRevisionRecord {
         mcp_deployment_id: deployment_id,
         revision_id: 1,
         hash: SqlBlake3Hash::empty(),
-        domain: new_domain.to_string(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
         }),
@@ -1216,25 +1213,17 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         .unwrap();
 
     assert!(updated_deployment.revision.revision_id == revision_1.revision_id);
-    assert!(updated_deployment.domain == revision_1.domain);
+    assert!(updated_deployment.domain == domain);
 
-    // Old domain should no longer be found
-    let old_domain_query = deps
+    // Domain should still be found
+    let domain_query = deps
         .mcp_deployment_repo
         .get_staged_by_domain(env.revision.environment_id, domain)
         .await
         .unwrap();
-    assert!(old_domain_query.is_none());
-
-    // New domain should be found
-    let new_domain_query = deps
-        .mcp_deployment_repo
-        .get_staged_by_domain(env.revision.environment_id, new_domain)
-        .await
-        .unwrap();
-    let_assert!(Some(new_domain_query) = new_domain_query);
-    assert!(new_domain_query.revision.revision_id == revision_1.revision_id);
-    assert!(new_domain_query.domain == revision_1.domain);
+    let_assert!(Some(domain_query) = domain_query);
+    assert!(domain_query.revision.revision_id == revision_1.revision_id);
+    assert!(domain_query.domain == domain);
 }
 
 pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
@@ -1248,7 +1237,6 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         mcp_deployment_id: deployment_id,
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
-        domain: domain.to_string(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
         }),
@@ -1274,7 +1262,6 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         mcp_deployment_id: deployment_id,
         revision_id: 1,
         hash: SqlBlake3Hash::empty(),
-        domain: domain.to_string(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
         }),
@@ -1302,7 +1289,6 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         mcp_deployment_id: other_deployment_id,
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
-        domain: other_domain.to_string(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
         }),
@@ -1330,24 +1316,14 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
     // Try to delete with old revision (should fail with ConcurrentModification)
     let delete_with_old_revision = deps
         .mcp_deployment_repo
-        .delete(
-            user.revision.account_id,
-            deployment_id,
-            0,
-            domain.to_string(),
-        )
+        .delete(user.revision.account_id, deployment_id, 0)
         .await;
 
     let_assert!(Err(McpDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
 
     // Delete with correct revision
     deps.mcp_deployment_repo
-        .delete(
-            user.revision.account_id,
-            deployment_id,
-            1,
-            domain.to_string(),
-        )
+        .delete(user.revision.account_id, deployment_id, 1)
         .await
         .unwrap();
 

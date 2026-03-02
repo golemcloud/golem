@@ -60,14 +60,12 @@ pub struct McpDeploymentRevisionRecord {
     pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
-    pub domain: String,
     pub data: Blob<McpDeploymentData>,
 }
 
 impl McpDeploymentRevisionRecord {
     pub fn creation(
         mcp_deployment_id: McpDeploymentId,
-        domain: Domain,
         actor: AccountId,
         agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
     ) -> Self {
@@ -76,7 +74,6 @@ impl McpDeploymentRevisionRecord {
             revision_id: McpDeploymentRevision::INITIAL.into(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
-            domain: domain.0,
             data: Blob::new(McpDeploymentData { agents }),
         };
         value.update_hash();
@@ -89,7 +86,6 @@ impl McpDeploymentRevisionRecord {
             revision_id: deployment.revision.into(),
             hash: SqlBlake3Hash::empty(),
             audit,
-            domain: deployment.domain.0,
             data: Blob::new(McpDeploymentData {
                 agents: deployment.agents,
             }),
@@ -102,14 +98,12 @@ impl McpDeploymentRevisionRecord {
         created_by: uuid::Uuid,
         mcp_deployment_id: Uuid,
         current_revision_id: i64,
-        domain: String,
     ) -> Self {
         let mut value = Self {
             mcp_deployment_id,
             revision_id: current_revision_id,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            domain,
             data: Blob::new(McpDeploymentData {
                 agents: Default::default(),
             }),
