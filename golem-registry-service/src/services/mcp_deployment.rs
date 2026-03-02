@@ -190,9 +190,6 @@ impl McpDeploymentService {
         };
 
         mcp_deployment.revision = mcp_deployment.revision.next()?;
-        if let Some(domain) = update.domain {
-            mcp_deployment.domain = domain;
-        };
         if let Some(agents) = update.agents {
             mcp_deployment.agents = agents;
         };

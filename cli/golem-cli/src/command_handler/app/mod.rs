@@ -1537,7 +1537,6 @@ impl AppCommandHandler {
                                 current_revision: deploy_diff
                                     .staged_mcp_deployment_identity(&domain)
                                     .revision,
-                                domain: Some(domain.clone()),
                                 agents: Some(agents),
                             },
                             mcp_deployment_diff,

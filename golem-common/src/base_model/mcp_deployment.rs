@@ -38,7 +38,6 @@ declare_structs! {
 
     pub struct McpDeploymentUpdate {
         pub current_revision: McpDeploymentRevision,
-        pub domain: Option<Domain>,
         pub agents: Option<BTreeMap<AgentTypeName, McpDeploymentAgentOptions>>,
     }
 

@@ -491,7 +491,6 @@ impl ApiDeploymentCommandHandler {
                 &mcp_deployment.id.0,
                 &golem_common::model::mcp_deployment::McpDeploymentUpdate {
                     current_revision: update.current_revision,
-                    domain: update.domain.clone(),
                     agents: if agents_changed {
                         update.agents.clone()
                     } else {
