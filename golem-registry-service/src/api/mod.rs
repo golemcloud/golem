@@ -60,7 +60,8 @@ pub type Apis = (
         EnvironmentsApi,
         EnvironmentSharesApi,
     ),
-    (HttpApiDeploymentsApi, McpDeploymentsApi),
+    HttpApiDeploymentsApi,
+    McpDeploymentsApi,
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
@@ -113,15 +114,13 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.auth_service.clone(),
                 ),
             ),
-            (
-                HttpApiDeploymentsApi::new(
-                    services.http_api_deployment_service.clone(),
-                    services.auth_service.clone(),
-                ),
-                McpDeploymentsApi::new(
-                    services.mcp_deployment_service.clone(),
-                    services.auth_service.clone(),
-                ),
+            HttpApiDeploymentsApi::new(
+                services.http_api_deployment_service.clone(),
+                services.auth_service.clone(),
+            ),
+            McpDeploymentsApi::new(
+                services.mcp_deployment_service.clone(),
+                services.auth_service.clone(),
             ),
             LoginApi::new(
                 services.login_system.clone(),
