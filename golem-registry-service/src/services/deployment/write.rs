@@ -285,7 +285,7 @@ impl DeploymentWriteService {
             environment,
             components,
             http_api_deployments,
-            mcp_deployments.clone(),
+            mcp_deployments,
         );
 
         {
@@ -318,7 +318,7 @@ impl DeploymentWriteService {
                 .http_api_deployments
                 .into_values()
                 .collect(),
-            mcp_deployments,
+            deployment_context.mcp_deployments.into_values().collect(),
             compiled_routes,
             compiled_mcps,
             registered_agent_types
