@@ -2,16 +2,18 @@ use super::{
     AgentConstructor, AgentDependency, AgentHttpAuthDetails, AgentInvocationMode, AgentMethod,
     AgentMode, AgentPrincipal, AgentType, AgentTypeName, BinaryDescriptor, BinaryReference,
     BinaryReferenceValue, BinarySource, BinaryType, ComponentModelElementSchema,
-    ComponentModelElementValue, CorsOptions, CustomHttpMethod, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, GolemUserPrincipal, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, NamedElementSchema,
-    NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal, PathSegment,
-    PathVariable, Principal, QueryVariable, RegisteredAgentType, RegisteredAgentTypeImplementer,
-    Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic,
-    SystemVariable, SystemVariableSegment, TextDescriptor, TextReference, TextReferenceValue,
-    TextSource, TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
-    UntypedDataValue, UntypedElementValue, UntypedNamedElementValue, Url,
+    ComponentModelElementValue, ConfigKeyValueType, ConfigValueType, CorsOptions, CustomHttpMethod,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, GolemUserPrincipal,
+    HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, OidcPrincipal,
+    PathSegment, PathVariable, Principal, QueryVariable, RegisteredAgentType,
+    RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    SnapshottingPeriodic, SystemVariable, SystemVariableSegment, TextDescriptor, TextReference,
+    TextReferenceValue, TextSource, TextType, UnstructuredBinaryElementValue,
+    UnstructuredTextElementValue, UntypedDataValue, UntypedElementValue, UntypedNamedElementValue,
+    Url,
 };
+use crate::model::agent::{ConfigValueTypeLocal, ConfigValueTypeShared};
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
@@ -128,6 +130,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
                 .map(TryInto::try_into)
                 .transpose()?
                 .unwrap_or(Snapshotting::Disabled(Empty {})),
+            config: proto
+                .config
+                .into_iter()
+                .map(ConfigKeyValueType::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -151,6 +158,11 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
                 .collect(),
             http_mount: value.http_mount.map(Into::into),
             snapshotting: Some(value.snapshotting.into()),
+            config: value
+                .config
+                .into_iter()
+                .map(golem_api_grpc::proto::golem::component::ConfigKeyValueType::from)
+                .collect(),
         }
     }
 }
@@ -1503,6 +1515,80 @@ impl From<SnapshottingConfig> for golem_api_grpc::proto::golem::component::Snaps
                 SnapshottingConfig::EveryNInvocation(every_n) => {
                     Value::EveryNInvocation(every_n.count as u32)
                 }
+            }),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ConfigKeyValueType> for ConfigKeyValueType {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::ConfigKeyValueType,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            key: value.key,
+            value: value
+                .value
+                .ok_or_else(|| "Missing field: value".to_string())?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<ConfigKeyValueType> for golem_api_grpc::proto::golem::component::ConfigKeyValueType {
+    fn from(value: ConfigKeyValueType) -> Self {
+        Self {
+            key: value.key,
+            value: Some(value.value.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ConfigValueType> for ConfigValueType {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::ConfigValueType,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::config_value_type::Kind;
+
+        match value
+            .kind
+            .ok_or_else(|| "Missing field: kind".to_string())?
+        {
+            Kind::Local(inner) => Ok(Self::Local(ConfigValueTypeLocal {
+                value: (&inner
+                    .value
+                    .ok_or_else(|| "Missing field: value".to_string())?)
+                    .try_into()?,
+            })),
+            Kind::Shared(inner) => Ok(Self::Shared(ConfigValueTypeShared {
+                value: (&inner
+                    .value
+                    .ok_or_else(|| "Missing field: value".to_string())?)
+                    .try_into()?,
+            })),
+        }
+    }
+}
+
+impl From<ConfigValueType> for golem_api_grpc::proto::golem::component::ConfigValueType {
+    fn from(value: ConfigValueType) -> Self {
+        use golem_api_grpc::proto::golem::component::config_value_type::Kind;
+
+        Self {
+            kind: Some(match value {
+                ConfigValueType::Local(inner) => Kind::Local(
+                    golem_api_grpc::proto::golem::component::config_value_type::Local {
+                        value: Some((&inner.value).into()),
+                    },
+                ),
+                ConfigValueType::Shared(inner) => Kind::Shared(
+                    golem_api_grpc::proto::golem::component::config_value_type::Shared {
+                        value: Some((&inner.value).into()),
+                    },
+                ),
             }),
         }
     }

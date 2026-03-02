@@ -26,7 +26,7 @@ use golem_common::model::agent::{
     AgentId, DataValue, GolemUserPrincipal, Principal, UntypedDataValue,
 };
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::oplog::OplogCursor;
@@ -36,7 +36,7 @@ use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{Component, ComponentFileSystemNode, GetOplogResponse};
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
@@ -98,7 +98,7 @@ impl WorkerService {
     pub async fn create_with_component(
         &self,
         worker_id: &WorkerId,
-        component: ComponentDto,
+        component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
@@ -751,37 +751,31 @@ impl WorkerService {
         request: AgentInvocationRequest,
         auth: AuthCtx,
     ) -> WorkerResult<AgentInvocationResult> {
-        let registered_agent_type = match request.deployment_revision {
-            Some(rev) => {
+        let deployment_revision = request
+            .deployment_revision
+            .map(|rev| {
                 let rev_u64 = u64::try_from(rev).map_err(|_| {
                     WorkerServiceError::Internal(format!(
                         "Invalid deployment revision (must be non-negative): {rev}"
                     ))
                 })?;
-                let deployment_revision = DeploymentRevision::new(rev_u64).map_err(|e| {
+                DeploymentRevision::new(rev_u64).map_err(|e| {
                     WorkerServiceError::Internal(format!("Invalid deployment revision: {e}"))
-                })?;
-                self.registry_service
-                    .resolve_agent_type_at_deployment(
-                        &auth.account_id(),
-                        &request.app_name,
-                        &request.env_name,
-                        &request.agent_type_name,
-                        deployment_revision,
-                    )
-                    .await?
-            }
-            None => {
-                self.registry_service
-                    .resolve_latest_agent_type_by_names(
-                        &auth.account_id(),
-                        &request.app_name,
-                        &request.env_name,
-                        &request.agent_type_name,
-                    )
-                    .await?
-            }
-        };
+                })
+            })
+            .transpose()?;
+
+        let registered_agent_type = self
+            .registry_service
+            .resolve_agent_type_by_names(
+                &request.app_name,
+                &request.env_name,
+                &request.agent_type_name,
+                deployment_revision,
+                request.owner_account_email.as_deref(),
+                &auth,
+            )
+            .await?;
 
         let component_id = registered_agent_type.implemented_by.component_id;
         let component_metadata = self

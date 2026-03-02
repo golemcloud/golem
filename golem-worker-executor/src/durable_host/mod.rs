@@ -81,7 +81,7 @@ use futures::TryStreamExt;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode, Principal};
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -104,7 +104,7 @@ use golem_common::model::{
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::{
-    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+    Component, ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
-    pub fn component_metadata(&self) -> &ComponentDto {
+    pub fn component_metadata(&self) -> &Component {
         &self.state.component_metadata
     }
 
@@ -2829,7 +2829,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: ComponentDto,
+    component_metadata: Component,
 
     total_linear_memory_size: u64,
 
@@ -2898,7 +2898,7 @@ impl PrivateDurableWorkerState {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
-        component_metadata: ComponentDto,
+        component_metadata: Component,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,

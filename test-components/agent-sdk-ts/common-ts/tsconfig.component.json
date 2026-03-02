@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "noEmit": true,
+    "lib": ["ES2020"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "checkJs": false,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "useDefineForClassFields": false,
+    "paths": {
+      "common/*": ["../common-ts/src/*"]
+    }
+  }
+}

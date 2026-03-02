@@ -31,7 +31,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId};
+use golem_common::model::component::{ComponentFilePath, ComponentId};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -51,7 +51,7 @@ use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageCo
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use golem_service_base::model::GetFileSystemNodeResult;
+use golem_service_base::model::{Component, GetFileSystemNodeResult};
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
@@ -233,7 +233,7 @@ impl TestWorkerExecutor {
         name: &str,
         component_id: &ComponentId,
         environment_id: &EnvironmentId,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         let source_path = self.deps.component_directory.join(format!("{name}.wasm"));
         self.deps
             .component_writer
@@ -789,7 +789,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &ComponentDto {
+    fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
     }
 

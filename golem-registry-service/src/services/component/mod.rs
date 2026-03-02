@@ -21,7 +21,6 @@ pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
 use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
-use crate::model::component::Component;
 use crate::repo::component::ComponentRepo;
 use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
@@ -30,6 +29,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_service_base::model::Component;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use std::sync::Arc;
@@ -444,10 +444,7 @@ impl ComponentService {
 
         let stream = self
             .object_store
-            .get_stream(
-                component.environment_id,
-                &component.transformed_object_store_key,
-            )
+            .get_stream(component.environment_id, &component.object_store_key)
             .await?;
 
         Ok(stream)

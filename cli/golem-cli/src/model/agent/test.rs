@@ -101,6 +101,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
         mode: AgentMode::Durable,
         http_mount: None,
         snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
     }]
 }
 
@@ -172,6 +173,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
             mode: AgentMode::Durable,
             http_mount: None,
             snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
         },
         AgentType {
             type_name: golem_common::model::agent::AgentTypeName("agent2".to_string()),
@@ -232,6 +234,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
             mode: AgentMode::Durable,
             http_mount: None,
             snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
         },
     ];
 

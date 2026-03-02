@@ -28,6 +28,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::model::Component;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -50,7 +51,7 @@ struct CachedAnalysis {
 pub struct FileSystemComponentWriter {
     root: PathBuf,
     analysis_cache: Cache<blake3::Hash, (), CachedAnalysis, String>,
-    component_cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, String>,
+    component_cache: Cache<(ComponentId, ComponentRevision), (), Component, String>,
     latest_revisions: Mutex<HashMap<ComponentId, ComponentRevision>>,
 }
 
@@ -96,7 +97,7 @@ impl FileSystemComponentWriter {
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
         original_source_hash: Option<blake3::Hash>,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -254,7 +255,7 @@ impl FileSystemComponentWriter {
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
         original_source_hash: Option<blake3::Hash>,
-    ) -> ComponentDto {
+    ) -> Component {
         self.add_component(
             local_path,
             name,
@@ -285,7 +286,7 @@ impl FileSystemComponentWriter {
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
         original_source_hash: Option<blake3::Hash>,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         self.write_component_to_filesystem(
             local_path,
             name,
@@ -313,7 +314,7 @@ impl FileSystemComponentWriter {
         application_id: ApplicationId,
         account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         self.write_component_to_filesystem(
             local_path,
             component_name,
@@ -341,7 +342,7 @@ impl FileSystemComponentWriter {
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
         original_source_hash: Option<blake3::Hash>,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -427,7 +428,7 @@ impl FileSystemComponentWriter {
     pub async fn get_latest_component_metadata(
         &self,
         component_id: &ComponentId,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         let revision = self.get_latest_revision(component_id).await;
         self.get_component_metadata_at_revision(component_id, revision)
             .await
@@ -437,7 +438,7 @@ impl FileSystemComponentWriter {
         &self,
         component_id: &ComponentId,
         revision: ComponentRevision,
-    ) -> anyhow::Result<ComponentDto> {
+    ) -> anyhow::Result<Component> {
         let key = (*component_id, revision);
         let root = self.root.clone();
         self.component_cache
@@ -445,7 +446,7 @@ impl FileSystemComponentWriter {
                 let metadata = load_metadata_from(&root, &key.0, key.1)
                     .await
                     .map_err(|err| format!("Failed to load component metadata: {err:#}"))?;
-                let component: ComponentDto = metadata.into();
+                let component: Component = metadata.into();
                 Ok(component)
             })
             .await
@@ -512,7 +513,7 @@ pub(super) struct LocalFileSystemComponentMetadata {
 
 impl LocalFileSystemComponentMetadata {
     pub fn with_updated_hash(self) -> Self {
-        let diffable = ComponentDto::from(self.clone()).to_diffable();
+        let diffable = ComponentDto::from(Component::from(self.clone())).to_diffable();
         Self {
             final_hash: diffable.hash(),
             ..self
@@ -520,7 +521,7 @@ impl LocalFileSystemComponentMetadata {
     }
 }
 
-impl From<LocalFileSystemComponentMetadata> for ComponentDto {
+impl From<LocalFileSystemComponentMetadata> for Component {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
             id: value.component_id,
@@ -538,15 +539,14 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
                 value.agent_types,
             ),
             created_at: Default::default(),
-            original_files: value.files.clone(),
             files: value.files,
             installed_plugins: vec![],
-            original_env: value.env.clone(),
             env: value.env,
-            original_config_vars: value.config_vars.clone(),
+            local_agent_config: Vec::new(),
             config_vars: value.config_vars,
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,
+            object_store_key: "".to_string(),
         }
     }
 }

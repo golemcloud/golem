@@ -21,9 +21,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, PluginPriority,
-};
+use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -1104,7 +1102,7 @@ impl WorkerApi {
         &self,
         component_id: ComponentId,
         worker_id: &str,
-    ) -> Result<(WorkerId, ComponentDto)> {
+    ) -> Result<(WorkerId, Component)> {
         let latest_component = self
             .component_service
             .get_latest_by_id_uncached(component_id)

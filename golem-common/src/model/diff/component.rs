@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::VecDiff;
 use crate::model::component::ComponentFilePermissions;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::plugin::PluginInstallation;
@@ -20,6 +21,42 @@ use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAgentConfigEntry {
+    pub agent: String,
+    pub key: Vec<String>,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAgentConfigEntryDiff {
+    pub agent_changed: bool,
+    pub key_changed: bool,
+    pub value_changed: bool,
+}
+
+impl Diffable for LocalAgentConfigEntry {
+    type DiffResult = LocalAgentConfigEntryDiff;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        let agent_changed = new.agent != current.agent;
+        let key_changed = new.key != current.key;
+        let value_changed = new.value != current.value;
+
+        if agent_changed || key_changed || value_changed {
+            Some(LocalAgentConfigEntryDiff {
+                agent_changed,
+                key_changed,
+                value_changed,
+            })
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,8 +99,6 @@ impl Diffable for ComponentFile {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -87,6 +122,8 @@ pub struct Component {
     pub files_by_path: BTreeMap<String, HashOf<ComponentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugins_by_grant_id: BTreeMap<Uuid, PluginInstallation>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub local_agent_config_ordered_by_agent_and_key: Vec<LocalAgentConfigEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -98,6 +135,8 @@ pub struct ComponentDiff {
     pub file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_changes: BTreeMapDiff<Uuid, PluginInstallation>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub local_agent_config_changes: VecDiff<LocalAgentConfigEntry>,
 }
 
 impl Diffable for Component {
@@ -114,17 +153,23 @@ impl Diffable for Component {
             .plugins_by_grant_id
             .diff_with_current(&current.plugins_by_grant_id)
             .unwrap_or_default();
+        let local_agent_config_changes = new
+            .local_agent_config_ordered_by_agent_and_key
+            .diff_with_current(&current.local_agent_config_ordered_by_agent_and_key)
+            .unwrap_or_default();
 
         if metadata_changed
             || wasm_changed
             || !file_changes.is_empty()
             || !plugin_changes.is_empty()
+            || !local_agent_config_changes.is_empty()
         {
             Some(ComponentDiff {
                 metadata_changed,
                 wasm_changed,
                 file_changes,
                 plugin_changes,
+                local_agent_config_changes,
             })
         } else {
             None

@@ -82,6 +82,7 @@ impl ToWitNaming for AgentType {
             mode: self.mode,
             http_mount: self.http_mount.clone(),
             snapshotting: self.snapshotting.clone(),
+            config: self.config.clone(),
         }
     }
 }

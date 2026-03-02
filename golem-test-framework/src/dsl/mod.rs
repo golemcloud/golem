@@ -31,15 +31,13 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, DataValue};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
-use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     PluginInstallation,
 };
+use golem_common::model::component::{LocalAgentConfigEntry, PluginPriority};
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentCreation, DeploymentRevision, DeploymentVersion,
-};
+use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -103,6 +101,7 @@ pub trait TestDsl {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -131,6 +130,7 @@ pub trait TestDsl {
             Vec::new(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -148,6 +148,7 @@ pub trait TestDsl {
             Some(name),
             files,
             latest_revision.files.into_iter().map(|f| f.path).collect(),
+            None,
             None,
             None,
         )
@@ -169,6 +170,7 @@ pub trait TestDsl {
             Vec::new(),
             Some(BTreeMap::from_iter(env.to_vec())),
             None,
+            None,
         )
         .await
     }
@@ -182,6 +184,7 @@ pub trait TestDsl {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
+        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn try_start_agent(
@@ -596,27 +599,8 @@ pub trait TestDslExtended: TestDsl {
 
     async fn deploy_environment(
         &self,
-        environment_id: &EnvironmentId,
-    ) -> anyhow::Result<CurrentDeployment> {
-        let client = self.registry_service_client().await;
-
-        let plan = client
-            .get_environment_deployment_plan(&environment_id.0)
-            .await?;
-
-        let deployment = client
-            .deploy_environment(
-                &environment_id.0,
-                &DeploymentCreation {
-                    current_revision: plan.current_revision,
-                    expected_deployment_hash: plan.deployment_hash,
-                    version: DeploymentVersion(Uuid::new_v4().to_string()),
-                },
-            )
-            .await?;
-
-        Ok(deployment)
-    }
+        environment_id: EnvironmentId,
+    ) -> anyhow::Result<CurrentDeployment>;
 
     fn get_last_deployment_revision(
         &self,
@@ -634,6 +618,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     files: Vec<IFSEntry>,
     env: BTreeMap<String, String>,
     config_vars: BTreeMap<String, String>,
+    local_agent_config: Vec<LocalAgentConfigEntry>,
     plugins: Vec<PluginInstallation>,
 }
 
@@ -649,6 +634,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             files: Vec::new(),
             env: BTreeMap::new(),
             config_vars: BTreeMap::new(),
+            local_agent_config: Vec::new(),
             plugins: Vec::new(),
         }
     }
@@ -729,6 +715,19 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
+    pub fn with_local_agent_config(
+        mut self,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
+    ) -> Self {
+        self.local_agent_config = local_agent_config;
+        self
+    }
+
+    pub fn add_local_agent_config(mut self, local_agent_config: LocalAgentConfigEntry) -> Self {
+        self.local_agent_config.push(local_agent_config);
+        self
+    }
+
     pub fn with_plugin(
         self,
         environment_plugin_id: &EnvironmentPluginGrantId,
@@ -764,6 +763,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.files,
                 self.env,
                 self.config_vars,
+                self.local_agent_config,
                 self.plugins,
             )
             .await

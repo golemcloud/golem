@@ -13,8 +13,10 @@
 // limitations under the License.
 
 pub mod auth;
+pub mod components;
 pub mod plugin_registration;
 
+pub use self::components::*;
 use derive_more::Display;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;

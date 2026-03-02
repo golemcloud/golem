@@ -571,7 +571,7 @@ impl ThroughputBenchmark {
 
         info!("Deploying environment");
 
-        user.deploy_environment(&env.id)
+        user.deploy_environment(env.id)
             .await
             .expect("Failed to deploy environment");
 

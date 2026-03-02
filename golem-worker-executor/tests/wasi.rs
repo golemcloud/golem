@@ -3200,6 +3200,7 @@ async fn wasi_config_component_update(
                 ("k3".to_string(), "v4".to_string()),
                 ("k4".to_string(), "v4".to_string()),
             ])),
+            None,
         )
         .await?;
 

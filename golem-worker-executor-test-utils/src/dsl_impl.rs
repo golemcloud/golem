@@ -31,7 +31,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::agent::{AgentId, DataValue, UntypedDataValue};
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile, PluginInstallation,
+    InitialComponentFile, LocalAgentConfigEntry, PluginInstallation,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -70,12 +70,17 @@ impl TestDsl for TestWorkerExecutor {
         files: Vec<IFSEntry>,
         env: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<LocalAgentConfigEntry>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
-        if !plugins.is_empty() {
+        if !local_agent_config.is_empty() {
             return Err(anyhow!(
-                "Plugins aren not supported in worker executor tests"
+                "Local agent config isn't supported in worker executor tests"
             ));
+        }
+
+        if !plugins.is_empty() {
+            return Err(anyhow!("Plugins aren't supported in worker executor tests"));
         }
 
         let component_directory = &self.deps.component_directory;
@@ -161,17 +166,19 @@ impl TestDsl for TestWorkerExecutor {
             }
         };
 
-        Ok(component)
+        Ok(component.into())
     }
 
     async fn get_latest_component_revision(
         &self,
         component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
-        self.deps
+        let component = self
+            .deps
             .component_writer
             .get_latest_component_metadata(component_id)
-            .await
+            .await?;
+        Ok(component.into())
     }
 
     async fn get_component_at_revision(
@@ -179,10 +186,12 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         revision: ComponentRevision,
     ) -> anyhow::Result<ComponentDto> {
-        self.deps
+        let component = self
+            .deps
             .component_writer
             .get_component_metadata_at_revision(component_id, revision)
-            .await
+            .await?;
+        Ok(component.into())
     }
 
     async fn update_component_with(
@@ -194,7 +203,14 @@ impl TestDsl for TestWorkerExecutor {
         removed_files: Vec<ComponentFilePath>,
         env: Option<BTreeMap<String, String>>,
         config_vars: Option<BTreeMap<String, String>>,
+        local_agent_config: Option<Vec<LocalAgentConfigEntry>>,
     ) -> anyhow::Result<ComponentDto> {
+        if local_agent_config.is_some() {
+            return Err(anyhow!(
+                "Local agent config isn't supported in worker executor tests"
+            ));
+        }
+
         let latest_revision = self
             .deps
             .component_writer
@@ -257,7 +273,7 @@ impl TestDsl for TestWorkerExecutor {
             )
             .await?;
 
-        Ok(component)
+        Ok(component.into())
     }
 
     async fn try_start_agent_with(
