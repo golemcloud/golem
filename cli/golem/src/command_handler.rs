@@ -52,6 +52,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     router_addr: args.router_addr().to_string(),
                     router_port: args.router_port(),
                     custom_request_port: args.custom_request_port(),
+                    mcp_port: args.mcp_port(),
                     data_dir,
                 })
                 .await?;
@@ -73,6 +74,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             router_addr: args.router_addr().to_string(),
             router_port: args.router_port(),
             custom_request_port: args.custom_request_port(),
+            mcp_port: args.mcp_port(),
             data_dir: default_data_dir()?,
         })
         .await?;

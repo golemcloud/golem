@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::http_api::HttpApiDeploymentDeployProperties;
+use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
@@ -338,6 +338,8 @@ pub struct Application {
     clean: Vec<WithSource<String>>,
     http_api_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
+    mcp_deployments:
+        BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -484,6 +486,13 @@ impl Application {
         environment: &EnvironmentName,
     ) -> Option<&BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>> {
         self.http_api_deployments.get(environment)
+    }
+
+    pub fn mcp_deployments(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Option<&BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>> {
+        self.mcp_deployments.get(environment)
     }
 }
 
@@ -1442,7 +1451,9 @@ mod app_builder {
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
-    use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::http_api::{
+        HttpApiDeploymentDeployProperties, McpDeploymentAgentOptions, McpDeploymentDeployProperties,
+    };
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
@@ -1556,6 +1567,9 @@ mod app_builder {
             BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>,
         >,
 
+        mcp_deployments:
+            BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
         all_sources: BTreeSet<PathBuf>,
@@ -1603,6 +1617,7 @@ mod app_builder {
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
+                mcp_deployments: builder.mcp_deployments,
                 bridge_sdks: builder.bridge_sdks,
             })
         }
@@ -1773,6 +1788,25 @@ mod app_builder {
                                         webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
                                         agents
                                     },
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(mcp) = app.application.mcp {
+                        for (environment, deployments) in mcp.deployments {
+                            for mcp_deployment in deployments {
+                                let mcp_deployments =
+                                    self.mcp_deployments.entry(environment.clone()).or_default();
+
+                                let agents = mcp_deployment.agents
+                                    .into_iter()
+                                    .map(|(k, _v)| (k, McpDeploymentAgentOptions {}))
+                                    .collect();
+
+                                mcp_deployments.entry(mcp_deployment.domain.clone()).or_insert(WithSource::new(
+                                    app.source.to_path_buf(),
+                                    McpDeploymentDeployProperties { agents },
                                 ));
                             }
                         }
