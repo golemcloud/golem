@@ -102,6 +102,7 @@ criterion = "0.5"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
 darling = "0.20.11"
+dashmap = "7.0.0-rc2"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 desert_rust = { version = "0.1.7", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
@@ -205,6 +206,7 @@ regex = "1.11.1"
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
+rmcp = {version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rustc-hash = "2.1.1"
