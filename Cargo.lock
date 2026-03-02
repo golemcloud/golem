@@ -4308,6 +4308,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm",
+ "heck",
  "humantime-serde",
  "itertools 0.14.0",
  "log",
