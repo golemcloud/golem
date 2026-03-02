@@ -109,7 +109,7 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::CreateHttpApiDeployment,
+            EnvironmentAction::CreateMcpDeployment,
         )?;
 
         self.domain_registration_service
@@ -175,14 +175,14 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+            EnvironmentAction::ViewMcpDeployment,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::UpdateHttpApiDeployment,
+            EnvironmentAction::UpdateMcpDeployment,
         )?;
 
         if update.current_revision != mcp_deployment.revision {
@@ -244,14 +244,14 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+            EnvironmentAction::ViewMcpDeployment,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::DeleteHttpApiDeployment,
+            EnvironmentAction::DeleteMcpDeployment,
         )?;
 
         if current_revision != mcp_deployment.revision {
@@ -302,7 +302,7 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+            EnvironmentAction::ViewMcpDeployment,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
@@ -336,7 +336,7 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+            EnvironmentAction::ViewMcpDeployment,
         )?;
 
         let mcp_deployments: Vec<McpDeployment> = self
@@ -370,7 +370,7 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+            EnvironmentAction::ViewMcpDeployment,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentByDomainNotFound(domain.clone()))?;
 
@@ -417,7 +417,7 @@ impl McpDeploymentService {
         auth.authorize_environment_action(
             environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDeployment,
+            EnvironmentAction::ViewMcpDeployment,
         )
         .map_err(|_| McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?;
 
