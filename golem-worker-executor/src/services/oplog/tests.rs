@@ -1807,9 +1807,8 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
         Arc::new(SqliteIndexedStorage::new(pool).await.unwrap());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
-    let oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage, blob_storage, 100, 100, 100).await,
-    );
+    let oplog_service =
+        Arc::new(PrimaryOplogService::new(indexed_storage, blob_storage, 100, 100, 100).await);
 
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
@@ -1854,24 +1853,19 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
         let owned_worker_id = owned_worker_id.clone();
         let worker_id = worker_id.clone();
         let barrier = barrier.clone();
-        let failure_count = failure_count.clone();
+        let _failure_count = failure_count.clone();
 
         handles.push(tokio::spawn(async move {
             for _iteration in 0..num_iterations {
                 // Synchronize all tasks to maximize contention on get_or_open
                 barrier.wait().await;
 
-                let last_oplog_index =
-                    oplog_service.get_last_index(&owned_worker_id).await;
+                let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
                 let oplog = oplog_service
                     .open(
                         &owned_worker_id,
                         last_oplog_index,
-                        WorkerMetadata::default(
-                            worker_id.clone(),
-                            account_id,
-                            environment_id,
-                        ),
+                        WorkerMetadata::default(worker_id.clone(), account_id, environment_id),
                         default_last_known_status(),
                         default_execution_status(AgentMode::Durable),
                     )
