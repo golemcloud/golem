@@ -59,17 +59,22 @@ export function invalidType(error: string): AgentError {
   };
 }
 
-export function isAgentError(error: any): error is AgentError {
+export function isAgentError(error: unknown): error is AgentError {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const e = error as Record<string, unknown>;
   return (
-    error.tag !== undefined &&
-    error.val !== undefined &&
-    ((error.tag === 'invalid-input' && typeof error.val === 'string') ||
-      (error.tag === 'invalid-method' && typeof error.val === 'string') ||
-      (error.tag === 'invalid-type' && typeof error.val === 'string') ||
-      (error.tag === 'invalid-agent-id' && typeof error.val === 'string') ||
-      (error.tag === 'custom-error' &&
-        typeof error.val === 'object' &&
-        error.val.value !== undefined &&
-        error.val.typ !== undefined))
+    e.tag !== undefined &&
+    e.val !== undefined &&
+    ((e.tag === 'invalid-input' && typeof e.val === 'string') ||
+      (e.tag === 'invalid-method' && typeof e.val === 'string') ||
+      (e.tag === 'invalid-type' && typeof e.val === 'string') ||
+      (e.tag === 'invalid-agent-id' && typeof e.val === 'string') ||
+      (e.tag === 'custom-error' &&
+        typeof e.val === 'object' &&
+        e.val !== null &&
+        (e.val as Record<string, unknown>).value !== undefined &&
+        (e.val as Record<string, unknown>).typ !== undefined))
   );
 }
