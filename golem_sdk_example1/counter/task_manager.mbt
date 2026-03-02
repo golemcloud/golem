@@ -17,6 +17,15 @@ pub(all) struct TaskInfo {
 }
 
 ///|
+fn priority_to_string(p : Priority) -> String {
+  match p {
+    Low => "low"
+    Medium => "medium"
+    High => "high"
+  }
+}
+
+///|
 /// A task management agent
 #derive.agent
 struct TaskManager {
@@ -36,9 +45,18 @@ fn TaskManager::new() -> TaskManager {
 ///|
 /// Adds a new task, returns the total task count
 pub fn TaskManager::add_task(self : Self, task : TaskInfo) -> UInt64 {
-  task_logger.info("Adding task: " + task.title)
-  self.tasks.push(task)
-  self.tasks.length().reinterpret_as_uint().to_uint64()
+  @context.with_span(
+    "task_manager.add_task",
+    attributes=[
+      ("task.title", task.title),
+      ("task.priority", priority_to_string(task.priority)),
+    ],
+    fn(_span) {
+      task_logger.info("Adding task: " + task.title)
+      self.tasks.push(task)
+      self.tasks.length().reinterpret_as_uint().to_uint64()
+    },
+  )
 }
 
 ///|

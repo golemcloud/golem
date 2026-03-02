@@ -1,0 +1,46 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "vigoo/golem_sdk/context"
+
+import {
+  "vigoo/golem_sdk/interface/wasi/clocks/wallClock",
+}
+
+// Values
+pub fn allow_forwarding_trace_context_headers(Bool) -> Bool
+
+pub fn current_context() -> Context
+
+pub fn start_span(String, attributes? : Array[(String, String)]) -> Span
+
+pub fn[T] with_span(String, attributes? : Array[(String, String)], (Span) -> T) -> T
+
+// Errors
+
+// Types and methods
+pub(all) struct Context {
+  // private fields
+}
+pub fn Context::attribute_chain(Self, String) -> Array[String]
+pub fn Context::attribute_chains(Self) -> Map[String, Array[String]]
+pub fn Context::attributes(Self) -> Map[String, String]
+pub fn Context::current_attributes(Self) -> Map[String, String]
+pub fn Context::get_attribute(Self, String) -> String?
+pub fn Context::get_current_attribute(Self, String) -> String?
+pub fn Context::parent(Self) -> Self?
+pub fn Context::span_id(Self) -> String
+pub fn Context::trace_context_headers(Self) -> Array[(String, String)]
+pub fn Context::trace_id(Self) -> String
+
+pub(all) struct Span {
+  // private fields
+}
+pub fn Span::finish(Self) -> Unit
+pub fn Span::set_attribute(Self, String, String) -> Unit
+pub fn Span::set_attributes(Self, Array[(String, String)]) -> Unit
+pub fn Span::started_at(Self) -> @wallClock.Datetime
+
+// Type aliases
+pub using @wallClock {type Datetime}
+
+// Traits
+

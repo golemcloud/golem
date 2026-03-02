@@ -23,14 +23,20 @@ pub fn VisionAgent::analyze(
   self : Self,
   input : @types.Multimodal[TextOrImage],
 ) -> String {
-  self.count += 1
-  let mut result = ""
-  for item in input.items {
-    match item {
-      Text(t) => result = result + "text:" + t + " "
-      Image(data) =>
-        result = result + "image:" + data.length().to_string() + "bytes "
-    }
-  }
-  result
+  @context.with_span(
+    "vision_agent.analyze",
+    attributes=[("input.items", input.items.length().to_string())],
+    fn(_span) {
+      self.count += 1
+      let mut result = ""
+      for item in input.items {
+        match item {
+          Text(t) => result = result + "text:" + t + " "
+          Image(data) =>
+            result = result + "image:" + data.length().to_string() + "bytes "
+        }
+      }
+      result
+    },
+  )
 }

@@ -19,15 +19,27 @@ fn Counter::new(name : String) -> Counter {
 ///|
 /// Increments the counter
 pub fn Counter::increment(self : Self) -> Unit {
-  logger.debug("Incrementing counter: " + self.name)
-  self.value += 1
+  @context.with_span(
+    "counter.increment",
+    attributes=[("counter.name", self.name)],
+    fn(_span) {
+      logger.debug("Incrementing counter: " + self.name)
+      self.value += 1
+    },
+  )
 }
 
 ///|
 /// Decrements the counter
 pub fn Counter::decrement(self : Self) -> Unit {
-  logger.debug("Decrementing counter: " + self.name)
-  self.value -= 1
+  @context.with_span(
+    "counter.decrement",
+    attributes=[("counter.name", self.name)],
+    fn(_span) {
+      logger.debug("Decrementing counter: " + self.name)
+      self.value -= 1
+    },
+  )
 }
 
 ///|

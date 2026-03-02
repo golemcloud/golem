@@ -8,7 +8,7 @@ priv struct LoggingState {
 }
 
 ///|
-let state : LoggingState = { context: "", min_level: INFO }
+let state : LoggingState = { context: "", min_level: TRACE }
 
 ///|
 /// Sets the global default context string used by module-level logging functions.
