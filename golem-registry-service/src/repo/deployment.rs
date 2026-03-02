@@ -14,8 +14,9 @@
 
 use super::model::BindFields;
 use super::model::deployment::{
-    CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
-    DeploymentMcpCapabilityRecord, DeploymentRevisionCreationRecord, ResolvedAgentTypeRecord,
+    CurrentDeploymentExtRevisionRecord, DeploymentCompiledMcpRecord,
+    DeploymentCompiledRouteWithSecuritySchemeRecord, DeploymentRevisionCreationRecord,
+    ResolvedAgentTypeRecord,
 };
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
@@ -100,7 +101,7 @@ pub trait DeploymentRepo: Send + Sync {
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str,
-    ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>>;
+    ) -> RepoResult<Option<DeploymentCompiledMcpRecord>>;
 
     async fn list_compiled_routes_for_domain_and_deployment(
         &self,
@@ -317,7 +318,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str,
-    ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
+    ) -> RepoResult<Option<DeploymentCompiledMcpRecord>> {
         self.repo
             .get_active_mcp_for_domain(domain)
             .instrument(Self::span_domain(domain))
@@ -776,7 +777,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn get_active_mcp_for_domain(
         &self,
         domain: &str,
-    ) -> RepoResult<Option<DeploymentMcpCapabilityRecord>> {
+    ) -> RepoResult<Option<DeploymentCompiledMcpRecord>> {
         self.with_ro("get_active_mcp_for_domain")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -1309,7 +1310,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
 
     async fn create_deployment_mcp(
         tx: &mut Self::Tx,
-        mcp: &DeploymentMcpCapabilityRecord,
+        mcp: &DeploymentCompiledMcpRecord,
     ) -> RepoResult<()>;
 
     async fn create_deployment_registered_agent_type(
@@ -1512,7 +1513,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
 
     async fn create_deployment_mcp(
         tx: &mut Self::Tx,
-        mcp: &DeploymentMcpCapabilityRecord,
+        mcp: &DeploymentCompiledMcpRecord,
     ) -> RepoResult<()> {
         tx.execute(
             sqlx::query(indoc! { r#"

@@ -12708,10 +12708,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
+        mcpDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
       required:
       - deploymentHash
       - components
       - httpApiDeployments
+      - mcpDeployments
     DeploymentPlanComponentEntry:
       title: DeploymentPlanComponentEntry
       type: object
@@ -12734,6 +12739,26 @@ components:
       - hash
     DeploymentPlanHttpApiDeploymentEntry:
       title: DeploymentPlanHttpApiDeploymentEntry
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        domain:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - id
+      - revision
+      - domain
+      - hash
+    DeploymentPlanMcpDeploymentEntry:
+      title: DeploymentPlanMcpDeploymentEntry
       type: object
       properties:
         id:
@@ -12784,11 +12809,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
+        mcpDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
       required:
       - deploymentRevision
       - deploymentHash
       - components
       - httpApiDeployments
+      - mcpDeployments
     DomainRegistration:
       title: DomainRegistration
       type: object
@@ -13467,6 +13497,13 @@ components:
           format: uuid
         domain:
           type: string
+        hash:
+          type: string
+          format: hash
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentAgentOptions'
         createdAt:
           type: string
           format: date-time
@@ -13475,15 +13512,25 @@ components:
       - revision
       - environmentId
       - domain
+      - hash
+      - agents
       - createdAt
+    McpDeploymentAgentOptions:
+      title: McpDeploymentAgentOptions
+      type: object
     McpDeploymentCreation:
       title: McpDeploymentCreation
       type: object
       properties:
         domain:
           type: string
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentAgentOptions'
       required:
       - domain
+      - agents
     McpDeploymentUpdate:
       title: McpDeploymentUpdate
       type: object
@@ -13491,8 +13538,10 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        domain:
-          type: string
+        agents:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentAgentOptions'
       required:
       - currentRevision
     NamedElementSchema:

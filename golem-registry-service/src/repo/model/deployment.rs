@@ -424,7 +424,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
     pub mcp_deployments: Vec<DeploymentMcpDeploymentRevisionRecord>,
     pub compiled_routes: Vec<DeploymentCompiledRouteRecord>,
-    pub compiled_mcp: Vec<DeploymentMcpCapabilityRecord>,
+    pub compiled_mcp: Vec<DeploymentCompiledMcpRecord>,
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
 }
 
@@ -489,7 +489,7 @@ impl DeploymentRevisionCreationRecord {
                 .collect(),
             compiled_mcp: compiled_mcp
                 .into_iter()
-                .map(DeploymentMcpCapabilityRecord::from_model)
+                .map(DeploymentCompiledMcpRecord::from_model)
                 .collect(),
             registered_agent_types: registered_agent_types
                 .into_iter()
@@ -511,7 +511,7 @@ pub struct CompiledMcpData {
 }
 
 #[derive(FromRow)]
-pub struct DeploymentMcpCapabilityRecord {
+pub struct DeploymentCompiledMcpRecord {
     pub account_id: Uuid,
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -519,7 +519,7 @@ pub struct DeploymentMcpCapabilityRecord {
     pub mcp_data: Blob<CompiledMcpData>,
 }
 
-impl DeploymentMcpCapabilityRecord {
+impl DeploymentCompiledMcpRecord {
     pub fn from_model(compiled_mcp: CompiledMcp) -> Self {
         Self {
             account_id: compiled_mcp.account_id.0,
@@ -533,10 +533,10 @@ impl DeploymentMcpCapabilityRecord {
     }
 }
 
-impl TryFrom<DeploymentMcpCapabilityRecord> for CompiledMcp {
+impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
     type Error = DeployRepoError;
 
-    fn try_from(value: DeploymentMcpCapabilityRecord) -> Result<Self, Self::Error> {
+    fn try_from(value: DeploymentCompiledMcpRecord) -> Result<Self, Self::Error> {
         let mcp_data = value.mcp_data.into_value();
 
         Ok(Self {
