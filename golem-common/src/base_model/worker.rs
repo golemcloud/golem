@@ -61,8 +61,7 @@ declare_structs! {
         pub value: serde_json::Value
     }
 
-    #[derive(IntoValue, FromValue)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct ParsedWorkerCreationLocalAgentConfigEntry {
         pub key: Vec<String>,

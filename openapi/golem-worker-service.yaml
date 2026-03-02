@@ -2577,6 +2577,19 @@ components:
         end:
           type: integer
           format: uint64
+    ParsedWorkerCreationLocalAgentConfigEntry:
+      type: object
+      title: ParsedWorkerCreationLocalAgentConfigEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ValueAndType'
     PendingUpdate:
       type: object
       title: PendingUpdate
@@ -4204,6 +4217,18 @@ components:
         value:
           type: string
           format: date-time
+    WorkerCreationLocalAgentConfigEntry:
+      type: object
+      title: WorkerCreationLocalAgentConfigEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value: {}
     WorkerCreationRequest:
       type: object
       title: WorkerCreationRequest
@@ -4222,6 +4247,11 @@ components:
           default: {}
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -4758,6 +4788,7 @@ components:
       - initialTotalLinearMemorySize
       - initialActivePlugins
       - configVars
+      - localAgentConfig
       properties:
         timestamp:
           type: string
@@ -4793,6 +4824,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
