@@ -64,6 +64,20 @@ pub struct McpDeploymentRevisionRecord {
 }
 
 impl McpDeploymentRevisionRecord {
+    pub(in crate::repo) fn for_recreation(
+        mut self,
+        mcp_deployment_id: Uuid,
+        revision_id: i64,
+    ) -> Result<Self, McpDeploymentRepoError> {
+        let revision: McpDeploymentRevision = revision_id.try_into()?;
+        let next_revision_id = revision.next()?.into();
+
+        self.mcp_deployment_id = mcp_deployment_id;
+        self.revision_id = next_revision_id;
+
+        Ok(self)
+    }
+
     pub fn creation(
         mcp_deployment_id: McpDeploymentId,
         actor: AccountId,
@@ -147,13 +161,14 @@ impl TryFrom<McpDeploymentExtRevisionRecord> for McpDeployment {
     type Error = McpDeploymentRepoError;
 
     fn try_from(value: McpDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
+        let data = value.revision.data.into_value();
         Ok(McpDeployment {
             id: McpDeploymentId(value.revision.mcp_deployment_id),
             revision: value.revision.revision_id.try_into()?,
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
-            agents: value.revision.data.value().agents.clone(),
+            agents: data.agents,
             created_at: value.entity_created_at.into(),
         })
     }

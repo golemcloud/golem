@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::model::BindFields;
 use crate::repo::model::mcp_deployment::{
-    McpDeploymentExtRevisionRecord, McpDeploymentRepoError, McpDeploymentRevisionRecord,
+    McpDeploymentExtRevisionRecord, McpDeploymentRepoError, McpDeploymentRevisionIdentityRecord,
+    McpDeploymentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -21,9 +23,10 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
+use sqlx::Database;
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -60,10 +63,29 @@ pub trait McpDeploymentRepo: Send + Sync {
         domain: &str,
     ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>>;
 
+    async fn get_by_id_and_revision(
+        &self,
+        mcp_deployment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>>;
+
     async fn list_staged(
         &self,
         environment_id: Uuid,
     ) -> RepoResult<Vec<McpDeploymentExtRevisionRecord>>;
+
+    async fn list_by_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentExtRevisionRecord>>;
+
+    async fn get_in_deployment_by_domain(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        domain: &str,
+    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>>;
 }
 
 pub struct LoggedMcpDeploymentRepo<Repo: McpDeploymentRepo> {
@@ -77,12 +99,24 @@ impl<Repo: McpDeploymentRepo> LoggedMcpDeploymentRepo<Repo> {
         Self { repo }
     }
 
-    fn span(span_name: &'static str) -> Span {
-        info_span!(SPAN_NAME, span = span_name)
+    fn span_name(environment_id: Uuid, domain: &str) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, domain)
     }
 
     fn span_env(environment_id: Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
+    }
+
+    fn span_env_and_deployment(environment_id: Uuid, deployment_revision_id: i64) -> Span {
+        info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
+    }
+
+    fn span_id(mcp_deployment_id: Uuid) -> Span {
+        info_span!(SPAN_NAME, mcp_deployment_id = %mcp_deployment_id)
+    }
+
+    fn span_id_and_revision(mcp_deployment_id: Uuid, revision_id: i64) -> Span {
+        info_span!(SPAN_NAME, mcp_deployment_id = %mcp_deployment_id, revision_id)
     }
 }
 
@@ -96,7 +130,7 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
     ) -> Result<McpDeploymentExtRevisionRecord, McpDeploymentRepoError> {
         self.repo
             .create(environment_id, domain, revision)
-            .instrument(Self::span_env(environment_id))
+            .instrument(Self::span_name(environment_id, domain))
             .await
     }
 
@@ -104,10 +138,8 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
         &self,
         revision: McpDeploymentRevisionRecord,
     ) -> Result<McpDeploymentExtRevisionRecord, McpDeploymentRepoError> {
-        self.repo
-            .update(revision)
-            .instrument(Self::span("update"))
-            .await
+        let span = Self::span_id(revision.mcp_deployment_id);
+        self.repo.update(revision).instrument(span).await
     }
 
     async fn delete(
@@ -118,7 +150,7 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
     ) -> Result<(), McpDeploymentRepoError> {
         self.repo
             .delete(user_account_id, mcp_deployment_id, revision_id)
-            .instrument(Self::span("delete"))
+            .instrument(Self::span_id(mcp_deployment_id))
             .await
     }
 
@@ -128,7 +160,7 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
     ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
         self.repo
             .get_staged_by_id(mcp_deployment_id)
-            .instrument(Self::span("get_staged_by_id"))
+            .instrument(Self::span_id(mcp_deployment_id))
             .await
     }
 
@@ -139,7 +171,18 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
     ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
         self.repo
             .get_staged_by_domain(environment_id, domain)
-            .instrument(Self::span_env(environment_id))
+            .instrument(Self::span_name(environment_id, domain))
+            .await
+    }
+
+    async fn get_by_id_and_revision(
+        &self,
+        mcp_deployment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+        self.repo
+            .get_by_id_and_revision(mcp_deployment_id, revision_id)
+            .instrument(Self::span_id_and_revision(mcp_deployment_id, revision_id))
             .await
     }
 
@@ -150,6 +193,35 @@ impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo
         self.repo
             .list_staged(environment_id)
             .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn list_by_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentExtRevisionRecord>> {
+        self.repo
+            .list_by_deployment(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_deployment(
+                environment_id,
+                deployment_revision_id,
+            ))
+            .await
+    }
+
+    async fn get_in_deployment_by_domain(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        domain: &str,
+    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+        self.repo
+            .get_in_deployment_by_domain(environment_id, deployment_revision_id, domain)
+            .instrument(Self::span_env_and_deployment(
+                environment_id,
+                deployment_revision_id,
+            ))
             .await
     }
 }
@@ -200,6 +272,30 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         domain: &str,
         revision: McpDeploymentRevisionRecord,
     ) -> Result<McpDeploymentExtRevisionRecord, McpDeploymentRepoError> {
+        let opt_deleted_revision: Option<McpDeploymentRevisionIdentityRecord> = self
+            .with_ro("create - get opt deleted")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT m.mcp_deployment_id, m.domain, mr.revision_id, mr.hash
+                    FROM mcp_deployments m
+                    JOIN mcp_deployment_revisions mr
+                        ON m.mcp_deployment_id = mr.mcp_deployment_id
+                            AND m.current_revision_id = mr.revision_id
+                    WHERE m.environment_id = $1 AND m.domain = $2 AND m.deleted_at IS NOT NULL
+                "#})
+                .bind(environment_id)
+                .bind(domain),
+            )
+            .await?;
+
+        if let Some(deleted_revision) = opt_deleted_revision {
+            let recreated_revision = revision.for_recreation(
+                deleted_revision.mcp_deployment_id,
+                deleted_revision.revision_id,
+            )?;
+            return self.update(recreated_revision).await;
+        }
+
         let domain = domain.to_owned();
 
         self.with_tx_err("create", |tx| {
@@ -220,28 +316,11 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     .await
                     .to_error_on_unique_violation(McpDeploymentRepoError::McpDeploymentViolatesUniqueness)?;
 
-                let revision = revision.with_updated_hash();
-
-                let revision: McpDeploymentRevisionRecord = tx
-                    .fetch_one_as(
-                        sqlx::query_as(indoc! { r#"
-                            INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, false)
-                            RETURNING mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted
-                        "# })
-                        .bind(revision.mcp_deployment_id)
-                        .bind(revision.revision_id)
-                        .bind(revision.hash)
-                        .bind(&revision.data)
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by),
-                    )
-                    .await?;
+                let revision = Self::insert_revision(tx, revision).await?;
 
                 Ok(McpDeploymentExtRevisionRecord {
                     environment_id,
-                    domain: domain.clone(),
+                    domain,
                     entity_created_at: revision.audit.created_at.clone(),
                     revision,
                 })
@@ -257,24 +336,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
     ) -> Result<McpDeploymentExtRevisionRecord, McpDeploymentRepoError> {
         self.with_tx_err("update", |tx| {
             async move {
-                let revision = revision.with_updated_hash();
-
-                let revision: McpDeploymentRevisionRecord = tx
-                    .fetch_one_as(
-                        sqlx::query_as(indoc! { r#"
-                            INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, false)
-                            RETURNING mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted
-                        "# })
-                        .bind(revision.mcp_deployment_id)
-                        .bind(revision.revision_id)
-                        .bind(revision.hash)
-                        .bind(&revision.data)
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by),
-                    )
-                    .await?;
+                let revision = Self::insert_revision(tx, revision).await?;
 
                 let mcp_deployment: (Uuid, crate::repo::model::datetime::SqlDateTime, String) = tx
                     .fetch_one_as(
@@ -310,29 +372,15 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
     ) -> Result<(), McpDeploymentRepoError> {
         self.with_tx_err("delete", |tx| {
             async move {
-                let revision = McpDeploymentRevisionRecord::deletion(
-                    user_account_id,
-                    mcp_deployment_id,
-                    revision_id,
-                );
-
-                let revision: McpDeploymentRevisionRecord = tx
-                    .fetch_one_as(
-                        sqlx::query_as(indoc! { r#"
-                            INSERT INTO mcp_deployment_revisions
-                            (mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted)
-                            VALUES ($1, $2, $3, $4, $5, $6, true)
-                            RETURNING mcp_deployment_id, revision_id, hash, data, created_at, created_by, deleted
-                        "# })
-                        .bind(revision.mcp_deployment_id)
-                        .bind(revision.revision_id)
-                        .bind(revision.hash)
-                        .bind(&revision.data)
-                        .bind(&revision.audit.created_at)
-                        .bind(revision.audit.created_by),
-                    )
-                    .await
-                    .to_error_on_unique_violation(McpDeploymentRepoError::ConcurrentModification)?;
+                let revision: McpDeploymentRevisionRecord = Self::insert_revision(
+                    tx,
+                    McpDeploymentRevisionRecord::deletion(
+                        user_account_id,
+                        mcp_deployment_id,
+                        revision_id,
+                    ),
+                )
+                .await?;
 
                 tx.execute(
                     sqlx::query(indoc! { r#"
@@ -361,16 +409,9 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         self.with_ro("get_staged_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
-                        m.mcp_deployment_id,
-                        m.environment_id,
-                        mr.revision_id,
-                        mr.hash,
-                        mr.created_at,
-                        mr.created_by,
-                        mr.deleted,
-                        mr.data,
-                        m.domain,
+                    SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
+                        mr.revision_id, mr.hash, mr.data,
+                        mr.created_at, mr.created_by, mr.deleted,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
@@ -391,16 +432,9 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         self.with_ro("get_staged_by_domain")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
-                        m.mcp_deployment_id,
-                        m.environment_id,
-                        mr.revision_id,
-                        mr.hash,
-                        mr.created_at,
-                        mr.created_by,
-                        mr.deleted,
-                        mr.data,
-                        m.domain,
+                    SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
+                        mr.revision_id, mr.hash, mr.data,
+                        mr.created_at, mr.created_by, mr.deleted,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
@@ -414,6 +448,29 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
             .await
     }
 
+    async fn get_by_id_and_revision(
+        &self,
+        mcp_deployment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+        self.with_ro("get_by_id_and_revision")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
+                        mr.revision_id, mr.hash, mr.data,
+                        mr.created_at, mr.created_by, mr.deleted,
+                        m.created_at as entity_created_at
+                    FROM mcp_deployments m
+                    JOIN mcp_deployment_revisions mr
+                        ON m.mcp_deployment_id = mr.mcp_deployment_id
+                    WHERE m.mcp_deployment_id = $1 AND mr.revision_id = $2 AND mr.deleted = FALSE
+                "# })
+                .bind(mcp_deployment_id)
+                .bind(revision_id),
+            )
+            .await
+    }
+
     async fn list_staged(
         &self,
         environment_id: Uuid,
@@ -421,25 +478,114 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
         self.with_ro("list_staged")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT 
-                        m.mcp_deployment_id,
-                        m.environment_id,
-                        mr.revision_id,
-                        mr.hash,
-                        mr.created_at,
-                        mr.created_by,
-                        mr.deleted,
-                        m.domain,
-                        mr.data,
+                    SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
+                        mr.revision_id, mr.hash, mr.data,
+                        mr.created_at, mr.created_by, mr.deleted,
                         m.created_at as entity_created_at
                     FROM mcp_deployments m
                     JOIN mcp_deployment_revisions mr
                         ON m.mcp_deployment_id = mr.mcp_deployment_id
                             AND m.current_revision_id = mr.revision_id
                     WHERE m.environment_id = $1 AND m.deleted_at IS NULL
+                    ORDER BY m.domain
                 "# })
                 .bind(environment_id),
             )
             .await
+    }
+
+    async fn list_by_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<McpDeploymentExtRevisionRecord>> {
+        self.with_ro("list_by_deployment")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
+                        mr.revision_id, mr.hash, mr.data,
+                        mr.created_at, mr.created_by, mr.deleted,
+                        m.created_at as entity_created_at
+                    FROM mcp_deployments m
+                    JOIN mcp_deployment_revisions mr ON m.mcp_deployment_id = mr.mcp_deployment_id
+                    JOIN deployment_mcp_deployment_revisions dmdr
+                        ON dmdr.mcp_deployment_id = mr.mcp_deployment_id
+                            AND dmdr.mcp_deployment_revision_id = mr.revision_id
+                    WHERE dmdr.environment_id = $1 AND dmdr.deployment_revision_id = $2
+                    ORDER BY m.domain
+                "# })
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await
+    }
+
+    async fn get_in_deployment_by_domain(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        domain: &str,
+    ) -> RepoResult<Option<McpDeploymentExtRevisionRecord>> {
+        self.with_ro("get_in_deployment_by_domain")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT m.environment_id, m.domain, mr.mcp_deployment_id,
+                        mr.revision_id, mr.hash, mr.data,
+                        mr.created_at, mr.created_by, mr.deleted,
+                        m.created_at as entity_created_at
+                    FROM mcp_deployments m
+                    JOIN mcp_deployment_revisions mr ON m.mcp_deployment_id = mr.mcp_deployment_id
+                    JOIN deployment_mcp_deployment_revisions dmdr
+                        ON dmdr.mcp_deployment_id = mr.mcp_deployment_id
+                            AND dmdr.mcp_deployment_revision_id = mr.revision_id
+                    WHERE dmdr.environment_id = $1 AND dmdr.deployment_revision_id = $2 AND m.domain = $3
+                "# })
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(domain),
+            )
+            .await
+    }
+}
+
+#[async_trait]
+trait McpDeploymentRepoInternal: McpDeploymentRepo {
+    type Db: Database;
+    type Tx: LabelledPoolTransaction;
+
+    async fn insert_revision(
+        tx: &mut Self::Tx,
+        revision: McpDeploymentRevisionRecord,
+    ) -> Result<McpDeploymentRevisionRecord, McpDeploymentRepoError>;
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+#[async_trait]
+impl McpDeploymentRepoInternal for DbMcpDeploymentRepo<PostgresPool> {
+    type Db = <PostgresPool as Pool>::Db;
+    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
+    async fn insert_revision(
+        tx: &mut Self::Tx,
+        revision: McpDeploymentRevisionRecord,
+    ) -> Result<McpDeploymentRevisionRecord, McpDeploymentRepoError> {
+        let revision = revision.with_updated_hash();
+        tx.fetch_one_as(
+            sqlx::query_as(indoc! { r#"
+                    INSERT INTO mcp_deployment_revisions
+                    (mcp_deployment_id, revision_id, data,
+                        hash, created_at, created_by, deleted)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING mcp_deployment_id, revision_id, hash,
+                        created_at, created_by, deleted, data
+                "# })
+            .bind(revision.mcp_deployment_id)
+            .bind(revision.revision_id)
+            .bind(&revision.data)
+            .bind(revision.hash)
+            .bind_deletable_revision_audit(revision.audit),
+        )
+        .await
+        .to_error_on_unique_violation(McpDeploymentRepoError::ConcurrentModification)
     }
 }

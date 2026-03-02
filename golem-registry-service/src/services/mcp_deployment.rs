@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::deployment::{DeploymentError, DeploymentService};
 use super::domain_registration::{DomainRegistrationError, DomainRegistrationService};
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::mcp_deployment::McpDeploymentRepo;
+use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::mcp_deployment::{McpDeploymentRepoError, McpDeploymentRevisionRecord};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::mcp_deployment::{
-    McpDeployment, McpDeploymentCreation, McpDeploymentId, McpDeploymentUpdate,
+    McpDeployment, McpDeploymentCreation, McpDeploymentId, McpDeploymentRevision,
+    McpDeploymentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
@@ -35,6 +38,8 @@ pub enum McpDeploymentError {
     McpDeploymentNotFound(McpDeploymentId),
     #[error("MCP deployment for domain {0} not found")]
     McpDeploymentByDomainNotFound(Domain),
+    #[error("Deployment revision {0} does not exist")]
+    DeploymentRevisionNotFound(DeploymentRevision),
     #[error("MCP deployment for domain {0} already exists in this environment")]
     McpDeploymentForDomainAlreadyExists(Domain),
     #[error("Domain {0} is not registered")]
@@ -53,6 +58,7 @@ impl SafeDisplay for McpDeploymentError {
             Self::McpDeploymentNotFound(_) => self.to_string(),
             Self::McpDeploymentByDomainNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::DeploymentRevisionNotFound(_) => self.to_string(),
             Self::McpDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
@@ -67,12 +73,14 @@ error_forwarding!(
     McpDeploymentRepoError,
     RepoError,
     EnvironmentError,
+    DeploymentError,
     DomainRegistrationError,
 );
 
 pub struct McpDeploymentService {
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
     environment_service: Arc<EnvironmentService>,
+    deployment_service: Arc<DeploymentService>,
     domain_registration_service: Arc<DomainRegistrationService>,
 }
 
@@ -80,11 +88,13 @@ impl McpDeploymentService {
     pub fn new(
         mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
         environment_service: Arc<EnvironmentService>,
+        deployment_service: Arc<DeploymentService>,
         domain_registration_service: Arc<DomainRegistrationService>,
     ) -> Self {
         Self {
             mcp_deployment_repo,
             environment_service,
+            deployment_service,
             domain_registration_service,
         }
     }
@@ -123,11 +133,7 @@ impl McpDeploymentService {
             })?;
 
         let id = McpDeploymentId::new();
-        let record = McpDeploymentRevisionRecord::creation(
-            id,
-            auth.account_id(),
-            data.agents,
-        );
+        let record = McpDeploymentRevisionRecord::creation(id, auth.account_id(), data.agents);
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
@@ -195,7 +201,7 @@ impl McpDeploymentService {
 
         let record = McpDeploymentRevisionRecord::from_model(
             mcp_deployment,
-            crate::repo::model::audit::DeletableRevisionAuditFields::new(auth.account_id().0),
+            DeletableRevisionAuditFields::new(auth.account_id().0),
         );
 
         let stored_mcp_deployment: McpDeployment = self
@@ -216,7 +222,7 @@ impl McpDeploymentService {
     pub async fn delete(
         &self,
         mcp_deployment_id: McpDeploymentId,
-        current_revision: golem_common::model::mcp_deployment::McpDeploymentRevision,
+        current_revision: McpDeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<(), McpDeploymentError> {
         let mcp_deployment: McpDeployment = self
@@ -384,19 +390,15 @@ impl McpDeploymentService {
     pub async fn get_revision(
         &self,
         mcp_deployment_id: McpDeploymentId,
-        revision: golem_common::model::mcp_deployment::McpDeploymentRevision,
+        revision: McpDeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<McpDeployment, McpDeploymentError> {
         let mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
-            .get_staged_by_id(mcp_deployment_id.0)
+            .get_by_id_and_revision(mcp_deployment_id.0, revision.into())
             .await?
             .ok_or(McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id))?
             .try_into()?;
-
-        if mcp_deployment.revision != revision {
-            return Err(McpDeploymentError::McpDeploymentNotFound(mcp_deployment_id));
-        }
 
         let environment = self
             .environment_service
@@ -422,20 +424,74 @@ impl McpDeploymentService {
     pub async fn get_in_deployment_by_domain(
         &self,
         environment_id: EnvironmentId,
-        _deployment_revision: DeploymentRevision,
+        deployment_revision: DeploymentRevision,
         domain: &Domain,
         auth: &AuthCtx,
     ) -> Result<McpDeployment, McpDeploymentError> {
-        self.get_staged_by_domain(environment_id, domain, auth)
+        let (_, environment) = self
+            .deployment_service
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await
+            .map_err(|err| match err {
+                DeploymentError::ParentEnvironmentNotFound(environment_id) => {
+                    McpDeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                DeploymentError::DeploymentNotFound(deployment_revision) => {
+                    McpDeploymentError::DeploymentRevisionNotFound(deployment_revision)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewMcpDeployment,
+        )
+        .map_err(|_| McpDeploymentError::McpDeploymentByDomainNotFound(domain.clone()))?;
+
+        let mcp_deployment: McpDeployment = self
+            .mcp_deployment_repo
+            .get_in_deployment_by_domain(environment_id.0, deployment_revision.into(), &domain.0)
+            .await?
+            .ok_or(McpDeploymentError::McpDeploymentByDomainNotFound(
+                domain.clone(),
+            ))?
+            .try_into()?;
+
+        Ok(mcp_deployment)
     }
 
     pub async fn list_in_deployment(
         &self,
         environment_id: EnvironmentId,
-        _deployment_revision: DeploymentRevision,
+        deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<McpDeployment>, McpDeploymentError> {
-        self.list_staged(environment_id, auth).await
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    McpDeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewMcpDeployment,
+        )?;
+
+        let mcp_deployments: Vec<McpDeployment> = self
+            .mcp_deployment_repo
+            .list_by_deployment(environment_id.0, deployment_revision.into())
+            .await?
+            .into_iter()
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(mcp_deployments)
     }
 }

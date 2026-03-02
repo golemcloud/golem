@@ -596,13 +596,14 @@ impl From<McpDeploymentError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             McpDeploymentError::ParentEnvironmentNotFound(_)
+            | McpDeploymentError::DeploymentRevisionNotFound(_)
             | McpDeploymentError::McpDeploymentNotFound(_)
-            | McpDeploymentError::McpDeploymentByDomainNotFound(_)
-            | McpDeploymentError::DomainNotRegistered(_) => {
+            | McpDeploymentError::McpDeploymentByDomainNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            McpDeploymentError::McpDeploymentForDomainAlreadyExists(_)
+            McpDeploymentError::DomainNotRegistered(_)
+            | McpDeploymentError::McpDeploymentForDomainAlreadyExists(_)
             | McpDeploymentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
