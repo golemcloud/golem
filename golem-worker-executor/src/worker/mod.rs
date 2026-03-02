@@ -311,9 +311,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // We might have crashed between creating the oplog and writing it, so just check here for it.
         if let Some(agent_id) = &agent_id {
             if last_oplog_idx <= OplogIndex::from_u64(2) {
+                let init_idempotency_key =
+                    IdempotencyKey::new(format!("init-{}", worker.worker_id()));
                 worker
                     .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
-                        idempotency_key: IdempotencyKey::fresh(),
+                        idempotency_key: init_idempotency_key,
                         input: agent_id.parameters.clone().into(),
                         invocation_context: invocation_context_stack.clone(),
                         principal,
