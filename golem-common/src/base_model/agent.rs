@@ -674,7 +674,7 @@ impl From<ElementValue> for UntypedJsonElementValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
+    derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue)
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -733,32 +733,6 @@ pub struct ComponentModelElementValue {
     pub value: ValueAndType,
 }
 
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for ComponentModelElementValue {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Record(mut fields) if fields.len() == 1 => {
-                let wit_value =
-                    <golem_wasm::WitValue as golem_wasm::FromValue>::from_value(fields.remove(0))?;
-                let value: Value = wit_value.into();
-                // NOTE: The type information is lost during WitValue serialization.
-                // The actual type should be reconstructed from the accompanying DataSchema
-                // when available (e.g., via TypedDataValue).
-                Ok(ComponentModelElementValue {
-                    value: ValueAndType::new(
-                        value,
-                        AnalysedType::Str(golem_wasm::analysis::TypeStr),
-                    ),
-                })
-            }
-            _ => Err(format!(
-                "Expected Record with 1 field for ComponentModelElementValue, got {:?}",
-                value
-            )),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -792,7 +766,7 @@ pub struct UnstructuredBinaryElementValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue, FromValue)
+    derive(desert_rust::BinaryCodec, poem_openapi::Union, IntoValue)
 )]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
