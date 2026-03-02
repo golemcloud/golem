@@ -576,19 +576,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
             let parsed: GetOplogResponse =
                 serde_json::from_slice(&body_bytes).with_context(|| {
-                    let body_preview = String::from_utf8_lossy(&body_bytes);
-                    let truncated = if body_preview.len() > 4000 {
-                        format!(
-                            "{}... [truncated, total {} bytes]",
-                            &body_preview[..4000],
-                            body_bytes.len()
-                        )
-                    } else {
-                        body_preview.into_owned()
-                    };
                     format!(
                         "get_oplog: failed to deserialize response for worker {worker_id}, \
-                         from={from}, cursor={cursor:?}, status={status}, body:\n{truncated}"
+                         from={from}, cursor={cursor:?}, status={status}"
                     )
                 })?;
 

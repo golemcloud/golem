@@ -27,7 +27,8 @@ use crate::model::oplog::public_oplog_entry::{
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentInvocationOutputParameters, AgentMethodInvocationParameters, JsonSnapshotData, LogLevel,
+    AgentInitializationParameters, AgentInvocationOutputParameters, AgentMethodInvocationParameters,
+    JsonSnapshotData, LogLevel,
     PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicLocalSpanData, PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
@@ -378,6 +379,68 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
         timestamp: Timestamp::now_utc().rounded(),
         begin_index: OplogIndex::from_u64(1),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn agent_invocation_started_with_initialization_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            constructor_parameters: DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType {
+                        value: Value::String("test".to_string()),
+                        typ: str(),
+                    },
+                })],
+            }),
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: Timestamp::now_utc().rounded(),
+                parent_id: None,
+                linked_context: None,
+                attributes: vec![],
+                inherited: false,
+            })]],
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn pending_agent_invocation_with_initialization_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation: PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+            constructor_parameters: DataValue::Tuple(ElementValues {
+                elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                    value: ValueAndType {
+                        value: Value::Tuple(vec![]),
+                        typ: tuple(vec![]),
+                    },
+                })],
+            }),
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
+                span_id: SpanId::generate(),
+                start: Timestamp::now_utc().rounded(),
+                parent_id: None,
+                linked_context: None,
+                attributes: vec![],
+                inherited: false,
+            })]],
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
