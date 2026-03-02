@@ -14,7 +14,7 @@
 
 import { buildJSONFromType, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../../newTypes/either';
-import { isKebabCase, isNumberString, trimQuotes } from './stringFormat';
+import { isNumberString, trimQuotes } from './stringFormat';
 import {
   tryTaggedUnion,
   tryUnionOfOnlyLiteral,
@@ -430,12 +430,6 @@ function convertToVariantAnalysedType(
   const possibleTypes: NameOptionTypePair[] = [];
 
   for (const taggedTypeMetadata of taggedTypes) {
-    if (!isKebabCase(taggedTypeMetadata.tagLiteralName)) {
-      return Either.left(
-        `Tagged union case names must be in kebab-case. Found: ${taggedTypeMetadata.tagLiteralName}`,
-      );
-    }
-
     if (taggedTypeMetadata.valueType && taggedTypeMetadata.valueType[1].kind === 'literal') {
       return Either.left('Tagged unions cannot have literal types in the value section');
     }

@@ -16,7 +16,6 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::wave::function_wave_compatible;
 use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
@@ -148,7 +147,7 @@ impl ComponentView {
                 .metadata
                 .agent_types()
                 .iter()
-                .map(|a| a.to_wit_naming())
+                .cloned()
                 .collect::<Vec<_>>();
 
             show_exported_agents(&agent_types, true, true)
@@ -332,7 +331,7 @@ pub fn render_agent_constructor(
         format!(
             "{}({}){}",
             agent.wrapper_type_name(),
-            render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
+            render_data_schema(&agent.constructor.input_schema),
             dummy_return_type
         )
     } else {

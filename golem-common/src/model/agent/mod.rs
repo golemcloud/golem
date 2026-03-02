@@ -202,13 +202,12 @@ impl DataValue {
                                 .iter()
                                 .find(|element_schema| {
                                     element_schema.name == element_name
-                                        || element_schema.name.to_wit_naming() == element_name
                                 })
                                 .ok_or_else(|| {
                                     format!(
                                         "Unknown multimodal element name: `{}`. Should be one of {}",
                                         element_name,
-                                        element_schemas.elements.iter().map(|element_schema| element_schema.name.to_wit_naming()).collect::<Vec<_>>().join(", ")
+                                        element_schemas.elements.iter().map(|element_schema| element_schema.name.clone()).collect::<Vec<_>>().join(", ")
                                     )
                                 })?;
                             let element_value =

@@ -2130,8 +2130,8 @@ fn extract_simple_method_name(function_name: &str) -> String {
     function_name.to_string()
 }
 
-/// Fuzzy-matches a method name pattern against both original and WIT-named (kebab-case)
-/// method names, returning the **original** method name on success.
+/// Fuzzy-matches a method name pattern against the original method names from agent metadata,
+/// returning the matched method name on success.
 fn resolve_agent_method_name(
     provided_method_name: &str,
     agent_type: &AgentType,
@@ -2141,13 +2141,8 @@ fn resolve_agent_method_name(
 
     for m in &agent_type.methods {
         let original = m.name.clone();
-        let wit = original.to_wit_naming();
-        for alias in [original.clone(), wit] {
-            if !alias_to_original.contains_key(&alias) {
-                alias_to_original.insert(alias.clone(), original.clone());
-                aliases.push(alias);
-            }
-        }
+        alias_to_original.insert(original.clone(), original.clone());
+        aliases.push(original);
     }
 
     let fuzzy_search = FuzzySearch::new(aliases.iter().map(|s| s.as_str()));

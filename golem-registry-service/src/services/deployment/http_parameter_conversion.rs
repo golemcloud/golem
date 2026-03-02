@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     ComponentModelElementSchema, DataSchema, ElementSchema, HeaderVariable, HttpEndpointDetails,
     HttpMountDetails, NamedElementSchema, NamedElementSchemas, PathSegment, QueryVariable,
@@ -182,7 +181,7 @@ fn handle_body_parameters<E>(
 
             let field_index = body_fields.len();
             body_fields.push(NameTypePair {
-                name: named_schema.name.to_wit_naming(),
+                name: named_schema.name.clone(),
                 typ: element_type.clone(),
             });
 

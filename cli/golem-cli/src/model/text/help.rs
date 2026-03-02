@@ -21,7 +21,6 @@ use crate::model::text::fmt::{
 use cli_table::Table;
 use colored::Colorize;
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, ParsedAgentId};
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
@@ -222,7 +221,7 @@ impl AvailableFunctionNamesHelp {
             function_names: agent_type
                 .methods
                 .iter()
-                .map(|m| m.name.to_wit_naming())
+                .map(|m| m.name.clone())
                 .collect(),
         }
     }
