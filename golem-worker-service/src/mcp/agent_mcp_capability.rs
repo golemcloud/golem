@@ -14,7 +14,7 @@
 
 use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::schema::{get_mcp_schema, get_mcp_tool_schema, McpToolSchema};
+use crate::mcp::schema::{McpToolSchema, get_mcp_schema, get_mcp_tool_schema};
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::agent::{AgentMethod, AgentTypeName, DataSchema};
 use golem_common::base_model::component::ComponentId;
