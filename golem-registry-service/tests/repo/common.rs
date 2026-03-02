@@ -1266,7 +1266,9 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         hash: SqlBlake3Hash::empty(),
         components: vec![],
         http_api_deployments: vec![],
+        mcp_deployments: vec![],
         compiled_routes: vec![],
+        compiled_mcp: vec![],
         registered_agent_types: vec![agent_type_record],
     };
 

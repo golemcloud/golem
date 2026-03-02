@@ -15,8 +15,7 @@
 use super::model::BindFields;
 use super::model::deployment::{
     CurrentDeploymentExtRevisionRecord, DeploymentCompiledRouteWithSecuritySchemeRecord,
-    DeploymentMcpCapabilityRecord, DeploymentRevisionCreationRecord,
-    DeploymentRevisionCreationRecord, ResolvedAgentTypeRecord,
+    DeploymentMcpCapabilityRecord, DeploymentRevisionCreationRecord, ResolvedAgentTypeRecord,
 };
 use super::model::deployment::{
     DeploymentCompiledRouteRecord, DeploymentComponentRevisionRecord,
