@@ -35,6 +35,11 @@ interface oplog {
         parameters: list<tuple<string, string>>
     }
 
+    record local-agent-config-entry {
+        key: list<string>,
+        value: value-and-type
+    }
+
     record create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
@@ -47,7 +52,8 @@ interface oplog {
         component-size: u64,
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
-        config-vars: list<tuple<string, string>>
+        config-vars: list<tuple<string, string>>,
+        local-agent-config: list<local-agent-config-entry>
     }
 
     record host-call-parameters {

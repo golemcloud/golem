@@ -20,7 +20,7 @@ use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentTypeName};
+use golem_common::model::agent::{AgentId, AgentTypeName, ConfigKeyValueType, ConfigValueType};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
@@ -219,7 +219,42 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn get_config_value(&mut self, _key: Vec<String>) -> anyhow::Result<WitValue> {
-        unimplemented!()
+    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<WitValue> {
+        tracing::debug!("Agent getting config value for key {}", key.join("."));
+
+        let agent_id = self
+            .agent_id()
+            .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+
+        let declaration = self
+            .component_metadata()
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|at| at.type_name == agent_id.agent_type)
+            .unwrap()
+            .config
+            .iter()
+            .find(|c| c.key == key);
+        match declaration {
+            Some(ConfigKeyValueType {
+                value: ConfigValueType::Local(_),
+                ..
+            }) => {
+                let local_agent_config = self.state.local_agent_config.read().unwrap();
+                let config_value = local_agent_config
+                    .get(&key)
+                    .ok_or_else(|| anyhow!("No config declared for key {}", key.join(".")))?;
+
+                Ok(config_value.value.clone().into())
+            }
+            Some(ConfigKeyValueType {
+                value: ConfigValueType::Shared(_),
+                ..
+            }) => {
+                unimplemented!()
+            }
+            None => Err(anyhow!("No config declared for key {}", key.join("."))),
+        }
     }
 }

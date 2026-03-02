@@ -1005,6 +1005,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![],
         config_vars: BTreeMap::new(),
+        local_agent_config: Vec::new(),
         environment_id,
         created_by: account_id,
         parent: None,
@@ -1689,6 +1690,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             100,
             HashSet::new(),
             BTreeMap::new(),
+            Vec::new(),
             None,
         );
 

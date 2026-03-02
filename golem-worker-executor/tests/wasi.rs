@@ -336,7 +336,13 @@ async fn initial_file_read_write(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -533,7 +539,13 @@ async fn initial_file_reading_through_api(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     // run the agent so it can update the files.
@@ -1091,7 +1103,13 @@ async fn environment_variables(
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -1186,7 +1204,13 @@ async fn http_client_response_persisted_between_invocations(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
@@ -1278,7 +1302,13 @@ async fn http_client_interrupting_response_stream(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -1407,7 +1437,13 @@ async fn http_client_interrupting_response_stream_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -3063,6 +3099,7 @@ async fn wasi_config_initial_worker_config(
                 ("k1".to_string(), "v1".to_string()),
                 ("k2".to_string(), "v2".to_string()),
             ]),
+            Vec::new(),
         )
         .await?;
 
@@ -3158,6 +3195,7 @@ async fn wasi_config_component_update(
                 ("k1".to_string(), "v1".to_string()),
                 ("k2".to_string(), "v2".to_string()),
             ]),
+            Vec::new(),
         )
         .await?;
 

@@ -20,6 +20,7 @@ use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -40,6 +41,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
@@ -53,6 +55,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
@@ -102,6 +105,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
@@ -116,6 +120,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         owned_worker_id,
                         worker_env,
                         worker_config,
+                        worker_local_agent_config,
                         component_revision,
                         parent,
                         invocation_context,
@@ -135,6 +140,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
@@ -149,6 +155,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         owned_worker_id,
                         worker_env,
                         worker_config,
+                        worker_local_agent_config,
                         component_revision,
                         parent,
                         invocation_context,
@@ -192,6 +199,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     owned_worker_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -214,6 +222,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
@@ -225,6 +234,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             owned_worker_id,
             worker_env,
             worker_config,
+            worker_local_agent_config,
             component_revision,
             parent,
             invocation_context,
@@ -239,6 +249,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context: &InvocationContextStack,
@@ -250,6 +261,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             owned_worker_id,
             worker_env,
             worker_config,
+            worker_local_agent_config,
             component_revision,
             parent,
             invocation_context,

@@ -78,6 +78,10 @@ declare module 'golem:api/oplog@1.5.0' {
     version: string;
     parameters: [string, string][];
   };
+  export type LocalAgentConfigEntry = {
+    key: string[];
+    value: ValueAndType;
+  };
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
@@ -91,6 +95,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: PluginInstallationDescription[];
     configVars: [string, string][];
+    localAgentConfig: LocalAgentConfigEntry[];
   };
   export type HostCallParameters = {
     timestamp: Datetime;

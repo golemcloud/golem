@@ -165,7 +165,13 @@ async fn auto_update_on_running(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -304,7 +310,13 @@ async fn failing_auto_update_on_idle(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -436,7 +448,13 @@ async fn failing_auto_update_on_running(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -526,7 +544,13 @@ async fn manual_update_on_idle(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -597,7 +621,13 @@ async fn manual_update_on_idle_without_save_snapshot(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -664,7 +694,13 @@ async fn auto_update_on_running_followed_by_manual(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -765,7 +801,13 @@ async fn manual_update_on_idle_with_failing_load(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -831,7 +873,13 @@ async fn manual_update_on_idle_using_v11(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -902,7 +950,13 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -1145,7 +1199,13 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
         .await?;
     let agent_id = agent_id!("update-test");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     executor.log_output(&worker_id).await?;
 

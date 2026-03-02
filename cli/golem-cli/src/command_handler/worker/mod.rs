@@ -1246,6 +1246,8 @@ impl WorkerCommandHandler {
                     name: worker_name,
                     env,
                     config_vars,
+                    // FIXME: agent-config
+                    local_agent_config: Vec::new(),
                 },
             )
             .await

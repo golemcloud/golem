@@ -23,17 +23,6 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-pub struct WorkerCreationRequest {
-    pub name: String,
-    pub env: HashMap<String, String>,
-    #[cfg_attr(feature = "full", oai(default))]
-    pub config_vars: BTreeMap<String, String>,
-}
-
 declare_enums! {
     pub enum FlatComponentFileSystemNodeKind {
         Directory,
@@ -67,6 +56,28 @@ declare_unions! {
 }
 
 declare_structs! {
+    pub struct WorkerCreationLocalAgentConfigEntry {
+        pub key: Vec<String>,
+        pub value: serde_json::Value
+    }
+
+    #[derive(IntoValue, FromValue)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct ParsedWorkerCreationLocalAgentConfigEntry {
+        pub key: Vec<String>,
+        pub value: golem_wasm::ValueAndType
+    }
+
+    pub struct WorkerCreationRequest {
+        pub name: String,
+        pub env: HashMap<String, String>,
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config_vars: BTreeMap<String, String>,
+        #[cfg_attr(feature = "full", oai(default))]
+        pub local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>
+    }
+
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
@@ -127,6 +138,7 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
+    // TODO: Rename to AgentFileSystemNode
     pub struct FlatComponentFileSystemNode {
         pub name: String,
         pub last_modified: u64,

@@ -21,8 +21,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::Component;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
 use std::fmt::Debug;
 use std::sync::Arc;
 

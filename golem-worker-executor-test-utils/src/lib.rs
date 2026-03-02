@@ -51,7 +51,8 @@ use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageCo
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,

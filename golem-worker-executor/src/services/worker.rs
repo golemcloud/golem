@@ -142,6 +142,7 @@ impl WorkerService for DefaultWorkerService {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     config_vars,
+                    local_agent_config,
                     original_phantom_id,
                 },
             )) => {
@@ -149,6 +150,7 @@ impl WorkerService for DefaultWorkerService {
                     worker_id,
                     env,
                     config_vars,
+                    local_agent_config,
                     environment_id,
                     created_by,
                     created_at: timestamp,

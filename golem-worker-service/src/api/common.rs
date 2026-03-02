@@ -145,6 +145,13 @@ impl ApiEndpointError {
         }))
     }
 
+    pub fn conflict_message(error: impl ToString) -> Self {
+        Self::Conflict(Json(ErrorBody {
+            error: error.to_string(),
+            cause: None,
+        }))
+    }
+
     pub fn limit_exceeded<T: SafeDisplay>(error: T) -> Self {
         Self::LimitExceeded(Json(ErrorBody {
             error: error.to_safe_string(),

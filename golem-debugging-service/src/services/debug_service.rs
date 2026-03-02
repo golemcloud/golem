@@ -225,6 +225,7 @@ impl DebugServiceDefault {
             &owned_worker_id,
             None,
             None,
+            Vec::new(),
             None,
             None,
             &InvocationContextStack::fresh(),
@@ -412,15 +413,11 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(session_data.worker_metadata.env.clone()),
-            Some(session_data.worker_metadata.config_vars.clone()),
-            Some(
-                session_data
-                    .worker_metadata
-                    .last_known_status
-                    .component_revision,
-            ),
-            session_data.worker_metadata.parent.clone(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
             &InvocationContextStack::fresh(),
             Principal::anonymous(),
         )
@@ -540,15 +537,11 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(debug_session_data.worker_metadata.env.clone()),
-            Some(debug_session_data.worker_metadata.config_vars.clone()),
-            Some(
-                debug_session_data
-                    .worker_metadata
-                    .last_known_status
-                    .component_revision,
-            ),
-            debug_session_data.worker_metadata.parent.clone(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
             &InvocationContextStack::fresh(),
             Principal::anonymous(),
         )

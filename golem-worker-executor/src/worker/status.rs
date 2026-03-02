@@ -1503,6 +1503,7 @@ mod test {
                         200,
                         HashSet::new(),
                         BTreeMap::new(),
+                        Vec::new(),
                         None,
                     ),
                     expected_status: status.clone(),

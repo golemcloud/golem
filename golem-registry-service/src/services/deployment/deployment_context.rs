@@ -31,7 +31,7 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug)]
