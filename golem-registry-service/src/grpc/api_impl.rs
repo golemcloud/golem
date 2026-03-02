@@ -398,17 +398,15 @@ impl RegistryServiceGrpcApi {
         &self,
         request: GetActiveRoutesForDomainRequest,
     ) -> Result<GetActiveRoutesForDomainSuccessResponse, GrpcApiError> {
-        use golem_api_grpc::proto::golem::customapi::CompiledRoutes;
-
         let domain: Domain = Domain(request.domain);
 
-        let compiled_routes_internal = self
+        let compiled_routes = self
             .deployed_routes_service
             .get_currently_active_compiled_routes(&domain)
             .await?;
 
         Ok(GetActiveRoutesForDomainSuccessResponse {
-            compiled_routes: Some(CompiledRoutes::from(compiled_routes_internal)),
+            compiled_routes: Some(compiled_routes.into()),
         })
     }
 
