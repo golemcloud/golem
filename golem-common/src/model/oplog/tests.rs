@@ -149,7 +149,7 @@ fn host_call_with_complex_values_serialization_poem_serde_equivalence() {
                 ])))),
                 Value::Result(Ok(Some(Box::new(Value::Tuple(vec![
                     Value::Bool(true),
-                    Value::F64(3.14),
+                    Value::F64(1.23),
                 ]))))),
                 Value::Variant {
                     case_idx: 1,
