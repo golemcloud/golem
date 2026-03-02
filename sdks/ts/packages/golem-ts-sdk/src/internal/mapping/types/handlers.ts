@@ -70,7 +70,7 @@ const handlers: { [K in TsType['kind']]: Handler<K> } = {
   config: unsupported('Config'),
 };
 
-function unsupported(kind: string): Handler<any> {
+function unsupported<K extends TsType['kind']>(kind: string): Handler<K> {
   return ({ scopeName, parameterInScope }) =>
     Either.left(
       `Unsupported type \`${kind}\`` +
@@ -79,7 +79,7 @@ function unsupported(kind: string): Handler<any> {
     );
 }
 
-function unsupportedWithHint(kind: string, hint: string): Handler<any> {
+function unsupportedWithHint<K extends TsType['kind']>(kind: string, hint: string): Handler<K> {
   return ({ scopeName, parameterInScope }) =>
     Either.left(
       `Unsupported type \`${kind}\`${scopeName ? ` in ${scopeName}` : ''}` +

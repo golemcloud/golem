@@ -49,6 +49,7 @@ export class WitTypeBuilder {
   }
 
   private convert(typ: AnalysedType): WitTypeNode {
+    let kind = typ.kind;
     switch (typ.kind) {
       case 'variant': {
         const cases: [string, NodeIndex | undefined][] = typ.value.cases.map(
@@ -127,7 +128,7 @@ export class WitTypeBuilder {
       }
 
       default:
-        throw new Error(`Unhandled AnalysedType kind: ${(typ as any).kind}`);
+        throw new Error(`Unhandled AnalysedType kind: ${kind}`);
     }
   }
 }

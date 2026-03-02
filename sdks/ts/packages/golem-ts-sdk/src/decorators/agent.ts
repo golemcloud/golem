@@ -60,6 +60,12 @@ export type AgentDecoratorOptions = {
   phantom?: boolean;
 };
 
+type MutableAgentStatics = {
+  get?: unknown;
+  newPhantom?: unknown;
+  getPhantom?: unknown;
+};
+
 function parseDurationToNanoseconds(duration: string): bigint {
   const milliseconds = ms(duration as ms.StringValue);
   if (milliseconds === undefined) {
@@ -325,10 +331,10 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
-    (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
-
-    (ctor as any).getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
+    const decoratedCtor = ctor as T & MutableAgentStatics;
+    decoratedCtor.get = getRemoteClient(agentClassName, agentType, ctor);
+    decoratedCtor.newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor);
+    decoratedCtor.getPhantom = getPhantomRemoteClient(agentClassName, agentType, ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue, principal: Principal) => {
@@ -349,7 +355,7 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        const instance = new ctor(...deserializedConstructorArgs.val);
+        const instance = Reflect.construct(ctor, deserializedConstructorArgs.val) as BaseAgent;
 
         const agentId = getRawSelfAgentId();
         if (!agentId.value.startsWith(agentTypeName.value)) {
