@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::HttpApiDeployment;
+use super::{HttpApiDeployment, McpDeployment};
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::ser::serialize_with_mode;
@@ -29,6 +29,9 @@ pub struct Deployment {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub http_api_deployments: BTreeMap<String, HashOf<HttpApiDeployment>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(serialize_with = "serialize_with_mode")]
+    pub mcp_deployments: BTreeMap<String, HashOf<McpDeployment>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -38,6 +41,8 @@ pub struct DeploymentDiff {
     pub components: BTreeMapDiff<String, HashOf<Component>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub http_api_deployments: BTreeMapDiff<String, HashOf<HttpApiDeployment>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_deployments: BTreeMapDiff<String, HashOf<McpDeployment>>,
 }
 
 impl Diffable for Deployment {
@@ -48,11 +53,15 @@ impl Diffable for Deployment {
         let http_api_deployments = new
             .http_api_deployments
             .diff_with_current(&current.http_api_deployments);
+        let mcp_deployments = new
+            .mcp_deployments
+            .diff_with_current(&current.mcp_deployments);
 
-        if components.is_some() || http_api_deployments.is_some() {
+        if components.is_some() || http_api_deployments.is_some() || mcp_deployments.is_some() {
             Some(DeploymentDiff {
                 components: components.unwrap_or_default(),
                 http_api_deployments: http_api_deployments.unwrap_or_default(),
+                mcp_deployments: mcp_deployments.unwrap_or_default(),
             })
         } else {
             None

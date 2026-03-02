@@ -185,6 +185,35 @@ impl TextView for DeploymentDiff {
             }
             logln("");
         }
+        if !self.mcp_deployments.is_empty() {
+            logln("MCP deployment changes:".log_color_help_group().to_string());
+            for (domain, mcp_deployment_diff) in &self.mcp_deployments {
+                match mcp_deployment_diff {
+                    BTreeMapDiffValue::Create => {
+                        logln(format!(
+                            "  - {} MCP deployment {}",
+                            "create".green(),
+                            domain.log_color_highlight()
+                        ));
+                    }
+                    BTreeMapDiffValue::Delete => {
+                        logln(format!(
+                            "  - {} MCP deployment {}",
+                            "delete".red(),
+                            domain.log_color_highlight()
+                        ));
+                    }
+                    BTreeMapDiffValue::Update(_diff) => {
+                        logln(format!(
+                            "  - {} MCP deployment {}",
+                            "update".yellow(),
+                            domain.log_color_highlight()
+                        ));
+                    }
+                }
+            }
+            logln("");
+        }
     }
 }
 
