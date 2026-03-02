@@ -539,7 +539,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let mut cursor: Option<golem_client::model::OplogCursor> = None;
 
         loop {
-            let response = client
+            let response = match client
                 .get_oplog(
                     &worker_id.component_id.0,
                     &worker_id.worker_name,
@@ -549,7 +549,50 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     None,
                 )
                 .await
-                .map_err(|e| anyhow!("get_oplog failed for worker {worker_id}: {e}"))?;
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    // On decode failure, re-fetch as raw text to capture the actual response body
+                    let raw_url = format!(
+                        "http://{}:{}/v1/components/{}/workers/{}/oplog?from={}&count=100{}",
+                        self.deps.worker_service().http_host(),
+                        self.deps.worker_service().http_port(),
+                        worker_id.component_id.0,
+                        worker_id.worker_name,
+                        from.as_u64(),
+                        cursor.as_ref().map(|c| format!("&cursor={c}")).unwrap_or_default()
+                    );
+                    let raw_client = reqwest::Client::builder()
+                        .danger_accept_invalid_certs(true)
+                        .build()
+                        .unwrap();
+                    let raw_response = raw_client.get(&raw_url).send().await;
+                    match raw_response {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            let body = resp.text().await.unwrap_or_else(|e2| format!("<failed to read body: {e2}>"));
+                            let body_len = body.len();
+                            tracing::error!(
+                                worker_id = %worker_id,
+                                error = %e,
+                                status = %status,
+                                body_len = body_len,
+                                body = %body,
+                                "get_oplog failed - raw response captured"
+                            );
+                        }
+                        Err(e2) => {
+                            tracing::error!(
+                                worker_id = %worker_id,
+                                original_error = %e,
+                                refetch_error = %e2,
+                                "get_oplog failed and re-fetch also failed"
+                            );
+                        }
+                    }
+                    return Err(anyhow!("get_oplog failed for worker {worker_id}: {e}"));
+                }
+            };
 
             result.extend(response.entries);
             match response.next {
