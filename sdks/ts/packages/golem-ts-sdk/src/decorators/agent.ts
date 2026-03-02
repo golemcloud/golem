@@ -275,7 +275,7 @@ export function agent(options?: AgentDecoratorOptions) {
       AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ?? defaultPromptHint;
 
     const constructor: AgentConstructor = {
-      name: agentClassName.value,
+      name: undefined,
       description: agentTypeDescription,
       promptHint: agentTypePromptHint,
       inputSchema: constructorDataSchema,
