@@ -1,23 +1,27 @@
 use crate::mcp::{AgentTypeImplementers, CompiledMcp};
 use golem_common::base_model::domain_registration::Domain;
+use golem_common::model::agent::AgentTypeName;
 
 impl From<CompiledMcp> for golem_api_grpc::proto::golem::mcp::CompiledMcp {
     fn from(value: CompiledMcp) -> Self {
-        let agent_type_implementers_json = serde_json::to_string(&value.agent_type_implementers)
-            .unwrap_or_else(|_| "{}".to_string());
-
         Self {
             account_id: Some(value.account_id.into()),
             environment_id: Some(value.environment_id.into()),
             deployment_revision: value.deployment_revision.into(),
             domain: value.domain.0,
-            agent_type_implementers: std::collections::HashMap::from([(
-                "implementers".to_string(),
-                golem_api_grpc::proto::golem::mcp::AgentTypeImplementer {
-                    component_id: agent_type_implementers_json,
-                    component_revision: 0,
-                },
-            )]),
+            agent_type_implementers: value
+                .agent_type_implementers
+                .into_iter()
+                .map(|(name, (component_id, component_revision))| {
+                    (
+                        name.0,
+                        golem_api_grpc::proto::golem::registry::RegisteredAgentTypeImplementer {
+                            component_id: Some(component_id.into()),
+                            component_revision: component_revision.into(),
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -28,16 +32,22 @@ impl TryFrom<golem_api_grpc::proto::golem::mcp::CompiledMcp> for CompiledMcp {
     fn try_from(
         value: golem_api_grpc::proto::golem::mcp::CompiledMcp,
     ) -> Result<Self, Self::Error> {
-        // Extract the JSON string from protobuf and deserialize
-        let agent_type_implementers_json = value
+        let agent_type_implementers: AgentTypeImplementers = value
             .agent_type_implementers
-            .get("implementers")
-            .map(|impl_info| impl_info.component_id.clone())
-            .ok_or("Missing implementers in agent_type_implementers")?;
-
-        let agent_type_implementers: AgentTypeImplementers =
-            serde_json::from_str(&agent_type_implementers_json)
-                .map_err(|e| format!("Failed to parse agent_type_implementers: {}", e))?;
+            .into_iter()
+            .map(|(name, implementer)| {
+                let component_id = implementer
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()
+                    .map_err(|e| format!("Invalid component_id: {}", e))?;
+                let component_revision = implementer
+                    .component_revision
+                    .try_into()
+                    .map_err(|e| format!("Invalid component_revision: {}", e))?;
+                Ok((AgentTypeName(name), (component_id, component_revision)))
+            })
+            .collect::<Result<_, String>>()?;
 
         Ok(Self {
             account_id: value
