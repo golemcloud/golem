@@ -280,7 +280,6 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                     )
                     .await?;
 
-                // Fetch environment_id from mcp_deployments
                 let mcp_deployment: (Uuid,) = tx
                     .fetch_one_as(
                         sqlx::query_as(indoc! { r#"
