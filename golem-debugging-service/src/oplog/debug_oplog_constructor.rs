@@ -16,7 +16,7 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog::DebugOplog;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{OwnedWorkerId, WorkerMetadata, WorkerStatusRecord};
+use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{Oplog, OplogConstructor, OplogService};
@@ -24,29 +24,29 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct CreateDebugOplogConstructor {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     initial_entry: Option<OplogEntry>,
     last_oplog_index: OplogIndex,
     inner: Arc<dyn OplogService + Send + Sync>,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
-    initial_worker_metadata: WorkerMetadata,
-    last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+    initial_worker_metadata: AgentMetadata,
+    last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
 }
 
 impl CreateDebugOplogConstructor {
     pub fn new(
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         initial_entry: Option<OplogEntry>,
         last_oplog_index: OplogIndex,
         inner: Arc<dyn OplogService + Send + Sync>,
         debug_session: Arc<dyn DebugSessions + Send + Sync>,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Self {
         Self {
-            owned_worker_id,
+            owned_agent_id,
             initial_entry,
             last_oplog_index,
             inner,
@@ -64,7 +64,7 @@ impl OplogConstructor for CreateDebugOplogConstructor {
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
-                    &self.owned_worker_id,
+                    &self.owned_agent_id,
                     initial_entry,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -74,7 +74,7 @@ impl OplogConstructor for CreateDebugOplogConstructor {
         } else {
             self.inner
                 .open(
-                    &self.owned_worker_id,
+                    &self.owned_agent_id,
                     self.last_oplog_index,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -83,7 +83,7 @@ impl OplogConstructor for CreateDebugOplogConstructor {
                 .await
         };
 
-        let debug_session_id = DebugSessionId::new(self.owned_worker_id.clone());
+        let debug_session_id = DebugSessionId::new(self.owned_agent_id.clone());
 
         Arc::new(DebugOplog::new(inner, debug_session_id, self.debug_session))
     }

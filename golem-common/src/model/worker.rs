@@ -15,29 +15,29 @@
 pub use crate::base_model::worker::*;
 
 mod protobuf {
-    use super::WorkerMetadataDto;
+    use super::AgentMetadataDto;
+    use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use super::{
         ExportedResourceMetadata, FailedUpdate, PendingUpdate, SuccessfulUpdate, UpdateRecord,
     };
-    use super::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, WorkerUpdateMode};
     use crate::model::component::PluginPriority;
-    use crate::model::oplog::WorkerResourceId;
+    use crate::model::oplog::AgentResourceId;
     use crate::model::regions::OplogRegion;
-    use crate::model::{OplogIndex, WorkerResourceDescription};
+    use crate::model::{AgentResourceDescription, OplogIndex};
     use std::collections::HashSet;
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadataDto {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetadataDto {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
+            value: golem_api_grpc::proto::golem::worker::AgentMetadata,
         ) -> Result<Self, Self::Error> {
             let mut exported_resource_instances = Vec::new();
 
             for desc in value.owned_resources {
                 exported_resource_instances.push(ExportedResourceMetadata {
-                    key: WorkerResourceId(desc.resource_id),
-                    description: WorkerResourceDescription {
+                    key: AgentResourceId(desc.resource_id),
+                    description: AgentResourceDescription {
                         created_at: desc.created_at.ok_or("Missing created_at")?.into(),
                         resource_owner: desc.resource_owner,
                         resource_name: desc.resource_name,
@@ -45,7 +45,7 @@ mod protobuf {
                 });
             }
             Ok(Self {
-                worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
+                agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
                 environment_id: value
                     .environment_id
                     .ok_or("Missing environment_id")?
@@ -86,8 +86,8 @@ mod protobuf {
         }
     }
 
-    impl From<WorkerMetadataDto> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
-        fn from(value: WorkerMetadataDto) -> Self {
+    impl From<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMetadata {
+        fn from(value: AgentMetadataDto) -> Self {
             let mut owned_resources = Vec::new();
             for instance in value.exported_resource_instances {
                 owned_resources.push(golem_api_grpc::proto::golem::worker::ResourceDescription {
@@ -99,7 +99,7 @@ mod protobuf {
             }
 
             Self {
-                worker_id: Some(value.worker_id.into()),
+                agent_id: Some(value.agent_id.into()),
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
@@ -266,28 +266,24 @@ mod protobuf {
         }
     }
 
-    impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
+    impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for AgentUpdateMode {
         fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
             match value {
                 golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
-                    WorkerUpdateMode::Automatic
+                    AgentUpdateMode::Automatic
                 }
-                golem_api_grpc::proto::golem::worker::UpdateMode::Manual => {
-                    WorkerUpdateMode::Manual
-                }
+                golem_api_grpc::proto::golem::worker::UpdateMode::Manual => AgentUpdateMode::Manual,
             }
         }
     }
 
-    impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
-        fn from(value: WorkerUpdateMode) -> Self {
+    impl From<AgentUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+        fn from(value: AgentUpdateMode) -> Self {
             match value {
-                WorkerUpdateMode::Automatic => {
+                AgentUpdateMode::Automatic => {
                     golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
                 }
-                WorkerUpdateMode::Manual => {
-                    golem_api_grpc::proto::golem::worker::UpdateMode::Manual
-                }
+                AgentUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
             }
         }
     }

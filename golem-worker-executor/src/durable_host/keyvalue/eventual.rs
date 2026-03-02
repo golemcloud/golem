@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -88,7 +88,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -141,7 +141,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -186,7 +186,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()

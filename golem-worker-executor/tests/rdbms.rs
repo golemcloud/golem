@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::agent::AgentId;
+use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::base_model::AgentId;
 use golem_common::model::agent::DataValue;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
@@ -327,8 +328,8 @@ async fn rdbms_postgres_crud(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids_1: Vec<WorkerId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
-    let worker_ids_3: Vec<WorkerId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_1: Vec<AgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_3: Vec<AgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
 
     workers_interrupt_test(&executor, worker_ids_1.clone()).await?;
     workers_interrupt_test(&executor, worker_ids_3.clone()).await?;
@@ -612,7 +613,7 @@ async fn postgres_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids: Vec<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids: Vec<AgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
 
     drop(executor);
@@ -1000,8 +1001,8 @@ async fn rdbms_mysql_crud(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids_1: Vec<WorkerId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
-    let worker_ids_3: Vec<WorkerId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_1: Vec<AgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_3: Vec<AgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
 
     workers_interrupt_test(&executor, worker_ids_1).await?;
     workers_interrupt_test(&executor, worker_ids_3).await?;
@@ -1277,7 +1278,7 @@ async fn mysql_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids: Vec<WorkerId> = workers.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids: Vec<AgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
 
     drop(executor);
@@ -1649,12 +1650,12 @@ async fn rdbms_component_test<T: RdbmsType>(
 async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    workers: Vec<(WorkerId, AgentId)>,
+    workers: Vec<(AgentId, ParsedAgentId)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<WorkerId, DataValue> = HashMap::new();
+    let mut workers_results: HashMap<AgentId, DataValue> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(WorkerId, DataValue)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(AgentId, DataValue)>>::new();
 
     for (worker_id, agent_id) in workers {
         let worker_id_clone = worker_id.clone();
@@ -1696,7 +1697,7 @@ async fn rdbms_workers_test<T: RdbmsType>(
 async fn execute_worker_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent_id: &AgentId,
+    agent_id: &ParsedAgentId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
 ) -> anyhow::Result<DataValue> {
@@ -1745,7 +1746,7 @@ async fn execute_worker_test<T: RdbmsType>(
         .await
 }
 
-fn check_test_result(worker_id: &WorkerId, result: DataValue, test: RdbmsTest) {
+fn check_test_result(worker_id: &AgentId, result: DataValue, test: RdbmsTest) {
     let fn_name = test.fn_name();
 
     let return_value = result
@@ -1801,8 +1802,8 @@ async fn start_workers<T: RdbmsType>(
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
-) -> anyhow::Result<Vec<(WorkerId, AgentId)>> {
-    let mut workers: Vec<(WorkerId, AgentId)> = Vec::new();
+) -> anyhow::Result<Vec<(AgentId, ParsedAgentId)>> {
+    let mut workers: Vec<(AgentId, ParsedAgentId)> = Vec::new();
     let db_type = T::default().to_string();
 
     let mut env = HashMap::new();
@@ -1830,11 +1831,11 @@ async fn start_workers<T: RdbmsType>(
 
 async fn workers_interrupt_test(
     executor: &TestWorkerExecutor,
-    worker_ids: Vec<WorkerId>,
+    worker_ids: Vec<AgentId>,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
+    let mut workers_results: HashMap<AgentId, AgentStatus> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(WorkerId, WorkerStatus)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(AgentId, AgentStatus)>>::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();
@@ -1844,7 +1845,7 @@ async fn workers_interrupt_test(
                 executor_clone.interrupt(&worker_id_clone).await?;
 
                 let metadata = executor_clone
-                    .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+                    .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
                     .await?;
 
                 let status = metadata.status;
@@ -1863,7 +1864,7 @@ async fn workers_interrupt_test(
     for (worker_id, status) in workers_results {
         assert_eq!(
             status,
-            WorkerStatus::Idle,
+            AgentStatus::Idle,
             "status for worker {worker_id} is Idle"
         );
     }

@@ -30,7 +30,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
@@ -50,39 +50,39 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId);
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId);
     async fn open_oplog(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     // enqueue an invocation to the worker
     async fn enqueue_invocation(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
-    async fn activate_worker(&self, created_by: AccountId, owned_worker_id: &OwnedWorkerId) {
+    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId) {
         self.deref()
-            .activate_worker(created_by, owned_worker_id)
+            .activate_worker(created_by, owned_agent_id)
             .await;
     }
 
     async fn open_oplog(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
                 created_by,
-                owned_worker_id,
+                owned_agent_id,
                 None,
                 None,
                 None,
@@ -97,13 +97,13 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
     async fn enqueue_invocation(
         &self,
         created_by: AccountId,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
                 created_by,
-                owned_worker_id,
+                owned_agent_id,
                 None,
                 None,
                 None,
@@ -219,7 +219,7 @@ impl SchedulerServiceDefault {
             .into_iter()
             .filter(|(_, action)| {
                 self.shard_service
-                    .check_worker(&action.owned_worker_id().worker_id)
+                    .check_worker(&action.owned_agent_id().agent_id)
                     .is_ok()
             })
             .collect::<Vec<_>>();
@@ -233,7 +233,7 @@ impl SchedulerServiceDefault {
                     promise_id,
                     environment_id,
                 } => {
-                    let owned_worker_id = OwnedWorkerId::new(environment_id, &promise_id.worker_id);
+                    let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
 
                     let result = self
                         .promise_service
@@ -249,11 +249,11 @@ impl SchedulerServiceDefault {
                                 let span = span!(
                                     Level::INFO,
                                     "scheduler",
-                                    worker_id = owned_worker_id.worker_id.to_string()
+                                    agent_id = owned_agent_id.agent_id.to_string()
                                 );
 
                                 self.worker_access
-                                    .activate_worker(account_id, &owned_worker_id)
+                                    .activate_worker(account_id, &owned_agent_id)
                                     .instrument(span)
                                     .await;
                             }
@@ -262,7 +262,7 @@ impl SchedulerServiceDefault {
                         }
                         Err(e) => {
                             error!(
-                                worker_id = owned_worker_id.to_string(),
+                                agent_id = owned_agent_id.to_string(),
                                 promise_id = promise_id.to_string(),
                                 "Failed to complete promise: {e}"
                             );
@@ -271,18 +271,18 @@ impl SchedulerServiceDefault {
                 }
                 ScheduledAction::ArchiveOplog {
                     account_id,
-                    owned_worker_id,
+                    owned_agent_id,
                     last_oplog_index,
                     next_after,
                 } => {
-                    if self.oplog_service.exists(&owned_worker_id).await {
+                    if self.oplog_service.exists(&owned_agent_id).await {
                         let current_last_index =
-                            self.oplog_service.get_last_index(&owned_worker_id).await;
+                            self.oplog_service.get_last_index(&owned_agent_id).await;
                         if current_last_index == last_oplog_index {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self
                                 .worker_access
-                                .open_oplog(account_id, &owned_worker_id)
+                                .open_oplog(account_id, &owned_agent_id)
                                 .await
                             {
                                 Ok(oplog) => {
@@ -294,7 +294,7 @@ impl SchedulerServiceDefault {
                                                 now.add(next_after),
                                                 ScheduledAction::ArchiveOplog {
                                                     account_id,
-                                                    owned_worker_id,
+                                                    owned_agent_id,
                                                     last_oplog_index,
                                                     next_after,
                                                 },
@@ -302,19 +302,19 @@ impl SchedulerServiceDefault {
                                             .await;
                                         } else {
                                             info!(
-                                                worker_id = owned_worker_id.to_string(),
+                                                agent_id = owned_agent_id.to_string(),
                                                 "Deleting cached status of fully archived worker"
                                             );
                                             // The oplog is fully archived, so we can also delete the cached worker status
                                             self.worker_service
-                                                .remove_cached_status(&owned_worker_id)
+                                                .remove_cached_status(&owned_agent_id)
                                                 .await;
                                         }
                                     }
                                 }
                                 Err(error) => {
                                     error!(
-                                        worker_id = owned_worker_id.to_string(),
+                                        agent_id = owned_agent_id.to_string(),
                                         "Failed to activate worker for archiving: {error}"
                                     );
                                 }
@@ -326,19 +326,19 @@ impl SchedulerServiceDefault {
                 }
                 ScheduledAction::Invoke {
                     account_id,
-                    owned_worker_id,
+                    owned_agent_id,
                     invocation,
                 } => {
                     // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self
                         .worker_access
-                        .enqueue_invocation(account_id, &owned_worker_id, *invocation)
+                        .enqueue_invocation(account_id, &owned_agent_id, *invocation)
                         .await;
 
                     if let Err(e) = result {
                         error!(
-                            worker_id = owned_worker_id.to_string(),
+                            agent_id = owned_agent_id.to_string(),
                             "Failed to invoke worker with scheduled invocation: {e}"
                         );
                     };
@@ -445,7 +445,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
-        AgentInvocation, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
+        AgentId, AgentInvocation, OwnedAgentId, PromiseId, ScheduledAction, ShardId,
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -460,18 +460,18 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
-        async fn activate_worker(&self, _created_by: AccountId, _owned_worker_id: &OwnedWorkerId) {}
+        async fn activate_worker(&self, _created_by: AccountId, _owned_agent_id: &OwnedAgentId) {}
         async fn open_oplog(
             &self,
             _created_by: AccountId,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
         ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
             &self,
             _created_by: AccountId,
-            _owned_worker_id: &OwnedWorkerId,
+            _owned_agent_id: &OwnedAgentId,
             _invocation: AgentInvocation,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
@@ -529,27 +529,27 @@ mod tests {
     pub async fn promises_added_to_expected_buckets() {
         let uuid = Uuid::new_v4();
         let c1: ComponentId = ComponentId(uuid);
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -659,27 +659,27 @@ mod tests {
     #[test]
     pub async fn cancel_removes_entry() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -774,27 +774,27 @@ mod tests {
     #[test]
     pub async fn process_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -892,27 +892,27 @@ mod tests {
     #[test]
     pub async fn process_past_and_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 
@@ -1003,31 +1003,31 @@ mod tests {
     #[test]
     pub async fn process_past_and_current_hours_past_schedules_2() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
         let p4: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(111),
         };
 
@@ -1129,27 +1129,27 @@ mod tests {
     #[test]
     pub async fn process_past_and_current_hours_past_schedules_3() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
-        let i1: WorkerId = WorkerId {
+        let i1: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst1".to_string(),
+            agent_id: "inst1".to_string(),
         };
-        let i2: WorkerId = WorkerId {
+        let i2: AgentId = AgentId {
             component_id: c1,
-            worker_name: "inst2".to_string(),
+            agent_id: "inst2".to_string(),
         };
 
         let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(101),
         };
         let p2: PromiseId = PromiseId {
-            worker_id: i1.clone(),
+            agent_id: i1.clone(),
             oplog_idx: OplogIndex::from_u64(123),
         };
         let p3: PromiseId = PromiseId {
-            worker_id: i2.clone(),
+            agent_id: i2.clone(),
             oplog_idx: OplogIndex::from_u64(1000),
         };
 

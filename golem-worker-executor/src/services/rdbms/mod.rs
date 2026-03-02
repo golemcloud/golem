@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use golem_common::model::oplog::types::{
     SerializableDbColumn, SerializableDbResult, SerializableDbValue, SerializableRdbmsError,
 };
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::{RdbmsPoolKey, TransactionId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use itertools::Itertools;
@@ -58,7 +58,7 @@ pub trait RdbmsType: Debug + Display + Default + PartialEq + Clone + Send {
 
 #[derive(Clone)]
 pub struct RdbmsStatus {
-    pub pools: HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
+    pub pools: HashMap<RdbmsPoolKey, HashSet<AgentId>>,
 }
 
 impl Display for RdbmsStatus {
@@ -108,17 +108,16 @@ pub trait DbTransaction<T: RdbmsType> {
 
 #[async_trait]
 pub trait Rdbms<T: RdbmsType>: Send + Sync {
-    async fn create(&self, address: &str, worker_id: &WorkerId)
-        -> Result<RdbmsPoolKey, RdbmsError>;
+    async fn create(&self, address: &str, agent_id: &AgentId) -> Result<RdbmsPoolKey, RdbmsError>;
 
-    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
+    async fn exists(&self, key: &RdbmsPoolKey, agent_id: &AgentId) -> bool;
 
-    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
+    async fn remove(&self, key: &RdbmsPoolKey, agent_id: &AgentId) -> bool;
 
     async fn execute(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<u64, RdbmsError>
@@ -128,7 +127,7 @@ pub trait Rdbms<T: RdbmsType>: Send + Sync {
     async fn query_stream(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, RdbmsError>
@@ -138,7 +137,7 @@ pub trait Rdbms<T: RdbmsType>: Send + Sync {
     async fn query(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         statement: &str,
         params: Vec<T::DbValue>,
     ) -> Result<DbResult<T>, RdbmsError>
@@ -148,20 +147,20 @@ pub trait Rdbms<T: RdbmsType>: Send + Sync {
     async fn begin_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, RdbmsError>;
 
     async fn get_transaction_status(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, RdbmsError>;
 
     async fn cleanup_transaction(
         &self,
         key: &RdbmsPoolKey,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         transaction_id: &TransactionId,
     ) -> Result<(), RdbmsError>;
 

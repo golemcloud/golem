@@ -166,7 +166,7 @@ impl From<WorkerServiceError> for ApiEndpointError {
 
             WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::WorkerNotFound(_) => Self::not_found(error),
+            | WorkerServiceError::AgentNotFound(_) => Self::not_found(error),
 
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
@@ -208,7 +208,7 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
 impl From<WorkerExecutorError> for ApiEndpointError {
     fn from(error: WorkerExecutorError) -> Self {
         match error {
-            WorkerExecutorError::WorkerNotFound { .. } => Self::not_found(error),
+            WorkerExecutorError::AgentNotFound { .. } => Self::not_found(error),
             WorkerExecutorError::InvocationFailed { error, stderr } => {
                 Self::InternalError(Json(ErrorBodyWithOptionalWorkerError {
                     error: "Invocation Failed".to_string(),

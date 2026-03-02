@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -96,7 +96,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         bucket: Resource<Bucket>,
     ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -140,7 +140,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key_values: Vec<(Key, Resource<OutgoingValue>)>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let environment_id = self.owned_worker_id.environment_id();
+        let environment_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -202,7 +202,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let project_id = self.owned_worker_id.environment_id();
+        let project_id = self.owned_agent_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()

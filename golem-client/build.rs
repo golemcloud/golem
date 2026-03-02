@@ -253,16 +253,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::worker::RevertWorkerTarget",
             ),
             (
-                "WorkerCreationRequest",
-                "golem_common::model::worker::WorkerCreationRequest",
+                "AgentCreationRequest",
+                "golem_common::model::worker::AgentCreationRequest",
             ),
             (
-                "WorkerMetadataDto",
-                "golem_common::model::worker::WorkerMetadataDto",
+                "AgentMetadataDto",
+                "golem_common::model::worker::AgentMetadataDto",
             ),
             (
-                "WorkerUpdateMode",
-                "golem_common::model::worker::WorkerUpdateMode",
+                "AgentUpdateMode",
+                "golem_common::model::worker::AgentUpdateMode",
             ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
@@ -294,13 +294,13 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("ScanCursor", "golem_common::model::ScanCursor"),
             ("UntypedJsonBody", "golem_common::model::UntypedJsonBody"),
             ("VersionInfo", "golem_common::model::VersionInfo"),
-            ("WorkerFilter", "golem_common::model::WorkerFilter"),
-            ("WorkerId", "golem_common::model::WorkerId"),
+            ("AgentFilter", "golem_common::model::AgentFilter"),
+            ("AgentId", "golem_common::model::AgentId"),
             (
-                "WorkerResourceDescription",
-                "golem_common::model::WorkerResourceDescription",
+                "AgentResourceDescription",
+                "golem_common::model::AgentResourceDescription",
             ),
-            ("WorkerStatus", "golem_common::model::WorkerStatus"),
+            ("AgentStatus", "golem_common::model::AgentStatus"),
             // golem_wasm
             ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
@@ -310,7 +310,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ValueAndType", "golem_wasm::ValueAndType"),
         ],
-        &["/v1/components/{component_id}/workers/{worker_name}/connect"],
+        &["/v1/components/{component_id}/workers/{agent_name}/connect"],
     )
     .expect("Failed to generate client code from OpenAPI spec.");
 }

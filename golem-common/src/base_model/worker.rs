@@ -15,9 +15,9 @@
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::oplog::WorkerResourceId;
+use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{OplogIndex, Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
+use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
 use crate::{declare_enums, declare_structs, declare_unions};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -27,7 +27,7 @@ use std::fmt::{Display, Formatter};
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-pub struct WorkerCreationRequest {
+pub struct AgentCreationRequest {
     pub name: String,
     pub env: HashMap<String, String>,
     #[cfg_attr(feature = "full", oai(default))]
@@ -84,17 +84,17 @@ declare_structs! {
     }
 
     pub struct ExportedResourceMetadata {
-        pub key: WorkerResourceId,
-        pub description: WorkerResourceDescription,
+        pub key: AgentResourceId,
+        pub description: AgentResourceDescription,
     }
 
-    pub struct WorkerMetadataDto {
-        pub worker_id: WorkerId,
+    pub struct AgentMetadataDto {
+        pub agent_id: AgentId,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
         pub config_vars: BTreeMap<String, String>,
-        pub status: WorkerStatus,
+        pub status: AgentStatus,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,
@@ -137,7 +137,7 @@ declare_structs! {
 }
 
 declare_enums! {
-    pub enum WorkerUpdateMode {
+    pub enum AgentUpdateMode {
         Automatic,
         Manual,
     }

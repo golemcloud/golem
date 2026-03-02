@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
-use crate::model::WorkerConfig;
+use crate::model::AgentConfig;
 use crate::services::HasWorker;
 use crate::worker::merge_worker_env_with_component_env;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -27,18 +27,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
         let mut env = merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
 
-        let current_worker_name = if let Some(agent_id) = self.agent_id() {
+        let current_agent_name = if let Some(agent_id) = self.parsed_agent_id() {
             let updated_agent_id = agent_id.with_phantom_id(self.state.current_phantom_id);
             updated_agent_id.to_string()
         } else {
-            self.owned_worker_id.worker_name()
+            self.owned_agent_id.agent_name()
         };
 
-        WorkerConfig::enrich_env(
+        AgentConfig::enrich_env(
             &mut env,
-            &WorkerId {
-                component_id: self.owned_worker_id.component_id(),
-                worker_name: current_worker_name,
+            &AgentId {
+                component_id: self.owned_agent_id.component_id(),
+                agent_id: current_agent_name,
             },
             &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
             self.state.component_metadata.revision,

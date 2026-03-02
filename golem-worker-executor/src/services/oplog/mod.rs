@@ -26,8 +26,8 @@ use golem_common::model::oplog::{
     PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
 };
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, OwnedWorkerId, ScanCursor, Timestamp, WorkerId,
-    WorkerMetadata, WorkerStatusRecord,
+    AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
+    OwnedAgentId, ScanCursor, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::serialization::{deserialize, serialize};
@@ -71,29 +71,29 @@ pub mod tests;
 pub trait OplogService: Debug + Send + Sync {
     async fn create(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         initial_entry: OplogEntry,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
     async fn open(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
-    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
+    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex;
 
-    async fn delete(&self, owned_worker_id: &OwnedWorkerId);
+    async fn delete(&self, owned_agent_id: &OwnedAgentId);
 
     async fn read(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
@@ -101,7 +101,7 @@ pub trait OplogService: Debug + Send + Sync {
     /// Reads an inclusive range of entries from the oplog
     async fn read_range(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         start_idx: OplogIndex,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -111,7 +111,7 @@ pub trait OplogService: Debug + Send + Sync {
         );
 
         self.read(
-            owned_worker_id,
+            owned_agent_id,
             start_idx,
             Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
         )
@@ -120,15 +120,15 @@ pub trait OplogService: Debug + Send + Sync {
 
     async fn read_prefix(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         last_idx: OplogIndex,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read_range(owned_worker_id, OplogIndex::INITIAL, last_idx)
+        self.read_range(owned_agent_id, OplogIndex::INITIAL, last_idx)
             .await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
-    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool;
+    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool;
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
     ///
@@ -139,19 +139,19 @@ pub trait OplogService: Debug + Send + Sync {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError>;
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError>;
 
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_raw_payload(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String>;
 
     /// Downloads a big oplog payload by its reference
     async fn download_raw_payload(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
@@ -382,11 +382,11 @@ pub trait OplogServiceOps: OplogService {
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         data: &T,
     ) -> Result<OplogPayload<T>, String> {
         let bytes = serialize(&data)?;
-        let raw_payload = self.upload_raw_payload(owned_worker_id, bytes).await?;
+        let raw_payload = self.upload_raw_payload(owned_agent_id, bytes).await?;
         let cached = Arc::new(data.clone());
         let payload = raw_payload.into_payload_with_cache(cached)?;
         Ok(payload)
@@ -395,7 +395,7 @@ pub trait OplogServiceOps: OplogService {
     /// Downloads a big oplog payload by its reference
     async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync>(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
         match payload {
@@ -413,7 +413,7 @@ pub trait OplogServiceOps: OplogService {
                 ..
             } => {
                 let bytes = self
-                    .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+                    .download_raw_payload(owned_agent_id, payload_id, md5_hash)
                     .await?;
                 deserialize(&bytes)
             }
@@ -441,7 +441,7 @@ impl OpenOplogEntry {
 
 #[derive(Clone)]
 pub struct OpenOplogs {
-    oplogs: Cache<WorkerId, (), OpenOplogEntry, ()>,
+    oplogs: Cache<AgentId, (), OpenOplogEntry, ()>,
 }
 
 impl OpenOplogs {
@@ -458,17 +458,17 @@ impl OpenOplogs {
 
     pub async fn get_or_open(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         constructor: impl OplogConstructor + 'static,
     ) -> Arc<dyn Oplog> {
         loop {
             let constructor_clone = constructor.clone();
-            let close = Box::new(self.oplogs.create_weak_remover(worker_id.clone()));
+            let close = Box::new(self.oplogs.create_weak_remover(agent_id.clone()));
 
             let entry = self
                 .oplogs
                 .get_or_insert(
-                    worker_id,
+                    agent_id,
                     || (),
                     async |_| {
                         let result = constructor_clone.create_oplog(close).await;
@@ -500,7 +500,7 @@ impl OpenOplogs {
 
                 break oplog;
             } else {
-                self.oplogs.remove(worker_id).await;
+                self.oplogs.remove(agent_id).await;
                 continue;
             }
         }

@@ -15,7 +15,7 @@
 use crate::Tracing;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -42,7 +42,7 @@ async fn spawning_many_workers_that_sleep(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn agent_id(n: i32) -> AgentId {
+    fn agent_id(n: i32) -> ParsedAgentId {
         agent_id!("clocks", format!("sleeping-agent-{n}"))
     }
 
@@ -101,7 +101,7 @@ async fn spawning_many_workers_that_sleep(
             {
                 spawn(async move {
                     let agent_id = agent_id(n);
-                    let _worker_id = executor_clone
+                    let _agent_id = executor_clone
                         .start_agent(&component_clone.id, agent_id.clone())
                         .await?;
 
@@ -162,7 +162,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn agent_id(n: i32) -> AgentId {
+    fn agent_id(n: i32) -> ParsedAgentId {
         agent_id!("clocks", format!("sleeping-suspending-agent-{n}"))
     }
 

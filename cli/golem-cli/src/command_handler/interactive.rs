@@ -17,7 +17,7 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_warn, log_warn_action, logln, LogColorize};
 use crate::model::format::Format;
-use crate::model::worker::WorkerName;
+use crate::model::worker::RawAgentId;
 use crate::model::{GuestLanguage, NewInteractiveApp};
 use anyhow::bail;
 use colored::Colorize;
@@ -171,14 +171,14 @@ impl InteractiveHandler {
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
-        worker_name: &WorkerName,
+        agent_name: &RawAgentId,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    worker_name.0.log_color_highlight(),
+                    agent_name.0.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,

@@ -17,13 +17,13 @@ use crate::base_model::agent::{
 };
 use crate::base_model::Empty;
 use crate::model::agent::{
-    AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeName, AgentTypeResolver,
-    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
+    AgentConstructor, AgentMode, AgentType, AgentTypeName, AgentTypeResolver, BinaryDescriptor,
+    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
     JsonComponentModelValue, NamedElementSchema, NamedElementSchemas, NamedElementValue,
-    NamedElementValues, TextDescriptor, TextReference, TextReferenceValue, TextSource, TextType,
-    UnstructuredBinaryElementValue, UnstructuredTextElementValue, UntypedJsonDataValue,
-    UntypedJsonElementValue, UntypedJsonElementValues, Url,
+    NamedElementValues, ParsedAgentId, TextDescriptor, TextReference, TextReferenceValue,
+    TextSource, TextType, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    UntypedJsonDataValue, UntypedJsonElementValue, UntypedJsonElementValues, Url,
 };
 use crate::{agent_id, data_value, phantom_agent_id};
 use async_trait::async_trait;
@@ -44,12 +44,13 @@ use uuid::Uuid;
 fn agent_id_wave_normalization() {
     {
         let agent_id =
-            AgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new()).unwrap();
+            ParsedAgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new())
+                .unwrap();
         assert_eq!(agent_id.to_string(), "agent-7([12,13,14])");
     }
 
     {
-        let agent_id = AgentId::parse(
+        let agent_id = ParsedAgentId::parse(
             r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#,
             TestAgentTypes::new(),
         )
@@ -191,10 +192,10 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
+        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
         let s = id.to_string();
         println!("{s}");
-        let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
         prop_assert_eq!(id, id2);
     }
 
@@ -214,10 +215,10 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
+        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
         let s = id.to_string();
         println!("{s}");
-        let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+        let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
         prop_assert_eq!(id, id2);
     }
 }
@@ -534,7 +535,7 @@ fn snapshotting_enabled_every_n_invocation_serde_poem_roundtrip() {
 #[test]
 fn normalize_strips_whitespace_in_wave_values() {
     assert_eq!(
-        AgentId::normalize_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
+        ParsedAgentId::normalize_text("agent-7(  [  12,     13 , 14 ]   )").unwrap(),
         "agent-7([12,13,14])"
     );
 }
@@ -542,7 +543,7 @@ fn normalize_strips_whitespace_in_wave_values() {
 #[test]
 fn normalize_strips_whitespace_in_records() {
     assert_eq!(
-        AgentId::normalize_text(
+        ParsedAgentId::normalize_text(
             r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#
         )
         .unwrap(),
@@ -552,13 +553,16 @@ fn normalize_strips_whitespace_in_records() {
 
 #[test]
 fn normalize_preserves_already_compact() {
-    assert_eq!(AgentId::normalize_text("agent-1()").unwrap(), "agent-1()");
+    assert_eq!(
+        ParsedAgentId::normalize_text("agent-1()").unwrap(),
+        "agent-1()"
+    );
 }
 
 #[test]
 fn normalize_preserves_strings() {
     assert_eq!(
-        AgentId::normalize_text(r#"agent-2("hello world")"#).unwrap(),
+        ParsedAgentId::normalize_text(r#"agent-2("hello world")"#).unwrap(),
         r#"agent-2("hello world")"#
     );
 }
@@ -566,31 +570,31 @@ fn normalize_preserves_strings() {
 #[test]
 fn normalize_handles_phantom_id() {
     let result =
-        AgentId::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").unwrap();
+        ParsedAgentId::normalize_text("agent-1()[550e8400-e29b-41d4-a716-446655440000]").unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_handles_phantom_id_with_whitespace() {
     let result =
-        AgentId::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]").unwrap();
+        ParsedAgentId::normalize_text("agent-1()[ 550e8400-e29b-41d4-a716-446655440000 ]").unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_rejects_invalid_format() {
-    assert!(AgentId::normalize_text("not-an-agent-id").is_err());
+    assert!(ParsedAgentId::normalize_text("not-an-agent-id").is_err());
 }
 
 #[test]
 fn normalize_rejects_invalid_phantom_id() {
-    assert!(AgentId::normalize_text("agent-1()[not-a-uuid]").is_err());
+    assert!(ParsedAgentId::normalize_text("agent-1()[not-a-uuid]").is_err());
 }
 
 #[test]
 fn normalize_handles_urls() {
     assert_eq!(
-        AgentId::normalize_text("agent-4(https://url1.com/,https://url2.com/)").unwrap(),
+        ParsedAgentId::normalize_text("agent-4(https://url1.com/,https://url2.com/)").unwrap(),
         "agent-4(https://url1.com/,https://url2.com/)"
     );
 }
@@ -598,7 +602,7 @@ fn normalize_handles_urls() {
 #[test]
 fn normalize_handles_inline_text() {
     assert_eq!(
-        AgentId::normalize_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
+        ParsedAgentId::normalize_text(r#"agent-4("hello, world!","goodbye")"#).unwrap(),
         r#"agent-4("hello, world!","goodbye")"#
     );
 }
@@ -606,7 +610,7 @@ fn normalize_handles_inline_text() {
 #[test]
 fn normalize_handles_multimodal_elements() {
     assert_eq!(
-        AgentId::normalize_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
+        ParsedAgentId::normalize_text("agent-6(x(  42  ),y(https://example.com/))").unwrap(),
         "agent-6(x(42),y(https://example.com/))"
     );
 }
@@ -614,7 +618,7 @@ fn normalize_handles_multimodal_elements() {
 #[test]
 fn normalize_handles_nested_records_with_whitespace() {
     assert_eq!(
-        AgentId::normalize_text(
+        ParsedAgentId::normalize_text(
             r#"non-kebab-agent({ agent-id : { component-id : { uuid : { high-bits : 115746831381919841 , low-bits : 13556493125794766855 } } , agent-id : "some-agent-id(\"hello\")" } , oplog-idx : 1234 })"#
         )
         .unwrap(),
@@ -625,19 +629,19 @@ fn normalize_handles_nested_records_with_whitespace() {
 #[test]
 fn normalize_handles_options_and_results() {
     assert_eq!(
-        AgentId::normalize_text("agent-x( some( 42 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( some( 42 ) )").unwrap(),
         "agent-x(some(42))"
     );
     assert_eq!(
-        AgentId::normalize_text("agent-x( none )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( none )").unwrap(),
         "agent-x(none)"
     );
     assert_eq!(
-        AgentId::normalize_text("agent-x( ok( 1 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( ok( 1 ) )").unwrap(),
         "agent-x(ok(1))"
     );
     assert_eq!(
-        AgentId::normalize_text("agent-x( err( 2 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( err( 2 ) )").unwrap(),
         "agent-x(err(2))"
     );
 }
@@ -645,7 +649,7 @@ fn normalize_handles_options_and_results() {
 #[test]
 fn normalize_handles_empty_record() {
     assert_eq!(
-        AgentId::normalize_text("agent-x( {  :  } )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( {  :  } )").unwrap(),
         "agent-x({:})"
     );
 }
@@ -653,7 +657,7 @@ fn normalize_handles_empty_record() {
 #[test]
 fn normalize_handles_empty_flags() {
     assert_eq!(
-        AgentId::normalize_text("agent-x( {  } )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( {  } )").unwrap(),
         "agent-x({})"
     );
 }
@@ -661,7 +665,7 @@ fn normalize_handles_empty_flags() {
 #[test]
 fn normalize_handles_char_values() {
     assert_eq!(
-        AgentId::normalize_text("agent-x( 'a' , 'b' )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( 'a' , 'b' )").unwrap(),
         "agent-x('a','b')"
     );
 }
@@ -669,7 +673,7 @@ fn normalize_handles_char_values() {
 #[test]
 fn normalize_handles_variant_with_percent_prefix() {
     assert_eq!(
-        AgentId::normalize_text("agent-x( %true( 42 ) )").unwrap(),
+        ParsedAgentId::normalize_text("agent-x( %true( 42 ) )").unwrap(),
         "agent-x(%true(42))"
     );
 }
@@ -677,7 +681,7 @@ fn normalize_handles_variant_with_percent_prefix() {
 #[test]
 fn normalize_trims_outer_whitespace() {
     assert_eq!(
-        AgentId::normalize_text("  agent-7(  [  12, 13 ]  )  ").unwrap(),
+        ParsedAgentId::normalize_text("  agent-7(  [  12, 13 ]  )  ").unwrap(),
         "agent-7([12,13])"
     );
 }
@@ -685,37 +689,38 @@ fn normalize_trims_outer_whitespace() {
 #[test]
 fn normalize_phantom_id_with_casing_and_whitespace() {
     let result =
-        AgentId::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]").unwrap();
+        ParsedAgentId::normalize_text("agent-1(  )[ 550E8400-E29B-41D4-A716-446655440000 ]")
+            .unwrap();
     assert_eq!(result, "agent-1()[550e8400-e29b-41d4-a716-446655440000]");
 }
 
 #[test]
 fn normalize_empty_params_stays_empty() {
     assert_eq!(
-        AgentId::normalize_text("agent-1(   )").unwrap(),
+        ParsedAgentId::normalize_text("agent-1(   )").unwrap(),
         "agent-1()"
     );
 }
 
 #[test]
 fn normalize_rejects_empty_element_from_double_comma() {
-    assert!(AgentId::normalize_text("agent-x(1,,2)").is_err());
+    assert!(ParsedAgentId::normalize_text("agent-x(1,,2)").is_err());
 }
 
 #[test]
 fn normalize_rejects_leading_comma() {
-    assert!(AgentId::normalize_text("agent-x(,1)").is_err());
+    assert!(ParsedAgentId::normalize_text("agent-x(,1)").is_err());
 }
 
 #[test]
 fn normalize_rejects_empty_agent_type() {
-    assert!(AgentId::normalize_text("()").is_err());
+    assert!(ParsedAgentId::normalize_text("()").is_err());
 }
 
 proptest! {
     #[test]
     fn normalize_text_idempotent_for_simple_agent(x in 0u32..10000) {
-        let agent_id = AgentId::new(
+        let agent_id = ParsedAgentId::new(
             AgentTypeName("agent-2".to_string()),
             DataValue::Tuple(ElementValues {
                 elements: vec![
@@ -725,7 +730,7 @@ proptest! {
             None,
         );
         let canonical = agent_id.to_string();
-        let normalized = AgentId::normalize_text(&canonical).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
     }
 
@@ -735,7 +740,7 @@ proptest! {
         b in 0u32..100,
         c in 0u32..100,
     ) {
-        let agent_id = AgentId::new(
+        let agent_id = ParsedAgentId::new(
             AgentTypeName("agent-7".to_string()),
             DataValue::Tuple(ElementValues {
                 elements: vec![
@@ -748,14 +753,14 @@ proptest! {
             None,
         );
         let canonical = agent_id.to_string();
-        let normalized = AgentId::normalize_text(&canonical).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
     }
 
     #[test]
     fn normalize_text_strips_whitespace_for_simple_agent(x in 0u32..10000) {
         let with_spaces = format!("agent-2(  {x}  )");
-        let normalized = AgentId::normalize_text(&with_spaces).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&with_spaces).unwrap();
         prop_assert_eq!(normalized, format!("agent-2({x})"));
     }
 
@@ -766,41 +771,43 @@ proptest! {
         c in 0u32..100,
     ) {
         let with_spaces = format!("agent-7( [ {a} , {b} , {c} ] )");
-        let normalized = AgentId::normalize_text(&with_spaces).unwrap();
+        let normalized = ParsedAgentId::normalize_text(&with_spaces).unwrap();
         prop_assert_eq!(normalized, format!("agent-7([{a},{b},{c}])"));
     }
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
+    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
     println!("{s}");
-    let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
 }
 
 fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
-    let id = AgentId::new(
+    let id = ParsedAgentId::new(
         AgentTypeName(agent_type.to_string()),
         parameters,
         phantom_id,
     );
     let s = id.to_string();
     println!("{s}");
-    let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
     assert_eq!(id.phantom_id, phantom_id);
 }
 
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = AgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
+    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
     let s = id.to_string();
-    let id2 = AgentId::parse(s, TestAgentTypes::new()).err().unwrap();
+    let id2 = ParsedAgentId::parse(s, TestAgentTypes::new())
+        .err()
+        .unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 
 fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
-    let id2 = AgentId::parse(agent_id_str, TestAgentTypes::new())
+    let id2 = ParsedAgentId::parse(agent_id_str, TestAgentTypes::new())
         .err()
         .unwrap();
     assert_eq!(id2, expected_failure.to_string());

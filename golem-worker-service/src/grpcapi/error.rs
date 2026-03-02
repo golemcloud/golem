@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::golem::worker::v1::WorkerError;
+use golem_api_grpc::proto::golem::worker::v1::AgentError;
 use golem_common::metrics::api::ApiErrorDetails;
 use std::fmt::{Debug, Formatter};
 
-pub struct WorkerTraceErrorKind<'a>(pub &'a WorkerError);
+pub struct WorkerTraceErrorKind<'a>(pub &'a AgentError);
 
 impl Debug for WorkerTraceErrorKind<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -26,7 +26,7 @@ impl Debug for WorkerTraceErrorKind<'_> {
 
 impl ApiErrorDetails for WorkerTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
-        use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
+        use golem_api_grpc::proto::golem::worker::v1::agent_error::Error;
 
         match &self.0.error {
             None => "None",
@@ -42,7 +42,7 @@ impl ApiErrorDetails for WorkerTraceErrorKind<'_> {
     }
 
     fn is_expected(&self) -> bool {
-        use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
+        use golem_api_grpc::proto::golem::worker::v1::agent_error::Error;
 
         match &self.0.error {
             None => false,

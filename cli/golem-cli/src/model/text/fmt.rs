@@ -22,7 +22,7 @@ use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
-use golem_common::model::WorkerStatus;
+use golem_common::model::AgentStatus;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -207,16 +207,16 @@ pub fn format_binary_size(size: &u64) -> String {
     humansize::format_size(*size, humansize::BINARY)
 }
 
-pub fn format_status(status: &WorkerStatus) -> String {
+pub fn format_status(status: &AgentStatus) -> String {
     let status_name = status.to_string();
     match status {
-        WorkerStatus::Running => status_name.green(),
-        WorkerStatus::Idle => status_name.cyan(),
-        WorkerStatus::Suspended => status_name.yellow(),
-        WorkerStatus::Interrupted => status_name.red(),
-        WorkerStatus::Retrying => status_name.yellow(),
-        WorkerStatus::Failed => status_name.bright_red(),
-        WorkerStatus::Exited => status_name.white(),
+        AgentStatus::Running => status_name.green(),
+        AgentStatus::Idle => status_name.cyan(),
+        AgentStatus::Suspended => status_name.yellow(),
+        AgentStatus::Interrupted => status_name.red(),
+        AgentStatus::Retrying => status_name.yellow(),
+        AgentStatus::Failed => status_name.bright_red(),
+        AgentStatus::Exited => status_name.white(),
     }
     .to_string()
 }

@@ -22,7 +22,7 @@ use futures::stream;
 use golem_common::agent_id;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
-use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_test_framework::dsl::{drain_connection, stderr_events, stdout_events, TestDsl};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::Value;
@@ -669,10 +669,10 @@ async fn directories_replay(
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
     let metadata = executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
         .await?;
 
-    assert_eq!(metadata.status, WorkerStatus::Idle);
+    assert_eq!(metadata.status, AgentStatus::Idle);
 
     let Value::Record(fields) = &result else {
         panic!("expected record, got {:?}", result)
@@ -1312,7 +1312,7 @@ async fn http_client_interrupting_response_stream(
     executor.resume(&worker_id, false).await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(5))
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -1441,7 +1441,7 @@ async fn http_client_interrupting_response_stream_async(
     executor.resume(&worker_id, false).await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(5))
         .await?;
     executor.log_output(&worker_id).await?;
 

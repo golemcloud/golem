@@ -14,7 +14,7 @@
 
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::wave::function_wave_compatible;
-use crate::model::worker::WorkerName;
+use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
@@ -39,13 +39,13 @@ use std::fmt::Display;
 use std::path::PathBuf;
 
 pub enum ComponentRevisionSelection<'a> {
-    ByWorkerName(&'a WorkerName),
+    ByAgentName(&'a RawAgentId),
     ByExplicitRevision(ComponentRevision),
 }
 
-impl<'a> From<&'a WorkerName> for ComponentRevisionSelection<'a> {
-    fn from(value: &'a WorkerName) -> Self {
-        Self::ByWorkerName(value)
+impl<'a> From<&'a RawAgentId> for ComponentRevisionSelection<'a> {
+    fn from(value: &'a RawAgentId) -> Self {
+        Self::ByAgentName(value)
     }
 }
 

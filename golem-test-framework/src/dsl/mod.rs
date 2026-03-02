@@ -22,13 +22,13 @@ use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use bytes::Bytes;
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error as WorkerGrpcError;
+use golem_api_grpc::proto::golem::worker::v1::agent_error::Error as WorkerGrpcError;
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
-use golem_common::base_model::{PromiseId, WorkerId};
+use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, DataValue};
+use golem_common::model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{
@@ -44,9 +44,9 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
-    FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord, WorkerMetadataDto,
+    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord,
 };
-use golem_common::model::{IdempotencyKey, OplogIndex, ScanCursor, WorkerFilter, WorkerStatus};
+use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -190,8 +190,8 @@ pub trait TestDsl {
     async fn try_start_agent(
         &self,
         component_id: &ComponentId,
-        id: AgentId,
-    ) -> WorkerInvocationResult<WorkerId> {
+        id: ParsedAgentId,
+    ) -> WorkerInvocationResult<AgentId> {
         self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
@@ -199,16 +199,16 @@ pub trait TestDsl {
     async fn try_start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: AgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> WorkerInvocationResult<WorkerId>;
+    ) -> WorkerInvocationResult<AgentId>;
 
     async fn start_agent(
         &self,
         component_id: &ComponentId,
-        id: AgentId,
-    ) -> anyhow::Result<WorkerId> {
+        id: ParsedAgentId,
+    ) -> anyhow::Result<AgentId> {
         self.start_agent_with(component_id, id, HashMap::new(), HashMap::new())
             .await
     }
@@ -216,10 +216,10 @@ pub trait TestDsl {
     async fn start_agent_with(
         &self,
         component_id: &ComponentId,
-        id: AgentId,
+        id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> anyhow::Result<WorkerId> {
+    ) -> anyhow::Result<AgentId> {
         let result = self
             .try_start_agent_with(component_id, id, env, config_vars)
             .await?;
@@ -229,7 +229,7 @@ pub trait TestDsl {
     async fn invoke_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<()> {
@@ -246,7 +246,7 @@ pub trait TestDsl {
     async fn invoke_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -255,7 +255,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue> {
@@ -266,7 +266,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_at_deployment(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         deployment_revision: DeploymentRevision,
         method_name: &str,
         params: DataValue,
@@ -285,7 +285,7 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_with_key(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: &IdempotencyKey,
         method_name: &str,
         params: DataValue,
@@ -304,29 +304,29 @@ pub trait TestDsl {
     async fn invoke_and_await_agent_impl(
         &self,
         component: &ComponentDto,
-        agent_id: &AgentId,
+        agent_id: &ParsedAgentId,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
         method_name: &str,
         params: DataValue,
     ) -> anyhow::Result<DataValue>;
 
-    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
+    async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
     async fn get_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
     async fn search_oplog(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
-    async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
-        let entries = self.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    async fn check_oplog_is_queryable(&self, agent_id: &AgentId) -> crate::Result<()> {
+        let entries = self.get_oplog(agent_id, OplogIndex::INITIAL).await?;
 
         for entry in entries {
             debug!(
@@ -341,33 +341,32 @@ pub trait TestDsl {
 
     async fn interrupt_with_optional_recovery(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         recover_immediately: bool,
     ) -> anyhow::Result<()>;
 
-    async fn interrupt(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
-        self.interrupt_with_optional_recovery(worker_id, false)
-            .await
+    async fn interrupt(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        self.interrupt_with_optional_recovery(agent_id, false).await
     }
 
-    async fn simulated_crash(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
-        self.interrupt_with_optional_recovery(worker_id, true).await
+    async fn simulated_crash(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        self.interrupt_with_optional_recovery(agent_id, true).await
     }
 
-    async fn resume(&self, worker_id: &WorkerId, force: bool) -> anyhow::Result<()>;
+    async fn resume(&self, agent_id: &AgentId, force: bool) -> anyhow::Result<()>;
 
     async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()>;
 
     async fn make_worker_log_event_stream(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> anyhow::Result<impl WorkerLogEventStream>;
 
     async fn capture_output(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> anyhow::Result<UnboundedReceiver<LogEvent>> {
-        let mut stream = self.make_worker_log_event_stream(worker_id).await?;
+        let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(
             async move {
@@ -385,9 +384,9 @@ pub trait TestDsl {
 
     async fn capture_output_with_termination(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
     ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
-        let mut stream = self.make_worker_log_event_stream(worker_id).await?;
+        let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
 
@@ -425,8 +424,8 @@ pub trait TestDsl {
         Ok((rx, abort_tx))
     }
 
-    async fn log_output(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
-        let mut stream = self.make_worker_log_event_stream(worker_id).await?;
+    async fn log_output(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let mut stream = self.make_worker_log_event_stream(agent_id).await?;
         tokio::spawn(
             async move {
                 while let Some(event) = stream.message().await.expect("Failed to get message") {
@@ -441,60 +440,60 @@ pub trait TestDsl {
 
     async fn auto_update_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
     async fn manual_update_worker(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
-    async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()>;
+    async fn delete_worker(&self, agent_id: &AgentId) -> anyhow::Result<()>;
 
     async fn get_worker_metadata_opt(
         &self,
-        worker_id: &WorkerId,
-    ) -> anyhow::Result<Option<WorkerMetadataDto>>;
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Option<AgentMetadataDto>>;
 
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto> {
-        match self.get_worker_metadata_opt(worker_id).await? {
+    async fn get_worker_metadata(&self, agent_id: &AgentId) -> anyhow::Result<AgentMetadataDto> {
+        match self.get_worker_metadata_opt(agent_id).await? {
             Some(worker_metadata) => Ok(worker_metadata),
-            None => Err(anyhow!("Worker not found: {}", worker_id)),
+            None => Err(anyhow!("Worker not found: {}", agent_id)),
         }
     }
 
     async fn get_workers_metadata(
         &self,
         component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)>;
+    ) -> anyhow::Result<(Option<ScanCursor>, Vec<AgentMetadataDto>)>;
 
     async fn wait_for_status(
         &self,
-        worker_id: &WorkerId,
-        status: WorkerStatus,
+        agent_id: &AgentId,
+        status: AgentStatus,
         timeout: Duration,
-    ) -> anyhow::Result<WorkerMetadataDto> {
-        self.wait_for_statuses(worker_id, &[status], timeout).await
+    ) -> anyhow::Result<AgentMetadataDto> {
+        self.wait_for_statuses(agent_id, &[status], timeout).await
     }
 
     async fn wait_for_statuses(
         &self,
-        worker_id: &WorkerId,
-        statuses: &[WorkerStatus],
+        agent_id: &AgentId,
+        statuses: &[AgentStatus],
         timeout: Duration,
-    ) -> anyhow::Result<WorkerMetadataDto> {
+    ) -> anyhow::Result<AgentMetadataDto> {
         let start = Instant::now();
         let mut last_known = None;
         while start.elapsed() < timeout {
-            let metadata = self.get_worker_metadata(worker_id).await?;
+            let metadata = self.get_worker_metadata(agent_id).await?;
 
             if statuses.contains(&metadata.status) {
                 return Ok(metadata);
@@ -516,22 +515,22 @@ pub trait TestDsl {
 
     async fn cancel_invocation(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool>;
 
     async fn get_file_system_node(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         path: &str,
     ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>>;
 
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes>;
+    async fn get_file_contents(&self, agent_id: &AgentId, path: &str) -> anyhow::Result<Bytes>;
 
     async fn fork_worker(
         &self,
-        source_worker_id: &WorkerId,
-        target_worker_name: &str,
+        source_agent_id: &AgentId,
+        target_agent_name: &str,
         oplog_index: OplogIndex,
     ) -> anyhow::Result<()>;
 }
@@ -770,7 +769,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     }
 }
 
-pub fn update_counts(metadata: &WorkerMetadataDto) -> (usize, usize, usize) {
+pub fn update_counts(metadata: &AgentMetadataDto) -> (usize, usize, usize) {
     let mut pending_updates = 0;
     let mut successful_updates = 0;
     let mut failed_updates = 0;
@@ -884,14 +883,14 @@ pub fn is_worker_execution_error(
 pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
-        WorkerExecutorError::WorkerAlreadyExists { worker_id } => {
-            format!("Worker already exists: {:?}", worker_id)
+        WorkerExecutorError::AgentAlreadyExists { agent_id } => {
+            format!("Worker already exists: {:?}", agent_id)
         }
-        WorkerExecutorError::WorkerCreationFailed { worker_id, details } => {
-            format!("Worker creation failed: {:?}: {}", worker_id, details)
+        WorkerExecutorError::AgentCreationFailed { agent_id, details } => {
+            format!("Worker creation failed: {:?}: {}", agent_id, details)
         }
-        WorkerExecutorError::FailedToResumeWorker { worker_id, .. } => {
-            format!("Failed to resume worker: {:?}", worker_id)
+        WorkerExecutorError::FailedToResumeAgent { agent_id, .. } => {
+            format!("Failed to resume worker: {:?}", agent_id)
         }
         WorkerExecutorError::ComponentDownloadFailed {
             component_id,
@@ -956,8 +955,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         }
         WorkerExecutorError::PreviousInvocationExited => "Previous invocation exited".to_string(),
         WorkerExecutorError::InvalidAccount => "Invalid account id".to_string(),
-        WorkerExecutorError::WorkerNotFound { worker_id } => {
-            format!("Worker not found: {:?}", worker_id)
+        WorkerExecutorError::AgentNotFound { agent_id } => {
+            format!("Worker not found: {:?}", agent_id)
         }
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
         WorkerExecutorError::InitialComponentFileDownloadFailed { reason, .. } => {
@@ -972,7 +971,7 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
 
 pub fn worker_error_underlying_error(
     error: &WorkerExecutorError,
-) -> Option<golem_common::model::oplog::WorkerError> {
+) -> Option<golem_common::model::oplog::AgentError> {
     match error {
         WorkerExecutorError::InvocationFailed { error, .. } => Some(error.clone()),
         WorkerExecutorError::PreviousInvocationFailed { error, .. } => Some(error.clone()),

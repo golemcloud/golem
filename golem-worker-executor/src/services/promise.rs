@@ -25,7 +25,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
@@ -88,7 +88,7 @@ impl PromiseHandle {
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
@@ -125,9 +125,9 @@ impl LazyPromiseService {
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().create(worker_id, oplog_idx).await
+        lock.as_ref().unwrap().create(agent_id, oplog_idx).await
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -223,7 +223,7 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
             .with("promise", "complete")
             .exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &get_promise_redis_key(promise_id),
             )
@@ -236,9 +236,9 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
-    async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
         let promise_id = PromiseId {
-            worker_id: worker_id.clone(),
+            agent_id: agent_id.clone(),
             oplog_idx,
         };
         debug!("Created promise {promise_id}");
@@ -248,7 +248,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: worker_id.clone(),
+                    agent_id: agent_id.clone(),
                 },
                 &key,
                 &RedisPromiseState::Pending,
@@ -288,7 +288,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .with_entity("promise", "poll", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &get_promise_result_redis_key(&promise_id),
             )
@@ -318,7 +318,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    worker_id: promise_id.worker_id.clone(),
+                    agent_id: promise_id.agent_id.clone(),
                 },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
@@ -336,36 +336,36 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
         // the result to redis, but failed before the worker could persist the result.
         {
-            let worker_id = promise_id.worker_id.clone();
+            let agent_id = promise_id.agent_id.clone();
 
             let component_metdata = self
                 .services
                 .component_service
-                .get_metadata(worker_id.component_id, None)
+                .get_metadata(agent_id.component_id, None)
                 .await?;
 
-            let owned_worker_id = OwnedWorkerId {
+            let owned_agent_id = OwnedAgentId {
                 environment_id: component_metdata.environment_id,
-                worker_id,
+                agent_id,
             };
 
-            let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+            let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
                 .await
                 .ok_or(WorkerExecutorError::worker_not_found(
-                    owned_worker_id.worker_id(),
+                    owned_agent_id.agent_id(),
                 ))?;
 
             let should_activate = match &metadata.last_known_status.status {
-                WorkerStatus::Interrupted
-                | WorkerStatus::Running
-                | WorkerStatus::Suspended
-                | WorkerStatus::Retrying => true,
-                WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
+                AgentStatus::Interrupted
+                | AgentStatus::Running
+                | AgentStatus::Suspended
+                | AgentStatus::Retrying => true,
+                AgentStatus::Exited | AgentStatus::Failed | AgentStatus::Idle => false,
             };
 
             tracing::warn!(
                 "complete_promise, worker-status of {}: {}, should_activate={}",
-                owned_worker_id.worker_id,
+                owned_agent_id.agent_id,
                 metadata.last_known_status.status,
                 should_activate
             );
@@ -374,7 +374,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                 Worker::get_or_create_running(
                     &self.services,
                     completed_by,
-                    &owned_worker_id,
+                    &owned_agent_id,
                     None,
                     None,
                     None,
@@ -437,7 +437,7 @@ impl PromiseServiceMock {
 #[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _worker_id: &WorkerId, _oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
         unimplemented!()
     }
 

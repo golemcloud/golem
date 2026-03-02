@@ -21,8 +21,8 @@ use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, AgentInvocation, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId,
-    ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, AgentId, AgentInvocation, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId,
+    RdbmsPoolKey, ScheduleId, ScheduledAction,
 };
 use anyhow::anyhow;
 use bigdecimal::BigDecimal;
@@ -1086,23 +1086,23 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-/// A subset of WorkerMetadata visible for guests (and serializable to oplog)
+/// A subset of AgentMetadata visible for guests (and serializable to oplog)
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue, BinaryCodec)]
 pub struct AgentMetadataForGuests {
-    pub agent_id: WorkerId,
+    pub agent_id: AgentId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config_vars: BTreeMap<String, String>,
-    pub status: WorkerStatus,
+    pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
     pub environment_id: EnvironmentId,
 }
 
-impl From<WorkerMetadata> for AgentMetadataForGuests {
-    fn from(value: WorkerMetadata) -> Self {
+impl From<AgentMetadata> for AgentMetadataForGuests {
+    fn from(value: AgentMetadata) -> Self {
         Self {
-            agent_id: value.worker_id,
+            agent_id: value.agent_id,
             args: vec![],
             env: value.env,
             config_vars: value.config_vars,
@@ -1278,7 +1278,7 @@ pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub idempotency_key: IdempotencyKey,
     pub method_name: String,
     pub input: UntypedDataValue,
@@ -1293,7 +1293,7 @@ impl SerializableScheduledInvocation {
         match schedule_id.action {
             ScheduledAction::Invoke {
                 account_id,
-                owned_worker_id,
+                owned_agent_id,
                 invocation,
             } => match *invocation {
                 AgentInvocation::AgentMethod {
@@ -1305,8 +1305,8 @@ impl SerializableScheduledInvocation {
                 } => Ok(Self {
                     timestamp: schedule_id.timestamp,
                     account_id,
-                    environment_id: owned_worker_id.environment_id,
-                    worker_id: owned_worker_id.worker_id,
+                    environment_id: owned_agent_id.environment_id,
+                    agent_id: owned_agent_id.agent_id,
                     idempotency_key,
                     method_name,
                     input,
@@ -1334,9 +1334,9 @@ impl SerializableScheduledInvocation {
             timestamp: self.timestamp,
             action: ScheduledAction::Invoke {
                 account_id: self.account_id,
-                owned_worker_id: OwnedWorkerId {
+                owned_agent_id: OwnedAgentId {
                     environment_id: self.environment_id,
-                    worker_id: self.worker_id,
+                    agent_id: self.agent_id,
                 },
                 invocation: Box::new(AgentInvocation::AgentMethod {
                     idempotency_key: self.idempotency_key,

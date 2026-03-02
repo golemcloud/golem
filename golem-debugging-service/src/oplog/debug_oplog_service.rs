@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord};
+use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
@@ -53,10 +53,10 @@ impl Debug for DebugOplogService {
 impl OplogService for DebugOplogService {
     async fn create(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _owned_agent_id: &OwnedAgentId,
         _initial_entry: OplogEntry,
-        _initial_worker_metadata: WorkerMetadata,
-        _last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        _initial_worker_metadata: AgentMetadata,
+        _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         panic!("Cannot create a new oplog when debugging")
@@ -64,17 +64,17 @@ impl OplogService for DebugOplogService {
 
     async fn open(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         last_oplog_index: OplogIndex,
-        initial_worker_metadata: WorkerMetadata,
-        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        initial_worker_metadata: AgentMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
-                &owned_worker_id.worker_id,
+                &owned_agent_id.agent_id,
                 CreateDebugOplogConstructor::new(
-                    owned_worker_id.clone(),
+                    owned_agent_id.clone(),
                     None,
                     last_oplog_index,
                     self.inner.clone(),
@@ -87,8 +87,8 @@ impl OplogService for DebugOplogService {
             .await
     }
 
-    async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
+        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
 
         let result = self
             .debug_session
@@ -98,31 +98,31 @@ impl OplogService for DebugOplogService {
 
         match result {
             Some(index) => index,
-            None => self.inner.get_last_index(owned_worker_id).await,
+            None => self.inner.get_last_index(owned_agent_id).await,
         }
     }
 
-    async fn delete(&self, owned_worker_id: &OwnedWorkerId) {
-        self.inner.delete(owned_worker_id).await
+    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
+        self.inner.delete(owned_agent_id).await
     }
 
     async fn read(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         // In a debugging service, the read happens only through resume_replay which implies every call to
         // oplog_service.read will be always part of a replay (and never live)
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
         self.debug_session
             .update_oplog_index(&debug_session_id, idx)
             .await;
-        self.inner.read(owned_worker_id, idx, n).await
+        self.inner.read(owned_agent_id, idx, n).await
     }
 
-    async fn exists(&self, owned_worker_id: &OwnedWorkerId) -> bool {
-        self.inner.exists(owned_worker_id).await
+    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.inner.exists(owned_agent_id).await
     }
 
     async fn scan_for_component(
@@ -131,7 +131,7 @@ impl OplogService for DebugOplogService {
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
+    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
             .scan_for_component(environment_id, component_id, cursor, count)
             .await
@@ -140,7 +140,7 @@ impl OplogService for DebugOplogService {
     // DebugService shouldn't upload any data to the oplog
     async fn upload_raw_payload(
         &self,
-        _owned_worker_id: &OwnedWorkerId,
+        _owned_agent_id: &OwnedAgentId,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
         Ok(RawOplogPayload::SerializedInline(data))
@@ -148,12 +148,12 @@ impl OplogService for DebugOplogService {
 
     async fn download_raw_payload(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner
-            .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
             .await
     }
 }

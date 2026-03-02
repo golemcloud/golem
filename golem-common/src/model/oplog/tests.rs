@@ -23,15 +23,15 @@ use crate::model::oplog::public_oplog_entry::{
     SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
-    AgentInvocationOutputParameters, AgentMethodInvocationParameters, LogLevel,
+    AgentInvocationOutputParameters, AgentMethodInvocationParameters, AgentResourceId, LogLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
     PublicOplogEntry, PublicRetryConfig, PublicSpanData, PublicUpdateDescription,
-    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerResourceId,
+    SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp, WorkerId,
+    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp,
 };
 use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
@@ -48,11 +48,11 @@ fn create_serialization_poem_serde_equivalence() {
 
     let entry = PublicOplogEntry::Create(CreateParams {
         timestamp: Timestamp::now_utc().rounded(),
-        worker_id: WorkerId {
+        agent_id: AgentId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
             ),
-            worker_name: "test1".to_string(),
+            agent_id: "test1".to_string(),
         },
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
@@ -61,11 +61,11 @@ fn create_serialization_poem_serde_equivalence() {
         created_by: AccountId::new(),
         config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
         environment_id: EnvironmentId::new(),
-        parent: Some(WorkerId {
+        parent: Some(AgentId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
             ),
-            worker_name: "test2".to_string(),
+            agent_id: "test2".to_string(),
         }),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
@@ -435,7 +435,7 @@ fn grow_memory_serialization_poem_serde_equivalence() {
 fn create_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::CreateResource(CreateResourceParams {
         timestamp: Timestamp::now_utc().rounded(),
-        id: WorkerResourceId(100),
+        id: AgentResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
     });
@@ -449,7 +449,7 @@ fn create_resource_serialization_poem_serde_equivalence() {
 fn drop_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::DropResource(DropResourceParams {
         timestamp: Timestamp::now_utc().rounded(),
-        id: WorkerResourceId(100),
+        id: AgentResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
     });

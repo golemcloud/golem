@@ -626,7 +626,7 @@ pub struct AgentTypes {
     pub types: Vec<AgentType>,
 }
 
-impl AgentId {
+impl ParsedAgentId {
     pub fn new(agent_type: AgentTypeName, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
         let wrapper_agent_type = agent_type.to_wit_naming().0;
         let mut result = Self {
@@ -665,7 +665,7 @@ impl AgentId {
             .resolve_agent_type_by_wrapper_name(&AgentTypeName(agent_type_name.to_string()))?;
         let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
 
-        let mut agent_id = AgentId {
+        let mut agent_id = ParsedAgentId {
             agent_type: agent_type.type_name.clone(),
             wrapper_agent_type: agent_type.type_name.to_wit_naming().0,
             parameters: value,
@@ -694,7 +694,7 @@ impl AgentId {
     }
 }
 
-impl Display for AgentId {
+impl Display for ParsedAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.as_string.is_empty() {
             write!(

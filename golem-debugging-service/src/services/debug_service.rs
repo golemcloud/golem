@@ -24,7 +24,7 @@ use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{OwnedWorkerId, WorkerId, WorkerMetadata};
+use golem_common::model::{AgentId, AgentMetadata, OwnedAgentId};
 use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::model::auth::AuthCtx;
@@ -46,12 +46,12 @@ pub trait DebugService: Send + Sync {
     async fn connect(
         &self,
         authentication_context: &AuthCtx,
-        source_worker_id: &WorkerId,
-    ) -> Result<(ConnectResult, AccountId, OwnedWorkerId, WorkerEventReceiver), DebugServiceError>;
+        source_agent_id: &AgentId,
+    ) -> Result<(ConnectResult, AccountId, OwnedAgentId, WorkerEventReceiver), DebugServiceError>;
 
     async fn playback(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         account_id: AccountId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
@@ -60,7 +60,7 @@ pub trait DebugService: Send + Sync {
 
     async fn rewind(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
@@ -69,61 +69,61 @@ pub trait DebugService: Send + Sync {
     async fn fork(
         &self,
         account_id: AccountId,
-        source_owned_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_owned_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError>;
 
     async fn current_oplog_index(
         &self,
-        worker_id: &OwnedWorkerId,
+        agent_id: &OwnedAgentId,
     ) -> Result<OplogIndex, DebugServiceError>;
 
-    async fn terminate_session(&self, worker_id: &OwnedWorkerId) -> Result<(), DebugServiceError>;
+    async fn terminate_session(&self, agent_id: &OwnedAgentId) -> Result<(), DebugServiceError>;
 }
 
 #[derive(Clone, Debug)]
 pub enum DebugServiceError {
     Internal {
-        worker_id: Option<WorkerId>,
+        agent_id: Option<AgentId>,
     },
     Unauthorized {
         message: String,
     },
     Conflict {
-        worker_id: WorkerId,
+        agent_id: AgentId,
         message: String,
     },
     ValidationFailed {
-        worker_id: Option<WorkerId>,
+        agent_id: Option<AgentId>,
         errors: Vec<String>,
     },
 }
 
 impl DebugServiceError {
-    pub fn conflict(worker_id: WorkerId, message: String) -> Self {
-        DebugServiceError::Conflict { worker_id, message }
+    pub fn conflict(agent_id: AgentId, message: String) -> Self {
+        DebugServiceError::Conflict { agent_id, message }
     }
 
     pub fn unauthorized(message: String) -> Self {
         DebugServiceError::Unauthorized { message }
     }
 
-    pub fn internal(message: String, worker_id: Option<WorkerId>) -> Self {
+    pub fn internal(message: String, agent_id: Option<AgentId>) -> Self {
         tracing::warn!("internal error in debugging service: {message}");
-        DebugServiceError::Internal { worker_id }
+        DebugServiceError::Internal { agent_id }
     }
 
-    pub fn validation_failed(errors: Vec<String>, worker_id: Option<WorkerId>) -> Self {
-        DebugServiceError::ValidationFailed { errors, worker_id }
+    pub fn validation_failed(errors: Vec<String>, agent_id: Option<AgentId>) -> Self {
+        DebugServiceError::ValidationFailed { errors, agent_id }
     }
 
-    pub fn get_worker_id(&self) -> Option<WorkerId> {
+    pub fn get_agent_id(&self) -> Option<AgentId> {
         match self {
-            DebugServiceError::Internal { worker_id, .. } => (*worker_id).clone(),
+            DebugServiceError::Internal { agent_id, .. } => (*agent_id).clone(),
             DebugServiceError::Unauthorized { .. } => None,
-            DebugServiceError::Conflict { worker_id, .. } => Some(worker_id.clone()),
-            DebugServiceError::ValidationFailed { worker_id, .. } => (*worker_id).clone(),
+            DebugServiceError::Conflict { agent_id, .. } => Some(agent_id.clone()),
+            DebugServiceError::ValidationFailed { agent_id, .. } => (*agent_id).clone(),
         }
     }
 }
@@ -178,21 +178,21 @@ impl DebugServiceDefault {
     // First step is to get the worker details that's currently being run
     async fn connect_worker(
         &self,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         account_id: AccountId,
         enironment_id: EnvironmentId,
-    ) -> Result<(WorkerMetadata, WorkerEventReceiver), DebugServiceError> {
-        let owned_worker_id = OwnedWorkerId::new(enironment_id, &worker_id);
+    ) -> Result<(AgentMetadata, WorkerEventReceiver), DebugServiceError> {
+        let owned_agent_id = OwnedAgentId::new(enironment_id, &agent_id);
 
         // This get will only look at the oplogs to see if a worker presumably exists in the real executor.
         // This is only used to get the existing metadata that was/is running in the real executor
         self.all
             .worker_service()
-            .get(&owned_worker_id)
+            .get(&owned_agent_id)
             .await
             .ok_or_else(|| {
                 DebugServiceError::conflict(
-                    worker_id.clone(),
+                    agent_id.clone(),
                     "Worker doesn't exist in live/real worker executor for it to connect to"
                         .to_string(),
                 )
@@ -204,7 +204,7 @@ impl DebugServiceDefault {
 
         info!(
             "Registering worker {} with host {} and port {}",
-            worker_id, host, port
+            agent_id, host, port
         );
 
         let shard_assignment = self
@@ -212,7 +212,7 @@ impl DebugServiceDefault {
             .shard_manager_service()
             .register(host, port)
             .await
-            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
         self.all.shard_service().register(
             shard_assignment.number_of_shards,
@@ -222,7 +222,7 @@ impl DebugServiceDefault {
         let worker = Worker::get_or_create_suspended(
             &self.all,
             account_id,
-            &owned_worker_id,
+            &owned_agent_id,
             None,
             None,
             None,
@@ -231,7 +231,7 @@ impl DebugServiceDefault {
             Principal::anonymous(),
         )
         .await
-        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
         let metadata = worker.get_latest_worker_metadata().await;
 
@@ -241,20 +241,20 @@ impl DebugServiceDefault {
     }
 
     pub async fn validate_playback_overrides(
-        worker_id: WorkerId,
+        agent_id: AgentId,
         current_index: OplogIndex,
         overrides: Vec<PlaybackOverride>,
     ) -> Result<PlaybackOverridesInternal, DebugServiceError> {
         PlaybackOverridesInternal::from_playback_override(overrides, current_index).map_err(|err| {
             DebugServiceError::ValidationFailed {
-                worker_id: Some(worker_id.clone()),
+                agent_id: Some(agent_id.clone()),
                 errors: vec![err],
             }
         })
     }
 
     pub async fn target_index_at_invocation_boundary(
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         worker: &Arc<Worker<DebugContext>>,
         target_oplog_index: OplogIndex,
     ) -> Result<OplogIndex, DebugServiceError> {
@@ -269,7 +269,7 @@ impl DebugServiceDefault {
             original_current_oplog_index,
         )
         .await
-        .map_err(|e| DebugServiceError::internal(e, Some(worker_id.clone())))
+        .map_err(|e| DebugServiceError::internal(e, Some(agent_id.clone())))
     }
 
     pub async fn get_target_oplog_index_at_invocation_boundary(
@@ -308,14 +308,14 @@ impl DebugService for DebugServiceDefault {
     async fn connect(
         &self,
         auth_ctx: &AuthCtx,
-        worker_id: &WorkerId,
-    ) -> Result<(ConnectResult, AccountId, OwnedWorkerId, WorkerEventReceiver), DebugServiceError>
+        agent_id: &AgentId,
+    ) -> Result<(ConnectResult, AccountId, OwnedAgentId, WorkerEventReceiver), DebugServiceError>
     {
         let component = self
             .component_service
-            .get_metadata(worker_id.component_id, None)
+            .get_metadata(agent_id.component_id, None)
             .await
-            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
         self.auth_service
             .check_user_allowed_to_debug_in_environment(component.environment_id, auth_ctx)
@@ -324,16 +324,16 @@ impl DebugService for DebugServiceDefault {
                 AuthServiceError::DebuggingNotAllowed => DebugServiceError::Unauthorized {
                     message: e.to_safe_string(),
                 },
-                e => DebugServiceError::internal(e.to_string(), Some(worker_id.clone())),
+                e => DebugServiceError::internal(e.to_string(), Some(agent_id.clone())),
             })?;
 
-        let owned_worker_id = OwnedWorkerId::new(component.environment_id, worker_id);
+        let owned_agent_id = OwnedAgentId::new(component.environment_id, agent_id);
 
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
 
         if self.debug_session.get(&debug_session_id).await.is_some() {
             return Err(DebugServiceError::conflict(
-                worker_id.clone(),
+                agent_id.clone(),
                 "Worker is already being debugged".to_string(),
             ));
         }
@@ -341,7 +341,7 @@ impl DebugService for DebugServiceDefault {
         // This simply migrates the worker to the debug mode, but it doesn't start the worker
         let (worker_metadata, worker_event_receiver) = self
             .connect_worker(
-                worker_id.clone(),
+                agent_id.clone(),
                 component.account_id,
                 component.environment_id,
             )
@@ -360,21 +360,21 @@ impl DebugService for DebugServiceDefault {
             .await;
 
         let connect_result = ConnectResult {
-            worker_id: worker_id.clone(),
-            message: format!("Worker {worker_id} connected"),
+            agent_id: agent_id.clone(),
+            message: format!("Worker {agent_id} connected"),
         };
 
         Ok((
             connect_result,
             component.account_id,
-            owned_worker_id,
+            owned_agent_id,
             worker_event_receiver,
         ))
     }
 
     async fn playback(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         account_id: AccountId,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
@@ -382,15 +382,15 @@ impl DebugService for DebugServiceDefault {
     ) -> Result<PlaybackResult, DebugServiceError> {
         if !target_index.is_defined() {
             return Err(DebugServiceError::ValidationFailed {
-                worker_id: Some(owned_worker_id.worker_id.clone()),
+                agent_id: Some(owned_agent_id.agent_id.clone()),
                 errors: vec![format!(
                     "Trying to rewind to an invalid oplog index {target_index}"
                 )],
             });
         }
 
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
-        let worker_id = owned_worker_id.worker_id.clone();
+        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
+        let agent_id = owned_agent_id.agent_id.clone();
 
         let session_data =
             self.debug_session
@@ -398,7 +398,7 @@ impl DebugService for DebugServiceDefault {
                 .await
                 .ok_or(DebugServiceError::internal(
                     "No debug session found".to_string(),
-                    Some(worker_id.clone()),
+                    Some(agent_id.clone()),
                 ))?;
 
         let current_oplog_index = session_data.current_oplog_index;
@@ -411,7 +411,7 @@ impl DebugService for DebugServiceDefault {
         let worker = Worker::get_or_create_suspended(
             &self.all,
             account_id,
-            owned_worker_id,
+            owned_agent_id,
             Some(session_data.worker_metadata.env.clone()),
             Some(session_data.worker_metadata.config_vars.clone()),
             Some(
@@ -425,12 +425,12 @@ impl DebugService for DebugServiceDefault {
             Principal::anonymous(),
         )
         .await
-        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+        .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
         // We select a new target index based on the given target index
         // such that it is always in an invocation boundary
         let new_target_index = if ensure_invocation_boundary {
-            Self::target_index_at_invocation_boundary(&worker_id, &worker, target_index).await?
+            Self::target_index_at_invocation_boundary(&agent_id, &worker, target_index).await?
         } else {
             target_index
         };
@@ -440,18 +440,14 @@ impl DebugService for DebugServiceDefault {
                 format!(
                     "Target oplog index {target_index} for playback is less than the existing target oplog index {current_oplog_index}. Use rewind instead"
                 ),
-                Some(debug_session_id.worker_id()),
+                Some(debug_session_id.agent_id()),
             ));
         }
 
         let playback_overrides_validated = if let Some(overrides) = playback_overrides {
             Some(
-                Self::validate_playback_overrides(
-                    worker_id.clone(),
-                    current_oplog_index,
-                    overrides,
-                )
-                .await?,
+                Self::validate_playback_overrides(agent_id.clone(), current_oplog_index, overrides)
+                    .await?,
             )
         } else {
             None
@@ -476,7 +472,7 @@ impl DebugService for DebugServiceDefault {
             Worker::start_if_needed(worker.clone()).await.map_err(|e| {
                 DebugServiceError::internal(
                     format!("Failed to start worker for resumption: {e}"),
-                    Some(worker_id.clone()),
+                    Some(agent_id.clone()),
                 )
             })?;
         }
@@ -492,26 +488,26 @@ impl DebugService for DebugServiceDefault {
             .unwrap_or(OplogIndex::INITIAL);
 
         Ok(PlaybackResult {
-            worker_id: owned_worker_id.worker_id.clone(),
+            agent_id: owned_agent_id.agent_id.clone(),
             current_index: stopped_at_index,
             incremental_playback,
             message: format!(
                 "Playback worker {} stopped at index {}",
-                owned_worker_id.worker_id, stopped_at_index
+                owned_agent_id.agent_id, stopped_at_index
             ),
         })
     }
 
     async fn rewind(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError> {
         if !target_index.is_defined() {
             return Err(DebugServiceError::ValidationFailed {
-                worker_id: Some(owned_worker_id.worker_id.clone()),
+                agent_id: Some(owned_agent_id.agent_id.clone()),
                 errors: vec![format!(
                     "Trying to rewind to an invalid oplog index {target_index}"
                 )],
@@ -520,10 +516,10 @@ impl DebugService for DebugServiceDefault {
 
         info!(
             "Rewinding worker {} to index {}",
-            owned_worker_id.worker_id, target_index
+            owned_agent_id.agent_id, target_index
         );
 
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
 
         let debug_session_data =
             self.debug_session
@@ -531,7 +527,7 @@ impl DebugService for DebugServiceDefault {
                 .await
                 .ok_or(DebugServiceError::internal(
                     "No debug session found. Rewind cannot be called ".to_string(),
-                    Some(owned_worker_id.worker_id.clone()),
+                    Some(owned_agent_id.agent_id.clone()),
                 ))?;
 
         let current_oplog_index = debug_session_data.current_oplog_index;
@@ -539,7 +535,7 @@ impl DebugService for DebugServiceDefault {
         let worker = Worker::get_or_create_suspended(
             &self.all,
             account_id,
-            owned_worker_id,
+            owned_agent_id,
             Some(debug_session_data.worker_metadata.env.clone()),
             Some(debug_session_data.worker_metadata.config_vars.clone()),
             Some(
@@ -554,7 +550,7 @@ impl DebugService for DebugServiceDefault {
         )
         .await
         .map_err(|e| {
-            DebugServiceError::internal(e.to_string(), Some(owned_worker_id.worker_id.clone()))
+            DebugServiceError::internal(e.to_string(), Some(owned_agent_id.agent_id.clone()))
         })?;
 
         let new_target_index = if ensure_invocation_boundary {
@@ -564,7 +560,7 @@ impl DebugService for DebugServiceDefault {
                 current_oplog_index,
             )
             .await
-            .map_err(|e| DebugServiceError::internal(e, Some(owned_worker_id.worker_id.clone())))?
+            .map_err(|e| DebugServiceError::internal(e, Some(owned_agent_id.agent_id.clone())))?
         } else {
             target_index
         };
@@ -577,7 +573,7 @@ impl DebugService for DebugServiceDefault {
                         target_index,
                         current_oplog_index
                     )],
-                    Some(owned_worker_id.worker_id.clone()))
+                    Some(owned_agent_id.agent_id.clone()))
                 );
         };
 
@@ -604,7 +600,7 @@ impl DebugService for DebugServiceDefault {
             .unwrap_or(OplogIndex::NONE);
 
         Ok(RewindResult {
-            worker_id: owned_worker_id.worker_id.clone(),
+            agent_id: owned_agent_id.agent_id.clone(),
             current_index: stopped_at_index,
             message: format!("Rewinding the worker to index {target_index}"),
         })
@@ -613,13 +609,13 @@ impl DebugService for DebugServiceDefault {
     async fn fork(
         &self,
         account_id: AccountId,
-        source_worker_id: &OwnedWorkerId,
-        target_worker_id: &WorkerId,
+        source_agent_id: &OwnedAgentId,
+        target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<ForkResult, DebugServiceError> {
         info!(
             "Forking worker {} to new worker {}",
-            source_worker_id.worker_id, target_worker_id
+            source_agent_id.agent_id, target_agent_id
         );
 
         // TODO: authorize here
@@ -631,27 +627,27 @@ impl DebugService for DebugServiceDefault {
             .worker_fork_service()
             .fork(
                 account_id,
-                source_worker_id,
-                target_worker_id,
+                source_agent_id,
+                target_agent_id,
                 oplog_index_cut_off,
             )
             .await
             .map_err(|e| {
-                DebugServiceError::internal(e.to_string(), Some(source_worker_id.worker_id.clone()))
+                DebugServiceError::internal(e.to_string(), Some(source_agent_id.agent_id.clone()))
             })?;
 
         Ok(ForkResult {
-            source_worker_id: source_worker_id.worker_id.clone(),
-            target_worker_id: target_worker_id.clone(),
-            message: format!("Forked worker {source_worker_id} to new worker {target_worker_id}"),
+            source_agent_id: source_agent_id.agent_id.clone(),
+            target_agent_id: target_agent_id.clone(),
+            message: format!("Forked worker {source_agent_id} to new worker {target_agent_id}"),
         })
     }
 
     async fn current_oplog_index(
         &self,
-        worker_id: &OwnedWorkerId,
+        agent_id: &OwnedAgentId,
     ) -> Result<OplogIndex, DebugServiceError> {
-        let debug_session_id = DebugSessionId::new(worker_id.clone());
+        let debug_session_id = DebugSessionId::new(agent_id.clone());
 
         let result = self
             .debug_session
@@ -663,23 +659,23 @@ impl DebugService for DebugServiceDefault {
             Some(index) => Ok(index),
             None => Err(DebugServiceError::internal(
                 "No debug session found".to_string(),
-                Some(worker_id.worker_id()),
+                Some(agent_id.agent_id()),
             )),
         }
     }
 
     async fn terminate_session(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
     ) -> Result<(), DebugServiceError> {
-        let debug_session_id = DebugSessionId::new(owned_worker_id.clone());
+        let debug_session_id = DebugSessionId::new(owned_agent_id.clone());
 
         self.debug_session
             .remove(debug_session_id)
             .await
             .ok_or(DebugServiceError::internal(
                 "No debug session found".to_string(),
-                Some(owned_worker_id.worker_id()),
+                Some(owned_agent_id.agent_id()),
             ))?;
 
         Ok(())

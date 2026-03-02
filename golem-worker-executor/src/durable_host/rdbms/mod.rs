@@ -25,7 +25,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRdbmsColumns, HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult,
     HostResponseGolemRdbmsResultChunk, HostResponseGolemRdbmsRowCount,
 };
-use golem_common::model::{OplogIndex, RdbmsPoolKey, TransactionId, WorkerId};
+use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, TransactionId};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -85,12 +85,12 @@ where
 {
     ctx.observe_function_call(T::durability_connection_interface(), "open");
 
-    let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
     let result = ctx
         .state
         .rdbms_service
         .rdbms_type_service()
-        .create(&address, &worker_id)
+        .create(&address, &agent_id)
         .await;
 
     match result {
@@ -125,7 +125,7 @@ where
     let result = ctx
         .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
             pool_key.clone(),
-            ctx.state.owned_worker_id.worker_id.clone(),
+            ctx.state.owned_agent_id.agent_id.clone(),
             ctx.state.rdbms_service.clone(),
         ))
         .await;
@@ -296,7 +296,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     ctx.observe_function_call(T::durability_connection_interface(), "drop");
-    let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
     let pool_key = ctx
         .as_wasi_view()
         .table()
@@ -308,7 +308,7 @@ where
         .state
         .rdbms_service
         .rdbms_type_service()
-        .remove(&pool_key, &worker_id)
+        .remove(&pool_key, &agent_id)
         .await;
 
     ctx.as_wasi_view()
@@ -751,7 +751,7 @@ where
                 .rdbms_type_service()
                 .cleanup_transaction(
                     &entry.pool_key,
-                    &ctx.owned_worker_id.worker_id,
+                    &ctx.owned_agent_id.agent_id,
                     &transaction.transaction_id(),
                 )
                 .await;
@@ -876,7 +876,7 @@ where
                         .rdbms_type_service()
                         .query_stream(
                             &query_stream_entry.request.pool_key,
-                            &ctx.state.owned_worker_id.worker_id,
+                            &ctx.state.owned_agent_id.agent_id,
                             &query_stream_entry.request.statement,
                             query_stream_entry.request.params,
                         )
@@ -987,7 +987,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
-    let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
     let pool_key = ctx
         .as_wasi_view()
         .table()
@@ -1002,7 +1002,7 @@ where
                     .rdbms_service
                     .deref()
                     .rdbms_type_service()
-                    .query(&pool_key, &worker_id, &statement, params.clone())
+                    .query(&pool_key, &agent_id, &statement, params.clone())
                     .await;
                 (
                     Some(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
@@ -1027,7 +1027,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
 {
-    let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
 
     let pool_key = ctx
         .as_wasi_view()
@@ -1043,7 +1043,7 @@ where
                     .rdbms_service
                     .deref()
                     .rdbms_type_service()
-                    .execute(&pool_key, &worker_id, &statement, params.clone())
+                    .execute(&pool_key, &agent_id, &statement, params.clone())
                     .await;
                 (
                     Some(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
@@ -1287,11 +1287,11 @@ where
 
     match result {
         Ok((pool_key, transaction_id)) => {
-            let worker_id = ctx.state.owned_worker_id.worker_id.clone();
+            let agent_id = ctx.state.owned_agent_id.agent_id.clone();
             ctx.state
                 .rdbms_service
                 .rdbms_type_service()
-                .cleanup_transaction(&pool_key, &worker_id, &transaction_id)
+                .cleanup_transaction(&pool_key, &agent_id, &transaction_id)
                 .await
         }
         Err(error) => Err(RdbmsError::other_response_failure(error)),
@@ -1320,7 +1320,7 @@ where
 
 struct RdbmsRemoteTransactionHandler<T: RdbmsType> {
     pool_key: RdbmsPoolKey,
-    worker_id: WorkerId,
+    agent_id: AgentId,
     rdbms_service: Arc<dyn RdbmsService>,
     _owner: PhantomData<T>,
 }
@@ -1332,12 +1332,12 @@ where
 {
     fn new(
         pool_key: RdbmsPoolKey,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         rdbms_service: Arc<dyn RdbmsService>,
     ) -> Self {
         Self {
             pool_key,
-            worker_id,
+            agent_id,
             rdbms_service,
             _owner: PhantomData,
         }
@@ -1349,7 +1349,7 @@ where
     ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         self.rdbms_service
             .rdbms_type_service()
-            .get_transaction_status(&self.pool_key, &self.worker_id, transaction_id)
+            .get_transaction_status(&self.pool_key, &self.agent_id, transaction_id)
             .await
     }
 }
@@ -1366,7 +1366,7 @@ where
             .rdbms_service
             .deref()
             .rdbms_type_service()
-            .begin_transaction(&self.pool_key, &self.worker_id)
+            .begin_transaction(&self.pool_key, &self.agent_id)
             .await?;
 
         let transaction_id = transaction.transaction_id();

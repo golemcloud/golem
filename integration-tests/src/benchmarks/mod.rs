@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::BenchmarkTestDependencies;
@@ -34,15 +34,15 @@ pub mod throughput;
 
 pub async fn delete_workers(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    worker_ids: &[WorkerId],
+    agent_ids: &[AgentId],
 ) {
-    info!("Deleting {} workers...", worker_ids.len());
-    for worker_id in worker_ids {
-        if let Err(err) = user.delete_worker(worker_id).await {
+    info!("Deleting {} workers...", agent_ids.len());
+    for agent_id in agent_ids {
+        if let Err(err) = user.delete_worker(agent_id).await {
             warn!("Failed to delete worker: {:?}", err);
         }
     }
-    info!("Deleting {} workers completed", worker_ids.len());
+    info!("Deleting {} workers completed", agent_ids.len());
 }
 
 #[derive(Debug)]
@@ -54,10 +54,10 @@ pub struct InvokeResult {
 }
 
 impl InvokeResult {
-    pub fn record(&self, recorder: &BenchmarkRecorder, prefix: &str, worker_id: &str) {
+    pub fn record(&self, recorder: &BenchmarkRecorder, prefix: &str, agent_id: &str) {
         recorder.duration(&format!("{prefix}invocation").into(), self.accumulated_time);
         recorder.duration(
-            &ResultKey::secondary(format!("{prefix}worker-{worker_id}")),
+            &ResultKey::secondary(format!("{prefix}worker-{agent_id}")),
             self.accumulated_time,
         );
         recorder.count(
@@ -65,7 +65,7 @@ impl InvokeResult {
             self.retries as u64,
         );
         recorder.count(
-            &ResultKey::secondary(format!("{prefix}worker-{worker_id}-retries")),
+            &ResultKey::secondary(format!("{prefix}worker-{agent_id}-retries")),
             self.retries as u64,
         );
         recorder.count(
@@ -73,7 +73,7 @@ impl InvokeResult {
             self.timeouts as u64,
         );
         recorder.count(
-            &ResultKey::secondary(format!("{prefix}worker-{worker_id}-timeouts")),
+            &ResultKey::secondary(format!("{prefix}worker-{agent_id}-timeouts")),
             self.timeouts as u64,
         );
     }
@@ -82,7 +82,7 @@ impl InvokeResult {
 pub async fn invoke_and_await_agent(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    agent_id: &AgentId,
+    agent_id: &ParsedAgentId,
     method_name: &str,
     params: DataValue,
 ) -> InvokeResult {

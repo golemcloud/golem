@@ -17,7 +17,7 @@ use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -37,8 +37,8 @@ pub struct MultiSqliteIndexedStorage {
 }
 
 struct HashCache {
-    hash_per_worker_id: HashMap<WorkerId, String>,
-    worker_id_per_hash: HashMap<String, WorkerId>,
+    hash_per_agent_id: HashMap<AgentId, String>,
+    agent_id_per_hash: HashMap<String, AgentId>,
 }
 
 impl MultiSqliteIndexedStorage {
@@ -58,8 +58,8 @@ impl MultiSqliteIndexedStorage {
                 "multi-sqlite-indexed",
             ),
             hash_cache: Arc::new(Mutex::new(HashCache {
-                hash_per_worker_id: HashMap::new(),
-                worker_id_per_hash: HashMap::new(),
+                hash_per_agent_id: HashMap::new(),
+                agent_id_per_hash: HashMap::new(),
             })),
             root_dir: root_dir.to_path_buf(),
             max_connections,
@@ -104,31 +104,31 @@ impl MultiSqliteIndexedStorage {
 
     async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { worker_id } => {
-                format!("oplog-{}.db", self.worker_id_hash(worker_id).await)
+            IndexedStorageNamespace::OpLog { agent_id } => {
+                format!("oplog-{}.db", self.agent_id_hash(agent_id).await)
             }
-            IndexedStorageNamespace::CompressedOpLog { worker_id, level } => {
+            IndexedStorageNamespace::CompressedOpLog { agent_id, level } => {
                 format!(
                     "compressed-oplog-l{}-{}.db",
                     level,
-                    self.worker_id_hash(worker_id).await
+                    self.agent_id_hash(agent_id).await
                 )
             }
         }
     }
 
-    async fn worker_id_hash(&self, worker_id: &WorkerId) -> String {
+    async fn agent_id_hash(&self, agent_id: &AgentId) -> String {
         let mut hash_cache = self.hash_cache.lock().await;
-        match hash_cache.hash_per_worker_id.get(worker_id) {
+        match hash_cache.hash_per_agent_id.get(agent_id) {
             Some(hash) => hash.clone(),
             None => {
-                let hash = format!("{}", blake3::hash(worker_id.to_string().as_bytes()));
+                let hash = format!("{}", blake3::hash(agent_id.to_string().as_bytes()));
                 hash_cache
-                    .hash_per_worker_id
-                    .insert(worker_id.clone(), hash.clone());
+                    .hash_per_agent_id
+                    .insert(agent_id.clone(), hash.clone());
                 hash_cache
-                    .worker_id_per_hash
-                    .insert(hash.clone(), worker_id.clone());
+                    .agent_id_per_hash
+                    .insert(hash.clone(), agent_id.clone());
                 hash
             }
         }

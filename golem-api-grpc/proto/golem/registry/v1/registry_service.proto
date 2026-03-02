@@ -100,7 +100,7 @@ message GetResourceLimitsSuccessResponse {
 
 message UpdateWorkerLimitRequest {
   golem.common.AccountId accountId = 1;
-  golem.worker.WorkerId workerId = 2;
+  golem.worker.AgentId agentId = 2;
   bool added = 3;
 }
 
@@ -113,7 +113,7 @@ message UpdateWorkerLimitResponse {
 
 message UpdateWorkerConnectionLimitRequest {
   golem.common.AccountId accountId = 1;
-  golem.worker.WorkerId workerId = 2;
+  golem.worker.AgentId agentId = 2;
   bool added = 3;
 }
 

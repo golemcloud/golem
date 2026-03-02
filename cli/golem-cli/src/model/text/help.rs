@@ -22,7 +22,7 @@ use cli_table::Table;
 use colored::Colorize;
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentType};
+use golem_common::model::agent::{AgentType, ParsedAgentId};
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
@@ -211,7 +211,11 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new_agent(component: &ComponentDto, agent_id: &AgentId, agent_type: &AgentType) -> Self {
+    pub fn new_agent(
+        component: &ComponentDto,
+        agent_id: &ParsedAgentId,
+        agent_type: &AgentType,
+    ) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
             agent_name: Some(agent_id.wrapper_agent_type().to_string()),

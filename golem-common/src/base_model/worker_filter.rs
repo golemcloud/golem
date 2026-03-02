@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::component::ComponentRevision;
-use crate::base_model::{Timestamp, WorkerStatus};
+use crate::base_model::{AgentStatus, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -26,18 +26,18 @@ use std::str::FromStr;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerNameFilter {
+pub struct AgentNameFilter {
     pub comparator: StringFilterComparator,
     pub value: String,
 }
 
-impl WorkerNameFilter {
+impl AgentNameFilter {
     pub fn new(comparator: StringFilterComparator, value: String) -> Self {
         Self { comparator, value }
     }
 }
 
-impl Display for WorkerNameFilter {
+impl Display for AgentNameFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "name {} {}", self.comparator, self.value)
     }
@@ -51,18 +51,18 @@ impl Display for WorkerNameFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerStatusFilter {
+pub struct AgentStatusFilter {
     pub comparator: FilterComparator,
-    pub value: WorkerStatus,
+    pub value: AgentStatus,
 }
 
-impl WorkerStatusFilter {
-    pub fn new(comparator: FilterComparator, value: WorkerStatus) -> Self {
+impl AgentStatusFilter {
+    pub fn new(comparator: FilterComparator, value: AgentStatus) -> Self {
         Self { comparator, value }
     }
 }
 
-impl Display for WorkerStatusFilter {
+impl Display for AgentStatusFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "status == {:?}", self.value)
     }
@@ -76,18 +76,18 @@ impl Display for WorkerStatusFilter {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct WorkerRevisionFilter {
+pub struct AgentRevisionFilter {
     pub comparator: FilterComparator,
     pub value: ComponentRevision,
 }
 
-impl WorkerRevisionFilter {
+impl AgentRevisionFilter {
     pub fn new(comparator: FilterComparator, value: ComponentRevision) -> Self {
         Self { comparator, value }
     }
 }
 
-impl Display for WorkerRevisionFilter {
+impl Display for AgentRevisionFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "version {} {}", self.comparator, self.value)
     }
@@ -101,18 +101,18 @@ impl Display for WorkerRevisionFilter {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct WorkerCreatedAtFilter {
+pub struct AgentCreatedAtFilter {
     pub comparator: FilterComparator,
     pub value: Timestamp,
 }
 
-impl WorkerCreatedAtFilter {
+impl AgentCreatedAtFilter {
     pub fn new(comparator: FilterComparator, value: Timestamp) -> Self {
         Self { comparator, value }
     }
 }
 
-impl Display for WorkerCreatedAtFilter {
+impl Display for AgentCreatedAtFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "created_at {} {}", self.comparator, self.value)
     }
@@ -126,13 +126,13 @@ impl Display for WorkerCreatedAtFilter {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct WorkerEnvFilter {
+pub struct AgentEnvFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
     pub value: String,
 }
 
-impl WorkerEnvFilter {
+impl AgentEnvFilter {
     pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
         Self {
             name,
@@ -142,7 +142,7 @@ impl WorkerEnvFilter {
     }
 }
 
-impl Display for WorkerEnvFilter {
+impl Display for AgentEnvFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "env.{} {} {}", self.name, self.comparator, self.value)
     }
@@ -156,13 +156,13 @@ impl Display for WorkerEnvFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerConfigVarsFilter {
+pub struct AgentConfigVarsFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
     pub value: String,
 }
 
-impl WorkerConfigVarsFilter {
+impl AgentConfigVarsFilter {
     pub fn new(name: String, comparator: StringFilterComparator, value: String) -> Self {
         Self {
             name,
@@ -172,7 +172,7 @@ impl WorkerConfigVarsFilter {
     }
 }
 
-impl Display for WorkerConfigVarsFilter {
+impl Display for AgentConfigVarsFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -190,17 +190,17 @@ impl Display for WorkerConfigVarsFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerAndFilter {
-    pub filters: Vec<WorkerFilter>,
+pub struct AgentAndFilter {
+    pub filters: Vec<AgentFilter>,
 }
 
-impl WorkerAndFilter {
-    pub fn new(filters: Vec<WorkerFilter>) -> Self {
+impl AgentAndFilter {
+    pub fn new(filters: Vec<AgentFilter>) -> Self {
         Self { filters }
     }
 }
 
-impl Display for WorkerAndFilter {
+impl Display for AgentAndFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -222,17 +222,17 @@ impl Display for WorkerAndFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerOrFilter {
-    pub filters: Vec<WorkerFilter>,
+pub struct AgentOrFilter {
+    pub filters: Vec<AgentFilter>,
 }
 
-impl WorkerOrFilter {
-    pub fn new(filters: Vec<WorkerFilter>) -> Self {
+impl AgentOrFilter {
+    pub fn new(filters: Vec<AgentFilter>) -> Self {
         Self { filters }
     }
 }
 
-impl Display for WorkerOrFilter {
+impl Display for AgentOrFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -254,19 +254,19 @@ impl Display for WorkerOrFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct WorkerNotFilter {
-    pub filter: Box<WorkerFilter>,
+pub struct AgentNotFilter {
+    pub filter: Box<AgentFilter>,
 }
 
-impl WorkerNotFilter {
-    pub fn new(filter: WorkerFilter) -> Self {
+impl AgentNotFilter {
+    pub fn new(filter: AgentFilter) -> Self {
         Self {
             filter: Box::new(filter),
         }
     }
 }
 
-impl Display for WorkerNotFilter {
+impl Display for AgentNotFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "NOT ({})", self.filter)
     }
@@ -280,31 +280,31 @@ impl Display for WorkerNotFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
-pub enum WorkerFilter {
-    Name(WorkerNameFilter),
-    Status(WorkerStatusFilter),
-    Revision(WorkerRevisionFilter),
-    CreatedAt(WorkerCreatedAtFilter),
-    Env(WorkerEnvFilter),
-    And(WorkerAndFilter),
-    Or(WorkerOrFilter),
-    Not(WorkerNotFilter),
-    ConfigVars(WorkerConfigVarsFilter),
+pub enum AgentFilter {
+    Name(AgentNameFilter),
+    Status(AgentStatusFilter),
+    Revision(AgentRevisionFilter),
+    CreatedAt(AgentCreatedAtFilter),
+    Env(AgentEnvFilter),
+    And(AgentAndFilter),
+    Or(AgentOrFilter),
+    Not(AgentNotFilter),
+    ConfigVars(AgentConfigVarsFilter),
 }
 
-impl WorkerFilter {
-    pub fn and(&self, filter: WorkerFilter) -> Self {
+impl AgentFilter {
+    pub fn and(&self, filter: AgentFilter) -> Self {
         match self.clone() {
-            WorkerFilter::And(WorkerAndFilter { filters }) => {
+            AgentFilter::And(AgentAndFilter { filters }) => {
                 Self::new_and([filters, vec![filter]].concat())
             }
             f => Self::new_and(vec![f, filter]),
         }
     }
 
-    pub fn or(&self, filter: WorkerFilter) -> Self {
+    pub fn or(&self, filter: AgentFilter) -> Self {
         match self.clone() {
-            WorkerFilter::Or(WorkerOrFilter { filters }) => {
+            AgentFilter::Or(AgentOrFilter { filters }) => {
                 Self::new_or([filters, vec![filter]].concat())
             }
             f => Self::new_or(vec![f, filter]),
@@ -315,24 +315,24 @@ impl WorkerFilter {
         Self::new_not(self.clone())
     }
 
-    pub fn new_and(filters: Vec<WorkerFilter>) -> Self {
-        WorkerFilter::And(WorkerAndFilter::new(filters))
+    pub fn new_and(filters: Vec<AgentFilter>) -> Self {
+        AgentFilter::And(AgentAndFilter::new(filters))
     }
 
-    pub fn new_or(filters: Vec<WorkerFilter>) -> Self {
-        WorkerFilter::Or(WorkerOrFilter::new(filters))
+    pub fn new_or(filters: Vec<AgentFilter>) -> Self {
+        AgentFilter::Or(AgentOrFilter::new(filters))
     }
 
-    pub fn new_not(filter: WorkerFilter) -> Self {
-        WorkerFilter::Not(WorkerNotFilter::new(filter))
+    pub fn new_not(filter: AgentFilter) -> Self {
+        AgentFilter::Not(AgentNotFilter::new(filter))
     }
 
     pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
-        WorkerFilter::Name(WorkerNameFilter::new(comparator, value))
+        AgentFilter::Name(AgentNameFilter::new(comparator, value))
     }
 
     pub fn new_env(name: String, comparator: StringFilterComparator, value: String) -> Self {
-        WorkerFilter::Env(WorkerEnvFilter::new(name, comparator, value))
+        AgentFilter::Env(AgentEnvFilter::new(name, comparator, value))
     }
 
     pub fn new_config_vars(
@@ -340,65 +340,65 @@ impl WorkerFilter {
         comparator: StringFilterComparator,
         value: String,
     ) -> Self {
-        WorkerFilter::ConfigVars(WorkerConfigVarsFilter::new(name, comparator, value))
+        AgentFilter::ConfigVars(AgentConfigVarsFilter::new(name, comparator, value))
     }
 
     pub fn new_revision(comparator: FilterComparator, value: ComponentRevision) -> Self {
-        WorkerFilter::Revision(WorkerRevisionFilter::new(comparator, value))
+        AgentFilter::Revision(AgentRevisionFilter::new(comparator, value))
     }
 
-    pub fn new_status(comparator: FilterComparator, value: WorkerStatus) -> Self {
-        WorkerFilter::Status(WorkerStatusFilter::new(comparator, value))
+    pub fn new_status(comparator: FilterComparator, value: AgentStatus) -> Self {
+        AgentFilter::Status(AgentStatusFilter::new(comparator, value))
     }
 
     pub fn new_created_at(comparator: FilterComparator, value: Timestamp) -> Self {
-        WorkerFilter::CreatedAt(WorkerCreatedAtFilter::new(comparator, value))
+        AgentFilter::CreatedAt(AgentCreatedAtFilter::new(comparator, value))
     }
 
-    pub fn from(filters: Vec<String>) -> Result<WorkerFilter, String> {
+    pub fn from(filters: Vec<String>) -> Result<AgentFilter, String> {
         let mut fs = Vec::new();
         for f in filters {
-            fs.push(WorkerFilter::from_str(&f)?);
+            fs.push(AgentFilter::from_str(&f)?);
         }
-        Ok(WorkerFilter::new_and(fs))
+        Ok(AgentFilter::new_and(fs))
     }
 }
 
-impl Display for WorkerFilter {
+impl Display for AgentFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerFilter::Name(filter) => {
+            AgentFilter::Name(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::Revision(filter) => {
+            AgentFilter::Revision(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::Status(filter) => {
+            AgentFilter::Status(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::CreatedAt(filter) => {
+            AgentFilter::CreatedAt(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::Env(filter) => {
+            AgentFilter::Env(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::ConfigVars(filter) => {
+            AgentFilter::ConfigVars(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::Not(filter) => {
+            AgentFilter::Not(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::And(filter) => {
+            AgentFilter::And(filter) => {
                 write!(f, "{filter}")
             }
-            WorkerFilter::Or(filter) => {
+            AgentFilter::Or(filter) => {
                 write!(f, "{filter}")
             }
         }
     }
 }
 
-impl FromStr for WorkerFilter {
+impl FromStr for AgentFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -409,27 +409,24 @@ impl FromStr for WorkerFilter {
             let comparator = elements[1];
             let value = elements[2];
             match arg {
-                "name" => Ok(WorkerFilter::new_name(
+                "name" => Ok(AgentFilter::new_name(
                     comparator.parse()?,
                     value.to_string(),
                 )),
-                "revision" => Ok(WorkerFilter::new_revision(
+                "revision" => Ok(AgentFilter::new_revision(
                     comparator.parse()?,
                     value
                         .parse()
                         .map_err(|e| format!("Invalid filter value: {e}"))?,
                 )),
-                "status" => Ok(WorkerFilter::new_status(
-                    comparator.parse()?,
-                    value.parse()?,
-                )),
-                "created_at" | "createdAt" => Ok(WorkerFilter::new_created_at(
+                "status" => Ok(AgentFilter::new_status(comparator.parse()?, value.parse()?)),
+                "created_at" | "createdAt" => Ok(AgentFilter::new_created_at(
                     comparator.parse()?,
                     value.parse()?,
                 )),
                 _ if arg.starts_with("env.") => {
                     let name = &arg[4..];
-                    Ok(WorkerFilter::new_env(
+                    Ok(AgentFilter::new_env(
                         name.to_string(),
                         comparator.parse()?,
                         value.to_string(),

@@ -10,12 +10,12 @@ import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
 import "golem/common/environment.proto";
 
-message WorkerMetadata {
-  WorkerId worker_id = 1;
+message AgentMetadata {
+  AgentId agent_id = 1;
   golem.common.AccountId created_by = 2;
   map<string, string> env = 4;
   map<string, string> config_vars = 5;
-  WorkerStatus status = 6;
+  AgentStatus status = 6;
   uint64 component_revision = 7;
   uint32 retry_count = 8;
   uint64 pending_invocation_count = 9;

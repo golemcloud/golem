@@ -20,7 +20,7 @@ use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{IdempotencyKey, OplogIndex, Timestamp, TransactionId, WorkerId};
+use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
 use crate::oplog_entry;
 use golem_wasm::ValueAndType;
 pub use public_types::*;
@@ -66,12 +66,12 @@ oplog_entry! {
         hint: false
         wit_raw_type: "raw-create-parameters"
         raw {
-            worker_id: WorkerId,
+            agent_id: AgentId,
             component_revision: ComponentRevision,
             env: Vec<(String, String)>,
             environment_id: EnvironmentId,
             created_by: AccountId,
-            parent: Option<WorkerId>,
+            parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginPriority>,
@@ -79,12 +79,12 @@ oplog_entry! {
             original_phantom_id: Option<Uuid>
         }
         public {
-            worker_id: WorkerId,
+            agent_id: AgentId,
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,
             created_by: AccountId,
             environment_id: EnvironmentId,
-            parent: Option<WorkerId>,
+            parent: Option<AgentId>,
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
@@ -151,7 +151,7 @@ oplog_entry! {
         hint: true
         wit_raw_type: "raw-error-parameters"
         raw {
-            error: WorkerError,
+            error: AgentError,
             /// Points to the oplog index where the retry should start from. Normally this can be just the
             /// current oplog index (after the last persisted side-effect). When failing in an atomic region
             /// or batched remote writes, this should point to the start of the region.
@@ -326,11 +326,11 @@ oplog_entry! {
         hint: true
         wit_raw_type: "raw-create-resource-parameters"
         raw {
-            id: WorkerResourceId,
+            id: AgentResourceId,
             resource_type_id: ResourceTypeId,
         }
         public {
-            id: WorkerResourceId,
+            id: AgentResourceId,
             name: String,
             owner: String
         }
@@ -340,11 +340,11 @@ oplog_entry! {
         hint: true
         wit_raw_type: "raw-drop-resource-parameters"
         raw {
-            id: WorkerResourceId,
+            id: AgentResourceId,
             resource_type_id: ResourceTypeId,
         }
         public {
-            id: WorkerResourceId,
+            id: AgentResourceId,
             name: String,
             owner: String
         }

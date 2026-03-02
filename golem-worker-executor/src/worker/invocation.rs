@@ -15,15 +15,15 @@
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
-use golem_common::model::agent::AgentError;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::AgentError as AgentInvocationError;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, UntypedElementValue,
 };
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
+use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::oplog::RawSnapshotData;
-use golem_common::model::oplog::WorkerError;
 use golem_common::model::parsed_function_name::{ParsedFunctionName, ParsedFunctionReference};
 use golem_common::model::{
     AgentInvocation, AgentInvocationKind, AgentInvocationResult, OplogIndex,
@@ -180,7 +180,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
-    let agent_id = store.as_context().data().agent_id();
+    let agent_id = store.as_context().data().parsed_agent_id();
 
     let parsed = ParsedFunctionName::parse(&lowered.wit_fqfn).map_err(|err| {
         WorkerExecutorError::invalid_request(format!(
@@ -240,7 +240,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 }
 
 fn verify_agent_invocation(
-    agent_id: Option<AgentId>,
+    agent_id: Option<ParsedAgentId>,
     invocation: &InvokableFunction,
 ) -> Result<(), WorkerExecutorError> {
     if let Some(agent_id) = agent_id {
@@ -499,7 +499,7 @@ pub enum InvokeResult {
     /// The invoked function has failed
     Failed {
         consumed_fuel: u64,
-        error: WorkerError,
+        error: OplogAgentError,
         retry_from: OplogIndex,
     },
     /// The invoked function succeeded and produced a result
@@ -581,7 +581,7 @@ pub struct LoweredInvocation {
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&AgentId>,
+    agent_id: Option<&ParsedAgentId>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     let kind = invocation.kind();
     match invocation {
@@ -719,7 +719,7 @@ pub fn lower_invocation(
             }
             let val_config = Value::List(config_pairs);
 
-            let val_worker_id = metadata.agent_id.clone().into_value();
+            let val_agent_id = metadata.agent_id.clone().into_value();
             let val_metadata = metadata.into_value();
             let val_first_entry_index = first_entry_index.into_value();
             let val_entries = Value::List(
@@ -737,7 +737,7 @@ pub fn lower_invocation(
                     val_account_info,
                     val_config,
                     val_component_id,
-                    val_worker_id,
+                    val_agent_id,
                     val_metadata,
                     val_first_entry_index,
                     val_entries,
@@ -762,20 +762,20 @@ fn wrap_output_as_agent_result(
                 result: AgentInvocationResult::AgentInitialization,
             }),
             Some(Value::Result(Err(Some(err_val)))) => {
-                let agent_error = AgentError::from_value(*err_val).map_err(|e| {
+                let agent_error = AgentInvocationError::from_value(*err_val).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to decode agent-error from initialize: {e}"
                     ))
                 })?;
                 Ok(InvokeResult::Failed {
                     consumed_fuel,
-                    error: WorkerError::AgentError(agent_error.to_string()),
+                    error: OplogAgentError::InternalError(agent_error.to_string()),
                     retry_from: OplogIndex::INITIAL,
                 })
             }
             Some(Value::Result(Err(None))) => Ok(InvokeResult::Failed {
                 consumed_fuel,
-                error: WorkerError::AgentError("Unknown agent error".to_string()),
+                error: OplogAgentError::InternalError("Unknown agent error".to_string()),
                 retry_from: OplogIndex::INITIAL,
             }),
             other => Err(WorkerExecutorError::runtime(format!(
@@ -801,20 +801,20 @@ fn wrap_output_as_agent_result(
                 },
             }),
             Some(Value::Result(Err(Some(err_val)))) => {
-                let agent_error = AgentError::from_value(*err_val).map_err(|e| {
+                let agent_error = AgentInvocationError::from_value(*err_val).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to decode agent-error from invoke: {e}"
                     ))
                 })?;
                 Ok(InvokeResult::Failed {
                     consumed_fuel,
-                    error: WorkerError::AgentError(agent_error.to_string()),
+                    error: OplogAgentError::InternalError(agent_error.to_string()),
                     retry_from: OplogIndex::INITIAL,
                 })
             }
             Some(Value::Result(Err(None))) => Ok(InvokeResult::Failed {
                 consumed_fuel,
-                error: WorkerError::AgentError("Unknown agent error".to_string()),
+                error: OplogAgentError::InternalError("Unknown agent error".to_string()),
                 retry_from: OplogIndex::INITIAL,
             }),
             other => Err(WorkerExecutorError::runtime(format!(

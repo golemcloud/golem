@@ -40,7 +40,7 @@ use golem_common::model::agent::{
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::{
-    AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedWorkerId, WorkerId,
+    AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap};
@@ -53,9 +53,9 @@ use tracing::debug;
 pub trait Rpc: Send + Sync {
     async fn create_demand(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -63,12 +63,12 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke_and_await(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -76,12 +76,12 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
@@ -156,11 +156,11 @@ impl From<tonic::Status> for RpcError {
 impl From<WorkerExecutorError> for RpcError {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
-            WorkerExecutorError::WorkerAlreadyExists { worker_id } => RpcError::Denied {
-                details: format!("Worker {worker_id} already exists"),
+            WorkerExecutorError::AgentAlreadyExists { agent_id } => RpcError::Denied {
+                details: format!("Worker {agent_id} already exists"),
             },
-            WorkerExecutorError::WorkerNotFound { worker_id } => RpcError::NotFound {
-                details: format!("Worker {worker_id} not found"),
+            WorkerExecutorError::AgentNotFound { agent_id } => RpcError::NotFound {
+                details: format!("Worker {agent_id} not found"),
             },
             WorkerExecutorError::InvalidAccount => RpcError::Denied {
                 details: "Invalid account".to_string(),
@@ -230,13 +230,13 @@ impl RemoteInvocationRpc {
 }
 
 struct LoggingDemand {
-    worker_id: WorkerId,
+    agent_id: AgentId,
 }
 
 impl LoggingDemand {
-    pub fn new(worker_id: WorkerId) -> Self {
-        log::debug!("Initializing RPC connection for worker {worker_id}");
-        Self { worker_id }
+    pub fn new(agent_id: AgentId) -> Self {
+        log::debug!("Initializing RPC connection for worker {agent_id}");
+        Self { agent_id }
     }
 }
 
@@ -244,7 +244,7 @@ impl RpcDemand for LoggingDemand {}
 
 impl Drop for LoggingDemand {
     fn drop(&mut self) {
-        log::debug!("Dropping RPC connection for worker {}", self.worker_id);
+        log::debug!("Dropping RPC connection for worker {}", self.agent_id);
     }
 }
 
@@ -253,22 +253,22 @@ impl Drop for LoggingDemand {
 impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
-        let principal = caller_agent_principal(self_worker_id);
-        let demand = LoggingDemand::new(owned_worker_id.worker_id());
+        let principal = caller_agent_principal(self_agent_id);
+        let demand = LoggingDemand::new(owned_agent_id.agent_id());
 
         self.worker_proxy
             .start(
-                owned_worker_id,
-                self_worker_id,
+                owned_agent_id,
+                self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
@@ -282,28 +282,28 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke_and_await(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
-        let principal = caller_agent_principal(self_worker_id);
+        let principal = caller_agent_principal(self_agent_id);
 
         let output = self
             .worker_proxy
             .invoke_agent(
-                &owned_worker_id.worker_id(),
+                &owned_agent_id.agent_id(),
                 method_name,
                 method_parameters,
                 AgentInvocationMode::Await,
                 None,
                 idempotency_key,
-                self_worker_id.clone(),
+                self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
@@ -324,27 +324,27 @@ impl Rpc for RemoteInvocationRpc {
 
     async fn invoke(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
-        let principal = caller_agent_principal(self_worker_id);
+        let principal = caller_agent_principal(self_agent_id);
 
         self.worker_proxy
             .invoke_agent(
-                &owned_worker_id.worker_id(),
+                &owned_agent_id.agent_id(),
                 method_name,
                 method_parameters,
                 AgentInvocationMode::Schedule,
                 None,
                 idempotency_key,
-                self_worker_id.clone(),
+                self_agent_id.clone(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
@@ -357,9 +357,9 @@ impl Rpc for RemoteInvocationRpc {
     }
 }
 
-fn caller_agent_principal(self_worker_id: &WorkerId) -> Principal {
+fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
     Principal::Agent(AgentPrincipal {
-        agent_id: self_worker_id.clone(),
+        agent_id: self_agent_id.clone(),
     })
 }
 
@@ -664,43 +664,43 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         if self
             .shard_service()
-            .check_worker(&owned_worker_id.worker_id)
+            .check_worker(&owned_agent_id.agent_id)
             .is_ok()
         {
-            debug!(target_worker_id = %owned_worker_id, "Ensuring local target worker exists");
+            debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
             let _worker = Worker::get_or_create_running(
                 self,
                 self_created_by,
-                owned_worker_id,
+                owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
                 None,
-                Some(self_worker_id.clone()),
+                Some(self_agent_id.clone()),
                 &self_stack,
                 Principal::Agent(AgentPrincipal {
-                    agent_id: self_worker_id.clone(),
+                    agent_id: self_agent_id.clone(),
                 }),
             )
             .await?;
 
-            let demand = LoggingDemand::new(owned_worker_id.worker_id());
+            let demand = LoggingDemand::new(owned_agent_id.agent_id());
             Ok(Box::new(demand))
         } else {
             self.remote_rpc
                 .create_demand(
-                    owned_worker_id,
+                    owned_agent_id,
                     self_created_by,
-                    self_worker_id,
+                    self_agent_id,
                     self_env,
                     self_config,
                     self_stack,
@@ -711,32 +711,32 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke_and_await(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
         if self
             .shard_service()
-            .check_worker(&owned_worker_id.worker_id)
+            .check_worker(&owned_agent_id.agent_id)
             .is_ok()
         {
-            debug!(target_worker_id = %owned_worker_id, "Local direct agent invoke_and_await");
+            debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke_and_await");
 
-            let principal = caller_agent_principal(self_worker_id);
+            let principal = caller_agent_principal(self_agent_id);
             let worker = Worker::get_or_create_running(
                 self,
                 self_created_by,
-                owned_worker_id,
+                owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
                 None,
-                Some(self_worker_id.clone()),
+                Some(self_agent_id.clone()),
                 &self_stack,
                 principal.clone(),
             )
@@ -763,12 +763,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .invoke_and_await(
-                    owned_worker_id,
+                    owned_agent_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_worker_id,
+                    self_agent_id,
                     self_env,
                     self_config,
                     self_stack,
@@ -779,32 +779,32 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
     async fn invoke(
         &self,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: Option<IdempotencyKey>,
         method_name: String,
         method_parameters: UntypedDataValue,
         self_created_by: AccountId,
-        self_worker_id: &WorkerId,
+        self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         if self
             .shard_service()
-            .check_worker(&owned_worker_id.worker_id)
+            .check_worker(&owned_agent_id.agent_id)
             .is_ok()
         {
-            debug!(target_worker_id = %owned_worker_id, "Local direct agent invoke (fire-and-forget)");
+            debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke (fire-and-forget)");
 
-            let principal = caller_agent_principal(self_worker_id);
+            let principal = caller_agent_principal(self_agent_id);
             let worker = Worker::get_or_create_running(
                 self,
                 self_created_by,
-                owned_worker_id,
+                owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
                 None,
-                Some(self_worker_id.clone()),
+                Some(self_agent_id.clone()),
                 &self_stack,
                 principal.clone(),
             )
@@ -825,12 +825,12 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         } else {
             self.remote_rpc
                 .invoke(
-                    owned_worker_id,
+                    owned_agent_id,
                     Some(idempotency_key.unwrap_or(IdempotencyKey::fresh())),
                     method_name,
                     method_parameters,
                     self_created_by,
-                    self_worker_id,
+                    self_agent_id,
                     self_env,
                     self_config,
                     self_stack,

@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -129,9 +129,9 @@ async fn agent_env_inheritance(
         .invoke_and_await_agent(&component, &agent_id, "envVarTest", data_value!())
         .await;
 
-    let child_worker_id = WorkerId {
+    let child_worker_id = AgentId {
         component_id: worker_id.component_id,
-        worker_name: "child-agent(0)".to_string(),
+        agent_id: "child-agent(0)".to_string(),
     };
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -177,7 +177,7 @@ async fn agent_env_inheritance(
             ("ENV3".to_string(), Value::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
-                Value::String(worker_id.worker_name.to_string())
+                Value::String(worker_id.agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
@@ -193,7 +193,7 @@ async fn agent_env_inheritance(
             ),
             (
                 "GOLEM_WORKER_NAME".to_string(),
-                Value::String(worker_id.worker_name.to_string())
+                Value::String(worker_id.agent_id.to_string())
             ),
         ]
     );
@@ -205,7 +205,7 @@ async fn agent_env_inheritance(
             ("ENV3".to_string(), Value::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
-                Value::String(child_worker_id.worker_name.to_string())
+                Value::String(child_worker_id.agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
@@ -221,7 +221,7 @@ async fn agent_env_inheritance(
             ),
             (
                 "GOLEM_WORKER_NAME".to_string(),
-                Value::String(child_worker_id.worker_name.to_string())
+                Value::String(child_worker_id.agent_id.to_string())
             ),
         ]
     );

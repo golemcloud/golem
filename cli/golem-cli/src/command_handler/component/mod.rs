@@ -842,10 +842,10 @@ impl ComponentCommandHandler {
         match (component, component_revision_selection) {
             (Some(component), Some(component_revision_selection)) => {
                 let revision = match component_revision_selection {
-                    ComponentRevisionSelection::ByWorkerName(worker_name) => self
+                    ComponentRevisionSelection::ByAgentName(agent_name) => self
                         .ctx
                         .worker_handler()
-                        .worker_metadata(component.id.0, &component.component_name, worker_name)
+                        .worker_metadata(component.id.0, &component.component_name, agent_name)
                         .await
                         .ok()
                         .map(|worker_metadata| worker_metadata.component_revision),

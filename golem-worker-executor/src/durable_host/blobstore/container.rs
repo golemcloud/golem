@@ -78,7 +78,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerGetData>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -137,7 +137,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerWriteData>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -184,7 +184,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerListObject>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -236,7 +236,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -283,7 +283,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -326,7 +326,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerHasObject>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -369,7 +369,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerObjectInfo>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()
@@ -420,7 +420,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             Durability::<BlobstoreContainerClear>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let container_name = self
             .as_wasi_view()
             .table()

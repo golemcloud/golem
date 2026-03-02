@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -47,7 +47,7 @@ use golem_common::model::oplog::{
     SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedWorkerId, WorkerId,
+    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::IntoValueAndType;
@@ -64,16 +64,16 @@ pub struct PublicOplogChunk {
 pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
     let raw_entries = oplog_service
-        .read(owned_worker_id, initial_oplog_index, count as u64)
+        .read(owned_agent_id, initial_oplog_index, count as u64)
         .await;
 
-    let last_index = oplog_service.get_last_index(owned_worker_id).await;
+    let last_index = oplog_service.get_last_index(owned_agent_id).await;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -93,7 +93,7 @@ pub async fn get_public_oplog_chunk(
             raw_entry,
             oplog_service.clone(),
             components.clone(),
-            owned_worker_id,
+            owned_agent_id,
             current_component_revision,
         )
         .await?;
@@ -120,7 +120,7 @@ pub struct PublicOplogSearchResult {
 pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -137,7 +137,7 @@ pub async fn search_public_oplog(
         let chunk = get_public_oplog_chunk(
             component_service.clone(),
             oplog_service.clone(),
-            owned_worker_id,
+            owned_agent_id,
             current_component_revision,
             current_index,
             count,
@@ -172,16 +172,16 @@ pub async fn search_public_oplog(
 
 pub async fn find_component_revision_at(
     oplog_service: Arc<dyn OplogService>,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     start: OplogIndex,
 ) -> Result<ComponentRevision, WorkerExecutorError> {
     let mut initial_component_revision = ComponentRevision::INITIAL;
-    let last_oplog_index = oplog_service.get_last_index(owned_worker_id).await;
+    let last_oplog_index = oplog_service.get_last_index(owned_agent_id).await;
     let mut current = OplogIndex::INITIAL;
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
-            .read(owned_worker_id, current, 1)
+            .read(owned_agent_id, current, 1)
             .await
             .iter()
             .next()
@@ -204,7 +204,7 @@ pub trait PublicOplogEntryOps: Sized {
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         component_revision: ComponentRevision,
     ) -> Result<Self, String>;
 }
@@ -216,13 +216,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        owned_worker_id: &OwnedWorkerId,
+        owned_agent_id: &OwnedAgentId,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
         match value {
             OplogEntry::Create {
                 timestamp,
-                worker_id,
+                agent_id,
                 component_revision,
                 env,
                 environment_id,
@@ -236,7 +236,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        owned_worker_id.worker_id.component_id,
+                        owned_agent_id.agent_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -251,7 +251,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
-                    worker_id,
+                    agent_id,
                     component_revision,
                     env: env.into_iter().collect(),
                     environment_id,
@@ -272,10 +272,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 durable_function_type,
             } => {
                 let host_request: HostRequest = oplog_service
-                    .download_payload(owned_worker_id, request)
+                    .download_payload(owned_agent_id, request)
                     .await?;
                 let host_response: HostResponse = oplog_service
-                    .download_payload(owned_worker_id, response)
+                    .download_payload(owned_agent_id, response)
                     .await?;
 
                 // Enriching data
@@ -308,7 +308,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 invocation_context,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
-                    .download_payload(owned_worker_id, payload)
+                    .download_payload(owned_agent_id, payload)
                     .await?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
@@ -323,7 +323,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 );
                 let public_invocation = agent_invocation_to_public(
                     components.clone(),
-                    owned_worker_id,
+                    owned_agent_id,
                     component_revision,
                     invocation,
                 )
@@ -343,12 +343,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 component_revision: entry_component_revision,
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
-                    .download_payload(owned_worker_id, result)
+                    .download_payload(owned_agent_id, result)
                     .await?;
 
                 let public_result = agent_invocation_result_to_public(
                     components.clone(),
-                    owned_worker_id,
+                    owned_agent_id,
                     component_revision,
                     invocation_result,
                 )
@@ -427,7 +427,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 invocation_context,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
-                    .download_payload(owned_worker_id, payload)
+                    .download_payload(owned_agent_id, payload)
                     .await?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
@@ -442,7 +442,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 );
                 let public_invocation = agent_invocation_to_public(
                     components.clone(),
-                    owned_worker_id,
+                    owned_agent_id,
                     component_revision,
                     invocation,
                 )
@@ -468,7 +468,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         payload, mime_type, ..
                     } => {
                         let bytes = oplog_service
-                            .download_payload(owned_worker_id, payload)
+                            .download_payload(owned_agent_id, payload)
                             .await?;
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
@@ -489,10 +489,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 new_active_plugins,
             } => {
                 let metadata = components
-                    .get_metadata(
-                        owned_worker_id.worker_id.component_id,
-                        Some(target_revision),
-                    )
+                    .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
                     .await
                     .map_err(|err| err.to_string())?;
 
@@ -566,7 +563,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        owned_worker_id.worker_id.component_id,
+                        owned_agent_id.agent_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -590,7 +587,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let metadata = components
                     .get_metadata(
-                        owned_worker_id.worker_id.component_id,
+                        owned_agent_id.agent_id.component_id,
                         Some(component_revision),
                     )
                     .await
@@ -721,9 +718,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 data,
                 mime_type,
             } => {
-                let bytes: Vec<u8> = oplog_service
-                    .download_payload(owned_worker_id, data)
-                    .await?;
+                let bytes: Vec<u8> = oplog_service.download_payload(owned_agent_id, data).await?;
 
                 let snapshot_data = raw_snapshot_to_public(RawSnapshotData {
                     data: bytes,
@@ -752,13 +747,13 @@ fn raw_snapshot_to_public(snapshot: RawSnapshotData) -> PublicSnapshotData {
 
 async fn try_resolve_agent_id(
     component_service: Arc<dyn ComponentService>,
-    worker_id: &WorkerId,
-) -> Option<AgentId> {
+    agent_id: &AgentId,
+) -> Option<ParsedAgentId> {
     if let Ok(component) = component_service
-        .get_metadata(worker_id.component_id, None)
+        .get_metadata(agent_id.component_id, None)
         .await
     {
-        AgentId::parse(&worker_id.worker_name, &component.metadata).ok()
+        ParsedAgentId::parse(&agent_id.agent_id, &component.metadata).ok()
     } else {
         None
     }
@@ -768,7 +763,7 @@ async fn enrich_golem_rpc_invoke(
     components: Arc<dyn ComponentService>,
     mut payload: HostRequestGolemRpcInvoke,
 ) -> HostRequestGolemRpcInvoke {
-    let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
+    let agent_id = try_resolve_agent_id(components, &payload.remote_agent_id).await;
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
@@ -780,7 +775,7 @@ async fn enrich_golem_rpc_scheduled_invocation(
     components: Arc<dyn ComponentService>,
     mut payload: HostRequestGolemRpcScheduledInvocation,
 ) -> HostRequestGolemRpcScheduledInvocation {
-    let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
+    let agent_id = try_resolve_agent_id(components, &payload.remote_agent_id).await;
     payload.remote_agent_type = agent_id
         .as_ref()
         .map(|agent_id| agent_id.agent_type.clone());
@@ -790,7 +785,7 @@ async fn enrich_golem_rpc_scheduled_invocation(
 
 async fn agent_invocation_to_public(
     components: Arc<dyn ComponentService>,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     component_revision: ComponentRevision,
     invocation: AgentInvocation,
 ) -> Result<PublicAgentInvocation, String> {
@@ -803,7 +798,7 @@ async fn agent_invocation_to_public(
         } => {
             let metadata = components
                 .get_metadata(
-                    owned_worker_id.worker_id.component_id,
+                    owned_agent_id.agent_id.component_id,
                     Some(component_revision),
                 )
                 .await
@@ -842,7 +837,7 @@ async fn agent_invocation_to_public(
         } => {
             let metadata = components
                 .get_metadata(
-                    owned_worker_id.worker_id.component_id,
+                    owned_agent_id.agent_id.component_id,
                     Some(component_revision),
                 )
                 .await
@@ -893,14 +888,14 @@ async fn agent_invocation_to_public(
 
 async fn agent_invocation_result_to_public(
     components: Arc<dyn ComponentService>,
-    owned_worker_id: &OwnedWorkerId,
+    owned_agent_id: &OwnedAgentId,
     component_revision: ComponentRevision,
     result: AgentInvocationResult,
 ) -> Result<PublicAgentInvocationResult, String> {
     match result {
         AgentInvocationResult::AgentInitialization => {
             let _ = components;
-            let _ = owned_worker_id;
+            let _ = owned_agent_id;
             let _ = component_revision;
             let output_data = DataValue::Tuple(ElementValues { elements: vec![] });
 

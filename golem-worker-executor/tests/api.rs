@@ -21,10 +21,10 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::worker::AgentMetadataDto;
 use golem_common::model::{
-    FilterComparator, IdempotencyKey, PromiseId, RetryConfig, ScanCursor, StringFilterComparator,
-    WorkerFilter, WorkerId, WorkerStatus,
+    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
+    ScanCursor, StringFilterComparator,
 };
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -110,7 +110,7 @@ async fn interruption(
     );
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor.interrupt(&worker_id).await?;
@@ -511,7 +511,7 @@ async fn promise(
             let invoke_result = result??;
             return Err(anyhow!("await_promise returned immediately instead of suspending: {:?}", invoke_result));
         }
-        status = executor.wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10)) => {
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
             status?;
         }
     }
@@ -522,7 +522,7 @@ async fn promise(
     executor
         .complete_promise(
             &PromiseId {
-                worker_id: worker_id.clone(),
+                agent_id: worker_id.clone(),
                 oplog_idx,
             },
             vec![42],
@@ -599,7 +599,7 @@ async fn get_workers_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::AgentId,
+        caller_agent_id: &golem_common::base_model::agent::ParsedAgentId,
         name_filter: Option<String>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
@@ -733,7 +733,7 @@ async fn get_metadata_from_worker(
 
     fn get_agent_id_val(
         component_id: &ComponentId,
-        agent_id: &golem_common::base_model::agent::AgentId,
+        agent_id: &golem_common::base_model::agent::ParsedAgentId,
     ) -> Value {
         let component_id_val = {
             let (high, low) = component_id.0.as_u64_pair();
@@ -745,8 +745,8 @@ async fn get_metadata_from_worker(
 
     async fn get_check(
         component: &ComponentDto,
-        caller_agent_id: &golem_common::base_model::agent::AgentId,
-        other_agent_id: &golem_common::base_model::agent::AgentId,
+        caller_agent_id: &golem_common::base_model::agent::ParsedAgentId,
+        other_agent_id: &golem_common::base_model::agent::ParsedAgentId,
         executor: &TestWorkerExecutor,
     ) -> anyhow::Result<()> {
         let agent_id_val1 = get_agent_id_val(&component.id, caller_agent_id);
@@ -1044,7 +1044,7 @@ async fn component_env_variables_update(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let WorkerMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
+    let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
 
     env.retain(|k, _| k == "FOO");
 
@@ -1108,7 +1108,7 @@ async fn component_env_and_worker_env_priority(
         .start_agent_with(&component.id, agent_id.clone(), worker_env, HashMap::new())
         .await?;
 
-    let WorkerMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
+    let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
     env.retain(|k, _| k == "FOO");
 
     assert_eq!(
@@ -1149,9 +1149,9 @@ async fn delete_worker(
     let (cursor1, values1) = executor
         .get_workers_metadata(
             &worker_id.component_id,
-            Some(WorkerFilter::new_name(
+            Some(AgentFilter::new_name(
                 StringFilterComparator::Equal,
-                worker_id.worker_name.clone(),
+                worker_id.agent_id.clone(),
             )),
             ScanCursor::default(),
             10,
@@ -1180,10 +1180,10 @@ async fn get_workers(
 ) -> anyhow::Result<()> {
     async fn get_check(
         component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
+        filter: Option<AgentFilter>,
         expected_count: usize,
         executor: &TestWorkerExecutor,
-    ) -> anyhow::Result<Vec<WorkerMetadataDto>> {
+    ) -> anyhow::Result<Vec<AgentMetadataDto>> {
         let (cursor, values) = executor
             .get_workers_metadata(component_id, filter, ScanCursor::default(), 20, true)
             .await?;
@@ -1222,9 +1222,9 @@ async fn get_workers(
 
         get_check(
             &component.id,
-            Some(WorkerFilter::new_name(
+            Some(AgentFilter::new_name(
                 StringFilterComparator::Equal,
-                worker_id.worker_name.clone(),
+                worker_id.agent_id.clone(),
             )),
             1,
             &executor,
@@ -1234,7 +1234,7 @@ async fn get_workers(
 
     get_check(
         &component.id,
-        Some(WorkerFilter::new_name(
+        Some(AgentFilter::new_name(
             StringFilterComparator::Like,
             "test-worker".to_string(),
         )),
@@ -1246,13 +1246,13 @@ async fn get_workers(
     get_check(
         &component.id,
         Some(
-            WorkerFilter::new_name(StringFilterComparator::Like, "test-worker".to_string())
+            AgentFilter::new_name(StringFilterComparator::Like, "test-worker".to_string())
                 .and(
-                    WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle).or(
-                        WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
+                    AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Idle).or(
+                        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
                     ),
                 )
-                .and(WorkerFilter::new_revision(
+                .and(AgentFilter::new_revision(
                     FilterComparator::Equal,
                     ComponentRevision::INITIAL,
                 )),
@@ -1264,7 +1264,7 @@ async fn get_workers(
 
     get_check(
         &component.id,
-        Some(WorkerFilter::new_name(StringFilterComparator::Like, "test-worker".to_string()).not()),
+        Some(AgentFilter::new_name(StringFilterComparator::Like, "test-worker".to_string()).not()),
         0,
         &executor,
     )
@@ -1425,7 +1425,7 @@ async fn get_worker_metadata(
     let metadata1 = executor
         .wait_for_statuses(
             &worker_id,
-            &[WorkerStatus::Running, WorkerStatus::Suspended],
+            &[AgentStatus::Running, AgentStatus::Suspended],
             Duration::from_secs(5),
         )
         .await?;
@@ -1433,18 +1433,18 @@ async fn get_worker_metadata(
     fiber.await??;
 
     let metadata2 = executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(
-        metadata1.status == WorkerStatus::Suspended || // it is sleeping - whether it is suspended or not is the server's decision
-        metadata1.status == WorkerStatus::Running
+        metadata1.status == AgentStatus::Suspended || // it is sleeping - whether it is suspended or not is the server's decision
+        metadata1.status == AgentStatus::Running
     );
-    assert_eq!(metadata2.status, WorkerStatus::Idle);
+    assert_eq!(metadata2.status, AgentStatus::Idle);
     assert_eq!(metadata1.component_revision, ComponentRevision::INITIAL);
-    assert_eq!(metadata1.worker_id, worker_id);
+    assert_eq!(metadata1.agent_id, worker_id);
     assert_eq!(metadata1.created_by, context.account_id);
 
     let component_file_size = std::fs::metadata(
@@ -1558,7 +1558,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
         .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
         .await?;
 
-    let worker_id = WorkerId::from_agent_id(component.id, &counter_id)
+    let worker_id = AgentId::from_agent_id(component.id, &counter_id)
         .map_err(|err| anyhow!("Invalid agent id: {err}"))?;
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
@@ -1812,7 +1812,7 @@ async fn long_running_poll_loop_works_as_expected(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     {
@@ -1821,7 +1821,7 @@ async fn long_running_poll_loop_works_as_expected(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -1918,7 +1918,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
     // Poll loop is running. Wait until a given poll count
     let begin = Instant::now();
@@ -1964,7 +1964,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2028,7 +2028,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     {
@@ -2037,7 +2037,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2100,15 +2100,15 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
         .await?;
 
     let values1 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
-            Some(WorkerFilter::new_name(
+            Some(AgentFilter::new_name(
                 StringFilterComparator::Equal,
-                worker_id.worker_name.clone(),
+                worker_id.agent_id.clone(),
             )),
         )
         .await?;
@@ -2116,19 +2116,15 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     executor.interrupt(&worker_id).await?;
 
     executor
-        .wait_for_status(
-            &worker_id,
-            WorkerStatus::Interrupted,
-            Duration::from_secs(5),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
 
     let values2 = executor
         .get_running_workers_metadata(
             &worker_id.component_id,
-            Some(WorkerFilter::new_name(
+            Some(AgentFilter::new_name(
                 StringFilterComparator::Equal,
-                worker_id.worker_name.clone(),
+                worker_id.agent_id.clone(),
             )),
         )
         .await?;
@@ -2143,7 +2139,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(20))
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2176,7 +2172,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2244,7 +2240,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     {
@@ -2331,7 +2327,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor.interrupt(&worker_id).await?;
@@ -2351,8 +2347,8 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     drop(executor);
     http_server.abort();
 
-    assert_eq!(status1.status, WorkerStatus::Interrupted);
-    assert_eq!(status2.status, WorkerStatus::Interrupted);
+    assert_eq!(status1.status, AgentStatus::Interrupted);
+    assert_eq!(status2.status, AgentStatus::Interrupted);
 
     Ok(())
 }
@@ -2412,7 +2408,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor.interrupt(&worker_id).await?;
@@ -2422,7 +2418,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 
     executor.resume(&worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2479,7 +2475,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
         .await?;
 
     let status4 = executor.get_worker_metadata(&worker_id).await?;
@@ -2488,8 +2484,8 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     drop(executor);
     http_server.abort();
 
-    assert_eq!(status2.status, WorkerStatus::Interrupted);
-    assert_eq!(status4.status, WorkerStatus::Idle);
+    assert_eq!(status2.status, AgentStatus::Interrupted);
+    assert_eq!(status4.status, AgentStatus::Idle);
     Ok(())
 }
 
@@ -2548,7 +2544,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor.interrupt(&worker_id).await?;
@@ -2655,7 +2651,7 @@ async fn reconstruct_interrupted_state(
     );
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor.interrupt(&worker_id).await?;
@@ -2679,7 +2675,7 @@ async fn reconstruct_interrupted_state(
     assert!(result.is_err());
     let err_msg = format!("{}", result.err().unwrap());
     assert!(err_msg.contains("Interrupted via the Golem API"));
-    assert_eq!(status, WorkerStatus::Interrupted);
+    assert_eq!(status, AgentStatus::Interrupted);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -2740,7 +2736,7 @@ async fn invocation_queue_is_persistent(
         .await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
     executor
@@ -2758,11 +2754,7 @@ async fn invocation_queue_is_persistent(
     executor.interrupt(&worker_id).await?;
 
     executor
-        .wait_for_status(
-            &worker_id,
-            WorkerStatus::Interrupted,
-            Duration::from_secs(5),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(5))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2777,7 +2769,7 @@ async fn invocation_queue_is_persistent(
     // executor.log_output(&worker_id).await?;
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
     {
         let mut response = response.lock().unwrap();
@@ -2941,7 +2933,7 @@ async fn stderr_returned_for_failed_component(
         "Expected 'value is too large' in error: {err3}"
     );
 
-    assert_eq!(metadata.status, WorkerStatus::Failed);
+    assert_eq!(metadata.status, AgentStatus::Failed);
     assert!(metadata.last_error.is_some());
     let last_error = metadata.last_error.unwrap();
     assert!(
@@ -3051,7 +3043,7 @@ async fn cancelling_pending_invocations(
     executor
         .complete_promise(
             &PromiseId {
-                worker_id: worker_id.clone(),
+                agent_id: worker_id.clone(),
                 oplog_idx: OplogIndex::from_u64(oplog_idx),
             },
             vec![42],
@@ -3330,7 +3322,7 @@ async fn delete_worker_during_invocation(
     }
 
     executor
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(2))
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(2))
         .await?;
 
     info!("Deleting the worker");

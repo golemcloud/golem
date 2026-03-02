@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::base_model::agent::Principal;
-use golem_common::base_model::WorkerId;
+use golem_common::base_model::AgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -23,10 +23,10 @@ use tracing::warn;
 
 pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
-    fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
+    fn agent_id(&self) -> Result<AgentId, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
-    fn parent(&self) -> Option<WorkerId>;
+    fn parent(&self) -> Option<AgentId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
     }
@@ -37,7 +37,7 @@ pub trait CanStartWorker {
 }
 
 trait ProtobufInvocationDetails {
-    fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId>;
+    fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId>;
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId>;
     fn proto_invocation_context(
         &self,
@@ -58,10 +58,10 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .map_err(WorkerExecutorError::invalid_request)
     }
 
-    fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError> {
-        self.proto_worker_id()
+    fn agent_id(&self) -> Result<AgentId, WorkerExecutorError> {
+        self.proto_agent_id()
             .clone()
-            .ok_or(WorkerExecutorError::invalid_request("worker_id not found"))?
+            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)
     }
@@ -79,11 +79,11 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         }
     }
 
-    fn parent(&self) -> Option<WorkerId> {
+    fn parent(&self) -> Option<AgentId> {
         self.proto_invocation_context().as_ref().and_then(|ctx| {
             ctx.parent
                 .as_ref()
-                .and_then(|worker_id| worker_id.clone().try_into().ok())
+                .and_then(|agent_id| agent_id.clone().try_into().ok())
         })
     }
 
@@ -109,8 +109,8 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSystemNodeRequest
 {
-    fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
-        &self.worker_id
+    fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
+        &self.agent_id
     }
 
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
@@ -135,8 +135,8 @@ impl ProtobufInvocationDetails
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest
 {
-    fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
-        &self.worker_id
+    fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
+        &self.agent_id
     }
 
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
@@ -161,8 +161,8 @@ impl ProtobufInvocationDetails
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAgentRequest
 {
-    fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId> {
-        &self.worker_id
+    fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
+        &self.agent_id
     }
 
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {

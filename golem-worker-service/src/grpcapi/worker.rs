@@ -13,25 +13,25 @@
 // limitations under the License.
 
 use super::error::WorkerTraceErrorKind;
-use super::{bad_request_error, validate_protobuf_worker_id};
+use super::{bad_request_error, validate_protobuf_agent_id};
 use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
-    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, complete_promise_response,
+    AgentError as GrpcAgentError, CompletePromiseRequest, CompletePromiseResponse,
+    ForkWorkerRequest, ForkWorkerResponse, InvokeAgentRequest, InvokeAgentResponse,
+    InvokeAgentSuccess, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, complete_promise_response,
     fork_worker_response, invoke_agent_response, launch_new_worker_response,
     resume_worker_response, revert_worker_response, update_worker_response,
 };
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::WorkerUpdateMode;
+use golem_common::model::worker::AgentUpdateMode;
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::grpc::{proto_component_id_string, proto_worker_id_string};
+use golem_service_base::grpc::{proto_agent_id_string, proto_component_id_string};
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -59,9 +59,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
             .instrument(record.span.clone())
             .await
         {
-            Ok((worker_id, component_version)) => record.succeed(
+            Ok((agent_id, component_version)) => record.succeed(
                 launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
-                    worker_id: Some(worker_id.into()),
+                    agent_id: Some(agent_id.into()),
                     component_version: component_version.into(),
                 }),
             ),
@@ -83,7 +83,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "complete_promise",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let response = match self
@@ -110,7 +110,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "resume_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let response = match self
@@ -137,7 +137,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "update_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let response = match self
@@ -164,8 +164,8 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "fork_worker",
-            source_worker_id = proto_worker_id_string(&request.source_worker_id),
-            target_worker_id = proto_worker_id_string(&request.target_worker_id),
+            source_agent_id = proto_agent_id_string(&request.source_agent_id),
+            target_agent_id = proto_agent_id_string(&request.target_agent_id),
         );
 
         let response = match self
@@ -192,7 +192,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "revert_worker",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
         );
 
         let response = match self
@@ -219,7 +219,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_agent",
-            worker_id = proto_worker_id_string(&request.worker_id),
+            agent_id = proto_agent_id_string(&request.agent_id),
             method_name = request.method_name
         );
 
@@ -249,7 +249,7 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
-    ) -> Result<(WorkerId, ComponentRevision), GrpcWorkerError> {
+    ) -> Result<(AgentId, ComponentRevision), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
@@ -261,15 +261,15 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let worker_id = WorkerId {
+        let agent_id = AgentId {
             component_id,
-            worker_name: request.name,
+            agent_id: request.name,
         };
 
         let latest_component_revision = self
             .worker_service
             .create(
-                &worker_id,
+                &agent_id,
                 request.env,
                 request.config_vars.into_iter().collect(),
                 request.ignore_already_existing,
@@ -279,19 +279,19 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok((worker_id, latest_component_revision))
+        Ok((agent_id, latest_component_revision))
     }
 
     async fn complete_promise(
         &self,
         request: CompletePromiseRequest,
-    ) -> Result<bool, GrpcWorkerError> {
+    ) -> Result<bool, GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
         let parameters = request
             .complete_parameters
@@ -299,36 +299,36 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, auth)
+            .complete_promise(&agent_id, parameters.oplog_idx, parameters.data, auth)
             .await?;
 
         Ok(result)
     }
 
-    async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {
+    async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
         self.worker_service
-            .resume(&worker_id, request.force.unwrap_or(false), auth)
+            .resume(&agent_id, request.force.unwrap_or(false), auth)
             .await?;
 
         Ok(())
     }
 
-    async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcWorkerError> {
-        let worker_update_mode: WorkerUpdateMode = request.mode().into();
+    async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcAgentError> {
+        let worker_update_mode: AgentUpdateMode = request.mode().into();
         let disable_wakeup = request.disable_wakeup;
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
         let target_revision: ComponentRevision = request
             .target_revision
             .try_into()
@@ -336,7 +336,7 @@ impl WorkerGrpcApi {
 
         self.worker_service
             .update(
-                &worker_id,
+                &agent_id,
                 worker_update_mode,
                 target_revision,
                 disable_wakeup,
@@ -347,31 +347,31 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
-    async fn fork_worker(&self, request: ForkWorkerRequest) -> Result<(), GrpcWorkerError> {
+    async fn fork_worker(&self, request: ForkWorkerRequest) -> Result<(), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let source_worker_id = validate_protobuf_worker_id(request.source_worker_id)?;
-        let target_worker_id = validate_protobuf_worker_id(request.target_worker_id)?;
+        let source_agent_id = validate_protobuf_agent_id(request.source_agent_id)?;
+        let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
 
         self.worker_service
-            .fork_worker(&source_worker_id, &target_worker_id, oplog_idx, auth)
+            .fork_worker(&source_agent_id, &target_agent_id, oplog_idx, auth)
             .await?;
 
         Ok(())
     }
 
-    async fn revert_worker(&self, request: RevertWorkerRequest) -> Result<(), GrpcWorkerError> {
+    async fn revert_worker(&self, request: RevertWorkerRequest) -> Result<(), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
 
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
         let target = request
             .target
@@ -380,7 +380,7 @@ impl WorkerGrpcApi {
             .map_err(|err| bad_request_error(format!("Invalid target {err}")))?;
 
         self.worker_service
-            .revert_worker(&worker_id, target, auth)
+            .revert_worker(&agent_id, target, auth)
             .await?;
 
         Ok(())
@@ -389,14 +389,14 @@ impl WorkerGrpcApi {
     async fn invoke_agent(
         &self,
         request: InvokeAgentRequest,
-    ) -> Result<InvokeAgentSuccess, GrpcWorkerError> {
+    ) -> Result<InvokeAgentSuccess, GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
 
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
         let method_parameters = request
             .method_parameters
@@ -409,7 +409,7 @@ impl WorkerGrpcApi {
         let output = self
             .worker_service
             .invoke_agent(
-                &worker_id,
+                &agent_id,
                 request.method_name,
                 method_parameters,
                 request.mode,

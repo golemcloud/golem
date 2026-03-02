@@ -112,25 +112,25 @@ impl ErrorHandler {
                 // TODO: show agents
                 Ok(())
             }
-            GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName { worker_name } => {
+            GolemCliCommandPartialMatch::AgentInvokeMissingFunctionName { agent_name } => {
                 self.ctx.silence_app_context_init().await;
                 logln("");
                 log_action(
                     "Checking",
                     format!(
                         "provided agent name: {}",
-                        worker_name.0.log_color_highlight()
+                        agent_name.0.log_color_highlight()
                     ),
                 );
-                let worker_name_match = {
+                let agent_name_match = {
                     let _indent = NestedTextViewIndent::new(Format::Text);
-                    let worker_name_match = self
+                    let agent_name_match = self
                         .ctx
                         .worker_handler()
-                        .match_worker_name(worker_name)
+                        .match_agent_name(agent_name)
                         .await?;
 
-                    let environment_formatted = match worker_name_match.environment_reference() {
+                    let environment_formatted = match agent_name_match.environment_reference() {
                         Some(env) => {
                             format!(" environment: {} /", env.to_string().log_color_highlight())
                         }
@@ -141,9 +141,9 @@ impl ErrorHandler {
                         "[{}]{} component: {} / agent: {}, {}",
                         "ok".green(),
                         environment_formatted,
-                        worker_name_match.component_name.0.log_color_highlight(),
-                        worker_name_match.worker_name.0.log_color_highlight(),
-                        match worker_name_match.component_name_match_kind {
+                        agent_name_match.component_name.0.log_color_highlight(),
+                        agent_name_match.agent_name.0.log_color_highlight(),
+                        match agent_name_match.component_name_match_kind {
                             ComponentNameMatchKind::AppCurrentDir =>
                                 "component was selected based on current dir",
                             ComponentNameMatchKind::App =>
@@ -151,16 +151,16 @@ impl ErrorHandler {
                             ComponentNameMatchKind::Unknown => "",
                         }
                     ));
-                    worker_name_match
+                    agent_name_match
                 };
                 logln("");
                 if let Ok(Some(component)) = self
                     .ctx
                     .component_handler()
                     .resolve_component(
-                        &worker_name_match.environment,
-                        &worker_name_match.component_name,
-                        Some((&worker_name_match.worker_name).into()),
+                        &agent_name_match.environment,
+                        &agent_name_match.component_name,
+                        Some((&agent_name_match.agent_name).into()),
                     )
                     .await
                 {
@@ -169,7 +169,7 @@ impl ErrorHandler {
                         .worker_handler()
                         .validate_worker_and_function_names(
                             &component,
-                            &worker_name_match.worker_name,
+                            &agent_name_match.agent_name,
                             None,
                         )?;
 

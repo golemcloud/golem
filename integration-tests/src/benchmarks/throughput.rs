@@ -17,14 +17,14 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
-use golem_common::base_model::agent::{AgentId, DataValue};
+use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
-use golem_common::model::{RoutingTable, WorkerId};
+use golem_common::model::{AgentId, RoutingTable};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -353,18 +353,18 @@ impl Benchmark for ThroughputCpuIntensive {
 #[derive(Debug, Clone)]
 pub struct AgentIdPair {
     pub component_id: ComponentId,
-    pub parent: AgentId,
-    pub child: AgentId,
+    pub parent: ParsedAgentId,
+    pub child: ParsedAgentId,
 }
 
 impl AgentIdPair {
     fn at_same_worker_executor(&self, routing_table: &RoutingTable) -> bool {
-        let parent_worker_id = WorkerId::from_agent_id(self.component_id, &self.parent)
+        let parent_agent_id = AgentId::from_agent_id(self.component_id, &self.parent)
             .expect("Failed to create worker id from parent agent id");
-        let child_worker_id = WorkerId::from_agent_id(self.component_id, &self.child)
+        let child_agent_id = AgentId::from_agent_id(self.component_id, &self.child)
             .expect("Failed to create worker id from child agent id");
-        let parent_pod = routing_table.lookup(&parent_worker_id);
-        let child_pod = routing_table.lookup(&child_worker_id);
+        let parent_pod = routing_table.lookup(&parent_agent_id);
+        let child_pod = routing_table.lookup(&child_agent_id);
 
         match (parent_pod, child_pod) {
             (Some(parent_pod), Some(child_pod)) => parent_pod == child_pod,
@@ -376,7 +376,7 @@ impl AgentIdPair {
 enum AgentInvocationTarget {
     Single {
         component: ComponentDto,
-        agent_id: AgentId,
+        agent_id: ParsedAgentId,
     },
     Pair {
         component: ComponentDto,
@@ -392,7 +392,7 @@ impl AgentInvocationTarget {
         }
     }
 
-    pub fn agent_id(&self) -> &AgentId {
+    pub fn agent_id(&self) -> &ParsedAgentId {
         match self {
             AgentInvocationTarget::Single { agent_id, .. } => agent_id,
             AgentInvocationTarget::Pair { pair, .. } => &pair.parent,
@@ -418,10 +418,10 @@ pub struct IterationContext {
     domain: Domain,
     rust_agent_component: ComponentDto,
     ts_agent_component: ComponentDto,
-    rust_agent_ids: Vec<AgentId>,
-    ts_agent_ids: Vec<AgentId>,
-    rust_agent_ids_for_http: Vec<AgentId>,
-    ts_agent_ids_for_http: Vec<AgentId>,
+    rust_agent_ids: Vec<ParsedAgentId>,
+    ts_agent_ids: Vec<ParsedAgentId>,
+    rust_agent_ids_for_http: Vec<ParsedAgentId>,
+    ts_agent_ids_for_http: Vec<ParsedAgentId>,
     length: usize,
     routing_table: RoutingTable,
     ts_rpc_agent_id_pairs: Vec<AgentIdPair>,
@@ -437,9 +437,9 @@ pub struct ThroughputBenchmark {
     call_count: usize,
 }
 
-fn agent_ids_to_worker_ids(component_id: ComponentId, ids: &[AgentId]) -> Vec<WorkerId> {
+fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> Vec<AgentId> {
     ids.iter()
-        .filter_map(|id| WorkerId::from_agent_id(component_id, id).ok())
+        .filter_map(|id| AgentId::from_agent_id(component_id, id).ok())
         .collect()
 }
 
@@ -595,7 +595,7 @@ impl ThroughputBenchmark {
         async fn warmup_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             component: &ComponentDto,
-            ids: &[AgentId],
+            ids: &[ParsedAgentId],
             method_name: &str,
             params: &(dyn Fn(usize) -> DataValue + Send + Sync + 'static),
             length: usize,
@@ -904,17 +904,17 @@ impl ThroughputBenchmark {
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(iteration.rust_agent_component.id, &iteration.rust_agent_ids),
+            &agent_ids_to_agent_ids(iteration.rust_agent_component.id, &iteration.rust_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(iteration.ts_agent_component.id, &iteration.ts_agent_ids),
+            &agent_ids_to_agent_ids(iteration.ts_agent_component.id, &iteration.ts_agent_ids),
         )
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(
+            &agent_ids_to_agent_ids(
                 iteration.rust_agent_component.id,
                 &iteration.rust_agent_ids_for_http,
             ),
@@ -922,30 +922,30 @@ impl ThroughputBenchmark {
         .await;
         delete_workers(
             &iteration.user,
-            &agent_ids_to_worker_ids(
+            &agent_ids_to_agent_ids(
                 iteration.ts_agent_component.id,
                 &iteration.ts_agent_ids_for_http,
             ),
         )
         .await;
 
-        let mut ts_rpc_workers: Vec<WorkerId> = Vec::new();
+        let mut ts_rpc_workers: Vec<AgentId> = Vec::new();
         for pair in &iteration.ts_rpc_agent_id_pairs {
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.parent) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.parent) {
                 ts_rpc_workers.push(id);
             }
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.child) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.child) {
                 ts_rpc_workers.push(id);
             }
         }
         delete_workers(&iteration.user, &ts_rpc_workers).await;
 
-        let mut rust_rpc_workers: Vec<WorkerId> = Vec::new();
+        let mut rust_rpc_workers: Vec<AgentId> = Vec::new();
         for pair in &iteration.rust_rpc_agent_id_pairs {
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.parent) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.parent) {
                 rust_rpc_workers.push(id);
             }
-            if let Ok(id) = WorkerId::from_agent_id(pair.component_id, &pair.child) {
+            if let Ok(id) = AgentId::from_agent_id(pair.component_id, &pair.child) {
                 rust_rpc_workers.push(id);
             }
         }

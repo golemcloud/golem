@@ -492,14 +492,14 @@ macro_rules! data_value {
 #[macro_export]
 macro_rules! agent_id {
     ($name:expr) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             None
         )
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             None
@@ -522,14 +522,14 @@ macro_rules! agent_id {
 #[macro_export]
 macro_rules! phantom_agent_id {
     ($name:expr, $phantom_id:expr) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             Some($phantom_id)
         )
     };
     ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
-        $crate::base_model::agent::AgentId::new(
+        $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             Some($phantom_id)

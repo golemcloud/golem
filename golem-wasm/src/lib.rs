@@ -613,7 +613,7 @@ impl TryFrom<Uri> for AgentId {
                     })
                 }
                 _ => Err(format!(
-                    "Invalid URN: expected format 'urn:worker:<component_id>/<worker_name>', got '{urn}'",
+                    "Invalid URN: expected format 'urn:worker:<component_id>/<agent_name>', got '{urn}'",
                 )),
             }
         }

@@ -176,7 +176,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/WorkerCreationRequest'
+              $ref: '#/components/schemas/AgentCreationRequest'
         required: true
       responses:
         '200':
@@ -230,7 +230,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}:
+  /v1/components/{component_id}/workers/{agent_name}:
     get:
       tags:
       - Worker
@@ -263,7 +263,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -276,7 +276,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/WorkerMetadataDto'
+                $ref: '#/components/schemas/AgentMetadataDto'
         '400':
           description: ''
           content:
@@ -339,7 +339,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -398,7 +398,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/complete:
+  /v1/components/{component_id}/workers/{agent_name}/complete:
     post:
       tags:
       - Worker
@@ -419,7 +419,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -484,7 +484,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/interrupt:
+  /v1/components/{component_id}/workers/{agent_name}/interrupt:
     post:
       tags:
       - Worker
@@ -506,7 +506,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -667,7 +667,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/resume:
+  /v1/components/{component_id}/workers/{agent_name}/resume:
     post:
       tags:
       - Worker
@@ -684,7 +684,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -743,7 +743,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/update:
+  /v1/components/{component_id}/workers/{agent_name}/update:
     post:
       tags:
       - Worker
@@ -760,7 +760,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -825,7 +825,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/oplog:
+  /v1/components/{component_id}/workers/{agent_name}/oplog:
     get:
       tags:
       - Worker
@@ -842,7 +842,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -932,7 +932,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/files/{file_name}:
+  /v1/components/{component_id}/workers/{agent_name}/files/{file_name}:
     get:
       tags:
       - Worker
@@ -949,7 +949,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1016,7 +1016,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/file-contents/{file_name}:
+  /v1/components/{component_id}/workers/{agent_name}/file-contents/{file_name}:
     get:
       tags:
       - Worker
@@ -1033,7 +1033,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1101,7 +1101,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/activate-plugin:
+  /v1/components/{component_id}/workers/{agent_name}/activate-plugin:
     post:
       tags:
       - Worker
@@ -1119,7 +1119,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1190,7 +1190,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/deactivate-plugin:
+  /v1/components/{component_id}/workers/{agent_name}/deactivate-plugin:
     post:
       tags:
       - Worker
@@ -1208,7 +1208,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1279,7 +1279,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/revert:
+  /v1/components/{component_id}/workers/{agent_name}/revert:
     post:
       tags:
       - Worker
@@ -1297,7 +1297,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1362,7 +1362,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/fork:
+  /v1/components/{component_id}/workers/{agent_name}/fork:
     post:
       tags:
       - Worker
@@ -1380,7 +1380,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1445,7 +1445,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
+  /v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}:
     delete:
       tags:
       - Worker
@@ -1463,7 +1463,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -1530,7 +1530,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/connect:
+  /v1/components/{component_id}/workers/{agent_name}/connect:
     get:
       tags:
       - Worker
@@ -1547,7 +1547,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: worker_name
+        name: agent_name
         required: true
         deprecated: false
         schema:
@@ -7747,6 +7747,218 @@ components:
     ActivatePluginResponse:
       title: ActivatePluginResponse
       type: object
+    AgentAndFilter:
+      title: AgentAndFilter
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentFilter'
+      required:
+      - filters
+    AgentConfigVarsFilter:
+      title: AgentConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    AgentCreatedAtFilter:
+      title: AgentCreatedAtFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: string
+          format: date-time
+      required:
+      - comparator
+      - value
+    AgentCreationRequest:
+      title: AgentCreationRequest
+      type: object
+      properties:
+        name:
+          type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - name
+      - env
+    AgentEnvFilter:
+      title: AgentEnvFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
+      - comparator
+      - value
+    AgentFilter:
+      discriminator:
+        propertyName: type
+        mapping:
+          Name: '#/components/schemas/AgentFilter_AgentNameFilter'
+          Status: '#/components/schemas/AgentFilter_AgentStatusFilter'
+          Revision: '#/components/schemas/AgentFilter_AgentRevisionFilter'
+          CreatedAt: '#/components/schemas/AgentFilter_AgentCreatedAtFilter'
+          Env: '#/components/schemas/AgentFilter_AgentEnvFilter'
+          And: '#/components/schemas/AgentFilter_AgentAndFilter'
+          Or: '#/components/schemas/AgentFilter_AgentOrFilter'
+          Not: '#/components/schemas/AgentFilter_AgentNotFilter'
+          ConfigVars: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentStatusFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentRevisionFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentCreatedAtFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentEnvFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentAndFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentOrFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentNotFilter'
+      - $ref: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+    AgentFilter_AgentAndFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: And
+            type: string
+            enum:
+            - And
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentAndFilter'
+    AgentFilter_AgentConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ConfigVars
+            type: string
+            enum:
+            - ConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentConfigVarsFilter'
+    AgentFilter_AgentCreatedAtFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CreatedAt
+            type: string
+            enum:
+            - CreatedAt
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentCreatedAtFilter'
+    AgentFilter_AgentEnvFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Env
+            type: string
+            enum:
+            - Env
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentEnvFilter'
+    AgentFilter_AgentNameFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Name
+            type: string
+            enum:
+            - Name
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentNameFilter'
+    AgentFilter_AgentNotFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Not
+            type: string
+            enum:
+            - Not
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentNotFilter'
+    AgentFilter_AgentOrFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Or
+            type: string
+            enum:
+            - Or
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentOrFilter'
+    AgentFilter_AgentRevisionFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Revision
+            type: string
+            enum:
+            - Revision
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentRevisionFilter'
+    AgentFilter_AgentStatusFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Status
+            type: string
+            enum:
+            - Status
+        required:
+        - type
+      - $ref: '#/components/schemas/AgentStatusFilter'
+    AgentId:
+      title: AgentId
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+      required:
+      - componentId
+      - agentId
     AgentInitializationParameters:
       title: AgentInitializationParameters
       type: object
@@ -7831,6 +8043,95 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
+    AgentMetadataDto:
+      title: AgentMetadataDto
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        environmentId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          type: object
+          additionalProperties:
+            type: string
+        status:
+          $ref: '#/components/schemas/AgentStatus'
+        componentRevision:
+          type: integer
+          format: uint64
+        retryCount:
+          type: integer
+          format: uint32
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateRecord'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
+        activePlugins:
+          type: array
+          items:
+            title: |-
+              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+              There can only be a single plugin with a given priority installed to a component.
+            type: integer
+            format: int32
+        skippedRegions:
+          description: |-
+            Oplog regions that are skipped during the worker's state recovery, but describe
+            the history of the worker. For example if an atomic region gets restarted, its partially
+            recorded oplog entries will be skipped on retry.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+        deletedRegions:
+          description: Oplog regions permanently deleted from the workers using the revert functionality.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+      required:
+      - agentId
+      - environmentId
+      - createdBy
+      - env
+      - configVars
+      - status
+      - componentRevision
+      - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - exportedResourceInstances
+      - activePlugins
+      - skippedRegions
+      - deletedRegions
     AgentMethodInvocationParameters:
       title: AgentMethodInvocationParameters
       type: object
@@ -7860,6 +8161,93 @@ components:
       - traceId
       - traceStates
       - invocationContext
+    AgentNameFilter:
+      title: AgentNameFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - comparator
+      - value
+    AgentNotFilter:
+      title: AgentNotFilter
+      type: object
+      properties:
+        filter:
+          $ref: '#/components/schemas/AgentFilter'
+      required:
+      - filter
+    AgentOrFilter:
+      title: AgentOrFilter
+      type: object
+      properties:
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentFilter'
+      required:
+      - filters
+    AgentResourceDescription:
+      title: AgentResourceDescription
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+    AgentRevisionFilter:
+      title: AgentRevisionFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          type: integer
+          format: uint64
+      required:
+      - comparator
+      - value
+    AgentStatus:
+      description: |-
+        Represents last known status of a worker
+
+        This is always recorded together with the current oplog index, and it can only be used
+        as a source of truth if there are no newer oplog entries since the record.
+      type: string
+      enum:
+      - Running
+      - Idle
+      - Suspended
+      - Interrupted
+      - Retrying
+      - Failed
+      - Exited
+    AgentStatusFilter:
+      title: AgentStatusFilter
+      type: object
+      properties:
+        comparator:
+          $ref: '#/components/schemas/FilterComparator'
+        value:
+          $ref: '#/components/schemas/AgentStatus'
+      required:
+      - comparator
+      - value
+    AgentUpdateMode:
+      type: string
+      enum:
+      - automatic
+      - manual
     AnalysedResourceMode:
       type: string
       enum:
@@ -8424,7 +8812,7 @@ components:
           type: integer
           format: uint64
         description:
-          $ref: '#/components/schemas/WorkerResourceDescription'
+          $ref: '#/components/schemas/AgentResourceDescription'
       required:
       - key
       - description
@@ -8487,13 +8875,13 @@ components:
       title: ForkWorkerRequest
       type: object
       properties:
-        targetWorkerId:
-          $ref: '#/components/schemas/WorkerId'
+        targetAgentId:
+          $ref: '#/components/schemas/AgentId'
         oplogIndexCutoff:
           type: integer
           format: uint64
       required:
-      - targetWorkerId
+      - targetAgentId
       - oplogIndexCutoff
     ForkWorkerResponse:
       title: ForkWorkerResponse
@@ -10195,7 +10583,7 @@ components:
       type: object
       properties:
         mode:
-          $ref: '#/components/schemas/WorkerUpdateMode'
+          $ref: '#/components/schemas/AgentUpdateMode'
         targetRevision:
           type: integer
           format: uint64
@@ -10233,86 +10621,18 @@ components:
           type: string
       required:
       - version
-    WorkerAndFilter:
-      title: WorkerAndFilter
-      type: object
-      properties:
-        filters:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkerFilter'
-      required:
-      - filters
-    WorkerConfigVarsFilter:
-      title: WorkerConfigVarsFilter
-      type: object
-      properties:
-        name:
-          type: string
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - name
-      - comparator
-      - value
-    WorkerCreatedAtFilter:
-      title: WorkerCreatedAtFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          type: string
-          format: date-time
-      required:
-      - comparator
-      - value
-    WorkerCreationRequest:
-      title: WorkerCreationRequest
-      type: object
-      properties:
-        name:
-          type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
-      required:
-      - name
-      - env
     WorkerCreationResponse:
       title: WorkerCreationResponse
       type: object
       properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         componentRevision:
           type: integer
           format: uint64
       required:
-      - workerId
+      - agentId
       - componentRevision
-    WorkerEnvFilter:
-      title: WorkerEnvFilter
-      type: object
-      properties:
-        name:
-          type: string
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - name
-      - comparator
-      - value
     WorkerErrorDetails:
       title: WorkerErrorDetails
       description: Detail in case the error was caused by the worker failing
@@ -10327,332 +10647,12 @@ components:
       required:
       - cause
       - stderr
-    WorkerFilter:
-      discriminator:
-        propertyName: type
-        mapping:
-          Name: '#/components/schemas/WorkerFilter_WorkerNameFilter'
-          Status: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-          Revision: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
-          CreatedAt: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
-          Env: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-          And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
-          Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
-          Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-          ConfigVars: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerStatusFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerRevisionFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerCreatedAtFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerEnvFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
-      - $ref: '#/components/schemas/WorkerFilter_WorkerConfigVarsFilter'
-    WorkerFilter_WorkerAndFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: And
-            type: string
-            enum:
-            - And
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerAndFilter'
-    WorkerFilter_WorkerConfigVarsFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ConfigVars
-            type: string
-            enum:
-            - ConfigVars
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerConfigVarsFilter'
-    WorkerFilter_WorkerCreatedAtFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: CreatedAt
-            type: string
-            enum:
-            - CreatedAt
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerCreatedAtFilter'
-    WorkerFilter_WorkerEnvFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Env
-            type: string
-            enum:
-            - Env
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerEnvFilter'
-    WorkerFilter_WorkerNameFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Name
-            type: string
-            enum:
-            - Name
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerNameFilter'
-    WorkerFilter_WorkerNotFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Not
-            type: string
-            enum:
-            - Not
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerNotFilter'
-    WorkerFilter_WorkerOrFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Or
-            type: string
-            enum:
-            - Or
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerOrFilter'
-    WorkerFilter_WorkerRevisionFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Revision
-            type: string
-            enum:
-            - Revision
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerRevisionFilter'
-    WorkerFilter_WorkerStatusFilter:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Status
-            type: string
-            enum:
-            - Status
-        required:
-        - type
-      - $ref: '#/components/schemas/WorkerStatusFilter'
-    WorkerId:
-      title: WorkerId
-      type: object
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        workerName:
-          type: string
-      required:
-      - componentId
-      - workerName
-    WorkerMetadataDto:
-      title: WorkerMetadataDto
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        environmentId:
-          type: string
-          format: uuid
-        createdBy:
-          type: string
-          format: uuid
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
-        status:
-          $ref: '#/components/schemas/WorkerStatus'
-        componentRevision:
-          type: integer
-          format: uint64
-        retryCount:
-          type: integer
-          format: uint32
-        pendingInvocationCount:
-          type: integer
-          format: uint64
-        updates:
-          type: array
-          items:
-            $ref: '#/components/schemas/UpdateRecord'
-        createdAt:
-          type: string
-          format: date-time
-        lastError:
-          type: string
-        componentSize:
-          type: integer
-          format: uint64
-        totalLinearMemorySize:
-          type: integer
-          format: uint64
-        exportedResourceInstances:
-          type: array
-          items:
-            $ref: '#/components/schemas/ExportedResourceMetadata'
-        activePlugins:
-          type: array
-          items:
-            title: |-
-              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-              There can only be a single plugin with a given priority installed to a component.
-            type: integer
-            format: int32
-        skippedRegions:
-          description: |-
-            Oplog regions that are skipped during the worker's state recovery, but describe
-            the history of the worker. For example if an atomic region gets restarted, its partially
-            recorded oplog entries will be skipped on retry.
-          type: array
-          items:
-            $ref: '#/components/schemas/OplogRegion'
-        deletedRegions:
-          description: Oplog regions permanently deleted from the workers using the revert functionality.
-          type: array
-          items:
-            $ref: '#/components/schemas/OplogRegion'
-      required:
-      - workerId
-      - environmentId
-      - createdBy
-      - env
-      - configVars
-      - status
-      - componentRevision
-      - retryCount
-      - pendingInvocationCount
-      - updates
-      - createdAt
-      - componentSize
-      - totalLinearMemorySize
-      - exportedResourceInstances
-      - activePlugins
-      - skippedRegions
-      - deletedRegions
-    WorkerNameFilter:
-      title: WorkerNameFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/StringFilterComparator'
-        value:
-          type: string
-      required:
-      - comparator
-      - value
-    WorkerNotFilter:
-      title: WorkerNotFilter
-      type: object
-      properties:
-        filter:
-          $ref: '#/components/schemas/WorkerFilter'
-      required:
-      - filter
-    WorkerOrFilter:
-      title: WorkerOrFilter
-      type: object
-      properties:
-        filters:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkerFilter'
-      required:
-      - filters
-    WorkerResourceDescription:
-      title: WorkerResourceDescription
-      type: object
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        resourceOwner:
-          type: string
-        resourceName:
-          type: string
-      required:
-      - createdAt
-      - resourceOwner
-      - resourceName
-    WorkerRevisionFilter:
-      title: WorkerRevisionFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          type: integer
-          format: uint64
-      required:
-      - comparator
-      - value
-    WorkerStatus:
-      description: |-
-        Represents last known status of a worker
-
-        This is always recorded together with the current oplog index, and it can only be used
-        as a source of truth if there are no newer oplog entries since the record.
-      type: string
-      enum:
-      - Running
-      - Idle
-      - Suspended
-      - Interrupted
-      - Retrying
-      - Failed
-      - Exited
-    WorkerStatusFilter:
-      title: WorkerStatusFilter
-      type: object
-      properties:
-        comparator:
-          $ref: '#/components/schemas/FilterComparator'
-        value:
-          $ref: '#/components/schemas/WorkerStatus'
-      required:
-      - comparator
-      - value
-    WorkerUpdateMode:
-      type: string
-      enum:
-      - automatic
-      - manual
     WorkersMetadataRequest:
       title: WorkersMetadataRequest
       type: object
       properties:
         filter:
-          $ref: '#/components/schemas/WorkerFilter'
+          $ref: '#/components/schemas/AgentFilter'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
         count:
@@ -10667,7 +10667,7 @@ components:
         workers:
           type: array
           items:
-            $ref: '#/components/schemas/WorkerMetadataDto'
+            $ref: '#/components/schemas/AgentMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
       required:
@@ -10816,8 +10816,8 @@ components:
         timestamp:
           type: string
           format: date-time
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         componentRevision:
           type: integer
           format: uint64
@@ -10832,7 +10832,7 @@ components:
           type: string
           format: uuid
         parent:
-          $ref: '#/components/schemas/WorkerId'
+          $ref: '#/components/schemas/AgentId'
         componentSize:
           type: integer
           format: uint64
@@ -10852,7 +10852,7 @@ components:
           format: uuid
       required:
       - timestamp
-      - workerId
+      - agentId
       - componentRevision
       - env
       - createdBy

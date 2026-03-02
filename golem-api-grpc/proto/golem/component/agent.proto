@@ -299,7 +299,7 @@ message OidcPrincipal {
 }
 
 message AgentPrincipal {
-  golem.worker.WorkerId agent_id = 1;
+  golem.worker.AgentId agent_id = 1;
 }
 
 message GolemUserPrincipal {

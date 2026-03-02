@@ -22,10 +22,10 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::{PersistenceLevel, WorkerError};
+use golem_common::model::oplog::{AgentError, PersistenceLevel};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
+    AgentId, AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -42,12 +42,12 @@ pub mod event;
 pub mod public_oplog;
 
 pub trait ShardAssignmentCheck {
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError>;
+    fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
 }
 
 impl ShardAssignmentCheck for ShardAssignment {
-    fn check_worker(&self, worker_id: &WorkerId) -> Result<(), WorkerExecutorError> {
-        let shard_id = ShardId::from_worker_id(worker_id, self.number_of_shards);
+    fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
+        let shard_id = ShardId::from_agent_id(agent_id, self.number_of_shards);
         if self.shard_ids.contains(&shard_id) {
             Ok(())
         } else {
@@ -62,7 +62,7 @@ impl ShardAssignmentCheck for ShardAssignment {
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
 /// be different for each worker.
 #[derive(Clone, Debug)]
-pub struct WorkerConfig {
+pub struct AgentConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_revision_for_replay: ComponentRevision,
@@ -71,7 +71,7 @@ pub struct WorkerConfig {
     pub last_snapshot_index: Option<OplogIndex>,
 }
 
-impl WorkerConfig {
+impl AgentConfig {
     pub fn new(
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
@@ -79,8 +79,8 @@ impl WorkerConfig {
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
         last_snapshot_index: Option<OplogIndex>,
-    ) -> WorkerConfig {
-        WorkerConfig {
+    ) -> AgentConfig {
+        AgentConfig {
             deleted_regions,
             total_linear_memory_size,
             component_revision_for_replay,
@@ -102,17 +102,17 @@ impl WorkerConfig {
 
     pub(crate) fn enrich_env(
         worker_env: &mut Vec<(String, String)>,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         agent_type: &Option<AgentTypeName>,
         target_component_revision: ComponentRevision,
     ) {
-        let worker_name = worker_id.worker_name.clone();
-        let component_id = &worker_id.component_id;
+        let agent_name = agent_id.agent_id.clone();
+        let component_id = &agent_id.component_id;
         let component_revision = target_component_revision.to_string();
 
         Self::remove_dynamic_vars(worker_env);
-        worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
-        worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
+        worker_env.push((String::from("GOLEM_AGENT_ID"), agent_name.clone()));
+        worker_env.push((String::from("GOLEM_WORKER_NAME"), agent_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
         worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
         if let Some(agent_type) = agent_type {
@@ -241,7 +241,7 @@ pub enum TrapType {
     Exit,
     /// Failed with an error
     Error {
-        error: WorkerError,
+        error: AgentError,
         retry_from: OplogIndex,
     },
 }
@@ -254,39 +254,39 @@ impl TrapType {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
                     Some(&Trap::StackOverflow) => TrapType::Error {
-                        error: WorkerError::StackOverflow,
+                        error: AgentError::StackOverflow,
                         retry_from,
                     },
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
                         Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => TrapType::Error {
-                            error: WorkerError::OutOfMemory,
+                            error: AgentError::OutOfMemory,
                             retry_from,
                         },
                         Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => TrapType::Error {
-                            error: WorkerError::ExceededMemoryLimit,
+                            error: AgentError::ExceededMemoryLimit,
                             retry_from,
                         },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {
-                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    error: AgentError::InvalidRequest(details.clone()),
                                     retry_from,
                                 }
                             }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 TrapType::Error {
-                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    error: AgentError::InvalidRequest(details.clone()),
                                     retry_from,
                                 }
                             }
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
                                 TrapType::Error {
-                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    error: AgentError::InvalidRequest(details.clone()),
                                     retry_from,
                                 }
                             }
                             _ => TrapType::Error {
-                                error: WorkerError::Unknown(format!("{error:#}")),
+                                error: AgentError::Unknown(format!("{error:#}")),
                                 retry_from,
                             },
                         },
@@ -302,7 +302,7 @@ impl TrapType {
                 "Interrupted via the Golem API",
             )),
             TrapType::Error { error, .. } => match error {
-                WorkerError::InvalidRequest(msg) => {
+                AgentError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
                 }
                 _ => Some(WorkerExecutorError::InvocationFailed {
@@ -322,7 +322,7 @@ impl TrapType {
 /// decisions about retries/recovery.
 #[derive(Clone, Debug)]
 pub struct LastError {
-    pub error: WorkerError,
+    pub error: AgentError,
     pub stderr: String,
     pub retry_from: OplogIndex,
 }
@@ -774,11 +774,11 @@ mod tests {
         let uuid = Uuid::parse_str("96c12379-4fff-4fa2-aa09-a4d96c029ac2").unwrap();
 
         let component_id = ComponentId(uuid);
-        let worker_id = WorkerId {
+        let agent_id = AgentId {
             component_id,
-            worker_name: "instanceName".to_string(),
+            agent_id: "instanceName".to_string(),
         };
-        let hash = ShardId::hash_worker_id(&worker_id);
+        let hash = ShardId::hash_agent_id(&agent_id);
         info!("hash: {:?}", hash);
         assert_eq!(hash, -6692039695739768661);
     }

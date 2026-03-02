@@ -86,7 +86,7 @@ impl WebhookCallbackHandler {
         tracing::debug!("Completing promise due to webhook_callback: {promise_id}");
         self.worker_service
             .complete_promise(
-                &promise_id.worker_id,
+                &promise_id.agent_id,
                 promise_id.oplog_idx.as_u64(),
                 body_binary,
                 auth_ctx,

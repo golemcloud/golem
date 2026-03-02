@@ -18,7 +18,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{
     Enumeration, EnumerationType, Interval, SparseVec, TimeTz, ValuesRange,
 };
-use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
+use golem_common::model::{AgentId, RdbmsPoolKey, TransactionId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
@@ -2568,7 +2568,7 @@ async fn mysql_create_insert_select_test(
 async fn execute_rdbms_test<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     pool_key: &RdbmsPoolKey,
-    worker_id: &WorkerId,
+    agent_id: &AgentId,
     test: RdbmsTest<T>,
 ) -> (
     Option<TransactionId>,
@@ -2579,7 +2579,7 @@ async fn execute_rdbms_test<T: RdbmsType + 'static>(
     let mut transaction_id: Option<TransactionId> = None;
     if let Some(te) = test.transaction_end {
         let transaction = rdbms
-            .begin_transaction(pool_key, worker_id)
+            .begin_transaction(pool_key, agent_id)
             .await
             .expect("New transaction expected");
         transaction_id = Some(transaction.transaction_id());
@@ -2628,19 +2628,19 @@ async fn execute_rdbms_test<T: RdbmsType + 'static>(
             match st.action {
                 StatementAction::Execute(_) => {
                     let result = rdbms
-                        .execute(pool_key, worker_id, st.statement, st.params)
+                        .execute(pool_key, agent_id, st.statement, st.params)
                         .await;
                     results.push(result.map(StatementResult::Execute));
                 }
                 StatementAction::Query(_) => {
                     let result = rdbms
-                        .query(pool_key, worker_id, st.statement, st.params)
+                        .query(pool_key, agent_id, st.statement, st.params)
                         .await;
                     results.push(result.map(StatementResult::Query));
                 }
                 StatementAction::QueryStream(_) => {
                     match rdbms
-                        .query_stream(pool_key, worker_id, st.statement, st.params)
+                        .query_stream(pool_key, agent_id, st.statement, st.params)
                         .await
                     {
                         Ok(result_set) => {
@@ -2664,48 +2664,48 @@ async fn rdbms_test<T: RdbmsType + 'static>(
     db_address: &str,
     test: RdbmsTest<T>,
 ) {
-    let worker_id = new_worker_id();
-    let connection = rdbms.create(db_address, &worker_id).await;
+    let agent_id = new_agent_id();
+    let connection = rdbms.create(db_address, &agent_id).await;
     assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
     let (transaction_id, results) =
-        execute_rdbms_test::<T>(rdbms.clone(), &pool_key, &worker_id, test.clone()).await;
+        execute_rdbms_test::<T>(rdbms.clone(), &pool_key, &agent_id, test.clone()).await;
 
     check_transaction(
         rdbms.clone(),
         &pool_key,
-        &worker_id,
+        &agent_id,
         test.transaction_end.clone(),
         transaction_id,
     )
     .await;
 
-    check_test_results::<T>(&worker_id, test, results);
+    check_test_results::<T>(&agent_id, test, results);
 
-    let _ = rdbms.remove(&pool_key, &worker_id).await;
-    let exists = rdbms.exists(&pool_key, &worker_id).await;
+    let _ = rdbms.remove(&pool_key, &agent_id).await;
+    let exists = rdbms.exists(&pool_key, &agent_id).await;
     assert!(!exists);
 }
 
 async fn check_transaction<T: RdbmsType + 'static>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     pool_key: &RdbmsPoolKey,
-    worker_id: &WorkerId,
+    agent_id: &AgentId,
     transaction_end: Option<TransactionEnd>,
     transaction_id: Option<TransactionId>,
 ) {
     if let Some(te) = transaction_end {
         assert!(
             transaction_id.is_some(),
-            "transaction id for worker {worker_id} is some"
+            "transaction id for worker {agent_id} is some"
         );
         let transaction_id = transaction_id.unwrap();
         let transaction_status = rdbms
-            .get_transaction_status(pool_key, worker_id, &transaction_id)
+            .get_transaction_status(pool_key, agent_id, &transaction_id)
             .await;
         assert!(
             transaction_status.is_ok(),
-            "transaction status for worker {worker_id} is ok"
+            "transaction status for worker {agent_id} is ok"
         );
         let transaction_status = transaction_status.unwrap();
         match te {
@@ -2713,47 +2713,47 @@ async fn check_transaction<T: RdbmsType + 'static>(
                 assert_eq!(
                     transaction_status,
                     RdbmsTransactionStatus::Committed,
-                    "transaction status for worker {worker_id} is committed"
+                    "transaction status for worker {agent_id} is committed"
                 );
             }
             TransactionEnd::Rollback => {
                 assert_eq!(
                     transaction_status,
                     RdbmsTransactionStatus::RolledBack,
-                    "transaction status for worker {worker_id} is rolled back"
+                    "transaction status for worker {agent_id} is rolled back"
                 );
             }
             TransactionEnd::None => (),
         }
 
         let result = rdbms
-            .cleanup_transaction(pool_key, worker_id, &transaction_id)
+            .cleanup_transaction(pool_key, agent_id, &transaction_id)
             .await;
         assert!(
             result.is_ok(),
-            "transaction cleanup for worker {worker_id} is ok"
+            "transaction cleanup for worker {agent_id} is ok"
         );
 
         if PostgresType.type_id() != TypeId::of::<T>() {
             let transaction_status = rdbms
-                .get_transaction_status(pool_key, worker_id, &transaction_id)
+                .get_transaction_status(pool_key, agent_id, &transaction_id)
                 .await;
             assert!(
                 transaction_status.is_ok(),
-                "transaction status for worker {worker_id} is ok"
+                "transaction status for worker {agent_id} is ok"
             );
             let transaction_status = transaction_status.unwrap();
             assert_eq!(
                 transaction_status,
                 RdbmsTransactionStatus::NotFound,
-                "transaction status for worker {worker_id} is cleaned up"
+                "transaction status for worker {agent_id} is cleaned up"
             );
         }
     }
 }
 
 fn check_test_results<T: RdbmsType>(
-    worker_id: &WorkerId,
+    agent_id: &AgentId,
     test: RdbmsTest<T>,
     results: Vec<Result<StatementResult<T>, RdbmsError>>,
 ) {
@@ -2766,13 +2766,13 @@ fn check_test_results<T: RdbmsType>(
                             assert_eq!(
                                 result,
                                 expected,
-                                "execute result for worker {worker_id} and test statement with index {i} match"
+                                "execute result for worker {agent_id} and test statement with index {i} match"
                             );
                         }
                     }
                     v => {
-                        info!("execute result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        panic!("execute result for worker {worker_id} and test statement with index {i} is error or not found");
+                        info!("execute result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
+                        panic!("execute result for worker {agent_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2782,15 +2782,15 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            assert_eq!(result.columns, expected_columns, "query result columns for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.columns, expected_columns, "query result columns for worker {agent_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            assert_eq!(result.rows, expected_rows, "query result rows for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.rows, expected_rows, "query result rows for worker {agent_id} and test statement with index {i} match");
                         }
                     }
                     v => {
-                        info!("query result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        panic!("query result for worker {worker_id} and test statement with index {i} is error or not found");
+                        info!("query result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
+                        panic!("query result for worker {agent_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2800,15 +2800,15 @@ fn check_test_results<T: RdbmsType>(
                 match results.get(i).cloned() {
                     Some(Ok(StatementResult::Query(result))) => {
                         if let Some(expected_columns) = expected.expected_columns {
-                            assert_eq!(result.columns, expected_columns, "query stream result columns for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.columns, expected_columns, "query stream result columns for worker {agent_id} and test statement with index {i} match");
                         }
                         if let Some(expected_rows) = expected.expected_rows {
-                            assert_eq!(result.rows, expected_rows, "query stream result rows for worker {worker_id} and test statement with index {i} match");
+                            assert_eq!(result.rows, expected_rows, "query stream result rows for worker {agent_id} and test statement with index {i} match");
                         }
                     }
                     v => {
-                        info!("query stream result for worker {worker_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
-                        panic!("query stream result for worker {worker_id} and test statement with index {i} is error or not found");
+                        info!("query stream result for worker {agent_id} and test statement with index {i}, statement: {}, error: {:?}", st.statement, v);
+                        panic!("query stream result for worker {agent_id} and test statement with index {i} is error or not found");
                     }
                 }
             }
@@ -2981,8 +2981,8 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
     db_address: &str,
     expected: RdbmsError,
 ) {
-    let worker_id = new_worker_id();
-    let result = rdbms.create(db_address, &worker_id).await;
+    let agent_id = new_agent_id();
+    let result = rdbms.create(db_address, &agent_id).await;
 
     assert!(result.is_err(), "connection to {db_address} is error");
 
@@ -3000,13 +3000,13 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     params: Vec<T::DbValue>,
     expected: RdbmsError,
 ) {
-    let worker_id = new_worker_id();
-    let connection = rdbms.create(db_address, &worker_id).await;
+    let agent_id = new_agent_id();
+    let connection = rdbms.create(db_address, &agent_id).await;
     assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms
-        .query_stream(&pool_key, &worker_id, query, params)
+        .query_stream(&pool_key, &agent_id, query, params)
         .await;
 
     assert!(
@@ -3023,7 +3023,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
         query, pool_key
     );
 
-    let _ = rdbms.remove(&pool_key, &worker_id).await;
+    let _ = rdbms.remove(&pool_key, &agent_id).await;
 }
 
 async fn rdbms_execute_err_test<T: RdbmsType>(
@@ -3033,12 +3033,12 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     params: Vec<T::DbValue>,
     expected: RdbmsError,
 ) {
-    let worker_id = new_worker_id();
-    let connection = rdbms.create(db_address, &worker_id).await;
+    let agent_id = new_agent_id();
+    let connection = rdbms.create(db_address, &agent_id).await;
     assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
-    let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
+    let result = rdbms.execute(&pool_key, &agent_id, query, params).await;
 
     assert!(
         result.is_err(),
@@ -3054,7 +3054,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
         query, pool_key
     );
 
-    let _ = rdbms.remove(&pool_key, &worker_id).await;
+    let _ = rdbms.remove(&pool_key, &agent_id).await;
 }
 
 #[test]
@@ -3132,9 +3132,9 @@ async fn create_test_databases<T: RdbmsType + 'static>(
     count: u8,
     to_db_address: impl Fn(String) -> String,
 ) -> Vec<String> {
-    let worker_id = new_worker_id();
+    let agent_id = new_agent_id();
 
-    let connection = rdbms.create(db_address, &worker_id).await;
+    let connection = rdbms.create(db_address, &agent_id).await;
     assert!(connection.is_ok(), "connection to {} is ok", db_address);
     let pool_key = connection.unwrap();
 
@@ -3146,7 +3146,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
         let r = rdbms
             .execute(
                 &pool_key,
-                &worker_id,
+                &agent_id,
                 &format!("CREATE DATABASE {db_name}"),
                 vec![],
             )
@@ -3158,7 +3158,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
         values.push(address);
     }
 
-    let _ = rdbms.remove(&pool_key, &worker_id).await;
+    let _ = rdbms.remove(&pool_key, &agent_id).await;
 
     values
 }
@@ -3177,42 +3177,42 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
             let test_clone = test.clone();
             let _ = fibers.spawn(
                 async move {
-                    let worker_id = new_worker_id();
+                    let agent_id = new_agent_id();
 
-                    let connection = rdbms_clone.create(&db_address_clone, &worker_id).await;
+                    let connection = rdbms_clone.create(&db_address_clone, &agent_id).await;
 
                     let pool_key = connection.unwrap();
 
                     let (transaction_id, result) =
-                        execute_rdbms_test(rdbms_clone.clone(), &pool_key, &worker_id, test_clone)
+                        execute_rdbms_test(rdbms_clone.clone(), &pool_key, &agent_id, test_clone)
                             .await;
 
-                    (worker_id, pool_key, transaction_id, result)
+                    (agent_id, pool_key, transaction_id, result)
                 }
                 .in_current_span(),
             );
         }
     }
 
-    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, RdbmsError>>> =
+    let mut workers_results: HashMap<AgentId, Vec<Result<StatementResult<T>, RdbmsError>>> =
         HashMap::new();
-    let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
-    let mut workers_transactions: HashMap<WorkerId, Option<TransactionId>> = HashMap::new();
+    let mut workers_pools: HashMap<AgentId, RdbmsPoolKey> = HashMap::new();
+    let mut workers_transactions: HashMap<AgentId, Option<TransactionId>> = HashMap::new();
 
     while let Some(res) = fibers.join_next().await {
-        let (worker_id, pool_key, transaction_id, result_execute) = res.unwrap();
-        workers_results.insert(worker_id.clone(), result_execute);
-        workers_pools.insert(worker_id.clone(), pool_key);
-        workers_transactions.insert(worker_id.clone(), transaction_id);
+        let (agent_id, pool_key, transaction_id, result_execute) = res.unwrap();
+        workers_results.insert(agent_id.clone(), result_execute);
+        workers_pools.insert(agent_id.clone(), pool_key);
+        workers_transactions.insert(agent_id.clone(), transaction_id);
     }
 
     if test.transaction_end.is_some() {
-        for (worker_id, transaction_id) in workers_transactions.clone() {
-            let pool_key = workers_pools.get(&worker_id).unwrap().clone();
+        for (agent_id, transaction_id) in workers_transactions.clone() {
+            let pool_key = workers_pools.get(&agent_id).unwrap().clone();
             check_transaction(
                 rdbms.clone(),
                 &pool_key,
-                &worker_id,
+                &agent_id,
                 test.transaction_end.clone(),
                 transaction_id,
             )
@@ -3222,8 +3222,8 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 
     let rdbms_status = rdbms.status().await;
 
-    for (worker_id, pool_key) in workers_pools.clone() {
-        let _ = rdbms.remove(&pool_key, &worker_id).await;
+    for (agent_id, pool_key) in workers_pools.clone() {
+        let _ = rdbms.remove(&pool_key, &agent_id).await;
     }
 
     let pool_keys = db_addresses
@@ -3240,23 +3240,23 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         "pool keys match"
     );
 
-    for (worker_id, pool_key) in workers_pools {
-        let worker_ids = rdbms_status.pools.get(&pool_key);
+    for (agent_id, pool_key) in workers_pools {
+        let agent_ids = rdbms_status.pools.get(&pool_key);
 
         assert!(
-            worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
-            "worker {worker_id} found in pool {pool_key}"
+            agent_ids.is_some_and(|ids| ids.contains(&agent_id)),
+            "worker {agent_id} found in pool {pool_key}"
         );
     }
 
-    for (worker_id, result) in workers_results {
-        check_test_results(&worker_id, test.clone(), result);
+    for (agent_id, result) in workers_results {
+        check_test_results(&agent_id, test.clone(), result);
     }
 }
 
-fn new_worker_id() -> WorkerId {
-    WorkerId {
+fn new_agent_id() -> AgentId {
+    AgentId {
         component_id: ComponentId::new(),
-        worker_name: "test".to_string(),
+        agent_id: "test".to_string(),
     }
 }

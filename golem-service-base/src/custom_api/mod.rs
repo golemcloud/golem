@@ -24,7 +24,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
-use golem_common::model::{OplogIndex, PromiseId, WorkerId};
+use golem_common::model::{AgentId, OplogIndex, PromiseId};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::{AnalysedType, TypeList, TypeOption};
 use hmac::{Hmac, Mac};
@@ -338,7 +338,7 @@ impl OriginPattern {
 /// Includes a checksum that can be used to verify that the webhook was indeed created by the worker executor and
 /// for the correct component_id.
 pub struct AgentWebhookId {
-    pub worker_name: String,
+    pub agent_name: String,
     pub oplog_idx: OplogIndex,
     pub checksum: [u8; 32],
 }
@@ -354,7 +354,7 @@ impl AgentWebhookId {
 
         let checksum = mac.finalize().into_bytes().into();
         Self {
-            worker_name: promise_id.worker_id.worker_name.clone(),
+            agent_name: promise_id.agent_id.agent_id.clone(),
             oplog_idx: promise_id.oplog_idx,
             checksum,
         }
@@ -362,9 +362,9 @@ impl AgentWebhookId {
 
     pub fn into_promise_id(self, component_id: ComponentId) -> PromiseId {
         PromiseId {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id,
-                worker_name: self.worker_name,
+                agent_id: self.agent_name,
             },
             oplog_idx: self.oplog_idx,
         }
@@ -375,9 +375,9 @@ impl AgentWebhookId {
 
         mac.update(b"agent-webhook-id:v1");
         let promise_id = PromiseId {
-            worker_id: WorkerId {
+            agent_id: AgentId {
                 component_id,
-                worker_name: self.worker_name.clone(),
+                agent_id: self.agent_name.clone(),
             },
             oplog_idx: self.oplog_idx,
         };

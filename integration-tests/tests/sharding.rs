@@ -27,7 +27,7 @@ mod tests {
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
-    use golem_common::model::agent::AgentId;
+    use golem_common::model::agent::ParsedAgentId;
     use rand::prelude::*;
     use rand::rng;
     use std::time::Duration;
@@ -336,12 +336,12 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<AgentId>);
+        ) -> (ComponentDto, Vec<ParsedAgentId>);
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error>;
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error>;
         async fn start_all_worker_executors(&self);
         async fn stop_random_worker_executor(&self);
         async fn start_random_worker_executor(&self);
@@ -374,7 +374,7 @@ mod tests {
         async fn create_component_and_start_workers(
             &self,
             n: usize,
-        ) -> (ComponentDto, Vec<AgentId>) {
+        ) -> (ComponentDto, Vec<ParsedAgentId>) {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
@@ -407,8 +407,8 @@ mod tests {
         async fn invoke_and_await_workers(
             &self,
             component: &ComponentDto,
-            agent_ids: &[AgentId],
-        ) -> Result<(), worker::v1::worker_error::Error> {
+            agent_ids: &[ParsedAgentId],
+        ) -> Result<(), worker::v1::agent_error::Error> {
             let mut tasks = JoinSet::new();
             for agent_id in agent_ids {
                 let self_clone = self.admin().await;
@@ -664,7 +664,7 @@ mod tests {
         InvokeAndAwaitWorkers {
             name: String,
             component: Box<ComponentDto>,
-            agent_ids: Vec<AgentId>,
+            agent_ids: Vec<ParsedAgentId>,
         },
         Stop,
     }

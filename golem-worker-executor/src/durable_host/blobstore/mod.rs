@@ -37,7 +37,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let durability = Durability::<host_functions::BlobstoreBlobstoreCreateContainer>::new(
             self,
             DurableFunctionType::WriteRemote,
@@ -84,7 +84,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let durability = Durability::<host_functions::BlobstoreBlobstoreGetContainer>::new(
             self,
             DurableFunctionType::ReadRemote,
@@ -128,7 +128,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let durability = Durability::<host_functions::BlobstoreBlobstoreDeleteContainer>::new(
             self,
             DurableFunctionType::WriteRemote,
@@ -163,7 +163,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let durability = Durability::<host_functions::BlobstoreBlobstoreContainerExists>::new(
             self,
             DurableFunctionType::ReadRemote,
@@ -199,7 +199,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let durability = Durability::<host_functions::BlobstoreBlobstoreCopyObject>::new(
             self,
             DurableFunctionType::WriteRemote,
@@ -242,7 +242,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
-        let environment_id = self.state.owned_worker_id.environment_id();
+        let environment_id = self.state.owned_agent_id.environment_id();
         let durability = Durability::<host_functions::BlobstoreBlobstoreMoveObject>::new(
             self,
             DurableFunctionType::WriteRemote,

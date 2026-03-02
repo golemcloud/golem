@@ -27,7 +27,7 @@ use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunction
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::worker::UpdateRecord;
-use golem_common::model::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
+use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use golem_wasm::analysis::AnalysedExport;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -35,21 +35,21 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct WorkerName(pub String);
+pub struct RawAgentId(pub String);
 
-impl From<&str> for WorkerName {
+impl From<&str> for RawAgentId {
     fn from(name: &str) -> Self {
-        WorkerName(name.to_string())
+        RawAgentId(name.to_string())
     }
 }
 
-impl From<String> for WorkerName {
+impl From<String> for RawAgentId {
     fn from(name: String) -> Self {
-        WorkerName(name)
+        RawAgentId(name)
     }
 }
 
-impl Display for WorkerName {
+impl Display for RawAgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -93,12 +93,12 @@ impl FromStr for AgentUpdateMode {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerMetadataView {
     pub component_name: ComponentName,
-    pub worker_name: WorkerName,
+    pub agent_name: RawAgentId,
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
     pub env: HashMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
-    pub status: WorkerStatus,
+    pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
 
@@ -108,7 +108,7 @@ pub struct WorkerMetadataView {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
+    pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
 }
 
 impl TrimDateTime for WorkerMetadataView {
@@ -121,7 +121,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
     fn from(value: WorkerMetadata) -> Self {
         WorkerMetadataView {
             component_name: value.component_name,
-            worker_name: value.worker_id.worker_name.into(),
+            agent_name: value.agent_id.agent_id.into(),
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
@@ -142,13 +142,13 @@ impl From<WorkerMetadata> for WorkerMetadataView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMetadata {
-    pub worker_id: WorkerId,
+    pub agent_id: AgentId,
     pub component_name: ComponentName,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub env: HashMap<String, String>,
     pub config_vars: BTreeMap<String, String>,
-    pub status: WorkerStatus,
+    pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
     pub pending_invocation_count: u64,
@@ -157,16 +157,16 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
+    pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
 }
 
 impl WorkerMetadata {
     pub fn from(
         component_name: ComponentName,
-        value: golem_client::model::WorkerMetadataDto,
+        value: golem_client::model::AgentMetadataDto,
     ) -> Self {
         WorkerMetadata {
-            worker_id: value.worker_id,
+            agent_id: value.agent_id,
             component_name,
             created_by: value.created_by,
             environment_id: value.environment_id,
@@ -234,7 +234,7 @@ pub struct WorkerNameMatch {
     pub environment: ResolvedEnvironmentIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
-    pub worker_name: WorkerName,
+    pub agent_name: RawAgentId,
 }
 
 impl WorkerNameMatch {
