@@ -405,6 +405,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: number[];
     configVars: [string, string][];
+    localAgentConfig: LocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
   };
   export type RawHostCallParameters = {
