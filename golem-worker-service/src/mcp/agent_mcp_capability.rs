@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::agent_mcp_resource::AgentMcpResource;
+use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::mcp::schema::{McpToolSchema, get_mcp_schema, get_mcp_tool_schema};
 use golem_common::base_model::account::AccountId;
@@ -20,14 +20,13 @@ use golem_common::base_model::agent::{AgentMethod, AgentTypeName, DataSchema};
 use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::model::agent::AgentConstructor;
-use rmcp::model::Tool;
+use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Tool};
 use std::borrow::Cow;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum McpAgentCapability {
     Tool(Box<AgentMcpTool>),
-    #[allow(unused)]
     Resource(AgentMcpResource),
 }
 
@@ -87,8 +86,55 @@ impl McpAgentCapability {
                         agent_type_name.0
                     );
 
+                    let constructor_param_names =
+                        AgentMcpResource::constructor_param_names(constructor);
+                    let name = AgentMcpResource::resource_name(agent_type_name, method);
+
+                    let kind = if constructor_param_names.is_empty() {
+                        let uri = AgentMcpResource::static_uri(agent_type_name, method);
+                        AgentMcpResourceKind::Static(Annotated::new(
+                            RawResource {
+                                uri,
+                                name,
+                                title: None,
+                                description: Some(method.description.clone()),
+                                mime_type: Some("application/json".to_string()),
+                                size: None,
+                                icons: None,
+                                meta: None,
+                            },
+                            None,
+                        ))
+                    } else {
+                        let uri_template = AgentMcpResource::template_uri(
+                            agent_type_name,
+                            method,
+                            &constructor_param_names,
+                        );
+                        AgentMcpResourceKind::Template {
+                            template: Annotated::new(
+                                RawResourceTemplate {
+                                    uri_template,
+                                    name,
+                                    title: None,
+                                    description: Some(method.description.clone()),
+                                    mime_type: Some("application/json".to_string()),
+                                    icons: None,
+                                },
+                                None,
+                            ),
+                            constructor_param_names,
+                        }
+                    };
+
                     Self::Resource(AgentMcpResource {
-                        resource: method.clone(),
+                        kind,
+                        environment_id: *environment_id,
+                        account_id: *account_id,
+                        constructor: constructor.clone(),
+                        raw_method: method.clone(),
+                        component_id,
+                        agent_type_name: agent_type_name.clone(),
                     })
                 }
             }

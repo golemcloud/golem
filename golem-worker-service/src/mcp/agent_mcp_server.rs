@@ -14,8 +14,9 @@
 
 use crate::mcp::McpCapabilityLookup;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
+use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind, ResourceUri};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::invoke::agent_invoke;
+use crate::mcp::invoke::{agent_invoke, resource_invoke};
 use crate::service::worker::WorkerService;
 use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
@@ -33,6 +34,8 @@ pub struct GolemAgentMcpServer {
     processor: Arc<Mutex<OperationProcessor>>,
     tool_router: Arc<RwLock<Option<ToolRouter<GolemAgentMcpServer>>>>,
     tools: Arc<DashMap<String, Tool>>,
+    static_resources: Arc<DashMap<ResourceUri, AgentMcpResource>>,
+    template_resources: Arc<RwLock<Vec<AgentMcpResource>>>,
     domain: Arc<RwLock<Option<Domain>>>,
     mcp_definitions_lookup: Arc<dyn McpCapabilityLookup>,
     worker_service: Arc<WorkerService>,
@@ -46,6 +49,8 @@ impl GolemAgentMcpServer {
         Self {
             tool_router: Arc::new(RwLock::new(None)),
             tools: Arc::new(DashMap::new()),
+            static_resources: Arc::new(DashMap::new()),
+            template_resources: Arc::new(RwLock::new(Vec::new())),
             processor: Arc::new(Mutex::new(OperationProcessor::new())),
             domain: Arc::new(RwLock::new(None)),
             mcp_definitions_lookup,
@@ -61,32 +66,44 @@ impl GolemAgentMcpServer {
         agent_invoke(&self.worker_service, args_map, mcp_tool).await
     }
 
-    async fn tool_router(&self, domain: &Domain) -> ToolRouter<GolemAgentMcpServer> {
-        let tool_handlers = get_agent_tool_and_handlers(domain, &self.mcp_definitions_lookup).await;
+    async fn build_capabilities(
+        &self,
+        domain: &Domain,
+    ) -> (ToolRouter<GolemAgentMcpServer>, Vec<AgentMcpResource>) {
+        let capabilities = get_agent_capabilities(domain, &self.mcp_definitions_lookup).await;
 
         let mut router = ToolRouter::<GolemAgentMcpServer>::new();
 
-        for tool in tool_handlers {
+        for tool in capabilities.tools {
             router = router.with_route(tool);
         }
 
-        router
+        (router, capabilities.resources)
     }
 }
 
-pub async fn get_agent_tool_and_handlers(
+pub struct AgentCapabilities {
+    pub tools: Vec<AgentMcpTool>,
+    pub resources: Vec<AgentMcpResource>,
+}
+
+pub async fn get_agent_capabilities(
     domain: &Domain,
     mcp_definition_lookup: &Arc<dyn McpCapabilityLookup>,
-) -> Vec<AgentMcpTool> {
+) -> AgentCapabilities {
     let compiled_mcp = match mcp_definition_lookup.get(domain).await {
         Ok(mcp) => mcp,
         Err(e) => {
             tracing::error!("Failed to get compiled MCP for domain {}: {}", domain.0, e);
-            return vec![];
+            return AgentCapabilities {
+                tools: vec![],
+                resources: vec![],
+            };
         }
     };
 
     let mut tools = vec![];
+    let mut resources = vec![];
 
     let account_id = compiled_mcp.account_id;
     let environment_id = compiled_mcp.environment_id;
@@ -138,7 +155,9 @@ pub async fn get_agent_tool_and_handlers(
                         McpAgentCapability::Tool(agent_mcp_tool) => {
                             tools.push(*agent_mcp_tool);
                         }
-                        McpAgentCapability::Resource(_) => {}
+                        McpAgentCapability::Resource(agent_mcp_resource) => {
+                            resources.push(agent_mcp_resource);
+                        }
                     }
                 }
             }
@@ -153,13 +172,14 @@ pub async fn get_agent_tool_and_handlers(
         }
     }
 
-    if tools.is_empty() {
-        tracing::warn!("No tools found for domain {}", domain.0);
-    } else {
-        tracing::info!("Found {} tools for domain {}", tools.len(), domain.0);
-    }
+    tracing::info!(
+        "Found {} tools and {} resources for domain {}",
+        tools.len(),
+        resources.len(),
+        domain.0
+    );
 
-    tools
+    AgentCapabilities { tools, resources }
 }
 
 #[allow(deprecated)]
@@ -232,13 +252,27 @@ impl ServerHandler for GolemAgentMcpServer {
         }
     }
 
-    async fn read_resource(
+    async fn list_resources(
         &self,
-        ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
-        _: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
-        // TODO; Include Git tickets here
-        todo!("Resource support is not implemented yet. URI: {}", uri)
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        let resource_list: Vec<Resource> = self
+            .static_resources
+            .iter()
+            .filter_map(|entry| match &entry.value().kind {
+                AgentMcpResourceKind::Static(resource) => Some(resource.clone()),
+                AgentMcpResourceKind::Template { .. } => None,
+            })
+            .collect();
+
+        tracing::info!("Listing {} static resources", resource_list.len());
+
+        Ok(ListResourcesResult {
+            resources: resource_list,
+            next_cursor: None,
+            meta: None,
+        })
     }
 
     async fn list_resource_templates(
@@ -246,11 +280,56 @@ impl ServerHandler for GolemAgentMcpServer {
         _request: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
+        let templates = self.template_resources.read().await;
+
+        let resource_templates: Vec<ResourceTemplate> = templates
+            .iter()
+            .filter_map(|r| match &r.kind {
+                AgentMcpResourceKind::Template { template, .. } => Some(template.clone()),
+                AgentMcpResourceKind::Static(_) => None,
+            })
+            .collect();
+
+        tracing::info!("Listing {} resource templates", resource_templates.len());
+
         Ok(ListResourceTemplatesResult {
             next_cursor: None,
-            resource_templates: Vec::new(),
+            resource_templates,
             meta: None,
         })
+    }
+
+    async fn read_resource(
+        &self,
+        ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        // First try an exact match against static resources
+        if let Some(entry) = self.static_resources.get(&uri) {
+            return resource_invoke(&self.worker_service, entry.value(), &uri, None).await;
+        }
+
+        // Then try matching against resource templates
+        let templates = self.template_resources.read().await;
+        for resource in templates.iter() {
+            if let AgentMcpResourceKind::Template {
+                template,
+                constructor_param_names: _,
+            } = &resource.kind
+            {
+                if let Ok(params) =
+                    AgentMcpResource::extract_params_from_uri(&template.uri_template, &uri)
+                {
+                    return resource_invoke(&self.worker_service, resource, &uri, Some(params))
+                        .await;
+                }
+            }
+        }
+
+        Err(McpError::invalid_params(
+            format!("Resource not found for URI: {}", uri),
+            None,
+        ))
     }
 
     async fn initialize(
@@ -278,9 +357,20 @@ impl ServerHandler for GolemAgentMcpServer {
 
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                let tool_router = self.tool_router(&domain).await;
+                let (tool_router, agent_resources) = self.build_capabilities(&domain).await;
                 for tool in tool_router.list_all() {
                     self.tools.insert(tool.name.to_string(), tool);
+                }
+                let mut template_resources = self.template_resources.write().await;
+                for resource in agent_resources {
+                    match &resource.kind {
+                        AgentMcpResourceKind::Static(res) => {
+                            self.static_resources.insert(res.uri.clone(), resource);
+                        }
+                        AgentMcpResourceKind::Template { .. } => {
+                            template_resources.push(resource);
+                        }
+                    }
                 }
                 *self.domain.write().await = Some(domain);
                 *self.tool_router.write().await = Some(tool_router);

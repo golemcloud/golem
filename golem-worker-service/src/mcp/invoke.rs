@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::mcp::agent_mcp_resource::AgentMcpResource;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::service::worker::WorkerService;
 use golem_common::base_model::WorkerId;
@@ -20,7 +21,7 @@ use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, JsonObject};
+use rmcp::model::{CallToolResult, JsonObject, ReadResourceResult, ResourceContents};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -179,6 +180,107 @@ fn map_single_element_agent_response(element: ElementValue) -> Result<serde_json
                 .to_string(),
         ),
     }
+}
+
+/// Invoke a resource (zero-arg agent method).
+///
+/// `uri_params` is `None` for static resources (no constructor params),
+/// or `Some(vec![(name, value), ...])` for templated resources where
+/// constructor param values were extracted from the concrete URI.
+pub async fn resource_invoke(
+    worker_service: &Arc<WorkerService>,
+    mcp_resource: &AgentMcpResource,
+    uri: &str,
+    uri_params: Option<Vec<(String, String)>>,
+) -> Result<ReadResourceResult, ErrorData> {
+    let constructor_params = match uri_params {
+        None => {
+            // Static resource — constructor takes no params
+            vec![]
+        }
+        Some(params) => {
+            // Templated resource — build a JsonObject from extracted URI params
+            // and parse them through the constructor schema
+            let mut args_map = JsonObject::default();
+            for (name, value) in &params {
+                args_map.insert(name.clone(), serde_json::Value::String(value.clone()));
+            }
+            extract_parameters_by_schema(
+                &args_map,
+                &mcp_resource.constructor.input_schema,
+                |value_and_type| ComponentModelElementValue {
+                    value: value_and_type,
+                },
+            )
+            .map_err(|e| {
+                tracing::error!("Failed to extract constructor parameters from URI: {}", e);
+                ErrorData::invalid_params(
+                    format!("Failed to extract constructor parameters from URI: {}", e),
+                    None,
+                )
+            })?
+        }
+    };
+
+    let agent_id = AgentId::new(
+        mcp_resource.agent_type_name.clone(),
+        DataValue::Tuple(ElementValues {
+            elements: constructor_params
+                .into_iter()
+                .map(ElementValue::ComponentModel)
+                .collect(),
+        }),
+        None,
+    );
+
+    let method_params_data_value = UntypedDataValue::Tuple(vec![]);
+
+    let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
+        method_params_data_value.into();
+
+    let principal = Principal::anonymous();
+    let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+
+    let worker_id = WorkerId {
+        component_id: mcp_resource.component_id,
+        worker_name: agent_id.to_string(),
+    };
+
+    let auth_ctx =
+        golem_service_base::model::auth::AuthCtx::impersonated_user(mcp_resource.account_id);
+
+    let agent_output = worker_service
+        .invoke_agent(
+            &worker_id,
+            mcp_resource.raw_method.name.clone(),
+            proto_method_parameters,
+            golem_api_grpc::proto::golem::workerexecutor::v1::AgentInvocationMode::Await as i32,
+            None,
+            None,
+            None,
+            auth_ctx,
+            proto_principal,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to invoke worker for resource: {:?}", e);
+            ErrorData::internal_error(
+                format!("Failed to invoke worker for resource: {:?}", e),
+                None,
+            )
+        })?;
+
+    let agent_result = match agent_output.result {
+        golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
+        _ => None,
+    };
+
+    let json_value =
+        interpret_agent_response(agent_result, &mcp_resource.raw_method.output_schema)?;
+
+    Ok(ReadResourceResult {
+        contents: vec![ResourceContents::text(json_value.to_string(), uri)],
+    })
 }
 
 fn extract_parameters_by_schema<F, A>(
