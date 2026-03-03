@@ -662,26 +662,6 @@ impl WorkerApi {
             }
         };
 
-        // Debug: serialize with poem (to_json_string), then try to deserialize with serde_json
-        // to catch any round-trip mismatch the client would hit
-        {
-            use poem_openapi::types::ToJSON;
-            let poem_body = response.to_json_string();
-            let serde_body = serde_json::to_string(&response).unwrap_or_else(|e| format!("<serde serialization error: {e}>"));
-            match serde_json::from_str::<GetOplogResponse>(&poem_body) {
-                Ok(_) => {}
-                Err(deser_err) => {
-                    tracing::error!(
-                        worker_id = %worker_id,
-                        error = %deser_err,
-                        poem_body = %poem_body,
-                        serde_body = %serde_body,
-                        "get_oplog response round-trip FAILED: poem serialized OK but serde deserialization failed"
-                    );
-                }
-            }
-        }
-
         Ok(Json(response))
     }
 
