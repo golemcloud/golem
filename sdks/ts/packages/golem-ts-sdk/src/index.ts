@@ -22,6 +22,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { TypeInfoInternal } from './internal/typeInfoInternal';
 import { loadConfigKey } from './internal/mapping/values/dataValue';
+import { Type } from '@golemcloud/golem-ts-types-core';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -234,16 +235,16 @@ export const loadSnapshot: typeof bindings.loadSnapshot = {
 
 export class Secret<T> {
   private readonly path: string[];
-  private readonly typeInfoInternal: TypeInfoInternal;
+  private readonly type: Type.Type;
 
-  constructor(path: string[], typeInfoInternal: TypeInfoInternal) {
+  constructor(path: string[], type: Type.Type) {
     this.path = path;
-    this.typeInfoInternal = typeInfoInternal;
+    this.type = type;
   }
 
   /** Lazily loads or reloads the secret value */
   get(): T {
-    return loadConfigKey(this.path, this.typeInfoInternal);
+    return loadConfigKey(this.path, this.type);
   }
 }
 

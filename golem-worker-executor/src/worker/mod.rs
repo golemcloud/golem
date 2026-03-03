@@ -40,13 +40,16 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig};
+use golem_common::model::agent::{
+    AgentId, AgentMode, AgentType, AgentTypeName, ConfigKeyValueType, ConfigValueType, Principal,
+    Snapshotting, SnapshottingConfig,
+};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
@@ -57,8 +60,13 @@ use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::component::LocalAgentConfigEntry;
 use golem_service_base::model::GetFileSystemNodeResult;
 
+use golem_common::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -137,6 +145,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -152,6 +161,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_env,
                 worker_config_vars,
+                worker_local_agent_config,
                 component_revision,
                 parent,
                 invocation_context_stack,
@@ -167,6 +177,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -181,6 +192,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_worker_id,
             worker_env,
             worker_config_vars,
+            worker_local_agent_config,
             component_revision,
             parent,
             invocation_context_stack,
@@ -225,6 +237,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -244,6 +257,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             worker_env,
             worker_config,
+            worker_local_agent_config,
             parent,
         )
         .await?;
@@ -1495,6 +1509,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         parent: Option<WorkerId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_worker_id.component_id();
@@ -1601,6 +1616,68 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 };
 
                 let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+
+                let initial_local_agent_config = if let Some(agent_id) = &agent_id {
+                    let agent_type = component.metadata
+                        .agent_types()
+                        .iter()
+                        .find(|at| at.type_name == agent_id.agent_type)
+                        .expect("Agent metadata for the parsed agent type was not part of component metadata");
+
+                    let mut initial_local_agent_config = Vec::new();
+
+                    for entry in worker_local_agent_config {
+                        let config_key_type = agent_type
+                            .config
+                            .iter()
+                            .find_map(|c| match c {
+                                ConfigKeyValueType {
+                                    key,
+                                    value: ConfigValueType::Local(inner),
+                                } if *key == *entry.key => Some(&inner.value),
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Agent type does not declare config key {}",
+                                    entry.key.join(".")
+                                ))
+                            })?;
+
+                        let parsed_value =
+                            ValueAndType::parse_with_type(&entry.value, config_key_type).map_err(
+                                |err| {
+                                    WorkerExecutorError::invalid_request(format!(
+                                "config value for key {} does not match expected schema: [{}]",
+                                entry.key.join("."),
+                                err.join(", ")
+                            ))
+                                },
+                            )?;
+
+                        initial_local_agent_config.push(
+                            ParsedWorkerCreationLocalAgentConfigEntry {
+                                key: entry.key,
+                                value: parsed_value,
+                            },
+                        );
+                    }
+
+                    // The actual loading of the local agent config happens in the DurableWorkerCtx, but
+                    // we also compute it here during creation to allow failing a creation request before any metdata has
+                    // been written / oplog has been created.
+                    let local_agent_config = effective_local_agent_config(
+                        initial_local_agent_config.clone(),
+                        component.local_agent_config,
+                        &agent_type.type_name,
+                    );
+                    validate_local_agent_config(&local_agent_config, agent_type)?;
+
+                    initial_local_agent_config
+                } else {
+                    Vec::new()
+                };
+
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
@@ -1624,8 +1701,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
+                    // TODO: these environment variables already contain the component level values,
+                    // but we should only have the worker-level overrides here as we can't compute
+                    // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
+                    local_agent_config: initial_local_agent_config,
                     environment_id: owned_worker_id.environment_id(),
                     created_by: *account_id,
                     created_at,
@@ -1653,6 +1734,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .active_plugins
                         .clone(),
                     initial_worker_metadata.config_vars.clone(),
+                    initial_worker_metadata.local_agent_config.clone(),
                     initial_worker_metadata.original_phantom_id,
                 );
 
@@ -1819,6 +1901,60 @@ pub fn merge_worker_env_with_component_env(
     }
 
     result
+}
+
+pub fn effective_local_agent_config(
+    worker_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+    component_local_agent_config: Vec<LocalAgentConfigEntry>,
+    agent_type: &AgentTypeName,
+) -> HashMap<Vec<String>, golem_wasm::ValueAndType> {
+    let mut result = HashMap::new();
+
+    let applicable_component_local_agent_config = component_local_agent_config
+        .into_iter()
+        .filter(|lac| lac.agent == *agent_type);
+
+    for entry in applicable_component_local_agent_config {
+        result.insert(entry.key, entry.value);
+    }
+
+    for entry in worker_local_agent_config {
+        result.insert(entry.key, entry.value);
+    }
+
+    result
+}
+
+pub fn validate_local_agent_config(
+    local_agent_config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_type: &AgentType,
+) -> Result<(), WorkerExecutorError> {
+    for entry in &agent_type.config {
+        if let ConfigValueType::Local(config_declaration) = &entry.value {
+            match local_agent_config.get(&entry.key) {
+                Some(config_value) => {
+                    if config_value.typ != config_declaration.value {
+                        // TODO: better rendering of analysed type.
+                        return Err(WorkerExecutorError::invalid_request(format!(
+                            "Type mismatch for config key {}. expected: {:?}; found: {:?}",
+                            entry.key.join("."),
+                            config_declaration.value,
+                            config_value.typ
+                        )));
+                    }
+                }
+                None if matches!(config_declaration.value, AnalysedType::Option(_)) => {}
+                None => {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Config key {} was not provided a value",
+                        entry.key.join(".")
+                    )))
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2125,6 +2261,7 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
+                worker_metadata.local_agent_config,
                 if pending_update.is_none()
                     && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
                 {

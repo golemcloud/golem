@@ -43,6 +43,7 @@ import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config, Secret } from '../../..';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getConfigValue } from 'golem:agent/host@1.5.0';
+import { typeMapper } from '../types/typeMapperImpl';
 
 export type ParameterDetail = {
   name: string;
@@ -327,9 +328,9 @@ function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config
     const leafKey = path[path.length - 1];
     let leafValue;
     if (prop.secret) {
-      leafValue = new Secret(path, typeInfoInternal);
+      leafValue = new Secret(path, prop.type);
     } else {
-      leafValue = loadConfigKey(path, typeInfoInternal);
+      leafValue = loadConfigKey(path, prop.type);
     }
 
     current[leafKey] = leafValue;
@@ -338,27 +339,15 @@ function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config
   return new Config(root);
 }
 
-export function loadConfigKey(path: string[], typeInfoInternal: TypeInfoInternal): any {
+export function loadConfigKey(path: string[], type: Type.Type): any {
   const witValue = getConfigValue(path);
 
-  const dataValue = createSingleElementTupleDataValue({
-    tag: 'component-model',
-    val: witValue,
-  });
-
-  return Either.getOrThrowWith(
-    deserializeDataValue(
-      dataValue,
-      [
-        {
-          name: 'config-type',
-          type: typeInfoInternal,
-        },
-      ],
-      { tag: 'anonymous' },
-    ),
-    (err) => new Error(`Failed to deserialize config: ${err}`),
+  const analysedType = Either.getOrThrowWith(
+    typeMapper(type, undefined),
+    (err) => new Error(`Failed to analyse config type: ${err}`),
   );
+
+  return WitValue.toTsValue(witValue, analysedType);
 }
 
 // Used to serialize the return type of a method back to DataValue

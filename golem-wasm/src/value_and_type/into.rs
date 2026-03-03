@@ -455,6 +455,8 @@ impl IntoValue for crate::WitValue {
             "nodes",
             list(crate::WitNode::get_type()),
         )])
+        .named("wit-value")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -600,6 +602,8 @@ impl IntoValue for crate::WitNode {
                 tuple(vec![crate::Uri::get_type(), analysed_type::u64()]),
             ),
         ])
+        .named("wit-node")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -611,6 +615,8 @@ impl IntoValue for crate::Uri {
 
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![analysed_type::field("value", analysed_type::str())])
+            .named("uri")
+            .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -625,6 +631,8 @@ impl IntoValue for crate::WitType {
             "nodes",
             list(crate::golem_core_1_5_x::types::NamedWitTypeNode::get_type()),
         )])
+        .named("wit-type")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -644,6 +652,8 @@ impl IntoValue for crate::golem_core_1_5_x::types::NamedWitTypeNode {
             analysed_type::field("owner", option(analysed_type::str())),
             analysed_type::field("type", crate::WitTypeNode::get_type()),
         ])
+        .named("named-wit-type-node")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -782,6 +792,8 @@ impl IntoValue for crate::WitTypeNode {
                 tuple(vec![analysed_type::u64(), crate::ResourceMode::get_type()]),
             ),
         ])
+        .named("wit-type-node")
+        .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -816,6 +828,8 @@ impl IntoValue for crate::ResourceMode {
 
     fn get_type() -> AnalysedType {
         analysed_type::r#enum(&["owned", "borrowed"])
+            .named("resource-mode")
+            .owned("golem:core@1.5.0/types")
     }
 }
 
@@ -830,8 +844,10 @@ impl IntoValue for ValueAndType {
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![
             analysed_type::field("value", crate::WitValue::get_type()),
-            analysed_type::field("type", crate::WitType::get_type()),
+            analysed_type::field("typ", crate::WitType::get_type()),
         ])
+        .named("value-and-type")
+        .owned("golem:core@1.5.0/types")
     }
 }
 

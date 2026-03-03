@@ -20,7 +20,7 @@ use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentTypeName};
+use golem_common::model::agent::{AgentId, AgentTypeName, ConfigKeyValueType, ConfigValueType};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
@@ -30,7 +30,8 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
-use golem_wasm::WitValue;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{NodeBuilder, WitValue, WitValueBuilderExtensions};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -219,7 +220,42 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn get_config_value(&mut self, _key: Vec<String>) -> anyhow::Result<WitValue> {
-        unimplemented!()
+    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<WitValue> {
+        tracing::debug!("Agent getting config value for key {}", key.join("."));
+
+        let agent_id = self
+            .agent_id()
+            .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+
+        let declaration = self
+            .component_metadata()
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|at| at.type_name == agent_id.agent_type)
+            .unwrap()
+            .config
+            .iter()
+            .find(|c| c.key == key);
+
+        match declaration {
+            Some(ConfigKeyValueType {
+                value: ConfigValueType::Local(config_declaration),
+                ..
+            }) => match self.state.local_agent_config.get(&key) {
+                Some(config_value) => Ok(config_value.value.clone().into()),
+                None if matches!(config_declaration.value, AnalysedType::Option(_)) => {
+                    Ok(WitValue::builder().option_none())
+                }
+                None => Err(anyhow!("No config declared for key {}", key.join("."))),
+            },
+            Some(ConfigKeyValueType {
+                value: ConfigValueType::Shared(_),
+                ..
+            }) => {
+                unimplemented!()
+            }
+            None => Err(anyhow!("No config declared for key {}", key.join("."))),
+        }
     }
 }

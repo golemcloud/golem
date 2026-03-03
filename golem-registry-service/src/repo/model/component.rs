@@ -31,7 +31,7 @@ use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
-use golem_service_base::model::{Component, LocalAgentConfigEntry};
+use golem_service_base::model::component::{Component, LocalAgentConfigEntry};
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use golem_service_base::repo::numeric::NumericU64;

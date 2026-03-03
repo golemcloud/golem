@@ -257,6 +257,8 @@ impl WorkerProxy for RemoteWorkerProxy {
                     name: owned_worker_id.worker_name(),
                     env: caller_env.clone(),
                     config_vars: caller_config_vars.clone().into_iter().collect(),
+                    // FIXME: agent-config
+                    local_agent_config: Vec::new(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {

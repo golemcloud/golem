@@ -18,7 +18,22 @@ type AgentConfig = {
 
 @agent()
 export class ConfigAgent extends BaseAgent {
-  constructor(readonly config: Config<AgentConfig>) {
+  constructor(_name: string, readonly config: Config<AgentConfig>) {
     super();
+  }
+
+  echoLocalConfig(): string {
+    const config = this.config.value;
+    return JSON.stringify({
+      foo: config.foo,
+      bar: config.bar,
+      nested: {
+        a: config.nested.a,
+        b: config.nested.b,
+      },
+      aliasedNested: {
+        c: config.aliasedNested.c
+      }
+    })
   }
 }

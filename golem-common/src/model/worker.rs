@@ -15,11 +15,12 @@
 pub use crate::base_model::worker::*;
 
 mod protobuf {
-    use super::WorkerMetadataDto;
     use super::{
-        ExportedResourceMetadata, FailedUpdate, PendingUpdate, SuccessfulUpdate, UpdateRecord,
+        ExportedResourceMetadata, FailedUpdate, ParsedWorkerCreationLocalAgentConfigEntry,
+        PendingUpdate, SuccessfulUpdate, UpdateRecord,
     };
     use super::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, WorkerUpdateMode};
+    use super::{WorkerCreationLocalAgentConfigEntry, WorkerMetadataDto};
     use crate::model::component::PluginPriority;
     use crate::model::oplog::WorkerResourceId;
     use crate::model::regions::OplogRegion;
@@ -288,6 +289,60 @@ mod protobuf {
                 WorkerUpdateMode::Manual => {
                     golem_api_grpc::proto::golem::worker::UpdateMode::Manual
                 }
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry>
+        for WorkerCreationLocalAgentConfigEntry
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                key: value.key,
+                value: serde_json::from_str(&value.value).map_err(|e| e.to_string())?,
+            })
+        }
+    }
+
+    impl From<WorkerCreationLocalAgentConfigEntry>
+        for golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry
+    {
+        fn from(value: WorkerCreationLocalAgentConfigEntry) -> Self {
+            Self {
+                key: value.key,
+                value: serde_json::to_string(&value.value)
+                    .expect("json value should be encodable to string"),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::worker::ParsedLocalAgentConfigEntry>
+        for ParsedWorkerCreationLocalAgentConfigEntry
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::worker::ParsedLocalAgentConfigEntry,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                key: value.key,
+                value: value
+                    .value
+                    .ok_or_else(|| "Missing field: value".to_string())?
+                    .try_into()?,
+            })
+        }
+    }
+
+    impl From<ParsedWorkerCreationLocalAgentConfigEntry>
+        for golem_api_grpc::proto::golem::worker::ParsedLocalAgentConfigEntry
+    {
+        fn from(value: ParsedWorkerCreationLocalAgentConfigEntry) -> Self {
+            Self {
+                key: value.key,
+                value: Some(value.value.into()),
             }
         }
     }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{HasConfigVars, LogEventEmitBehaviour};
+use super::LogEventEmitBehaviour;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
@@ -62,10 +62,11 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
 use tracing::debug;
@@ -611,12 +612,6 @@ impl InvocationContextManagement for Context {
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.durable_ctx.clone_as_inherited_stack(current_span_id)
-    }
-}
-
-impl HasConfigVars for Context {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
     }
 }
 

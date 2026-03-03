@@ -232,6 +232,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id,
             } => {
                 let metadata = components
@@ -261,6 +262,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     config_vars,
+                    local_agent_config,
                     original_phantom_id,
                 }))
             }

@@ -58,6 +58,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::{
     AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
     ScanCursor, ScheduledAction, ShardId, Timestamp, TimestampedAgentInvocation, WorkerEvent,
@@ -243,6 +244,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let config_vars = request.config_vars.into_iter().collect();
 
+        let local_agent_config = request
+            .local_agent_config
+            .into_iter()
+            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Failed parsing local agent config: {err}"
+                ))
+            })?;
+
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
 
         let worker = Worker::get_or_create_suspended(
@@ -251,6 +263,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_worker_id,
             Some(env),
             Some(config_vars),
+            local_agent_config,
             None,
             None,
             &invocation_context,
@@ -357,6 +370,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_worker_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -480,6 +494,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -539,6 +554,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_worker_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -601,6 +617,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &owned_worker_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -626,6 +643,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &owned_worker_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -650,6 +668,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &owned_worker_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -718,6 +737,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -737,6 +757,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -789,6 +810,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_worker_id,
             request.env(),
             request.config_vars()?,
+            request.local_agent_config(),
             None,
             request.parent(),
             &invocation_context,
@@ -1043,6 +1065,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_worker_id,
                             None,
                             None,
+                            Vec::new(),
                             Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
@@ -1070,6 +1093,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_worker_id,
                             None,
                             None,
+                            Vec::new(),
                             None,
                             None,
                             &InvocationContextStack::fresh(),
@@ -1107,6 +1131,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -1160,6 +1185,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_worker_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -1525,6 +1551,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_worker_id,
                             None,
                             None,
+                            Vec::new(),
                             None,
                             None,
                             &InvocationContextStack::fresh(),
@@ -1600,6 +1627,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_worker_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
