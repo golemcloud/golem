@@ -15,63 +15,154 @@
 use crate::app::template::generator::InMemoryFs;
 use crate::edit::{golem_yaml, json};
 use crate::fs;
-use golem_common::model::diff;
+use crate::log::{log_action, log_skipping_up_to_date};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateApplyPlanEntry {
     Create { new: String },
-    Update { current: String, new: String },
+    Overwrite { current: String, new: String },
     Merge { current: String, new: String },
-    SkipSame,
+    SkipSame { current: String },
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct TemplateApplyPlan {
-    pub entries: BTreeMap<PathBuf, TemplateApplyPlanEntry>,
+    file_plans: BTreeMap<PathBuf, Vec<TemplateApplyPlanLayerEntry>>,
+    existing_files: BTreeMap<PathBuf, String>,
 }
 
 impl TemplateApplyPlan {
-    pub fn new(in_memory_fs: &InMemoryFs) -> anyhow::Result<TemplateApplyPlan> {
-        let mut entries = BTreeMap::new();
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn entries(&self) -> &BTreeMap<PathBuf, Vec<TemplateApplyPlanLayerEntry>> {
+        &self.file_plans
+    }
+
+    pub fn existing_files(&self) -> &BTreeMap<PathBuf, String> {
+        &self.existing_files
+    }
+
+    pub fn add(
+        &mut self,
+        name: impl Into<String>,
+        in_memory_fs: &InMemoryFs,
+    ) -> anyhow::Result<()> {
+        let name = name.into();
         for (path, new) in in_memory_fs.files() {
-            let current = path
-                .exists()
-                .then(|| fs::read_to_string(path))
-                .transpose()?;
+            let current = if let Some(existing) = self.latest_entry(path) {
+                Some(existing.planned_contents().to_string())
+            } else {
+                let current = path
+                    .exists()
+                    .then(|| fs::read_to_string(path))
+                    .transpose()?;
+                if let Some(loaded) = current.as_ref() {
+                    self.existing_files
+                        .entry(path.clone())
+                        .or_insert_with(|| loaded.clone());
+                }
+                current
+            };
 
             let entry = match current {
                 None => TemplateApplyPlanEntry::Create { new: new.clone() },
                 Some(current) => {
                     if current == *new {
-                        TemplateApplyPlanEntry::SkipSame
+                        TemplateApplyPlanEntry::SkipSame { current }
                     } else if let Some(merged) = try_merge(path, &current, new)? {
                         if merged == current {
-                            TemplateApplyPlanEntry::SkipSame
+                            TemplateApplyPlanEntry::SkipSame { current }
                         } else {
                             TemplateApplyPlanEntry::Merge {
                                 new: merged,
-                                current: current.clone(),
+                                current,
                             }
                         }
                     } else {
-                        TemplateApplyPlanEntry::Update {
-                            current: current.clone(),
+                        TemplateApplyPlanEntry::Overwrite {
+                            current,
                             new: new.clone(),
                         }
                     }
                 }
             };
 
-            entries.insert(path.clone(), entry);
+            self.file_plans
+                .entry(path.clone())
+                .or_default()
+                .push(TemplateApplyPlanLayerEntry {
+                    layer_name: name.clone(),
+                    entry,
+                });
         }
 
-        Ok(TemplateApplyPlan { entries })
+        Ok(())
     }
 
     pub fn apply(&self) -> anyhow::Result<()> {
-        todo!()
+        for (path, layers) in &self.file_plans {
+            let Some(entry) = self.effective_entry(layers) else {
+                continue;
+            };
+            match entry {
+                TemplateApplyPlanEntry::Create { new } => {
+                    log_action("Creating", format!("{}", path.display()));
+                    fs::write_str(path, new)?;
+                }
+                TemplateApplyPlanEntry::Overwrite { new, .. } => {
+                    log_action("Overwriting", format!("{}", path.display()));
+                    fs::write_str(path, new)?;
+                }
+                TemplateApplyPlanEntry::Merge { new, .. } => {
+                    log_action("Updating", format!("{}", path.display()));
+                    fs::write_str(path, new)?;
+                }
+                TemplateApplyPlanEntry::SkipSame { .. } => {
+                    log_skipping_up_to_date(format!("updating {}", path.display()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn latest_entry(&self, path: &Path) -> Option<&TemplateApplyPlanEntry> {
+        self.file_plans
+            .get(path)
+            .and_then(|layers| layers.last())
+            .map(|layer| &layer.entry)
+    }
+
+    fn effective_entry<'a>(
+        &self,
+        layers: &'a [TemplateApplyPlanLayerEntry],
+    ) -> Option<&'a TemplateApplyPlanEntry> {
+        layers
+            .iter()
+            .rev()
+            .find(|layer| !matches!(layer.entry, TemplateApplyPlanEntry::SkipSame { .. }))
+            .map(|layer| &layer.entry)
+            .or_else(|| layers.last().map(|layer| &layer.entry))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TemplateApplyPlanLayerEntry {
+    pub layer_name: String,
+    pub entry: TemplateApplyPlanEntry,
+}
+
+impl TemplateApplyPlanEntry {
+    fn planned_contents(&self) -> &str {
+        match self {
+            TemplateApplyPlanEntry::Create { new } => new,
+            TemplateApplyPlanEntry::Overwrite { new, .. } => new,
+            TemplateApplyPlanEntry::Merge { new, .. } => new,
+            TemplateApplyPlanEntry::SkipSame { current } => current,
+        }
     }
 }
 

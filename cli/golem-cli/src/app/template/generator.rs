@@ -60,7 +60,7 @@ impl TemplateGeneratorTargetFs for StdFs {
     type Output = ();
 
     fn ensure_dir(&self, path: &Path) -> anyhow::Result<()> {
-        fs::create_dir_all(path)
+        fs::create_dir_all(path).map(|_| ())
     }
 
     fn write_file(&mut self, path: &Path, contents: String) -> anyhow::Result<()> {
@@ -362,9 +362,6 @@ fn transform(ctx: &GeneratorContext<'_>, str: impl AsRef<str>, transforms: &[Tra
                      ),
             )
             .replace("    # golem-app-manifest-dep-env-vars-doc", &DEP_ENV_VARS_DOC)
-            .replace("    # golem-app-manifest-env-presets",
-                     "", // "    # TODO: atomic\n"
-            )
     };
 
     let transform_app_name = |str: &str| -> String {

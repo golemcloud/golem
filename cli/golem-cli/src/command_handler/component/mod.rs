@@ -166,12 +166,14 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        self.ctx.app_handler().generate_component(
+        // TODO: FCL
+        /*self.ctx.app_handler().generate_component(
             &application_name,
             &component_name,
             &PathBuf::from("."),
             template.as_str(),
-        )?;
+        )?;*/
+        todo!();
 
         Ok(())
     }

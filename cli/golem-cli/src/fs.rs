@@ -54,13 +54,15 @@ pub fn canonicalize_path(path: &Path) -> anyhow::Result<PathBuf> {
         .map_err(|err| anyhow!("Failed to canonicalize path ({}): {}", path.display(), err))
 }
 
-pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
+pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<bool> {
     let path = path.as_ref();
     if path.exists() {
-        Ok(())
+        Ok(false)
     } else {
-        std::fs::create_dir_all(path)
-            .with_context(|| anyhow!("Failed to create directory {}", path.log_color_highlight()))
+        std::fs::create_dir_all(path).with_context(|| {
+            anyhow!("Failed to create directory {}", path.log_color_highlight())
+        })?;
+        Ok(true)
     }
 }
 

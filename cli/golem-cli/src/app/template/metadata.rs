@@ -14,9 +14,10 @@
 
 use crate::app::template::repo::TEMPLATES_DIR;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
+use clap::builder::TypedValueParser;
 use serde_derive::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
@@ -47,10 +48,11 @@ impl AppTemplateMetadata {
             .get_file(template_path.join("metadata.json"))
             .expect("Failed to read metadata JSON")
             .contents();
-        serde_json::from_slice(raw_metadata).with_context(|| {
-            format!(
-                "Failed to parse metadata JSON for template at {}",
-                template_path.display()
+        serde_json::from_slice(raw_metadata).map_err(|err| {
+            anyhow!(
+                "Failed to parse metadata JSON for template at {}, error: {}",
+                template_path.display(),
+                err
             )
         })
     }

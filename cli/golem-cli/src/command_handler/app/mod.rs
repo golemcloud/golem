@@ -108,6 +108,7 @@ impl AppCommandHandler {
                     // NOP, there is no app
                 }
                 _ => {
+                    /*
                     log_error("The current directory is part of an existing application.");
                     logln("");
                     logln("Switch to a directory that is not part of an application or use");
@@ -117,6 +118,8 @@ impl AppCommandHandler {
                     ));
                     logln("");
                     bail!(NonSuccessfulExit);
+                     */
+                    // TODO: FCL
                 }
             }
         }
@@ -145,47 +148,41 @@ impl AppCommandHandler {
         }
 
         let app_dir = PathBuf::from(&application_name.0);
+        // TODO: FCL
+        /*
         if app_dir.exists() {
             bail!(
                 "Application directory already exists: {}",
                 app_dir.log_color_error_highlight()
             );
+        }*/
+
+        if fs::create_dir_all(&app_dir)? {
+            log_action(
+                "Created",
+                format!(
+                    "application directory: {}",
+                    app_dir.display().to_string().log_color_highlight()
+                ),
+            );
         }
 
-        fs::create_dir_all(&app_dir)?;
-        log_action(
-            "Created",
-            format!(
-                "application directory: {}",
-                app_dir.display().to_string().log_color_highlight()
-            ),
-        );
-
         let app_template_repo = self.ctx.app_template_repo()?;
+        let mut template_apply_plan = TemplateApplyPlan::new();
 
         if components.is_empty() {
             {
                 let _indent = LogIndent::new();
                 for language in &languages {
                     if let Some(common_template) = app_template_repo.common_template(*language)? {
-                        match common_template.generate(
-                            &application_name,
-                            &app_dir,
-                            self.ctx.sdk_overrides(),
-                        ) {
-                            Ok(()) => {
-                                log_action(
-                                    "Added",
-                                    format!(
-                                        "common template for {}",
-                                        common_template.0.language.name().log_color_highlight()
-                                    ),
-                                );
-                            }
-                            Err(error) => {
-                                bail!("Failed to add common template for new app: {:#}", error)
-                            }
-                        }
+                        template_apply_plan.add(
+                            common_template.0.name.as_str(),
+                            &common_template.generate(
+                                &application_name,
+                                &app_dir,
+                                self.ctx.sdk_overrides(),
+                            )?,
+                        )?;
                     }
                 }
             }
@@ -196,11 +193,28 @@ impl AppCommandHandler {
                     format!("component {}", component_name.0.log_color_highlight()),
                 );
 
-                self.generate_component(&application_name, component_name, &app_dir, template_name)?
+                self.generate_component(
+                    &mut template_apply_plan,
+                    &application_name,
+                    component_name,
+                    &app_dir,
+                    template_name,
+                )?
             }
         }
 
-        log_action(
+        debug!("template apply plan: {:#?}", template_apply_plan);
+
+        // TODO: FCL: review and approve
+
+        {
+            let indent = LogIndent::new();
+            template_apply_plan.apply()?;
+        }
+
+        // TODO: FCL: ok, done, help messages
+
+        /*log_action(
             "Created",
             format!("application {}", application_name.0.log_color_highlight()),
         );
@@ -224,7 +238,7 @@ impl AppCommandHandler {
                     "deploy".log_color_highlight(),
                 )
             );
-        }
+        }*/
 
         Ok(())
     }
@@ -1980,6 +1994,7 @@ impl AppCommandHandler {
 
     pub fn generate_component(
         &self,
+        template_apply_plan: &mut TemplateApplyPlan,
         application_name: &ApplicationName,
         component_name: &ComponentName,
         app_dir: &Path,
@@ -1988,26 +2003,21 @@ impl AppCommandHandler {
         let (common_template, component_template) = self.get_templates(template_name)?;
 
         if let Some(common_template) = common_template {
-            let in_memory = common_template.generate_in_memory(
-                application_name,
-                app_dir,
-                self.ctx.sdk_overrides(),
+            template_apply_plan.add(
+                common_template.0.name.as_str(),
+                &common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?,
             )?;
-            let plan = TemplateApplyPlan::new(&in_memory, app_dir)?;
-            todo!()
         }
 
-        match component_template.generate_in_memory(
-            application_name,
-            component_name,
-            app_dir,
-            self.ctx.sdk_overrides(),
-        ) {
-            Ok(in_memory) => {
-                todo!()
-            }
-            Err(error) => bail!("Failed to create new app component: {}", error),
-        }
+        template_apply_plan.add(
+            component_template.0.name.as_str(),
+            &component_template.generate(
+                application_name,
+                component_name,
+                app_dir,
+                self.ctx.sdk_overrides(),
+            )?,
+        )?;
 
         Ok(())
     }
