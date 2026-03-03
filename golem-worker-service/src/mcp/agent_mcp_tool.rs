@@ -43,7 +43,7 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
         async move {
             context
                 .service
-                .invoke(context.arguments.unwrap_or_default(), &self)
+                .invoke_tool(context.arguments.unwrap_or_default(), &self)
                 .await
         }
         .boxed()

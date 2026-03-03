@@ -25,7 +25,7 @@ use rmcp::model::{CallToolResult, JsonObject, ReadResourceResult, ResourceConten
 use serde_json::json;
 use std::sync::Arc;
 
-pub async fn agent_invoke(
+pub async fn invoke_tool(
     worker_service: &Arc<WorkerService>,
     args_map: JsonObject,
     mcp_tool: &AgentMcpTool,
@@ -182,12 +182,7 @@ fn map_single_element_agent_response(element: ElementValue) -> Result<serde_json
     }
 }
 
-/// Invoke a resource (zero-arg agent method).
-///
-/// `uri_params` is `None` for static resources (no constructor params),
-/// or `Some(vec![(name, value), ...])` for templated resources where
-/// constructor param values were extracted from the concrete URI.
-pub async fn resource_invoke(
+pub async fn invoke_resource(
     worker_service: &Arc<WorkerService>,
     mcp_resource: &AgentMcpResource,
     uri: &str,
@@ -195,12 +190,9 @@ pub async fn resource_invoke(
 ) -> Result<ReadResourceResult, ErrorData> {
     let constructor_params = match uri_params {
         None => {
-            // Static resource — constructor takes no params
             vec![]
         }
         Some(params) => {
-            // Templated resource — build a JsonObject from extracted URI params
-            // and parse them through the constructor schema
             let mut args_map = JsonObject::default();
             for (name, value) in &params {
                 args_map.insert(name.clone(), serde_json::Value::String(value.clone()));
