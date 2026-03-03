@@ -26,7 +26,7 @@ pub fn collect_value_text_by_path(source: &str, path: &[&str]) -> anyhow::Result
     Ok(Some(source[value.start_byte()..value.end_byte()].trim().to_string()))
 }
 
-pub fn merge_object_from_source(base_source: &str, update_source: &str) -> anyhow::Result<String> {
+pub fn merge_object(base_source: &str, update_source: &str) -> anyhow::Result<String> {
     let base_tree = parse_json(base_source)?;
     let update_tree = parse_json(update_source)?;
     let base_root = root_object(&base_tree, base_source)?;

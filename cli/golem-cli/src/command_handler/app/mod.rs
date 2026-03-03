@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::app::template::{AppTemplateCommon, AppTemplateComponent, AppTemplateName};
+use crate::app::template::{
+    AppTemplateCommon, AppTemplateComponent, AppTemplateName, TemplateApplyPlan,
+};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -1986,23 +1988,23 @@ impl AppCommandHandler {
         let (common_template, component_template) = self.get_templates(template_name)?;
 
         if let Some(common_template) = common_template {
-            common_template.generate(application_name, app_dir, self.ctx.sdk_overrides())?;
+            let in_memory = common_template.generate_in_memory(
+                application_name,
+                app_dir,
+                self.ctx.sdk_overrides(),
+            )?;
+            let plan = TemplateApplyPlan::new(&in_memory, app_dir)?;
+            todo!()
         }
 
-        match component_template.generate(
+        match component_template.generate_in_memory(
             application_name,
             component_name,
             app_dir,
             self.ctx.sdk_overrides(),
         ) {
-            Ok(()) => {
-                log_action(
-                    "Added",
-                    format!(
-                        "new app component {}",
-                        component_name.0.log_color_highlight()
-                    ),
-                );
+            Ok(in_memory) => {
+                todo!()
             }
             Err(error) => bail!("Failed to create new app component: {}", error),
         }

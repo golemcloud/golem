@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::edit::json::{collect_value_text_by_path, merge_object_from_source};
+use crate::edit::json::{collect_value_text_by_path, merge_object};
 
 #[derive(Debug, Clone)]
 pub struct RequiredSetting {
@@ -28,7 +28,7 @@ pub struct MissingSetting {
 }
 
 pub fn merge_with_newer(base_source: &str, newer_source: &str) -> anyhow::Result<String> {
-    merge_object_from_source(base_source, newer_source)
+    merge_object(base_source, newer_source)
 }
 
 pub fn check_required_settings(

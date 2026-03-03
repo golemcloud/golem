@@ -24,7 +24,6 @@ pub enum AppTemplateMetadata {
     #[serde(rename_all = "camelCase")]
     Common {
         description: Option<String>,
-        skip_if_exists: Option<PathBuf>,
         exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
     },
