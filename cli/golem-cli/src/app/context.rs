@@ -16,7 +16,7 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
-use crate::fs;
+use crate::app::template::AppTemplateRepo;
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
@@ -28,6 +28,7 @@ use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
+use crate::{fs, SdkOverrides};
 use anyhow::anyhow;
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
@@ -36,6 +37,7 @@ use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
@@ -137,9 +139,9 @@ pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
     pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
+    pub used_language_templates: HashSet<GuestLanguage>,
 }
 
-// TODO: review pub fields?
 pub struct ApplicationContext {
     loaded_with_warnings: bool,
     config: ApplicationConfig,
@@ -151,12 +153,14 @@ pub struct ApplicationContext {
 }
 
 impl ApplicationContext {
-    pub fn preload_sources_and_get_environments(
+    pub fn preload_application(
         source_mode: ApplicationSourceMode,
+        dev_mode: bool,
+        sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match load_environments(source_mode) {
+        match preload_app(source_mode, dev_mode, sdk_overrides) {
             Some(environments) => to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
@@ -169,6 +173,7 @@ impl ApplicationContext {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
                 application_name_and_environments: None,
+                used_language_templates: HashSet::new(),
             }),
         }
     }
@@ -571,23 +576,74 @@ fn load_app(
     })
 }
 
-fn load_environments(
+fn preload_app(
     source_mode: ApplicationSourceMode,
+    dev_mode: bool,
+    sdk_overrides: &SdkOverrides,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::environments_from_raw_apps(raw_apps.as_slice()).map(
-                |application_name_and_environments| ApplicationPreloadResult {
-                    source_mode: ApplicationSourceMode::Preloaded {
-                        raw_apps,
-                        calling_working_dir,
+            let used_language_templates = Application::language_templates_from_raw_apps(&raw_apps);
+
+            Application::environments_from_raw_apps(raw_apps.as_slice())
+                .and_then(|application_name_and_environments| {
+                    ValidatedResult::from_result(ensure_on_demand_commons(
+                        &used_language_templates,
+                        dev_mode,
+                        sdk_overrides,
+                    ))
+                    .map(|on_demand_common_raw_apps| {
+                        (on_demand_common_raw_apps, application_name_and_environments)
+                    })
+                })
+                .map(
+                    |(on_demand_common_raw_apps, application_name_and_environments)| {
+                        let raw_apps = {
+                            let mut raw_apps = raw_apps;
+                            raw_apps.extend(on_demand_common_raw_apps);
+                            raw_apps
+                        };
+
+                        ApplicationPreloadResult {
+                            source_mode: ApplicationSourceMode::Preloaded {
+                                raw_apps,
+                                calling_working_dir,
+                            },
+                            loaded_with_warnings: false,
+                            application_name_and_environments: Some(
+                                application_name_and_environments,
+                            ),
+                            used_language_templates,
+                        }
                     },
-                    loaded_with_warnings: false,
-                    application_name_and_environments: Some(application_name_and_environments),
-                },
-            )
+                )
         })
     })
+}
+
+fn ensure_on_demand_commons(
+    languages: &HashSet<GuestLanguage>,
+    dev_mode: bool,
+    sdk_overrides: &SdkOverrides,
+) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
+    let app_template_repo = AppTemplateRepo::get(dev_mode)?;
+
+    let mut on_demand_raw_apps = Vec::new();
+
+    for language in languages {
+        if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
+            let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
+            template.generate(&target_dir, sdk_overrides)?;
+            let golem_yaml_path = target_dir.join("golem.yaml");
+            if golem_yaml_path.exists() {
+                on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
+                    golem_yaml_path,
+                )?);
+            }
+        }
+    }
+
+    Ok(on_demand_raw_apps)
 }
 
 fn load_raw_apps(

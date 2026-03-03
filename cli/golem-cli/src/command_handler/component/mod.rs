@@ -39,6 +39,7 @@ use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use crate::model::worker::AgentUpdateMode;
+use crate::model::GuestLanguage;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::OptionFuture;
@@ -50,9 +51,6 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
-
-use crate::app_template::add_component_by_template;
-use crate::model::GuestLanguage;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
@@ -80,10 +78,7 @@ impl ComponentCommandHandler {
                 component_template,
                 component_name,
             } => self.cmd_new(component_template, component_name).await,
-            ComponentSubcommand::Templates { filter } => {
-                self.cmd_templates(filter);
-                Ok(())
-            }
+            ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
             ComponentSubcommand::List => self.cmd_list().await,
             ComponentSubcommand::Get {
                 component_name,
@@ -156,9 +151,7 @@ impl ComponentCommandHandler {
         }) else {
             log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
             logln("");
-            self.ctx
-                .app_handler()
-                .log_templates_help(None, None, self.ctx.dev_mode());
+            self.ctx.app_handler().log_templates_help(None, None)?;
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
@@ -173,56 +166,30 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit)
         }
 
-        let app_handler = self.ctx.app_handler();
-        let (common_template, component_template) =
-            app_handler.get_template(&template, self.ctx.dev_mode())?;
-
-        match add_component_by_template(
-            common_template,
-            Some(component_template),
-            &PathBuf::from("."),
+        self.ctx.app_handler().generate_component(
             &application_name,
             &component_name,
-            Some(self.ctx.template_sdk_overrides()),
-        ) {
-            Ok(()) => {
-                log_action(
-                    "Added",
-                    format!(
-                        "new app component {}",
-                        component_name.0.log_color_highlight()
-                    ),
-                );
-            }
-            Err(error) => {
-                bail!("Failed to create new app component: {}", error)
-            }
-        }
+            &PathBuf::from("."),
+            template.as_str(),
+        )?;
 
         Ok(())
     }
 
-    fn cmd_templates(&self, filter: Option<String>) {
+    fn cmd_templates(&self, filter: Option<String>) -> anyhow::Result<()> {
         match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx.app_handler().log_templates_help(
-                        Some(language),
-                        None,
-                        self.ctx.dev_mode(),
-                    );
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(Some(language), None)
                 } else {
-                    self.ctx.app_handler().log_templates_help(
-                        None,
-                        Some(&filter),
-                        self.ctx.dev_mode(),
-                    );
+                    self.ctx
+                        .app_handler()
+                        .log_templates_help(None, Some(&filter))
                 }
             }
-            None => self
-                .ctx
-                .app_handler()
-                .log_templates_help(None, None, self.ctx.dev_mode()),
+            None => self.ctx.app_handler().log_templates_help(None, None),
         }
     }
 

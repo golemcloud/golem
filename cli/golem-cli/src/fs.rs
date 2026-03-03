@@ -510,7 +510,7 @@ fn normalize_pattern(pattern: &str) -> String {
     pattern.replace('\\', "/")
 }
 
-pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
+pub fn delete_logged(context: &str, path: &Path) -> anyhow::Result<()> {
     if path.exists() {
         log_warn_action(
             "Deleting",
