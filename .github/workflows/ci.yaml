@@ -184,6 +184,7 @@ jobs:
           - name: misc
           - name: group1
           - name: group2
+          - name: group3
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout

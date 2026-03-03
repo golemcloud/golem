@@ -410,7 +410,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_s
 
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
-description = "Runs worker executor tests only (group 1/2)"
+description = "Runs worker executor tests only (group 1/3)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
@@ -418,10 +418,18 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:group1 
 
 [tasks.worker-executor-tests-group2]
 dependencies = ["wit"]
-description = "Runs worker executor tests only (group 2/2)"
+description = "Runs worker executor tests only (group 2/3)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests-group3]
+dependencies = ["wit"]
+description = "Runs worker executor tests only (group 3/3)"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo-test-r run --package golem-worker-executor --test integration :tag:group3 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.integration-tests]

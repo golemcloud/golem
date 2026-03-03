@@ -48,14 +48,15 @@ tag_suite!(http, group1);
 tag_suite!(rdbms, group1);
 tag_suite!(agent, group1);
 
-tag_suite!(transactions, group2);
-tag_suite!(wasi, group2);
-tag_suite!(revert, group2);
-tag_suite!(durability, group2);
-tag_suite!(observability, group2);
-tag_suite!(scalability, group2);
 tag_suite!(hot_update, group2);
-tag_suite!(rpc, group2);
+tag_suite!(transactions, group2);
+tag_suite!(observability, group2);
+
+tag_suite!(durability, group3);
+tag_suite!(rpc, group3);
+tag_suite!(wasi, group3);
+tag_suite!(scalability, group3);
+tag_suite!(revert, group3);
 
 tag_suite!(rdbms_service, rdbms_service);
 
