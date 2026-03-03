@@ -182,7 +182,7 @@ struct CreateOplogConstructor {
     initial_entry: Option<OplogEntry>,
     primary: Arc<dyn OplogService>,
     service: MultiLayerOplogService,
-    last_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
     initial_worker_metadata: WorkerMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
@@ -194,7 +194,7 @@ impl CreateOplogConstructor {
         initial_entry: Option<OplogEntry>,
         primary: Arc<dyn OplogService>,
         service: MultiLayerOplogService,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
@@ -216,6 +216,10 @@ impl CreateOplogConstructor {
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let agent_mode = self.execution_status.read().agent_mode();
+        let last_oplog_index = match self.last_oplog_index {
+            Some(idx) => idx,
+            None => self.service.get_last_index(&self.owned_worker_id).await,
+        };
 
         match agent_mode {
             AgentMode::Durable => {
@@ -233,7 +237,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.primary
                         .open(
                             &self.owned_worker_id,
-                            self.last_oplog_index,
+                            Some(last_oplog_index),
                             self.initial_worker_metadata,
                             self.last_known_status,
                             self.execution_status,
@@ -247,7 +251,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     .primary
                     .open(
                         &self.owned_worker_id,
-                        self.last_oplog_index,
+                        Some(last_oplog_index),
                         self.initial_worker_metadata,
                         self.last_known_status,
                         self.execution_status,
@@ -266,7 +270,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 Arc::new(
                     EphemeralOplog::new(
                         self.owned_worker_id,
-                        self.last_oplog_index,
+                        last_oplog_index,
                         self.service.max_operations_before_commit_ephemeral,
                         primary,
                         target,
@@ -297,7 +301,7 @@ impl OplogService for MultiLayerOplogService {
                     Some(initial_entry),
                     self.primary.clone(),
                     self.clone(),
-                    OplogIndex::INITIAL,
+                    Some(OplogIndex::INITIAL),
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
@@ -309,7 +313,7 @@ impl OplogService for MultiLayerOplogService {
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,

@@ -211,7 +211,13 @@ impl Default for GolemConfig {
             agent_types_service: AgentTypesServiceConfig::default(),
             agent_deployments_service: AgentDeploymentsServiceConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
-            registry_service: GrpcRegistryServiceConfig::default(),
+            registry_service: GrpcRegistryServiceConfig {
+                client_config: GrpcClientConfig {
+                    request_timeout: Some(Duration::from_secs(30)),
+                    ..GrpcClientConfig::default()
+                },
+                ..GrpcRegistryServiceConfig::default()
+            },
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
             http_address: "0.0.0.0".to_string(),
