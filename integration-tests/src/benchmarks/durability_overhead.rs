@@ -218,7 +218,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, true, false),
                 )
                 .await
@@ -238,7 +238,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, false, false),
                 )
                 .await
@@ -262,7 +262,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, false, false),
                 )
                 .await
@@ -282,7 +282,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, true, true),
                 )
                 .await
