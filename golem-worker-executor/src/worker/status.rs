@@ -1905,7 +1905,7 @@ mod test {
         async fn open(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            _last_oplog_index: OplogIndex,
+            _last_oplog_index: Option<OplogIndex>,
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,

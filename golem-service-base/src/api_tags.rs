@@ -24,6 +24,7 @@ pub enum ApiTags {
     ApiCertificate,
     ApiDeployment,
     ApiDomain,
+    McpDeployment,
     ApiSecurity,
     Application,
     Component,

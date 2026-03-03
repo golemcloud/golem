@@ -26,18 +26,9 @@ Always run `cargo make build` before starting work to ensure all dependencies ar
 
 ## Testing
 
-Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run:
+Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
 
-```rust
-use test_r::test;
-
-#[test]
-fn my_test() {
-    // ...
-}
-```
-
-**Do not run `cargo make test`** - it runs all tests and takes a very long time. Instead, choose the appropriate test command:
+**Do not run `cargo make test`** — it runs all tests and takes a very long time. Instead, choose the appropriate test command:
 
 | Change Type | Test Command |
 |-------------|--------------|
@@ -46,18 +37,11 @@ fn my_test() {
 | Service integration | `cargo make integration-tests` |
 | CLI changes | `cargo make cli-tests` |
 
+For specific tests: `cargo test -p <crate> -- <test_name> --report-time`
+
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 
-For specific tests during development:
-```shell
-cargo test -p <crate> <test_module> -- --report-time
-```
-
-## Test Components
-
-Worker executor tests and integration tests use pre-compiled WASM files from the `test-components/` directory. These are checked into the repository and **rebuilding them is not automated**. Do not attempt to rebuild test components - use the existing compiled WASM files, EXCEPT if the test component itself has an AGENTS.md file with instructions of how to do so.
-
-Load the `modifying-test-components` skill when rebuilding is needed.
+Load the `testing` skill for detailed guidance on test filtering, debugging failures, test components, and timeouts.
 
 ## Running Locally
 
@@ -74,6 +58,7 @@ Load these skills for guided workflows on complex tasks:
 |-------|-------------|
 | `modifying-http-endpoints` | Adding or modifying REST API endpoints (covers OpenAPI regeneration, golem-client rebuild, type mappings) |
 | `adding-dependencies` | Adding or updating crate dependencies (covers workspace dependency management, versioning, features) |
+| `testing` | Running and debugging tests (covers test filtering, debugging failures, test components, timeouts) |
 | `debugging-hanging-tests` | Diagnosing worker executor or integration tests that hang indefinitely |
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
@@ -100,22 +85,6 @@ This runs `rustfmt` and `clippy` with automatic fixes. Load `pre-pr-checklist` s
 ## Dependency Management
 
 All crate dependencies must have their versions specified in the root workspace `Cargo.toml` under `[workspace.dependencies]`. Workspace members must reference them using `x = { workspace = true }` in their own `Cargo.toml` rather than specifying versions directly.
-
-## Debugging Tests
-
-Use `--nocapture` when debugging tests to allow debugger attachment:
-```shell
-cargo test -p <crate> <test> -- --nocapture
-```
-
-**Always save test output to a file** when running worker executor tests, integration tests, or CLI tests. These tests are slow and produce potentially thousands of lines of logs. Never pipe output directly to `grep`, `head`, `tail`, etc. — if you need to examine different parts of the output, you would have to re-run the entire slow test. Instead:
-```shell
-cargo test -p <crate> <test> -- --nocapture > tmp/test_output.txt 2>&1
-# Then search/inspect the saved file as needed
-grep -n "pattern" tmp/test_output.txt
-```
-
-**Handling hanging tests:** Load the `debugging-hanging-tests` skill for a step-by-step workflow.
 
 ## Project Structure
 
