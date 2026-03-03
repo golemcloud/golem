@@ -2777,6 +2777,7 @@ pub(crate) enum HttpRequestCloseOwner {
     IncomingResponseDrop,
     IncomingBodyDropOrFinish,
     InputStreamClosed,
+    FutureTrailersDrop,
 }
 
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
@@ -2790,6 +2791,10 @@ struct HttpRequestState {
     pub request: HostRequestHttpRequest,
     /// SpanId
     pub span_id: SpanId,
+    /// When tracking is transferred from IncomingBody to InputStream via stream(),
+    /// this records the IncomingBody handle so that on stream close we can transfer
+    /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
+    pub body_handle: Option<u32>,
 }
 
 struct PrivateDurableWorkerState {

@@ -1906,7 +1906,7 @@ mod test {
         async fn open(
             &self,
             _owned_worker_id: &OwnedWorkerId,
-            _last_oplog_index: OplogIndex,
+            _last_oplog_index: Option<OplogIndex>,
             _initial_worker_metadata: WorkerMetadata,
             _last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,

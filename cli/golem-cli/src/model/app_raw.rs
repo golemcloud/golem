@@ -100,6 +100,8 @@ pub struct Application {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_api: Option<HttpApi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<Mcp>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environments: IndexMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +257,27 @@ pub struct HttpApiDeployment {
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Mcp {
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub deployments: IndexMap<EnvironmentName, Vec<McpDeployment>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpDeployment {
+    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDeploymentAgentOptions {
+    // MCP agent configuration options coming soon
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

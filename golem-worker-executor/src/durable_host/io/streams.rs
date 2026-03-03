@@ -15,7 +15,7 @@
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
-use crate::durable_host::http::end_http_request;
+use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::model::event::InternalWorkerEvent;
@@ -365,7 +365,21 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     if matches!(result, Err(SerializableStreamError::Closed)) {
         if let Some(state) = ctx.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
-                end_http_request(ctx, handle).await?;
+                // If the stream has a recorded body handle, transfer tracking back
+                // to the body instead of ending the request. This allows
+                // IncomingBody::finish() to later transfer tracking to FutureTrailers,
+                // making FutureTrailers::get() durable.
+                let body_handle = state.body_handle;
+                if let Some(body_handle) = body_handle {
+                    continue_http_request(
+                        ctx,
+                        handle,
+                        body_handle,
+                        HttpRequestCloseOwner::IncomingBodyDropOrFinish,
+                    );
+                } else {
+                    end_http_request(ctx, handle).await?;
+                }
             }
         }
     }

@@ -23,6 +23,7 @@ use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
@@ -88,6 +89,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
+        mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(db.pool.clone())),
         deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
         full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
@@ -182,4 +184,14 @@ async fn test_resolve_agent_type_nonexistent_revision_returns_none(deps: &Deps) 
 #[test]
 async fn test_resolve_agent_type_unknown_email_returns_none(deps: &Deps) {
     crate::repo::common::test_resolve_agent_type_unknown_email_returns_none(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_create_and_update(deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_create_and_update(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_list_and_delete(deps).await;
 }

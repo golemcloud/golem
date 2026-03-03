@@ -135,6 +135,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         begin_index,
                         request,
                         span_id: span.span_id().clone(),
+                        body_handle: None,
                     },
                 );
             }

@@ -65,7 +65,7 @@ impl OplogService for DebugOplogService {
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,

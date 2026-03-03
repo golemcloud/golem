@@ -158,6 +158,8 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          upload-artifact: 'true'
+          artifact-name: unit-tests-report
           summary: true
           summary-report: true
           failed-report: true
@@ -230,6 +232,8 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          upload-artifact: 'true'
+          artifact-name: worker-executor-tests-${{ matrix.group.name }}-report
           summary: true
           summary-report: true
           failed-report: true
@@ -339,6 +343,8 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          upload-artifact: 'true'
+          artifact-name: '${{ matrix.group.name }}-report'
           summary: true
           summary-report: true
           failed-report: true
