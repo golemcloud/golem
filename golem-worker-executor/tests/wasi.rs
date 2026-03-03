@@ -1628,6 +1628,53 @@ async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>)
     (host_http_port, http_server)
 }
 
+/// Creates an HTTP server with a streaming endpoint that sends many small chunks
+/// with delays between them, mimicking OpenAI-style SSE streaming.
+/// Each chunk is a small piece of text sent with a configurable delay.
+async fn streaming_chunk_server(
+    chunk_count: usize,
+    chunk_delay: Duration,
+) -> (u16, JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = spawn(
+        async move {
+            let route = Router::new()
+                .route(
+                    "/streaming-chunks",
+                    get(move || async move {
+                        let stream =
+                            stream::iter(0..chunk_count)
+                                .throttle(chunk_delay)
+                                .map(move |i| {
+                                    Ok::<Bytes, BoxError>(Bytes::from(format!("chunk-{i}\n")))
+                                });
+
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "text/plain")
+                            .header("Transfer-Encoding", "chunked")
+                            .body(axum::body::Body::from_stream(stream))
+                            .unwrap()
+                    }),
+                )
+                .route(
+                    "/simulated-slow-request",
+                    get(move || async move {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        "slow response".to_string()
+                    }),
+                );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    (host_http_port, http_server)
+}
+
 #[test]
 #[tracing::instrument]
 async fn sleep_less_than_suspend_threshold_while_awaiting_response(
@@ -3240,5 +3287,753 @@ async fn wasi_config_component_update(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    Ok(())
+}
+
+/// Reproducer for oplog mismatch bug: "expected io::poll::poll, got io::poll::ready"
+///
+/// This test exercises the scenario where a worker does HTTP requests with sleeps
+/// between them (triggering suspend due to exceeding the suspend threshold), then
+/// the executor is restarted, and the same function is re-invoked on the same worker.
+/// This forces a full oplog replay of the HTTP-heavy invocation. If subscribe() calls
+/// return different Resource<Pollable> handle IDs during replay, wstd's reactor may
+/// iterate its internal HashMap differently, causing ready()/poll() calls to be made
+/// in a different order than the oplog expects.
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_after_http_requests_with_suspend(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Use a fast response server so the test doesn't take too long
+    let (port, server) = simulated_slow_request_server(Duration::from_millis(100)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("clock", "clock-oplog-replay-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: do 3 HTTP requests with 1-second sleeps between them.
+    // The sleeps are below the suspend threshold so this completes normally,
+    // building up a substantial oplog with subscribe/ready/poll entries.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "sleep_between_requests",
+            data_value!(1u64, 3u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result,
+        Value::String(
+            "Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string()
+        )
+    );
+
+    info!("First invocation completed, dropping executor to force oplog replay on restart");
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Drop the executor but keep the HTTP server running on the same port
+    // so the second invocation can actually connect
+    drop(executor);
+
+    // Restart the executor - this simulates the worker being reactivated
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation on the SAME worker (same component object from before restart):
+    // this triggers full oplog replay of the first invocation before switching to live
+    // mode for the second. If subscribe() returns different handle IDs during replay,
+    // the wstd reactor may diverge and call ready() where poll() was expected.
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "sleep_between_requests",
+            data_value!(1u64, 2u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result2,
+        Value::String("Ok(\"slow response\")\nOk(\"slow response\")\n".to_string())
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Reproducer for oplog mismatch bug with CONCURRENT async tasks.
+///
+/// Uses sleep_during_parallel_requests which races 3 concurrent HTTP request
+/// loops against a timeout. This creates complex interleaving of subscribe/ready/poll
+/// calls that may produce different Resource<Pollable> handle IDs during replay.
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_after_parallel_http_requests(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Fast response server — each request completes in 100ms
+    let (port, server) = simulated_slow_request_server(Duration::from_millis(100)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_host_api_tests_release",
+        )
+        .name("golem-it:host-api-tests")
+        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("clock", "clock-oplog-parallel-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: 3 concurrent HTTP request loops (5 requests each) raced with
+    // a 30-second timeout. This creates many subscribe/ready/poll calls with complex
+    // interleaving across concurrent async tasks in wstd's reactor.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "sleep_during_parallel_requests",
+            data_value!(30u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    // All 3 concurrent loops should complete (each with 5 "slow response" results)
+    let result_str = match &result {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    let line_count = result_str.lines().count();
+    assert!(
+        line_count >= 5,
+        "Expected at least 5 lines in result, got {}",
+        line_count
+    );
+
+    info!(
+        "First invocation completed with {} result lines, dropping executor",
+        line_count
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Keep server running, drop executor
+    drop(executor);
+
+    // Restart the executor
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation on the SAME worker: triggers full oplog replay of the
+    // parallel HTTP invocation. If subscribe() returns different handle IDs during
+    // replay, wstd's reactor HashMap iteration may diverge.
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "sleep_during_parallel_requests",
+            data_value!(30u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result2_str = match &result2 {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    let line_count2 = result2_str.lines().count();
+    assert!(
+        line_count2 >= 5,
+        "Expected at least 5 lines in result, got {}",
+        line_count2
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Reproducer for oplog mismatch bug with STREAMING HTTP responses.
+///
+/// Uses streaming_http_read which reads a chunked HTTP response body
+/// chunk by chunk through wstd's async runtime. This produces many
+/// interleaved poll/ready/read oplog entries similar to OpenAI streaming.
+/// After the first invocation completes, the executor is dropped and
+/// restarted to force a full oplog replay. If the replay produces a
+/// different sequence of poll/ready calls, we'll see the
+/// "expected io::poll::poll, got io::poll::ready" error.
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_after_streaming_http_read(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // 50 chunks with 10ms delay between each — generates ~50 poll/ready cycles
+    let (port, server) = streaming_chunk_server(50, Duration::from_millis(10)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("streaming-client");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: read a streaming HTTP response with 50 chunks.
+    // This builds up a substantial oplog with many subscribe/ready/poll entries.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "streaming_http_read", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result_str = match &result {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        result_str.contains("chunk-0"),
+        "Expected streaming response to contain chunk-0, got: {}",
+        result_str
+    );
+    assert!(
+        result_str.contains("chunk-49"),
+        "Expected streaming response to contain chunk-49, got: {}",
+        result_str
+    );
+
+    info!(
+        "First invocation completed ({} bytes), dropping executor to force oplog replay",
+        result_str.len()
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Drop the executor but keep the HTTP server running
+    drop(executor);
+
+    // Restart the executor — triggers oplog replay
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation on the SAME worker: triggers full oplog replay of the
+    // first streaming invocation. If the durable host call sequence diverges
+    // during replay, this will fail with "expected io::poll::poll, got io::poll::ready".
+    let result2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "streaming_http_read", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result2_str = match &result2 {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        result2_str.contains("chunk-0"),
+        "Expected streaming response to contain chunk-0 in second invocation, got: {}",
+        result2_str
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Reproducer for the FutureTrailers non-durable bug (oplog mismatch).
+///
+/// This test exercises the exact bug mechanism identified in Step 13 of the investigation:
+/// 1. Streaming HTTP read using wstd's body.bytes() goes through:
+///    stream reads → stream Closed → finish() → FutureTrailers::subscribe() → ready() → get()
+/// 2. FutureTrailers::get() is NOT durable because the FutureTrailers handle is never
+///    tracked in open_http_requests (the tracking was removed when the stream read returned Closed).
+/// 3. During replay, durable ready() returns true from oplog but does NOT call the underlying
+///    HostFutureTrailers::ready() — so the state stays Waiting instead of transitioning to Done.
+/// 4. Non-durable get() sees Waiting → returns None → guest re-polls, consuming oplog entries
+///    meant for the subsequent sleep() call → oplog mismatch.
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Use enough chunks to generate substantial oplog entries
+    let (port, server) = streaming_chunk_server(20, Duration::from_millis(5)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("streaming-client");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: streaming HTTP read (goes through trailers path) then sleep.
+    // This creates oplog entries for: stream reads + trailers ready/poll + sleep ready/poll.
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "streaming_http_then_sleep",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result_str = match &result {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        result_str.contains("slept"),
+        "Expected result to contain 'slept', got: {}",
+        result_str
+    );
+
+    info!(
+        "First invocation completed: {}, dropping executor to force oplog replay",
+        result_str
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Drop the executor but keep the HTTP server running
+    drop(executor);
+
+    // Restart the executor — triggers oplog replay
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation on the SAME worker: triggers full oplog replay.
+    // Previously this would fail with oplog mismatch because FutureTrailers::get()
+    // was non-durable. Now that FutureTrailers tracking is properly maintained
+    // through the ownership chain, replay should succeed.
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "streaming_http_then_sleep",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result2_str = match &result2 {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        result2_str.contains("slept"),
+        "Expected result to contain 'slept', got: {}",
+        result2_str
+    );
+
+    server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Reproducer for oplog mismatch bug with PARALLEL streaming HTTP reads.
+///
+/// Runs multiple concurrent streaming HTTP request reads through wstd's reactor,
+/// racing them against a timeout. This creates maximum interleaving of
+/// subscribe/ready/poll calls across concurrent tasks, which is the closest
+/// reproduction of the production OpenAI streaming pattern.
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_after_parallel_streaming_http_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // 30 chunks with 10ms delay — each request generates ~30 poll/ready cycles
+    let (port, server) = streaming_chunk_server(30, Duration::from_millis(10)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("streaming-client");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: 3 concurrent streaming HTTP reads
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "parallel_streaming_http_reads",
+            data_value!(3u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result_str = match &result {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        !result_str.contains("Timeout"),
+        "Parallel streaming reads should not have timed out, got: {}",
+        result_str
+    );
+
+    info!(
+        "First invocation completed ({} bytes), dropping executor to force oplog replay",
+        result_str.len()
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation: triggers full oplog replay of the parallel streaming invocation
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "parallel_streaming_http_reads",
+            data_value!(3u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result2_str = match &result2 {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        !result2_str.contains("Timeout"),
+        "Second invocation should not have timed out, got: {}",
+        result2_str
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Reproducer for the oplog mismatch bug with raw WASI HTTP streaming.
+///
+/// This test mimics the production pattern from wasm-rquickjs/golem-wasi-http:
+/// - Uses raw WASI HTTP APIs to send a request
+/// - Reads the response body with subscribe() + AsyncPollable::wait_for() + read()
+/// - Drops the stream and body WITHOUT calling incoming_body.finish()
+///
+/// This is the exact pattern that the production component uses, which differs
+/// from wstd's body.bytes() (which goes through the full trailers path).
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_after_raw_streaming_http_read(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // 50 chunks with 10ms delay between each
+    let (port, server) = streaming_chunk_server(50, Duration::from_millis(10)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("streaming-client");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: read a streaming HTTP response using raw WASI APIs
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "raw_streaming_http_read",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result_str = match &result {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        result_str.contains("chunk-0"),
+        "Expected streaming response to contain chunk-0, got: {}",
+        result_str
+    );
+    assert!(
+        result_str.contains("chunk-49"),
+        "Expected streaming response to contain chunk-49, got: {}",
+        result_str
+    );
+
+    info!(
+        "First invocation completed ({} bytes), dropping executor to force oplog replay",
+        result_str.len()
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Drop the executor but keep the HTTP server running
+    drop(executor);
+
+    // Restart the executor — triggers oplog replay
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation on the SAME worker: triggers full oplog replay.
+    // If the durable host call sequence diverges during replay,
+    // this will fail with "expected io::poll::poll, got io::poll::ready".
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "raw_streaming_http_read",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result2_str = match &result2 {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        result2_str.contains("chunk-0"),
+        "Expected streaming response to contain chunk-0 in second invocation, got: {}",
+        result2_str
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
+    Ok(())
+}
+
+/// Reproducer for oplog mismatch bug with PARALLEL raw WASI HTTP streaming reads.
+///
+/// This is the closest reproduction of the production wasm-rquickjs/golem-wasi-http
+/// pattern: multiple concurrent raw WASI HTTP streaming reads running inside wstd's
+/// reactor. Each read uses subscribe() + AsyncPollable::wait_for() + read() in a
+/// loop and drops the stream/body without calling finish(). The concurrency
+/// creates maximum interleaving of nonblock_check_pollables/block_on_pollables
+/// (io::poll::poll) with WaitFor::poll ready() calls (io::poll::ready).
+#[test]
+#[tracing::instrument]
+async fn oplog_replay_after_parallel_raw_streaming_http_reads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // 30 chunks with 10ms delay — each request generates many poll/ready cycles
+    let (port, server) = streaming_chunk_server(30, Duration::from_millis(10)).await;
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_http_tests_release",
+        )
+        .name("golem-it:http-tests")
+        .store()
+        .await?;
+    let agent_id = agent_id!("streaming-client");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .await?;
+
+    executor.log_output(&worker_id).await?;
+
+    // First invocation: 3 concurrent raw streaming HTTP reads, each doing 3 sequential requests
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "parallel_raw_streaming_http_reads",
+            data_value!(3u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result_str = match &result {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        !result_str.contains("Timeout"),
+        "Parallel raw streaming reads should not have timed out, got: {}",
+        result_str
+    );
+
+    info!(
+        "First invocation completed ({} bytes), dropping executor to force oplog replay",
+        result_str.len()
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    info!("Restarting executor...");
+    let executor = start(deps, &context).await?;
+    info!("Executor restarted");
+
+    // Second invocation: triggers full oplog replay of the parallel raw streaming invocation.
+    // If the durable host call sequence diverges during replay,
+    // this will fail with "expected io::poll::poll, got io::poll::ready".
+    let result2 = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "parallel_raw_streaming_http_reads",
+            data_value!(3u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let result2_str = match &result2 {
+        Value::String(s) => s.clone(),
+        other => panic!("Expected string result, got {:?}", other),
+    };
+    assert!(
+        !result2_str.contains("Timeout"),
+        "Second invocation should not have timed out, got: {}",
+        result2_str
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    server.abort();
+    drop(executor);
     Ok(())
 }

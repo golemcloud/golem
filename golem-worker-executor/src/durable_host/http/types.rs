@@ -394,6 +394,12 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
                 stream_handle,
                 HttpRequestCloseOwner::InputStreamClosed,
             );
+            // Record the body handle so that when the stream closes, we can
+            // transfer tracking back to the body (enabling finish() to then
+            // transfer to FutureTrailers for durable trailers handling).
+            if let Some(state) = self.state.open_http_requests.get_mut(&stream_handle) {
+                state.body_handle = Some(handle);
+            }
         }
 
         result
@@ -406,13 +412,21 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::incoming_body", "finish");
 
         let handle = this.rep();
-        if let Some(state) = self.state.open_http_requests.get(&handle) {
-            if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                end_http_request(self, handle).await?;
-            }
+        let has_tracking = self.state.open_http_requests.contains_key(&handle);
+
+        let result = HostIncomingBody::finish(&mut self.as_wasi_http_view(), this).await?;
+
+        if has_tracking {
+            let ft_handle = result.rep();
+            continue_http_request(
+                self,
+                handle,
+                ft_handle,
+                HttpRequestCloseOwner::FutureTrailersDrop,
+            );
         }
 
-        HostIncomingBody::finish(&mut self.as_wasi_http_view(), this).await
+        Ok(result)
     }
 
     async fn drop(&mut self, rep: Resource<IncomingBody>) -> anyhow::Result<()> {
@@ -451,6 +465,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
             )
             .await?;
 
+            let handle = self_.rep();
             if durability.is_live() {
                 let result = HostFutureTrailers::get(&mut self.as_wasi_http_view(), self_).await;
                 let (to_serialize, for_retry) = match &result {
@@ -482,10 +497,17 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                         },
                     )
                     .await?;
+
+                // End the HTTP request when trailers have resolved (not pending)
+                let is_resolved = !matches!(&result, Ok(None));
+                if is_resolved {
+                    end_http_request(self, handle).await?;
+                }
+
                 result
             } else {
                 let serialized: HostResponseHttpFutureTrailersGet = durability.replay(self).await?;
-                match serialized.result {
+                let result = match serialized.result {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
                         let mut fields = FieldMap::new();
@@ -502,7 +524,15 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Err(_))) => Ok(Some(Err(()))),
                     Ok(None) => Ok(None),
                     Err(error) => Err(anyhow!(error)),
+                };
+
+                // End the HTTP request when trailers have resolved (not pending)
+                let is_resolved = !matches!(&result, Ok(None));
+                if is_resolved {
+                    end_http_request(self, handle).await?;
                 }
+
+                result
             }
         } else {
             self.observe_function_call("http::types::future_trailers", "get");
@@ -512,6 +542,15 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<FutureTrailers>) -> anyhow::Result<()> {
         self.observe_function_call("http::types::future_trailers", "drop");
+
+        // Remove tracking if still present (guest dropped without calling get()).
+        // Note: we cannot call end_http_request here because drop is sync,
+        // but this is safe — the durable function region was already opened by
+        // begin_function and the oplog entries are still valid. The request state
+        // cleanup is sufficient.
+        let handle = rep.rep();
+        self.state.open_http_requests.remove(&handle);
+
         HostFutureTrailers::drop(&mut self.as_wasi_http_view(), rep)
     }
 }

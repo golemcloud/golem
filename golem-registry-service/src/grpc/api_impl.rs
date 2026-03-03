@@ -17,7 +17,7 @@ use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
-use crate::services::deployment::{DeployedRoutesService, DeploymentService};
+use crate::services::deployment::{DeployedMcpService, DeployedRoutesService, DeploymentService};
 use crate::services::environment::EnvironmentService;
 use applying::Apply;
 use async_trait::async_trait;
@@ -28,15 +28,17 @@ use golem_api_grpc::proto::golem::registry::v1::get_agent_deployments_response::
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
     BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, BatchUpdateFuelUsageSuccessResponse,
-    DownloadComponentRequest, DownloadComponentResponse, GetActiveRoutesForDomainRequest,
-    GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse,
-    GetAgentDeploymentsRequest, GetAgentDeploymentsResponse, GetAgentTypeRequest,
-    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
-    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
-    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
-    GetAllDeployedComponentRevisionsSuccessResponse, GetAuthDetailsForEnvironmentRequest,
-    GetAuthDetailsForEnvironmentResponse, GetAuthDetailsForEnvironmentSuccessResponse,
-    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
+    GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
+    GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
+    GetActiveRoutesForDomainSuccessResponse, GetAgentDeploymentsRequest,
+    GetAgentDeploymentsResponse, GetAgentTypeRequest, GetAgentTypeResponse,
+    GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
+    GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
+    GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
+    GetAuthDetailsForEnvironmentRequest, GetAuthDetailsForEnvironmentResponse,
+    GetAuthDetailsForEnvironmentSuccessResponse, GetComponentMetadataRequest,
+    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse,
     GetDeployedComponentMetadataSuccessResponse, GetResourceLimitsRequest,
     GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, RegistryServiceError,
@@ -48,10 +50,11 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveLatestAgentTypeByNamesSuccessResponse, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
     authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
-    get_active_routes_for_domain_response, get_agent_deployments_response, get_agent_type_response,
-    get_all_agent_types_response, get_all_deployed_component_revisions_response,
-    get_auth_details_for_environment_response, get_component_metadata_response,
-    get_deployed_component_metadata_response, get_resource_limits_response, registry_service_error,
+    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
+    get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response,
+    get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
+    get_component_metadata_response, get_deployed_component_metadata_response,
+    get_resource_limits_response, registry_service_error,
     resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
     resolve_component_response, resolve_latest_agent_type_by_names_response,
     update_worker_connection_limit_response, update_worker_limit_response,
@@ -84,6 +87,7 @@ pub struct RegistryServiceGrpcApi {
     component_resolver_service: Arc<ComponentResolverService>,
     deployment_service: Arc<DeploymentService>,
     deployed_routes_service: Arc<DeployedRoutesService>,
+    deployed_mcp_service: Arc<DeployedMcpService>,
 }
 
 impl RegistryServiceGrpcApi {
@@ -95,6 +99,7 @@ impl RegistryServiceGrpcApi {
         component_resolver_service: Arc<ComponentResolverService>,
         deployment_service: Arc<DeploymentService>,
         deployed_routes_service: Arc<DeployedRoutesService>,
+        deployed_mcp_service: Arc<DeployedMcpService>,
     ) -> Self {
         Self {
             auth_service,
@@ -104,6 +109,7 @@ impl RegistryServiceGrpcApi {
             component_resolver_service,
             deployment_service,
             deployed_routes_service,
+            deployed_mcp_service,
         }
     }
 
@@ -399,6 +405,24 @@ impl RegistryServiceGrpcApi {
 
         Ok(GetActiveRoutesForDomainSuccessResponse {
             compiled_routes: Some(compiled_routes.into()),
+        })
+    }
+
+    async fn get_active_mcp_routes_for_domain_internal(
+        &self,
+        request: GetActiveMcpForDomainRequest,
+    ) -> Result<GetActiveMcpForDomainSuccessResponse, GrpcApiError> {
+        let domain: Domain = Domain(request.domain);
+
+        let compiled_mcp = self
+            .deployed_mcp_service
+            .get_currently_active_mcp(&domain)
+            .await?;
+
+        Ok(GetActiveMcpForDomainSuccessResponse {
+            compiled_mcp: Some(golem_api_grpc::proto::golem::mcp::CompiledMcp::from(
+                compiled_mcp,
+            )),
         })
     }
 
@@ -970,6 +994,31 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetActiveRoutesForDomainResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_active_mcp_for_domain(
+        &self,
+        request: Request<GetActiveMcpForDomainRequest>,
+    ) -> Result<Response<GetActiveMcpForDomainResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_active_mcp_for_domain",
+            get_active_mcp_for_domain = request.domain,
+        );
+
+        let response = match self
+            .get_active_mcp_routes_for_domain_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_active_mcp_for_domain_response::Result::Success(result),
+            Err(error) => get_active_mcp_for_domain_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetActiveMcpForDomainResponse {
             result: Some(response),
         }))
     }

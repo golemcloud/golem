@@ -429,10 +429,21 @@ pub trait TestDsl {
         let mut stream = self.make_worker_log_event_stream(worker_id).await?;
         tokio::spawn(
             async move {
-                while let Some(event) = stream.message().await.expect("Failed to get message") {
-                    info!("Received event: {:?}", event);
+                loop {
+                    match stream.message().await {
+                        Ok(Some(event)) => {
+                            info!("Received event: {:?}", event);
+                        }
+                        Ok(None) => {
+                            debug!("Finished receiving events");
+                            break;
+                        }
+                        Err(err) => {
+                            debug!("Log output stream closed: {err}");
+                            break;
+                        }
+                    }
                 }
-                debug!("Finished receiving events");
             }
             .in_current_span(),
         );
