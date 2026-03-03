@@ -24,6 +24,7 @@ use golem_wasm::analysis::analysed_type::{
     bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, result_err,
     result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case, unit_result, variant,
 };
+use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, TypeHandle};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use proptest::prelude::*;
@@ -977,7 +978,7 @@ fn handle_type_rejected() {
         resource_id: AnalysedResourceId(0),
         mode: AnalysedResourceMode::Owned,
     });
-    let schema = tuple_schema(vec![("h", cm(handle_type.clone()))]);
+    let _schema = tuple_schema(vec![("h", cm(handle_type.clone()))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
             value: ValueAndType::new(
@@ -1971,4 +1972,99 @@ fn record_mixed_non_option_after_option_fails() {
     let schema = tuple_schema(vec![("r", cm(typ))]);
     // Cannot default because bool (non-option) is trailing
     assert!(parse_structural("(42)", &schema).is_err());
+}
+
+#[test]
+fn format_rejects_depth_exceeding_max() {
+    let mut typ = u32();
+    let mut val: Value = Value::U32(0);
+    for _ in 0..32 {
+        typ = option(typ);
+        val = Value::Option(Some(Box::new(val)));
+    }
+    let data = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+            value: ValueAndType::new(val, typ.clone()),
+        })],
+    });
+    assert_eq!(
+        format_structural(&data),
+        Err(StructuralFormatError::MaxDepthExceeded(32))
+    );
+}
+
+#[test]
+fn parse_rejects_depth_exceeding_max() {
+    let mut typ = u32();
+    for _ in 0..32 {
+        typ = option(typ);
+    }
+    let schema = tuple_schema(vec![("x", cm(typ))]);
+    let input = format!("{}0{}", "s(".repeat(32), ")".repeat(32));
+    let result = parse_structural(&input, &schema);
+    assert!(
+        matches!(result, Err(StructuralFormatError::MaxDepthExceeded(32))),
+        "Expected MaxDepthExceeded(32), got: {result:?}"
+    );
+}
+
+#[test]
+fn depth_at_boundary_succeeds() {
+    let mut typ = u32();
+    let mut val: Value = Value::U32(0);
+    for _ in 0..31 {
+        typ = option(typ);
+        val = Value::Option(Some(Box::new(val)));
+    }
+    let schema = tuple_schema(vec![("x", cm(typ.clone()))]);
+    let data = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+            value: ValueAndType::new(val, typ),
+        })],
+    });
+    let formatted = format_structural(&data).expect("format should succeed at boundary");
+    let parsed = parse_structural(&formatted, &schema).expect("parse should succeed at boundary");
+    assert_eq!(
+        parsed,
+        data,
+        "Roundtrip should succeed at depth boundary"
+    );
+}
+
+#[test]
+fn format_rejects_handle_type() {
+    let handle_type = AnalysedType::Handle(TypeHandle {
+        name: None,
+        owner: None,
+        resource_id: AnalysedResourceId(0),
+        mode: AnalysedResourceMode::Owned,
+    });
+    let data = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+            value: ValueAndType::new(
+                Value::Handle {
+                    uri: "test".to_string(),
+                    resource_id: 0,
+                },
+                handle_type,
+            ),
+        })],
+    });
+    assert_eq!(
+        format_structural(&data),
+        Err(StructuralFormatError::HandleType)
+    );
+}
+
+#[test]
+fn parse_rejects_handle_type() {
+    let handle_type = AnalysedType::Handle(TypeHandle {
+        name: None,
+        owner: None,
+        resource_id: AnalysedResourceId(0),
+        mode: AnalysedResourceMode::Owned,
+    });
+    let schema = tuple_schema(vec![("h", cm(handle_type))]);
+    let result = parse_structural("anything", &schema);
+    assert_eq!(result, Err(StructuralFormatError::HandleType));
 }

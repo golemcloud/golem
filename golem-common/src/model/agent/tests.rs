@@ -1342,3 +1342,97 @@ fn agent_id_vs_phantom_agent_id() {
     assert_eq!(regular_id.phantom_id, None);
     assert_eq!(phantom_id.phantom_id, Some(uuid));
 }
+
+#[test]
+fn agent_id_too_long_rejected() {
+    use crate::base_model::component::ComponentId;
+    use crate::base_model::AgentId;
+
+    let component_id = ComponentId(Uuid::nil());
+    let long_string = "a".repeat(600);
+    let parsed = ParsedAgentId::new(
+        AgentTypeName("t".to_string()),
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::String(long_string),
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+            })],
+        }),
+        None,
+    )
+    .expect("ParsedAgentId::new should succeed");
+    let result = AgentId::from_agent_id(component_id, &parsed);
+    assert!(result.is_err(), "Expected error for too-long agent ID");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("too long"),
+        "Error should mention 'too long', got: {err}"
+    );
+}
+
+#[test]
+fn agent_id_at_max_length_accepted() {
+    use crate::base_model::component::ComponentId;
+    use crate::base_model::AgentId;
+
+    let component_id = ComponentId(Uuid::nil());
+    // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512
+    let content = "a".repeat(507);
+    let parsed = ParsedAgentId::new(
+        AgentTypeName("t".to_string()),
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::String(content),
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+            })],
+        }),
+        None,
+    )
+    .expect("ParsedAgentId::new should succeed");
+    assert_eq!(
+        parsed.to_string().len(),
+        512,
+        "ParsedAgentId string should be exactly 512 chars"
+    );
+    let result = AgentId::from_agent_id(component_id, &parsed);
+    assert!(
+        result.is_ok(),
+        "Expected success for exactly 512-char agent ID, got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn source_language_protobuf_roundtrip() {
+    use golem_api_grpc::proto::golem::component::AgentType as ProtoAgentType;
+
+    for lang in &["rust", "typescript", ""] {
+        let agent_type = AgentType {
+            type_name: AgentTypeName("test-agent".to_string()),
+            description: "test".to_string(),
+            source_language: lang.to_string(),
+            constructor: AgentConstructor {
+                name: None,
+                description: "".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
+        };
+        let proto: ProtoAgentType = agent_type.clone().into();
+        let roundtripped: AgentType = proto.try_into().expect("protobuf roundtrip failed");
+        assert_eq!(
+            roundtripped.source_language, agent_type.source_language,
+            "source_language should survive protobuf roundtrip for '{lang}'"
+        );
+    }
+}

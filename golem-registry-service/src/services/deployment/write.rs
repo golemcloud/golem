@@ -158,6 +158,12 @@ pub enum DeployValidationError {
     },
     #[error("Invalid http method: {method:?}")]
     InvalidHttpMethod { method: HttpMethod },
+    #[error("Agent type names '{name1}' and '{name2}' conflict: both normalize to '{normalized}' in kebab-case")]
+    ConflictingAgentTypeNames {
+        name1: AgentTypeName,
+        name2: AgentTypeName,
+        normalized: String,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {

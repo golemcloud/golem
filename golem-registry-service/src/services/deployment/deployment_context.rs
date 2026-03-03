@@ -24,6 +24,7 @@ use crate::services::deployment::route_compilation::{
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
+use heck::ToKebabCase;
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -143,6 +144,26 @@ impl DeploymentContext {
                 )
             }
         }
+
+        // Check for kebab-case collisions
+        let mut kebab_map: BTreeMap<String, AgentTypeName> = BTreeMap::new();
+        for agent_type_name in agent_types.keys() {
+            let kebab = agent_type_name.0.to_kebab_case();
+            if let Some(existing) = kebab_map.get(&kebab) {
+                errors.push(DeployValidationError::ConflictingAgentTypeNames {
+                    name1: existing.clone(),
+                    name2: agent_type_name.clone(),
+                    normalized: kebab.clone(),
+                });
+            } else {
+                kebab_map.insert(kebab, agent_type_name.clone());
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
+        }
+
         Ok(agent_types)
     }
 
@@ -284,5 +305,40 @@ fn validate_final_router(
                 path: compiled_route.path.clone(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use heck::ToKebabCase;
+    use std::collections::HashMap;
+    use test_r::test;
+
+    #[test]
+    fn kebab_case_collision_detected() {
+        assert_eq!("WeatherAgent".to_kebab_case(), "weather-agent");
+        assert_eq!("weather-agent".to_kebab_case(), "weather-agent");
+        assert_eq!("StockAgent".to_kebab_case(), "stock-agent");
+        assert_ne!(
+            "weather-agent".to_kebab_case(),
+            "stock-agent".to_kebab_case()
+        );
+    }
+
+    #[test]
+    fn kebab_case_no_collision() {
+        let names = vec!["WeatherAgent", "StockAgent", "email-service"];
+        let mut kebab_map: HashMap<String, &str> = HashMap::new();
+        let mut has_collision = false;
+        for name in &names {
+            let kebab = name.to_kebab_case();
+            if kebab_map.insert(kebab, name).is_some() {
+                has_collision = true;
+            }
+        }
+        assert!(
+            !has_collision,
+            "Should not have collision for distinct kebab names"
+        );
     }
 }

@@ -900,3 +900,37 @@ use proptest::prelude::*;
             prop_assert_eq!(data, parsed);
         }
     }
+
+    #[test]
+    fn source_language_from_str() {
+        // Rust variants
+        assert_eq!(SourceLanguage::from("rust"), SourceLanguage::Rust);
+        assert_eq!(SourceLanguage::from("Rust"), SourceLanguage::Rust);
+        assert_eq!(SourceLanguage::from("RUST"), SourceLanguage::Rust);
+        assert_eq!(SourceLanguage::from("  rust  "), SourceLanguage::Rust);
+
+        // TypeScript variants
+        assert_eq!(SourceLanguage::from("typescript"), SourceLanguage::TypeScript);
+        assert_eq!(SourceLanguage::from("TypeScript"), SourceLanguage::TypeScript);
+        assert_eq!(SourceLanguage::from("ts"), SourceLanguage::TypeScript);
+        assert_eq!(SourceLanguage::from("TS"), SourceLanguage::TypeScript);
+        assert_eq!(SourceLanguage::from("  typescript  "), SourceLanguage::TypeScript);
+
+        // Other
+        assert_eq!(SourceLanguage::from("go"), SourceLanguage::Other("go".to_string()));
+        assert_eq!(SourceLanguage::from(""), SourceLanguage::Other("".to_string()));
+        assert_eq!(SourceLanguage::from("python"), SourceLanguage::Other("python".to_string()));
+    }
+
+    #[test]
+    fn unknown_language_falls_back_to_canonical() {
+        use golem_common::model::agent::structural_format::format_structural;
+
+        let data = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
+        let rendered_other = render_data_value(&data, &SourceLanguage::Other("go".to_string()));
+        let canonical = format_structural(&data).unwrap();
+        assert_eq!(
+            rendered_other, canonical,
+            "Unknown language should produce canonical structural format"
+        );
+    }

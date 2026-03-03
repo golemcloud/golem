@@ -1243,14 +1243,12 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
 
     let agent_type_name = format!("TestAgent{}", new_repo_uuid().simple());
     let agent_type = make_test_agent_type(&agent_type_name);
-    let wrapper_type_name = agent_type.type_name.to_string();
     let deployment_revision_id: i64 = 1;
 
     let agent_type_record = DeploymentRegisteredAgentTypeRecord {
         environment_id,
         deployment_revision_id,
         agent_type_name: agent_type_name.clone(),
-        agent_wrapper_type_name: wrapper_type_name,
         component_id,
         component_revision_id,
         webhook_prefix_authority_and_path: None,
