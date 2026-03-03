@@ -249,18 +249,10 @@ export class Secret<T> {
 }
 
 export class Config<T> {
-  private _value: T;
-
-  constructor(readonly properties: Type.ConfigProperty[]) {
-    this._value = this.loadConfig();
-  }
+  constructor(readonly properties: Type.ConfigProperty[]) {}
 
   get value(): T {
-    return this._value;
-  }
-
-  reload(): void {
-    this._value = this.loadConfig();
+    return this.loadConfig();
   }
 
   private loadConfig(): T {

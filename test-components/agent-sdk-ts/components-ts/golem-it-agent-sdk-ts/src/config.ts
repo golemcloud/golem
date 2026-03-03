@@ -23,7 +23,6 @@ export class ConfigAgent extends BaseAgent {
   }
 
   echoLocalConfig(): string {
-    this.config.reload();
     const config = this.config.value;
     return JSON.stringify({
       foo: config.foo,

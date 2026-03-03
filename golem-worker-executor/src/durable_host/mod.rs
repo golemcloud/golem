@@ -2888,7 +2888,7 @@ struct PrivateDurableWorkerState {
 
     // The initial local agent config that the worker was configured with
     initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
-    /// The current local agent config of the worker, taking into component version.
+    /// The current local agent config of the worker, taking the component revision into account
     local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
