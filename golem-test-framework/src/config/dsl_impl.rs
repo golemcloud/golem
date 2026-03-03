@@ -549,9 +549,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     None,
                 )
                 .await
-                .map_err(|e| {
-                    anyhow!("get_oplog failed for worker {worker_id}: {e}")
-                })?;
+                .map_err(|e| anyhow!("get_oplog failed for worker {worker_id}: {e}"))?;
 
             result.extend(response.entries);
             match response.next {
