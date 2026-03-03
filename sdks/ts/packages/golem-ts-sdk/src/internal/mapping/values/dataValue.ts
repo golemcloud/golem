@@ -19,7 +19,6 @@ import {
   isPrincipal,
   TypeInfoInternal,
 } from '../../typeInfoInternal';
-
 import * as Either from '../../../newTypes/either';
 import * as WitValue from '../../mapping/values/WitValue';
 import {
@@ -37,13 +36,13 @@ import {
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
-
 import * as Value from '../values/Value';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config, Secret } from '../../..';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getConfigValue } from 'golem:agent/host@1.5.0';
 import { typeMapper } from '../types/typeMapperImpl';
+import * as WitType from '../types/WitType.js';
 
 export type ParameterDetail = {
   name: string;
@@ -310,42 +309,16 @@ export function deserializeDataValue(
 function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config' }): Config<any> {
   // safe as the parent node is config
   const properties = (typeInfoInternal.tsType as Type.Type & { kind: 'config' }).properties;
-
-  const root: Record<string, any> = {};
-
-  for (const prop of properties) {
-    const { path } = prop;
-    if (!path.length) continue;
-
-    let current = root;
-
-    for (let i = 0; i < path.length - 1; i++) {
-      const key = path[i];
-      if (!(key in current)) current[key] = {};
-      current = current[key];
-    }
-
-    const leafKey = path[path.length - 1];
-    let leafValue;
-    if (prop.secret) {
-      leafValue = new Secret(path, prop.type);
-    } else {
-      leafValue = loadConfigKey(path, prop.type);
-    }
-
-    current[leafKey] = leafValue;
-  }
-
-  return new Config(root);
+  return new Config(properties);
 }
 
 export function loadConfigKey(path: string[], type: Type.Type): any {
-  const witValue = getConfigValue(path);
-
-  const analysedType = Either.getOrThrowWith(
-    typeMapper(type, undefined),
+  const [witType, analysedType] = Either.getOrThrowWith(
+    WitType.fromTsType(type, undefined),
     (err) => new Error(`Failed to analyse config type: ${err}`),
   );
+
+  let witValue = getConfigValue(path, witType);
 
   return WitValue.toTsValue(witValue, analysedType);
 }

@@ -65,7 +65,7 @@ use golem_service_base::error::worker_executor::{
 use golem_service_base::model::component::Component;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::Uri;
+use golem_wasm::{Uri, WitType};
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
@@ -542,8 +542,12 @@ impl AgentHost for Context {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
 
-    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<golem_wasm::WitValue> {
-        AgentHost::get_config_value(&mut self.durable_ctx, key).await
+    async fn get_config_value(
+        &mut self,
+        key: Vec<String>,
+        expected_type: WitType,
+    ) -> anyhow::Result<golem_wasm::WitValue> {
+        AgentHost::get_config_value(&mut self.durable_ctx, key, expected_type).await
     }
 }
 

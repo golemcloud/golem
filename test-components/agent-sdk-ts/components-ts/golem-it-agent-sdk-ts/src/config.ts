@@ -1,7 +1,7 @@
 import { agent, BaseAgent, Config, Secret } from "@golemcloud/golem-ts-sdk";
 
 type AliasedNestedConfig = {
-  c: number;
+  c?: number;
 };
 
 type AgentConfig = {
@@ -23,6 +23,7 @@ export class ConfigAgent extends BaseAgent {
   }
 
   echoLocalConfig(): string {
+    this.config.reload();
     const config = this.config.value;
     return JSON.stringify({
       foo: config.foo,

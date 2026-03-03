@@ -20,7 +20,7 @@ use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentTypeName, ConfigKeyValueType, ConfigValueType};
+use golem_common::model::agent::{AgentId, AgentTypeName, ConfigValueType};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
@@ -31,7 +31,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::PromiseId;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{NodeBuilder, WitValue, WitValueBuilderExtensions};
+use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -220,12 +220,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<WitValue> {
-        tracing::debug!("Agent getting config value for key {}", key.join("."));
+    async fn get_config_value(
+        &mut self,
+        key: Vec<String>,
+        expected_type: WitType,
+    ) -> anyhow::Result<WitValue> {
+        let key_str = key.join(".");
+        tracing::debug!("Agent getting config value for key {}", key_str);
 
         let agent_id = self
             .agent_id()
             .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+
+        let expected_type = AnalysedType::from(expected_type);
 
         let declaration = self
             .component_metadata()
@@ -233,29 +240,49 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .agent_types()
             .iter()
             .find(|at| at.type_name == agent_id.agent_type)
-            .unwrap()
+            .expect("Active agent type of agent was not declared in component metadata")
             .config
             .iter()
-            .find(|c| c.key == key);
+            .find_map(|c| (c.key == key).then(|| c.value.clone()));
+
+        let declaration = match declaration {
+            None if matches!(expected_type, AnalysedType::Option(_)) => {
+                // Allow optional undeclared config for schema evolution
+                return Ok(WitValue::builder().option_none());
+            }
+            None => {
+                return Err(anyhow!("No config declared for key {}", key_str));
+            }
+            Some(d) => d,
+        };
 
         match declaration {
-            Some(ConfigKeyValueType {
-                value: ConfigValueType::Local(config_declaration),
-                ..
-            }) => match self.state.local_agent_config.get(&key) {
-                Some(config_value) => Ok(config_value.value.clone().into()),
-                None if matches!(config_declaration.value, AnalysedType::Option(_)) => {
-                    Ok(WitValue::builder().option_none())
+            ConfigValueType::Local(local_decl) => {
+                let config_value = self.state.local_agent_config.get(&key);
+
+                match (&local_decl.value, &expected_type, config_value) {
+                    // Declared optional, expected optional, value missing
+                    (AnalysedType::Option(declared), AnalysedType::Option(expected), None)
+                        if declared == expected =>
+                    {
+                        Ok(WitValue::builder().option_none())
+                    }
+
+                    // Types match and value exists
+                    (declared, expected, Some(value)) if declared == expected => {
+                        Ok(value.value.clone().into())
+                    }
+
+                    _ => Err(anyhow!(
+                        "declared and expected type for config key {} are not compatible",
+                        key_str
+                    )),
                 }
-                None => Err(anyhow!("No config declared for key {}", key.join("."))),
-            },
-            Some(ConfigKeyValueType {
-                value: ConfigValueType::Shared(_),
-                ..
-            }) => {
+            }
+
+            ConfigValueType::Shared(_) => {
                 unimplemented!()
             }
-            None => Err(anyhow!("No config declared for key {}", key.join("."))),
         }
     }
 }

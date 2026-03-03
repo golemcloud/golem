@@ -249,9 +249,46 @@ export class Secret<T> {
 }
 
 export class Config<T> {
-  readonly value: T;
+  private _value: T
 
-  constructor(value: T) {
-    this.value = value;
+  constructor(readonly properties: Type.ConfigProperty[]) {
+    this._value = this.loadConfig()
+  }
+
+  get value(): T {
+    return this._value
+  }
+
+  reload(): void {
+    this._value = this.loadConfig()
+  }
+
+  private loadConfig(): T {
+    const root: Record<string, any> = {};
+
+    for (const prop of this.properties) {
+      const { path } = prop;
+      if (path.length === 0) continue;
+
+      let current = root;
+
+      for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        if (!(key in current)) current[key] = {};
+        current = current[key];
+      }
+
+      const leafKey = path[path.length - 1];
+      let leafValue;
+      if (prop.secret) {
+        leafValue = new Secret(path, prop.type);
+      } else {
+        leafValue = loadConfigKey(path, prop.type);
+      }
+
+      current[leafKey] = leafValue;
+    }
+
+    return root as T
   }
 }

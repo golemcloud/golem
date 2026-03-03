@@ -264,7 +264,6 @@ async fn agent_with_mixed_local_agent_config(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-#[ignore]
 async fn agent_with_mixed_local_agent_config_update(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
@@ -474,6 +473,74 @@ async fn mistyped_local_agent_config_key(deps: &EnvBasedTestDependencies) -> any
     assert_matches!(
         result,
         Err(golem_client::Error::Item(WorkerError::Error500(_)))
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn optional_local_agent_config_does_not_need_to_be_provided(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("config-agent", "test-agent");
+    user.start_agent_with(
+        &component.id,
+        agent_id.clone(),
+        HashMap::new(),
+        HashMap::new(),
+        vec![
+            WorkerCreationLocalAgentConfigEntry {
+                key: vec!["foo".to_string()],
+                value: json!(1),
+            },
+            WorkerCreationLocalAgentConfigEntry {
+                key: vec!["bar".to_string()],
+                value: json!("bar"),
+            },
+            WorkerCreationLocalAgentConfigEntry {
+                key: vec!["nested".to_string(), "a".to_string()],
+                value: json!(true),
+            },
+            WorkerCreationLocalAgentConfigEntry {
+                key: vec!["nested".to_string(), "b".to_string()],
+                value: json!([1, 2]),
+            },
+        ],
+    )
+    .await?;
+
+    let response = user
+        .invoke_and_await_agent(&component, &agent_id, "echoLocalConfig", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let_assert!(Value::String(agent_config) = response);
+
+    let parsed_agent_config: serde_json::Value = serde_json::from_str(&agent_config)?;
+
+    assert_eq!(
+        parsed_agent_config,
+        json!({
+            "foo": 1,
+            "bar": "bar",
+            "nested": {
+                "a": true,
+                "b": [1, 2]
+            },
+            "aliasedNested": { }
+        })
     );
 
     Ok(())
