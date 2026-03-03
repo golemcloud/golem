@@ -791,7 +791,7 @@ fn resolve_agent_type_from_worker_name(
         .ok()
         .and_then(|type_name| {
             metadata
-                .find_agent_type_by_wrapper_name(&type_name)
+                .find_agent_type_by_name(&type_name)
                 .ok()
                 .flatten()
         })

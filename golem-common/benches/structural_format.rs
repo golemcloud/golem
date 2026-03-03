@@ -19,8 +19,8 @@ use golem_common::model::agent::structural_format::{
 use golem_common::model::agent::{
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    TextDescriptor, TextReference, TextSource, TextType, UnstructuredBinaryElementValue,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
+    TextReference, TextSource, TextType, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue,
 };
 use golem_wasm::analysis::analysed_type::{
@@ -60,9 +60,7 @@ fn cm(typ: AnalysedType) -> ElementSchema {
 }
 
 fn text_elem_schema() -> ElementSchema {
-    ElementSchema::UnstructuredText(TextDescriptor {
-        restrictions: None,
-    })
+    ElementSchema::UnstructuredText(TextDescriptor { restrictions: None })
 }
 
 fn binary_elem_schema() -> ElementSchema {
@@ -140,18 +138,9 @@ fn complex_data_and_schema() -> (DataValue, DataSchema) {
                     Value::Result(Ok(Some(Box::new(Value::U32(200))))),
                     Value::Flags(vec![true, false, true]),
                     Value::List(vec![
-                        Value::Record(vec![
-                            Value::U32(1),
-                            Value::String("first".into()),
-                        ]),
-                        Value::Record(vec![
-                            Value::U32(2),
-                            Value::String("second".into()),
-                        ]),
-                        Value::Record(vec![
-                            Value::U32(3),
-                            Value::String("third".into()),
-                        ]),
+                        Value::Record(vec![Value::U32(1), Value::String("first".into())]),
+                        Value::Record(vec![Value::U32(2), Value::String("second".into())]),
+                        Value::Record(vec![Value::U32(3), Value::String("third".into())]),
                     ]),
                     Value::Option(Some(Box::new(Value::F64(3.14159265)))),
                 ]),
@@ -165,10 +154,13 @@ fn complex_data_and_schema() -> (DataValue, DataSchema) {
 /// Multimodal: mixed CM + text + binary elements
 fn multimodal_data_and_schema() -> (DataValue, DataSchema) {
     let schema = multimodal_schema(vec![
-        ("structured", cm(record(vec![
-            golem_wasm::analysis::analysed_type::field("id", u32()),
-            golem_wasm::analysis::analysed_type::field("name", str()),
-        ]))),
+        (
+            "structured",
+            cm(record(vec![
+                golem_wasm::analysis::analysed_type::field("id", u32()),
+                golem_wasm::analysis::analysed_type::field("name", str()),
+            ])),
+        ),
         ("text", text_elem_schema()),
         ("binary", binary_elem_schema()),
     ]);
@@ -178,10 +170,7 @@ fn multimodal_data_and_schema() -> (DataValue, DataSchema) {
                 name: "structured".to_string(),
                 value: ElementValue::ComponentModel(ComponentModelElementValue {
                     value: ValueAndType::new(
-                        Value::Record(vec![
-                            Value::U32(99),
-                            Value::String("bench".into()),
-                        ]),
+                        Value::Record(vec![Value::U32(99), Value::String("bench".into())]),
                         record(vec![
                             golem_wasm::analysis::analysed_type::field("id", u32()),
                             golem_wasm::analysis::analysed_type::field("name", str()),
@@ -194,14 +183,13 @@ fn multimodal_data_and_schema() -> (DataValue, DataSchema) {
                 name: "text".to_string(),
                 value: ElementValue::UnstructuredText(UnstructuredTextElementValue {
                     value: TextReference::Inline(TextSource {
-                        data: "Hello, this is a benchmark text element with some content.".to_string(),
+                        data: "Hello, this is a benchmark text element with some content."
+                            .to_string(),
                         text_type: Some(TextType {
                             language_code: "en".to_string(),
                         }),
                     }),
-                    descriptor: TextDescriptor {
-                        restrictions: None,
-                    },
+                    descriptor: TextDescriptor { restrictions: None },
                 }),
                 schema_index: 1,
             },
@@ -214,9 +202,7 @@ fn multimodal_data_and_schema() -> (DataValue, DataSchema) {
                             mime_type: "application/octet-stream".to_string(),
                         },
                     }),
-                    descriptor: golem_common::model::agent::BinaryDescriptor {
-                        restrictions: None,
-                    },
+                    descriptor: golem_common::model::agent::BinaryDescriptor { restrictions: None },
                 }),
                 schema_index: 2,
             },
@@ -234,12 +220,7 @@ fn large_list_data_and_schema() -> (DataValue, DataSchema) {
     let typ = list(inner.clone());
     let schema = tuple_schema(vec![("items", cm(typ.clone()))]);
     let items: Vec<Value> = (0..1000)
-        .map(|i| {
-            Value::Record(vec![
-                Value::U32(i),
-                Value::String(format!("item-{i}")),
-            ])
-        })
+        .map(|i| Value::Record(vec![Value::U32(i), Value::String(format!("item-{i}"))]))
         .collect();
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
@@ -275,10 +256,7 @@ fn escaped_strings_data_and_schema() -> (DataValue, DataSchema) {
     let nasty = "line1\\nline2\\ttab\\\"quoted\\\"back\\\\slash \u{00e9}\u{1f600} end";
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(
-                Value::Record(vec![Value::String(nasty.into())]),
-                typ,
-            ),
+            value: ValueAndType::new(Value::Record(vec![Value::String(nasty.into())]), typ),
         })],
     });
     (data, schema)
@@ -298,9 +276,7 @@ fn large_binary_data_and_schema() -> (DataValue, DataSchema) {
                         mime_type: "application/octet-stream".to_string(),
                     },
                 }),
-                descriptor: golem_common::model::agent::BinaryDescriptor {
-                    restrictions: None,
-                },
+                descriptor: golem_common::model::agent::BinaryDescriptor { restrictions: None },
             }),
         }],
     });
@@ -425,9 +401,13 @@ fn bench_parse(c: &mut Criterion) {
 
     for (name, data, schema) in &cases {
         let formatted = format_structural(data).unwrap();
-        group.bench_with_input(BenchmarkId::new("structural", name), &(formatted, schema), |b, (s, schema)| {
-            b.iter(|| parse_structural(black_box(s), black_box(schema)).unwrap());
-        });
+        group.bench_with_input(
+            BenchmarkId::new("structural", name),
+            &(formatted, schema),
+            |b, (s, schema)| {
+                b.iter(|| parse_structural(black_box(s), black_box(schema)).unwrap());
+            },
+        );
     }
     group.finish();
 }
@@ -467,12 +447,16 @@ fn bench_roundtrip(c: &mut Criterion) {
     ];
 
     for (name, data, schema) in &cases {
-        group.bench_with_input(BenchmarkId::new("structural", name), &(data, schema), |b, (d, s)| {
-            b.iter(|| {
-                let formatted = format_structural(black_box(d)).unwrap();
-                parse_structural(black_box(&formatted), black_box(s)).unwrap()
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("structural", name),
+            &(data, schema),
+            |b, (d, s)| {
+                b.iter(|| {
+                    let formatted = format_structural(black_box(d)).unwrap();
+                    parse_structural(black_box(&formatted), black_box(s)).unwrap()
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -480,7 +464,7 @@ fn bench_roundtrip(c: &mut Criterion) {
 fn bench_normalize(c: &mut Criterion) {
     let mut group = c.benchmark_group("normalize");
 
-    let (data, schema) = complex_data_and_schema();
+    let (data, _schema) = complex_data_and_schema();
     let formatted = format_structural(&data).unwrap();
 
     // Add whitespace to simulate user input
@@ -514,5 +498,11 @@ fn bench_normalize(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_format, bench_parse, bench_roundtrip, bench_normalize);
+criterion_group!(
+    benches,
+    bench_format,
+    bench_parse,
+    bench_roundtrip,
+    bench_normalize
+);
 criterion_main!(benches);

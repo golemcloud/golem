@@ -78,7 +78,7 @@ fn roundtrip(data: &DataValue, schema: &DataSchema) {
     assert_eq!(&parsed, data, "Roundtrip failed for formatted: {formatted}");
 }
 
-fn format_and_check(data: &DataValue, schema: &DataSchema, expected: &str) {
+fn format_and_check(data: &DataValue, expected: &str) {
     let formatted = format_structural(data).unwrap();
     assert_eq!(formatted, expected);
 }
@@ -91,7 +91,7 @@ fn empty_tuple() {
     let data = DataValue::Tuple(ElementValues {
         elements: vec![],
     });
-    format_and_check(&data, &schema, "");
+    format_and_check(&data, "");
     roundtrip(&data, &schema);
 }
 
@@ -105,7 +105,7 @@ fn single_u32() {
             value: 42u32.into_value_and_type(),
         })],
     });
-    format_and_check(&data, &schema, "42");
+    format_and_check(&data, "42");
     roundtrip(&data, &schema);
 }
 
@@ -117,7 +117,7 @@ fn single_u32_zero() {
             value: 0u32.into_value_and_type(),
         })],
     });
-    format_and_check(&data, &schema, "0");
+    format_and_check(&data, "0");
     roundtrip(&data, &schema);
 }
 
@@ -129,7 +129,7 @@ fn signed_negative() {
             value: ValueAndType::new(Value::S32(-42), s32()),
         })],
     });
-    format_and_check(&data, &schema, "-42");
+    format_and_check(&data, "-42");
     roundtrip(&data, &schema);
 }
 
@@ -167,7 +167,6 @@ fn all_integer_types() {
     });
     format_and_check(
         &data,
-        &schema,
         &format!("255,65535,{},-128,-32768,{}", u64::MAX, i64::MIN),
     );
     roundtrip(&data, &schema);
@@ -199,25 +198,23 @@ fn float_zero() {
             value: ValueAndType::new(Value::F64(0.0), f64()),
         })],
     });
-    format_and_check(&data, &schema, "0.0");
+    format_and_check(&data, "0.0");
     roundtrip(&data, &schema);
 }
 
 #[test]
 fn float_negative_zero() {
-    let schema = tuple_schema(vec![("x", cm(f64()))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
             value: ValueAndType::new(Value::F64(-0.0), f64()),
         })],
     });
     // -0.0 maps to 0.0
-    format_and_check(&data, &schema, "0.0");
+    format_and_check(&data, "0.0");
 }
 
 #[test]
 fn float_nan_rejected() {
-    let schema = tuple_schema(vec![("x", cm(f64()))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
             value: ValueAndType::new(Value::F64(f64::NAN), f64()),
@@ -231,7 +228,6 @@ fn float_nan_rejected() {
 
 #[test]
 fn float_inf_rejected() {
-    let schema = tuple_schema(vec![("x", cm(f64()))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
             value: ValueAndType::new(Value::F64(f64::INFINITY), f64()),
@@ -251,7 +247,7 @@ fn float_f32() {
             value: ValueAndType::new(Value::F32(1.5), f32()),
         })],
     });
-    format_and_check(&data, &schema, "1.5");
+    format_and_check(&data, "1.5");
     roundtrip(&data, &schema);
 }
 
@@ -270,7 +266,7 @@ fn bool_values() {
             }),
         ],
     });
-    format_and_check(&data, &schema, "true,false");
+    format_and_check(&data, "true,false");
     roundtrip(&data, &schema);
 }
 
@@ -284,7 +280,7 @@ fn string_simple() {
             value: ValueAndType::new(Value::String("hello".into()), str()),
         })],
     });
-    format_and_check(&data, &schema, r#""hello""#);
+    format_and_check(&data, r#""hello""#);
     roundtrip(&data, &schema);
 }
 
@@ -299,7 +295,7 @@ fn string_with_escapes() {
             ),
         })],
     });
-    format_and_check(&data, &schema, r#""hello\n\"world\"\t\\""#);
+    format_and_check(&data, r#""hello\n\"world\"\t\\""#);
     roundtrip(&data, &schema);
 }
 
@@ -325,7 +321,7 @@ fn char_simple() {
             value: ValueAndType::new(Value::Char('a'), chr()),
         })],
     });
-    format_and_check(&data, &schema, r#"c"a""#);
+    format_and_check(&data, r#"c"a""#);
     roundtrip(&data, &schema);
 }
 
@@ -337,7 +333,7 @@ fn char_special() {
             value: ValueAndType::new(Value::Char('\n'), chr()),
         })],
     });
-    format_and_check(&data, &schema, r#"c"\n""#);
+    format_and_check(&data, r#"c"\n""#);
     roundtrip(&data, &schema);
 }
 
@@ -368,7 +364,7 @@ fn record_simple() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "(10,20)");
+    format_and_check(&data, "(10,20)");
     roundtrip(&data, &schema);
 }
 
@@ -380,7 +376,7 @@ fn record_empty() {
             value: ValueAndType::new(Value::Record(vec![]), record(vec![])),
         })],
     });
-    format_and_check(&data, &schema, "()");
+    format_and_check(&data, "()");
     roundtrip(&data, &schema);
 }
 
@@ -410,7 +406,7 @@ fn record_with_flags() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "(12,32,f(0,2))");
+    format_and_check(&data, "(12,32,f(0,2))");
     roundtrip(&data, &schema);
 }
 
@@ -450,7 +446,7 @@ fn multiple_cm_elements() {
             }),
         ],
     });
-    format_and_check(&data, &schema, "32,(12,32,f(0,2))");
+    format_and_check(&data, "32,(12,32,f(0,2))");
     roundtrip(&data, &schema);
 }
 
@@ -467,7 +463,7 @@ fn list_of_u32() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "[12,13,14]");
+    format_and_check(&data, "[12,13,14]");
     roundtrip(&data, &schema);
 }
 
@@ -479,7 +475,7 @@ fn list_empty() {
             value: ValueAndType::new(Value::List(vec![]), list(u32())),
         })],
     });
-    format_and_check(&data, &schema, "[]");
+    format_and_check(&data, "[]");
     roundtrip(&data, &schema);
 }
 
@@ -502,7 +498,7 @@ fn variant_no_payload() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "v1");
+    format_and_check(&data, "v1");
     roundtrip(&data, &schema);
 }
 
@@ -523,7 +519,7 @@ fn variant_with_payload() {
             ),
         })],
     });
-    format_and_check(&data, &schema, r#"v1("hello")"#);
+    format_and_check(&data, r#"v1("hello")"#);
     roundtrip(&data, &schema);
 }
 
@@ -543,7 +539,7 @@ fn enum_value() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "v2");
+    format_and_check(&data, "v2");
     roundtrip(&data, &schema);
 }
 
@@ -560,7 +556,7 @@ fn option_some() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "s(42)");
+    format_and_check(&data, "s(42)");
     roundtrip(&data, &schema);
 }
 
@@ -572,7 +568,7 @@ fn option_none() {
             value: ValueAndType::new(Value::Option(None), option(u32())),
         })],
     });
-    format_and_check(&data, &schema, "n");
+    format_and_check(&data, "n");
     roundtrip(&data, &schema);
 }
 
@@ -589,7 +585,7 @@ fn result_ok_with_value() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "ok(1)");
+    format_and_check(&data, "ok(1)");
     roundtrip(&data, &schema);
 }
 
@@ -601,7 +597,7 @@ fn result_ok_unit() {
             value: ValueAndType::new(Value::Result(Ok(None)), result_err(str())),
         })],
     });
-    format_and_check(&data, &schema, "ok");
+    format_and_check(&data, "ok");
     roundtrip(&data, &schema);
 }
 
@@ -616,7 +612,7 @@ fn result_err_with_value() {
             ),
         })],
     });
-    format_and_check(&data, &schema, r#"err("bad")"#);
+    format_and_check(&data, r#"err("bad")"#);
     roundtrip(&data, &schema);
 }
 
@@ -628,7 +624,7 @@ fn result_err_unit() {
             value: ValueAndType::new(Value::Result(Err(None)), result_ok(u32())),
         })],
     });
-    format_and_check(&data, &schema, "err");
+    format_and_check(&data, "err");
     roundtrip(&data, &schema);
 }
 
@@ -640,7 +636,7 @@ fn result_unit_both() {
             value: ValueAndType::new(Value::Result(Ok(None)), unit_result()),
         })],
     });
-    format_and_check(&data, &schema, "ok");
+    format_and_check(&data, "ok");
     roundtrip(&data, &schema);
 }
 
@@ -657,7 +653,7 @@ fn flags_some_set() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "f(0,2)");
+    format_and_check(&data, "f(0,2)");
     roundtrip(&data, &schema);
 }
 
@@ -672,7 +668,7 @@ fn flags_none_set() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "f()");
+    format_and_check(&data, "f()");
     roundtrip(&data, &schema);
 }
 
@@ -689,7 +685,7 @@ fn tuple_type() {
             ),
         })],
     });
-    format_and_check(&data, &schema, r#"(1,"hi")"#);
+    format_and_check(&data, r#"(1,"hi")"#);
     roundtrip(&data, &schema);
 }
 
@@ -711,7 +707,7 @@ fn text_inline_no_lang() {
             },
         )],
     });
-    format_and_check(&data, &schema, r#"@t"hello, world!""#);
+    format_and_check(&data, r#"@t"hello, world!""#);
     roundtrip(&data, &schema);
 }
 
@@ -733,7 +729,7 @@ fn text_inline_with_lang() {
             },
         )],
     });
-    format_and_check(&data, &schema, r#"@t[de]"hallo""#);
+    format_and_check(&data, r#"@t[de]"hallo""#);
     roundtrip(&data, &schema);
 }
 
@@ -752,7 +748,7 @@ fn text_url() {
             },
         )],
     });
-    format_and_check(&data, &schema, r#"@tu"https://example.com/""#);
+    format_and_check(&data, r#"@tu"https://example.com/""#);
     roundtrip(&data, &schema);
 }
 
@@ -779,7 +775,6 @@ fn binary_inline() {
     let expected_b64 = base64::engine::general_purpose::STANDARD.encode(b"Hello world!");
     format_and_check(
         &data,
-        &schema,
         &format!(r#"@b[application/json]"{expected_b64}""#),
     );
     roundtrip(&data, &schema);
@@ -802,7 +797,6 @@ fn binary_url() {
     });
     format_and_check(
         &data,
-        &schema,
         r#"@bu"https://example.com/image.png""#,
     );
     roundtrip(&data, &schema);
@@ -841,7 +835,7 @@ fn multimodal_basic() {
             },
         ],
     });
-    format_and_check(&data, &schema, r#"0(42),1(@t"hello")"#);
+    format_and_check(&data, r#"0(42),1(@t"hello")"#);
     roundtrip(&data, &schema);
 }
 
@@ -878,7 +872,7 @@ fn multimodal_repeated_element() {
             },
         ],
     });
-    format_and_check(&data, &schema, r#"1(@t"first"),1(@t"second")"#);
+    format_and_check(&data, r#"1(@t"first"),1(@t"second")"#);
     roundtrip(&data, &schema);
 }
 
@@ -888,7 +882,7 @@ fn multimodal_empty() {
     let data = DataValue::Multimodal(NamedElementValues {
         elements: vec![],
     });
-    format_and_check(&data, &schema, "");
+    format_and_check(&data, "");
     roundtrip(&data, &schema);
 }
 
@@ -1015,7 +1009,7 @@ fn deeply_nested_record() {
             ),
         })],
     });
-    format_and_check(&data, &schema, "(((99)))");
+    format_and_check(&data, "(((99)))");
     roundtrip(&data, &schema);
 }
 
@@ -1055,7 +1049,7 @@ fn complex_agent_id_example() {
             }),
         ],
     });
-    format_and_check(&data, &schema, "32,(12,32,f(0,2))");
+    format_and_check(&data, "32,(12,32,f(0,2))");
     roundtrip(&data, &schema);
 }
 
@@ -1822,7 +1816,7 @@ proptest! {
     }
 
     #[test]
-    fn format_then_normalize_is_identity((schema, data) in arb_data()) {
+    fn format_then_normalize_is_identity((_schema, data) in arb_data()) {
         if let Ok(formatted) = format_structural(&data) {
             let normalized = normalize_structural(&formatted);
             prop_assert_eq!(&formatted, &normalized);

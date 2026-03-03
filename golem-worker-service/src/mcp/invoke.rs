@@ -47,14 +47,18 @@ pub async fn agent_invoke(
 
     let parsed_agent_id = ParsedAgentId::new(
         mcp_tool.agent_type_name.clone(),
-        golem_common::model::agent::DataValue::Tuple(golem_common::model::agent::ElementValues {
+        DataValue::Tuple(ElementValues {
             elements: constructor_params
                 .into_iter()
-                .map(golem_common::model::agent::ElementValue::ComponentModel)
+                .map(ElementValue::ComponentModel)
                 .collect(),
         }),
         None,
-    );
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to parse agent id: {}", e);
+        ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
+    })?;
 
     let method_params =
         extract_parameters_by_schema(&args_map, &mcp_tool.raw_method.input_schema, |vat| {
