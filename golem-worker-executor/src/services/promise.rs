@@ -363,13 +363,6 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                 AgentStatus::Exited | AgentStatus::Failed | AgentStatus::Idle => false,
             };
 
-            tracing::warn!(
-                "complete_promise, worker-status of {}: {}, should_activate={}",
-                owned_agent_id.agent_id,
-                metadata.last_known_status.status,
-                should_activate
-            );
-
             if should_activate {
                 Worker::get_or_create_running(
                     &self.services,

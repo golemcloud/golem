@@ -535,7 +535,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
 
         let mut result = Vec::new();
-        let mut cursor = None;
+        let mut cursor: Option<golem_client::model::OplogCursor> = None;
 
         loop {
             let response = client
@@ -547,7 +547,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     cursor.as_ref(),
                     None,
                 )
-                .await?;
+                .await
+                .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
 
             result.extend(response.entries);
             match response.next {
@@ -571,7 +572,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .await;
 
         let mut result = Vec::new();
-        let mut cursor = None;
+        let mut cursor: Option<golem_client::model::OplogCursor> = None;
 
         loop {
             let response = client
@@ -583,7 +584,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     cursor.as_ref(),
                     Some(query),
                 )
-                .await?;
+                .await
+                .map_err(|e| {
+                    anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
+                })?;
 
             result.extend(response.entries);
             match response.next {
@@ -1041,27 +1045,32 @@ impl HttpWorkerLogEventStream {
 #[async_trait]
 impl WorkerLogEventStream for HttpWorkerLogEventStream {
     async fn message(&mut self) -> anyhow::Result<Option<LogEvent>> {
-        match self.read.next().await {
-            Some(Ok(message)) => match message {
-                Message::Text(payload) => Ok(Some(
-                    serde_json::from_str::<AgentEvent>(payload.as_str())?
-                        .try_into()
-                        .map_err(|error: String| anyhow!(error))?,
-                )),
-                Message::Binary(payload) => Ok(Some(
-                    serde_json::from_slice::<AgentEvent>(payload.as_slice())?
-                        .try_into()
-                        .map_err(|error: String| anyhow!(error))?,
-                )),
-                Message::Ping(_) => Box::pin(self.message()).await,
-                Message::Pong(_) => Box::pin(self.message()).await,
-                Message::Close(_) => Ok(None),
-                Message::Frame(_) => {
-                    panic!("Raw frames should not be received")
-                }
-            },
-            Some(Err(error)) => Err(anyhow!(error)),
-            None => Ok(None),
+        loop {
+            match self.read.next().await {
+                Some(Ok(message)) => match message {
+                    Message::Text(payload) => {
+                        return Ok(Some(
+                            serde_json::from_str::<AgentEvent>(payload.as_str())?
+                                .try_into()
+                                .map_err(|error: String| anyhow!(error))?,
+                        ))
+                    }
+                    Message::Binary(payload) => {
+                        return Ok(Some(
+                            serde_json::from_slice::<AgentEvent>(payload.as_slice())?
+                                .try_into()
+                                .map_err(|error: String| anyhow!(error))?,
+                        ))
+                    }
+                    Message::Ping(_) | Message::Pong(_) => continue,
+                    Message::Close(_) => return Ok(None),
+                    Message::Frame(_) => {
+                        panic!("Raw frames should not be received")
+                    }
+                },
+                Some(Err(error)) => return Err(anyhow!(error)),
+                None => return Ok(None),
+            }
         }
     }
 }

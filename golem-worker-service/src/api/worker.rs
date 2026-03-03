@@ -635,38 +635,33 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        match (from, query) {
-            (Some(_), Some(_)) => Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![
-                    "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                ],
-                cause: None,
-            }))),
+        let response = match (from, query) {
+            (Some(_), Some(_)) => {
+                return Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
+                    errors: vec![
+                        "Cannot specify both the 'from' and the 'query' parameters".to_string(),
+                    ],
+                    cause: None,
+                })));
+            }
             (Some(from), None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
             (None, Some(query)) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .search_oplog(&agent_id, cursor, count, query, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
             (None, None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
-        }
+        };
+
+        Ok(Json(response))
     }
 
     /// List files in a worker

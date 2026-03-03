@@ -141,6 +141,7 @@ connect_timeout = "10s"
 host = "localhost"
 max_message_size = 52428800
 port = 8080
+request_timeout = "30s"
 
 [registry_service.retries_on_unavailable]
 max_attempts = 5
@@ -409,6 +410,7 @@ without_time = false
 # host = "localhost"
 # max_message_size = 52428800
 # port = 8080
+# request_timeout = "30s"
 # 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5
@@ -626,6 +628,7 @@ without_time = false
 # host = "localhost"
 # max_message_size = 52428800
 # port = 8080
+# request_timeout = "30s"
 # 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5

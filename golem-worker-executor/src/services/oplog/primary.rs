@@ -86,6 +86,29 @@ impl PrimaryOplogService {
         format!("{}*", component_id.0)
     }
 
+    async fn get_last_index_from_storage(
+        indexed_storage: &(dyn IndexedStorage + Send + Sync),
+        owned_agent_id: &OwnedAgentId,
+    ) -> OplogIndex {
+        OplogIndex::from_u64(
+            indexed_storage
+                .with_entity("oplog", "get_last_index", "entry")
+                .last_id(
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: owned_agent_id.agent_id(),
+                    },
+                    &Self::oplog_key(&owned_agent_id.agent_id),
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to get last oplog index for agent {owned_agent_id} from indexed storage: {err}"
+                    )
+                })
+                .unwrap_or_default(),
+        )
+    }
+
     pub fn get_agent_id_from_key(key: &str, component_id: &ComponentId) -> AgentId {
         let redis_prefix = format!("{}:", component_id.0);
         if key.starts_with(&redis_prefix) {
@@ -192,7 +215,7 @@ impl OplogService for PrimaryOplogService {
 
         self.open(
             owned_agent_id,
-            OplogIndex::INITIAL,
+            Some(OplogIndex::INITIAL),
             initial_worker_metadata,
             last_known_status,
             execution_status,
@@ -203,7 +226,7 @@ impl OplogService for PrimaryOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
@@ -232,19 +255,7 @@ impl OplogService for PrimaryOplogService {
 
     async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
         record_oplog_call("get_last_index");
-
-        OplogIndex::from_u64(
-            self.indexed_storage
-                .with_entity("oplog", "get_last_index", "entry")
-                .last_id(IndexedStorageNamespace::OpLog { agent_id: owned_agent_id.agent_id.clone() }, &Self::oplog_key(&owned_agent_id.agent_id))
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to get last oplog index for worker {owned_agent_id} from indexed storage: {err}"
-                    )
-                })
-                .unwrap_or_default()
-        )
+        Self::get_last_index_from_storage(&*self.indexed_storage, owned_agent_id).await
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId) {
@@ -378,7 +389,7 @@ struct CreateOplogConstructor {
     max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
     key: String,
-    last_oplog_idx: OplogIndex,
+    last_oplog_idx: Option<OplogIndex>,
     owned_agent_id: OwnedAgentId,
 }
 
@@ -391,7 +402,7 @@ impl CreateOplogConstructor {
         max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
         key: String,
-        last_oplog_idx: OplogIndex,
+        last_oplog_idx: Option<OplogIndex>,
         owned_agent_id: OwnedAgentId,
     ) -> Self {
         Self {
@@ -411,6 +422,16 @@ impl CreateOplogConstructor {
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
+        let last_oplog_idx = match self.last_oplog_idx {
+            Some(idx) => idx,
+            None => {
+                PrimaryOplogService::get_last_index_from_storage(
+                    &*self.indexed_storage,
+                    &self.owned_agent_id,
+                )
+                .await
+            }
+        };
         Arc::new(PrimaryOplog::new(
             self.indexed_storage,
             self.blob_storage,
@@ -419,7 +440,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.max_operations_before_commit_in_persist_nothing,
             self.max_payload_size,
             self.key,
-            self.last_oplog_idx,
+            last_oplog_idx,
             self.owned_agent_id,
             close,
         ))
