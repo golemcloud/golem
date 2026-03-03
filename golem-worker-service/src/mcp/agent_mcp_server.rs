@@ -304,12 +304,10 @@ impl ServerHandler for GolemAgentMcpServer {
         ReadResourceRequestParams { meta: _, uri }: ReadResourceRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        // First try an exact match against static resources
         if let Some(entry) = self.static_resources.get(&uri) {
             return resource_invoke(&self.worker_service, entry.value(), &uri, None).await;
         }
 
-        // Then try matching against resource templates
         let templates = self.template_resources.read().await;
         for resource in templates.iter() {
             if let AgentMcpResourceKind::Template {
