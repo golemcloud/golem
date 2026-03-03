@@ -415,7 +415,7 @@ impl TestDsl for TestWorkerExecutor {
                             .await?;
                         let agent_type = component_at_rev
                             .metadata
-                            .find_agent_type_by_wrapper_name(&agent_id.agent_type)
+                            .find_agent_type_by_name(&agent_id.agent_type)
                             .map_err(|err| anyhow!("Agent type not found: {err}"))?
                             .ok_or_else(|| {
                                 anyhow!("Agent type not found: {}", agent_id.agent_type)

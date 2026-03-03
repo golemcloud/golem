@@ -15,7 +15,6 @@ use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
 use crate::model::GuestLanguage;
 use anyhow::bail;
 use camino::Utf8PathBuf;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use itertools::Itertools;
 use std::collections::BTreeMap;
 
@@ -152,7 +151,6 @@ async fn collect_custom_targets(
             if should_filter_by_agent_type_name {
                 agent_types.retain(|agent_type| {
                     agent_type_names.remove(&agent_type.type_name)
-                        || agent_type_names.remove(&agent_type.type_name.to_wit_naming())
                 });
             }
 

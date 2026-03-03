@@ -892,7 +892,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
-                        AND (r.agent_type_name = $3 OR r.agent_wrapper_type_name = $3)
+                        AND r.agent_type_name = $3
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
@@ -950,7 +950,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_registered_agent_types r
                         ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
-                    WHERE cd.environment_id = $1 AND (r.agent_type_name = $2 OR r.agent_wrapper_type_name = $2)
+                    WHERE cd.environment_id = $1 AND r.agent_type_name = $2
                 "#})
                 .bind(environment_id)
                 .bind(agent_type_name)
@@ -1064,8 +1064,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             JOIN deployment_registered_agent_types r
               ON r.environment_id = target.environment_id
              AND r.deployment_revision_id = target.deployment_revision_id
-            WHERE (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
-            ORDER BY (r.agent_wrapper_type_name = $4) DESC
+            WHERE r.agent_type_name = $4
             LIMIT 1
         "#};
 
@@ -1131,7 +1130,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             ORDER BY deployment_revision_id DESC
                             LIMIT 1
                         )
-                        AND (r.agent_type_name = $4 OR r.agent_wrapper_type_name = $4)
+                        AND r.agent_type_name = $4
                     ORDER BY r.agent_type_name
                 "#})
                 .bind(environment_id)

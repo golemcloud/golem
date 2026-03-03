@@ -782,7 +782,7 @@ impl WorkerService {
 
         let agent_type = component_metadata
             .metadata
-            .find_agent_type_by_wrapper_name(&request.agent_type_name)
+            .find_agent_type_by_name(&request.agent_type_name)
             .map_err(|err| {
                 WorkerServiceError::Internal(format!(
                     "Cannot get agent type {} from component metadata: {err}",
@@ -810,7 +810,10 @@ impl WorkerService {
             request.agent_type_name.clone(),
             constructor_parameters,
             request.phantom_id,
-        );
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!("Agent ID formatting error: {err}"))
+        })?;
 
         let agent_id = AgentId {
             component_id: component_metadata.id,
@@ -890,7 +893,7 @@ impl WorkerService {
                     .await?;
                 let decode_agent_type = component_metadata_for_decode
                     .metadata
-                    .find_agent_type_by_wrapper_name(&agent_type_name)
+                    .find_agent_type_by_name(&agent_type_name)
                     .map_err(|err| {
                         WorkerServiceError::Internal(format!(
                             "Cannot get agent type {agent_type_name} from component metadata at revision {decode_revision}: {err}",

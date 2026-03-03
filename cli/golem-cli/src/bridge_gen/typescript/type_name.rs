@@ -46,24 +46,46 @@ impl TypeName for TypeScriptTypeName {
         None
     }
 
-    fn from_owner_and_name(owner: Option<impl AsRef<str>>, name: impl AsRef<str>) -> Self {
-        match owner {
-            Some(owner) => format!(
-                "{}{}",
-                owner.as_ref().to_upper_camel_case(),
-                name.as_ref().to_upper_camel_case()
-            )
-            .into(),
-            None => name.as_ref().to_upper_camel_case().into(),
+    fn from_owner_and_name(
+        owner: Option<impl AsRef<str>>,
+        name: impl AsRef<str>,
+        same_language: bool,
+    ) -> Self {
+        if same_language {
+            match owner {
+                Some(owner) => format!("{}{}", owner.as_ref(), name.as_ref()).into(),
+                None => name.as_ref().to_string().into(),
+            }
+        } else {
+            match owner {
+                Some(owner) => format!(
+                    "{}{}",
+                    owner.as_ref().to_upper_camel_case(),
+                    name.as_ref().to_upper_camel_case()
+                )
+                .into(),
+                None => name.as_ref().to_upper_camel_case().into(),
+            }
         }
     }
 
-    fn from_segments(segments: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        segments
-            .into_iter()
-            .map(|segment| segment.as_ref().to_upper_camel_case())
-            .join("")
-            .into()
+    fn from_segments(
+        segments: impl IntoIterator<Item = impl AsRef<str>>,
+        same_language: bool,
+    ) -> Self {
+        if same_language {
+            segments
+                .into_iter()
+                .map(|segment| segment.as_ref().to_string())
+                .join("")
+                .into()
+        } else {
+            segments
+                .into_iter()
+                .map(|segment| segment.as_ref().to_upper_camel_case())
+                .join("")
+                .into()
+        }
     }
 
     fn requires_type_name(typ: &AnalysedType) -> bool {

@@ -171,6 +171,7 @@ fn ts_counter_agent() -> GeneratedPackage {
     let agent_type = AgentType {
         type_name: AgentTypeName("CounterAgent".to_string()),
         description: "Constructs the agent CounterAgent".to_string(),
+        source_language: "typescript".to_string(),
         constructor: AgentConstructor {
             name: Some("CounterAgent".to_string()),
             description: "Constructs the agent CounterAgent".to_string(),
@@ -191,7 +192,7 @@ fn ts_counter_agent() -> GeneratedPackage {
             input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             output_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
-                    name: "return-value".to_string(),
+                    name: "returnValue".to_string(),
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: f64(),
                     }),

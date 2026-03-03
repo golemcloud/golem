@@ -217,7 +217,7 @@ impl AvailableFunctionNamesHelp {
     ) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
-            agent_name: Some(agent_id.wrapper_agent_type().to_string()),
+            agent_name: Some(agent_id.agent_type.0.clone()),
             function_names: agent_type
                 .methods
                 .iter()

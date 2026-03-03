@@ -370,12 +370,14 @@ impl AgentDependency {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[cfg_attr(feature = "full", desert(evolution(FieldAdded("http_mount", None))))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
     pub type_name: AgentTypeName,
     pub description: String,
+    #[serde(default)]
+    pub source_language: String,
     pub constructor: AgentConstructor,
     pub methods: Vec<AgentMethod>,
     pub dependencies: Vec<AgentDependency>,
@@ -395,6 +397,7 @@ impl AgentType {
         Self {
             type_name: self.type_name,
             description: self.description,
+            source_language: self.source_language,
             constructor: self.constructor,
             methods: self.methods,
             dependencies: self
@@ -417,7 +420,7 @@ impl AgentType {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_wrapper_name(
+    fn resolve_agent_type_by_name(
         &self,
         agent_type: &AgentTypeName,
     ) -> Result<AgentType, String>;
@@ -494,11 +497,13 @@ impl DataValue {
                         .elements
                         .into_iter()
                         .zip(schema.elements)
-                        .map(|(value, schema)| {
+                        .enumerate()
+                        .map(|(idx, (value, schema))| {
                             ElementValue::try_from_untyped_json(value.value, schema.schema).map(
                                 |v| NamedElementValue {
                                     name: value.name,
                                     value: v,
+                                    schema_index: idx as u32,
                                 },
                             )
                         })
@@ -703,7 +708,6 @@ pub struct ParsedAgentId {
     pub agent_type: AgentTypeName,
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
-    pub(crate) wrapper_agent_type: String,
     pub(crate) as_string: String,
 }
 
@@ -718,6 +722,8 @@ pub struct ParsedAgentId {
 pub struct NamedElementValue {
     pub name: String,
     pub value: ElementValue,
+    #[serde(default)]
+    pub schema_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

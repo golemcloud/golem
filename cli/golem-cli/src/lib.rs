@@ -22,6 +22,7 @@ use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+pub mod agent_id_display;
 pub mod app;
 pub mod app_template;
 pub mod auth;

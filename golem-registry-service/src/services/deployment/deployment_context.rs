@@ -23,7 +23,6 @@ use crate::services::deployment::route_compilation::{
 };
 use crate::services::deployment::write::DeployValidationError;
 use golem_common::model::agent::DeployedRegisteredAgentType;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
@@ -103,7 +102,7 @@ impl DeploymentContext {
 
         for component in self.components.values() {
             for agent_type in component.metadata.agent_types() {
-                let agent_type_name = agent_type.type_name.to_wit_naming();
+                let agent_type_name = agent_type.type_name.clone();
                 let implementer = RegisteredAgentTypeImplementer {
                     component_id: component.id,
                     component_revision: component.revision,

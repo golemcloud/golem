@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::SourceLanguage;
 use crate::command::shared_args::StreamArgs;
 use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
@@ -109,6 +110,8 @@ pub struct WorkerMetadataView {
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub exported_resource_instances: HashMap<String, AgentResourceDescription>,
+    #[serde(skip)]
+    pub source_language: SourceLanguage,
 }
 
 impl TrimDateTime for WorkerMetadataView {
@@ -136,7 +139,15 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
             exported_resource_instances: value.exported_resource_instances,
+            source_language: SourceLanguage::default(),
         }
+    }
+}
+
+impl WorkerMetadataView {
+    pub fn with_source_language(mut self, source_language: SourceLanguage) -> Self {
+        self.source_language = source_language;
+        self
     }
 }
 
@@ -235,6 +246,7 @@ pub struct WorkerNameMatch {
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
     pub agent_name: RawAgentId,
+    pub source_language: SourceLanguage,
 }
 
 impl WorkerNameMatch {

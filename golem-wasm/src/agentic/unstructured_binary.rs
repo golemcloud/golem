@@ -48,8 +48,8 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
         UnstructuredBinary::Inline { data, mime_type }
     }
 
-    pub fn from_url(url: String) -> UnstructuredBinary<T> {
-        UnstructuredBinary::Url(url)
+    pub fn from_url(url: impl Into<String>) -> UnstructuredBinary<T> {
+        UnstructuredBinary::Url(url.into())
     }
 
     #[cfg(any(feature = "host", feature = "stub"))]

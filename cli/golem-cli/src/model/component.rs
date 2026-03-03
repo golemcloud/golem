@@ -290,7 +290,7 @@ fn render_exported_agent(
         show_dummy_return_type,
     ));
     let agent_name = if wrapper_naming {
-        format!("{}.", agent.wrapper_type_name())
+        format!("{}.", agent.type_name.0)
     } else {
         "  ".to_string()
     };
@@ -330,7 +330,7 @@ pub fn render_agent_constructor(
     if wrapper_naming {
         format!(
             "{}({}){}",
-            agent.wrapper_type_name(),
+            agent.type_name.0.clone(),
             render_data_schema(&agent.constructor.input_schema),
             dummy_return_type
         )

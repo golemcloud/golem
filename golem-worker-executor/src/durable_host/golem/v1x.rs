@@ -811,6 +811,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     agent_id.parameters.clone(),
                     Some(forked_phantom_id),
                 )
+                .map_err(|e| anyhow!(e))?
                 .to_string()
             } else {
                 format!("{}-{}", self.agent_id().agent_id, forked_phantom_id)

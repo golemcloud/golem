@@ -67,6 +67,7 @@ pub fn transform_data_value(
                     .map(|e| NamedElementValue {
                         name: e.name,
                         value: transform_element_value(e.value, f),
+                        schema_index: e.schema_index,
                     })
                     .collect(),
             })

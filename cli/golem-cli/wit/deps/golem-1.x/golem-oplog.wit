@@ -337,12 +337,12 @@ interface oplog {
         stack-overflow,
         out-of-memory,
         exceeded-memory-limit,
-        agent-error(string),
+        internal-error(string),
     }
 
     record raw-create-parameters {
         timestamp: datetime,
-        worker-id: agent-id,
+        agent-id: agent-id,
         component-revision: component-revision,
         env: list<tuple<string, string>>,
         environment-id: environment-id,

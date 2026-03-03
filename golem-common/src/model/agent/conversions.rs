@@ -171,6 +171,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
         Self {
             type_name: AgentTypeName(value.type_name),
             description: value.description,
+            source_language: value.source_language,
             constructor: AgentConstructor::from(value.constructor),
             methods: value.methods.into_iter().map(AgentMethod::from).collect(),
             dependencies: value
@@ -195,6 +196,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
         Self {
             type_name: value.type_name.0,
             description: value.description,
+            source_language: value.source_language,
             constructor: value.constructor.into(),
             methods: value.methods.into_iter().map(AgentMethod::into).collect(),
             dependencies: value
@@ -296,9 +298,10 @@ impl DataValue {
                 elements: multimodal
                     .into_iter()
                     .zip(schema)
-                    .map(|((name, value), schema)| {
+                    .enumerate()
+                    .map(|(idx, ((name, value), schema))| {
                         ElementValue::try_from_bindings(value, schema.1)
-                            .map(|v| NamedElementValue { name, value: v })
+                            .map(|v| NamedElementValue { name, value: v, schema_index: idx as u32 })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             })),
@@ -325,11 +328,13 @@ impl DataValue {
                     elements: multimodal
                         .into_iter()
                         .zip(schema.elements)
-                        .map(|(value, schema)| {
+                        .enumerate()
+                        .map(|(idx, (value, schema))| {
                             ElementValue::try_from_untyped(value.value, schema.schema).map(|v| {
                                 NamedElementValue {
                                     name: value.name,
                                     value: v,
+                                    schema_index: idx as u32,
                                 }
                             })
                         })

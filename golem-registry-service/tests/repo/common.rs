@@ -1137,6 +1137,7 @@ fn make_test_agent_type(name: &str) -> AgentType {
     AgentType {
         type_name: AgentTypeName(name.to_string()),
         description: format!("Test agent {name}"),
+        source_language: String::new(),
         constructor: AgentConstructor {
             name: None,
             description: "constructor".to_string(),
@@ -1242,7 +1243,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
 
     let agent_type_name = format!("TestAgent{}", new_repo_uuid().simple());
     let agent_type = make_test_agent_type(&agent_type_name);
-    let wrapper_type_name = agent_type.wrapper_type_name();
+    let wrapper_type_name = agent_type.type_name.to_string();
     let deployment_revision_id: i64 = 1;
 
     let agent_type_record = DeploymentRegisteredAgentTypeRecord {

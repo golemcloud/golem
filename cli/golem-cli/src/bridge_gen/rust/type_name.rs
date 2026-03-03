@@ -56,23 +56,45 @@ impl TypeName for RustTypeName {
         None
     }
 
-    fn from_owner_and_name(owner: Option<impl AsRef<str>>, name: impl AsRef<str>) -> Self {
-        Self::Derived(match owner {
-            Some(owner) => format!(
-                "{}{}",
-                owner.as_ref().to_upper_camel_case(),
-                name.as_ref().to_upper_camel_case()
-            ),
-            None => name.as_ref().to_upper_camel_case(),
-        })
+    fn from_owner_and_name(
+        owner: Option<impl AsRef<str>>,
+        name: impl AsRef<str>,
+        same_language: bool,
+    ) -> Self {
+        if same_language {
+            Self::Derived(match owner {
+                Some(owner) => format!("{}{}", owner.as_ref(), name.as_ref()),
+                None => name.as_ref().to_string(),
+            })
+        } else {
+            Self::Derived(match owner {
+                Some(owner) => format!(
+                    "{}{}",
+                    owner.as_ref().to_upper_camel_case(),
+                    name.as_ref().to_upper_camel_case()
+                ),
+                None => name.as_ref().to_upper_camel_case(),
+            })
+        }
     }
 
-    fn from_segments(segments: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        segments
-            .into_iter()
-            .map(|segment| segment.as_ref().to_upper_camel_case())
-            .join("")
-            .into()
+    fn from_segments(
+        segments: impl IntoIterator<Item = impl AsRef<str>>,
+        same_language: bool,
+    ) -> Self {
+        if same_language {
+            segments
+                .into_iter()
+                .map(|segment| segment.as_ref().to_string())
+                .join("")
+                .into()
+        } else {
+            segments
+                .into_iter()
+                .map(|segment| segment.as_ref().to_upper_camel_case())
+                .join("")
+                .into()
+        }
     }
 
     fn requires_type_name(typ: &AnalysedType) -> bool {

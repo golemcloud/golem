@@ -293,6 +293,7 @@ export function agent(options?: AgentDecoratorOptions) {
     const agentType: AgentType = {
       typeName: agentTypeName.value,
       description: agentTypeDescription,
+      sourceLanguage: 'typescript',
       constructor,
       methods,
       dependencies: [],

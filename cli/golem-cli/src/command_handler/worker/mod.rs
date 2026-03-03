@@ -35,8 +35,8 @@ use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
-    ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
-    AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
+    AvailableAgentConstructorsHelp, AvailableComponentNamesHelp, AvailableFunctionNamesHelp,
+    WorkerNameHelp,
 };
 use crate::model::text::worker::{
     format_agent_name_match, format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView,
@@ -46,6 +46,7 @@ use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 
+use crate::agent_id_display::SourceLanguage;
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
     AgentUpdateMode, WorkerMetadata, WorkerMetadataView, RawAgentId, WorkerNameMatch,
@@ -57,11 +58,7 @@ use golem_client::model::{
     AgentCreationRequest, AgentInvocationMode, AgentInvocationRequest, ComponentDto,
     RevertWorkerTarget, UpdateWorkerRequest,
 };
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{
-    AgentType, ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue,
-    ElementValues, ParsedAgentId, UntypedJsonDataValue,
-};
+use golem_common::model::agent::{AgentType, DataValue, ParsedAgentId, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -72,10 +69,9 @@ use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
 use golem_common::model::{IdempotencyKey, OplogIndex};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{parse_value_and_type, ValueAndType};
+
 use inquire::Confirm;
-use itertools::{EitherOrBoth, Itertools};
+use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write;
@@ -421,8 +417,20 @@ impl WorkerCommandHandler {
             AgentInvocationMode::Await
         };
 
-        let method_parameters =
-            wave_args_to_agent_method_parameters(&agent_type, &method_name, arguments)?;
+        let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
+        let joined_args = arguments.join(",");
+        let method_parameters = crate::agent_id_display::parse_agent_id_params(
+            &joined_args,
+            &method.input_schema,
+            &source_language,
+        )
+        .map_err(|e| anyhow!("Failed to parse method parameters: {e}"))?;
+        let method_parameters = UntypedJsonDataValue::from(method_parameters);
 
         let mut connect_handle = if !no_stream {
             let connection = WorkerConnection::new(
@@ -452,7 +460,7 @@ impl WorkerCommandHandler {
         let request = AgentInvocationRequest {
             app_name: environment.application_name.to_string(),
             env_name: environment.environment_name.to_string(),
-            agent_type_name: agent_id.agent_type.to_wit_naming().0,
+            agent_type_name: agent_id.agent_type.0.clone(),
             parameters: UntypedJsonDataValue::from(agent_id.parameters.clone()),
             phantom_id: agent_id.phantom_id,
             method_name: method_name.clone(),
@@ -567,7 +575,8 @@ impl WorkerCommandHandler {
         .map_err(|err| {
             anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
         })?;
-        let agent_id = ParsedAgentId::new(agent_type_name, typed_parameters, phantom_id);
+        let agent_id = ParsedAgentId::new(agent_type_name, typed_parameters, phantom_id)
+            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
         let agent_name = RawAgentId(agent_id.to_string());
 
         let agent_name_match = self.match_agent_name(agent_name).await?;
@@ -816,7 +825,7 @@ impl WorkerCommandHandler {
                                 0,
                                 format!(
                                     "name startswith {}(",
-                                    agent_type.agent_type.wrapper_type_name()
+                                    agent_type.agent_type.type_name.0.clone()
                                 ),
                             );
 
@@ -1740,7 +1749,95 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
-        Ok((component, agent_name_match.agent_name.clone()))
+        // Try to re-canonicalize the agent name using language-aware parsing
+        let agent_name = if agent_name_match.source_language.is_known() {
+            self.try_recanonicalize_agent_name(
+                &agent_name_match.agent_name,
+                &component,
+                &agent_name_match.source_language,
+            )
+        } else {
+            agent_name_match.agent_name.clone()
+        };
+
+        Ok((component, agent_name))
+    }
+
+    fn try_recanonicalize_agent_name(
+        &self,
+        agent_name: &RawAgentId,
+        component: &ComponentDto,
+        source_language: &SourceLanguage,
+    ) -> RawAgentId {
+        let raw = &agent_name.0;
+
+        // Extract type name and params using ParsedAgentId::parse_agent_type_name
+        // and manual splitting for the params portion
+        let Some(paren_pos) = raw.find('(') else {
+            return agent_name.clone();
+        };
+        let type_name = &raw[..paren_pos];
+
+        // Find matching closing paren (account for nesting and phantom id)
+        let mut nesting = 0i32;
+        let mut close_pos = None;
+        for (i, ch) in raw[paren_pos..].char_indices() {
+            match ch {
+                '(' => nesting += 1,
+                ')' => {
+                    nesting -= 1;
+                    if nesting == 0 {
+                        close_pos = Some(paren_pos + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(close_pos) = close_pos else {
+            return agent_name.clone();
+        };
+
+        let params_str = &raw[paren_pos + 1..close_pos];
+        let phantom_str = if close_pos + 1 < raw.len() {
+            Some(&raw[close_pos + 1..])
+        } else {
+            None
+        };
+
+        // Look up the agent type from component metadata
+        let agent_type = component
+            .metadata
+            .agent_types()
+            .iter()
+            .find(|at| at.type_name.0 == type_name);
+
+        let Some(agent_type) = agent_type else {
+            return agent_name.clone();
+        };
+
+        // Try language-aware parse
+        let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
+            params_str,
+            &agent_type.constructor.input_schema,
+            source_language,
+        ) else {
+            return agent_name.clone();
+        };
+
+        // Re-canonicalize using structural format
+        let Ok(canonical) =
+            golem_common::model::agent::structural_format::format_structural(&data_value)
+        else {
+            return agent_name.clone();
+        };
+
+        let mut new_id = format!("{type_name}({canonical})");
+        if let Some(phantom) = phantom_str {
+            new_id.push_str(phantom);
+        }
+        RawAgentId(new_id)
     }
 
     async fn resume_worker(
@@ -1832,6 +1929,7 @@ impl WorkerCommandHandler {
                             )
                             .map_err(|err| anyhow!(err))?,
                             agent_name: agent_name.into(),
+                            source_language: SourceLanguage::default(),
                         })
                     }
                     None => {
@@ -1971,6 +2069,7 @@ impl WorkerCommandHandler {
                                     component_name_match_kind: ComponentNameMatchKind::App,
                                     component_name: ComponentName(match_.option),
                                     agent_name: agent_name.into(),
+                                    source_language: SourceLanguage::default(),
                                 })
                             }
                             Err(error) => match error {
@@ -2005,6 +2104,7 @@ impl WorkerCommandHandler {
                                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                                         component_name,
                                         agent_name: agent_name.into(),
+                                        source_language: SourceLanguage::default(),
                                     })
                                 }
                             },
@@ -2015,6 +2115,7 @@ impl WorkerCommandHandler {
                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                         component_name,
                         agent_name: agent_name.into(),
+                        source_language: SourceLanguage::default(),
                     }),
                 }
             }
@@ -2061,7 +2162,7 @@ impl WorkerCommandHandler {
                         })
                     {
                         let component_name = format!("{namespace}:{package}");
-                        if interface == agent_id.wrapper_agent_type()
+                        if *interface == agent_id.agent_type.0
                             && component.component_name.0 == component_name
                         {
                             return Ok(Some((agent_id, agent_type.clone())));
@@ -2156,137 +2257,6 @@ fn resolve_agent_method_name(
             ..m
         }
     })
-}
-
-fn wave_args_to_agent_method_parameters(
-    agent_type: &AgentType,
-    method_name: &str,
-    wave_args: Vec<String>,
-) -> anyhow::Result<UntypedJsonDataValue> {
-    let method = agent_type
-        .methods
-        .iter()
-        .find(|m| m.name == method_name)
-        .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
-    let element_schemas = match &method.input_schema {
-        DataSchema::Tuple(schemas) => &schemas.elements,
-        DataSchema::Multimodal(_) => {
-            bail!("Multimodal method parameters are not supported via CLI WAVE arguments")
-        }
-    };
-    if element_schemas.len() != wave_args.len() {
-        logln("");
-        log_error(format!(
-            "Wrong number of parameters: expected {}, got {}",
-            element_schemas.len(),
-            wave_args.len()
-        ));
-        logln("");
-        let types_and_args: Vec<ArgumentError> = element_schemas
-            .iter()
-            .zip_longest(wave_args.iter())
-            .map(|zipped| match zipped {
-                EitherOrBoth::Both(schema, value) => ArgumentError {
-                    type_: match &schema.schema {
-                        ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
-                        _ => None,
-                    },
-                    value: Some(value.clone()),
-                    error: None,
-                },
-                EitherOrBoth::Left(schema) => ArgumentError {
-                    type_: match &schema.schema {
-                        ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
-                        _ => None,
-                    },
-                    value: None,
-                    error: Some("missing argument".log_color_error().to_string()),
-                },
-                EitherOrBoth::Right(value) => ArgumentError {
-                    type_: None,
-                    value: Some(value.clone()),
-                    error: Some("extra argument".log_color_error().to_string()),
-                },
-            })
-            .collect();
-        log_text_view(&ParameterErrorTableView(types_and_args));
-        logln("");
-        bail!(NonSuccessfulExit);
-    }
-    let mut element_values = Vec::with_capacity(element_schemas.len());
-    let mut has_errors = false;
-    let mut error_entries = Vec::new();
-    for (schema, wave_arg) in element_schemas.iter().zip(wave_args.iter()) {
-        match &schema.schema {
-            ElementSchema::ComponentModel(cm) => {
-                match lenient_parse_type_annotated_value(&cm.element_type.to_wit_naming(), wave_arg)
-                {
-                    Ok(mut vt) => {
-                        vt.typ = cm.element_type.clone();
-                        element_values.push(ElementValue::ComponentModel(
-                            ComponentModelElementValue { value: vt },
-                        ));
-                        error_entries.push(None);
-                    }
-                    Err(err) => {
-                        has_errors = true;
-                        element_values.push(ElementValue::ComponentModel(
-                            ComponentModelElementValue {
-                                value: golem_wasm::ValueAndType::new(
-                                    golem_wasm::Value::Bool(false),
-                                    golem_wasm::analysis::analysed_type::bool(),
-                                ),
-                            },
-                        ));
-                        error_entries.push(Some(err));
-                    }
-                }
-            }
-            _ => bail!("Non-ComponentModel element schema is not supported via CLI WAVE arguments"),
-        }
-    }
-    if has_errors {
-        logln("");
-        log_error("Argument WAVE parse error(s)!");
-        logln("");
-        let error_table: Vec<ArgumentError> = element_schemas
-            .iter()
-            .zip(wave_args.iter())
-            .zip(error_entries.iter())
-            .map(|((schema, value), err)| ArgumentError {
-                type_: match &schema.schema {
-                    ElementSchema::ComponentModel(cm) => Some(cm.element_type.clone()),
-                    _ => None,
-                },
-                value: Some(value.clone()),
-                error: err
-                    .as_ref()
-                    .map(|e| e.log_color_error_highlight().to_string()),
-            })
-            .collect();
-        log_text_view(&ParameterErrorTableView(error_table));
-        logln("");
-        bail!(NonSuccessfulExit);
-    }
-    Ok(UntypedJsonDataValue::from(DataValue::Tuple(
-        ElementValues {
-            elements: element_values,
-        },
-    )))
-}
-
-pub fn lenient_parse_type_annotated_value(
-    analysed_type: &AnalysedType,
-    input: &str,
-) -> Result<ValueAndType, String> {
-    let patched_input = match analysed_type {
-        AnalysedType::Chr(_) => (!input.starts_with('\'')).then(|| format!("'{input}'")),
-        AnalysedType::Str(_) => (!input.starts_with('"')).then(|| format!("\"{input}\"")),
-        _ => None,
-    };
-
-    let input = patched_input.as_deref().unwrap_or(input);
-    parse_value_and_type(analysed_type, input)
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {

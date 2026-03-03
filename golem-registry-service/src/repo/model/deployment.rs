@@ -307,7 +307,7 @@ impl DeploymentRegisteredAgentTypeRecord {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
             agent_type_name: registered_agent_type.agent_type.type_name.to_string(),
-            agent_wrapper_type_name: registered_agent_type.agent_type.wrapper_type_name(),
+            agent_wrapper_type_name: registered_agent_type.agent_type.type_name.to_string(),
             component_id: registered_agent_type.implemented_by.component_id.0,
             component_revision_id: registered_agent_type
                 .implemented_by

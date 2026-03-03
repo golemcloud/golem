@@ -98,6 +98,7 @@ fn rust_counter_agent() -> GeneratedPackage {
     let agent_type = AgentType {
         type_name: AgentTypeName("CounterAgent".to_string()),
         description: "Constructs the agent CounterAgent".to_string(),
+        source_language: "rust".to_string(),
         constructor: AgentConstructor {
             name: Some("CounterAgent".to_string()),
             description: "Constructs the agent CounterAgent".to_string(),
@@ -118,7 +119,7 @@ fn rust_counter_agent() -> GeneratedPackage {
             input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
             output_schema: DataSchema::Tuple(NamedElementSchemas {
                 elements: vec![NamedElementSchema {
-                    name: "return-value".to_string(),
+                    name: "return_value".to_string(),
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: f64(),
                     }),

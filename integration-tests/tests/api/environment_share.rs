@@ -15,7 +15,6 @@
 use golem_client::api::{
     AgentClient, AgentError, RegistryServiceClient, RegistryServiceGetEnvironmentShareError,
 };
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{EnvironmentShareCreation, EnvironmentShareUpdate};
 use golem_common::model::IdempotencyKey;
@@ -189,7 +188,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
             &golem_client::model::AgentInvocationRequest {
                 app_name: app.name.0.clone(),
                 env_name: env.name.0.clone(),
-                agent_type_name: agent_id.agent_type.to_wit_naming().0.clone(),
+                agent_type_name: agent_id.agent_type.0.clone(),
                 parameters: agent_id.parameters.clone().into(),
                 phantom_id: agent_id.phantom_id,
                 method_name: "inc_by".to_string(),
@@ -211,7 +210,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
             &golem_client::model::AgentInvocationRequest {
                 app_name: app.name.0.clone(),
                 env_name: env.name.0.clone(),
-                agent_type_name: agent_id.agent_type.to_wit_naming().0.clone(),
+                agent_type_name: agent_id.agent_type.0.clone(),
                 parameters: agent_id.parameters.clone().into(),
                 phantom_id: agent_id.phantom_id,
                 method_name: "get_value".to_string(),
@@ -287,7 +286,7 @@ async fn invoke_agent_in_shared_environment_fails_without_share(
             &golem_client::model::AgentInvocationRequest {
                 app_name: app.name.0.clone(),
                 env_name: env.name.0.clone(),
-                agent_type_name: agent_id.agent_type.to_wit_naming().0.clone(),
+                agent_type_name: agent_id.agent_type.0.clone(),
                 parameters: agent_id.parameters.clone().into(),
                 phantom_id: agent_id.phantom_id,
                 method_name: "get_value".to_string(),
