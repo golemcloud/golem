@@ -199,7 +199,17 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
             buf.push('"');
         }
         (Value::Option(opt), AnalysedType::Option(type_opt)) => match opt {
-            Some(inner) => render_cm_value(buf, inner, &type_opt.inner),
+            Some(inner) => {
+                if matches!(&*type_opt.inner, AnalysedType::Option(_)) {
+                    // Nested Option<Option<…>>: wrap Some in `{ some: <inner> }`
+                    // so it can be distinguished from None (`null`) at any depth.
+                    buf.push_str("{ some: ");
+                    render_cm_value(buf, inner, &type_opt.inner);
+                    buf.push_str(" }");
+                } else {
+                    render_cm_value(buf, inner, &type_opt.inner);
+                }
+            }
             None => buf.push_str("null"),
         },
         (Value::Result(res), AnalysedType::Result(type_res)) => match res {

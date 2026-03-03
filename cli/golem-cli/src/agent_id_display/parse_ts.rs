@@ -176,10 +176,23 @@ fn parse_cm_value(lex: &mut Lexer, typ: &AnalysedType) -> Result<ValueAndType, P
             Ok(ValueAndType::new(Value::Enum(idx as u32), typ.clone()))
         }
         AnalysedType::Option(to) => {
+            let is_nested = matches!(&*to.inner, AnalysedType::Option(_));
             match lex.peek()? {
                 Token::Null | Token::Undefined => {
                     lex.next_token()?;
                     Ok(ValueAndType::new(Value::Option(None), typ.clone()))
+                }
+                Token::LBrace if is_nested => {
+                    // Nested Option<Option<…>>: `{ some: <inner> }` means Some(inner)
+                    lex.next_token()?;
+                    let (key, pos, _) = lex.expect_ident()?;
+                    if key != "some" {
+                        return Err(ParseError { position: pos, message: format!("expected 'some', got '{key}'") });
+                    }
+                    lex.expect(&Token::Colon)?;
+                    let inner = parse_cm_value(lex, &to.inner)?;
+                    lex.expect(&Token::RBrace)?;
+                    Ok(ValueAndType::new(Value::Option(Some(Box::new(inner.value))), typ.clone()))
                 }
                 _ => {
                     let inner = parse_cm_value(lex, &to.inner)?;

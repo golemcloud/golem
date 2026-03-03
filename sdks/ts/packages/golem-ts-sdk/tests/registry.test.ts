@@ -50,6 +50,7 @@ describe('AgentType look up', () => {
     const AgentTypeSample: AgentType = {
       typeName: agentClassName.value,
       description: 'An assistant agent',
+      sourceLanguage: 'typescript',
       constructor: {
         name: 'foo',
         description: 'sample desc',
