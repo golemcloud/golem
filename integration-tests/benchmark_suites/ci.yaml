@@ -16,13 +16,6 @@ benchmarks:
     length: [ 5 ]
     disableCompilationCache: true
 
-  - name: cold-start-unknown-large
-    iterations: 1
-    clusterSize: [ 1 ]
-    size: [ 1, 5, 10 ]
-    length: [ 10 ]
-    disableCompilationCache: true
-
   - name: cold-start-unknown-small
     iterations: 1
     clusterSize: [ 1 ]
@@ -35,12 +28,6 @@ benchmarks:
     size: [ 1, 5, 10 ]
     length: [ 5 ]
 
-  - name: cold-start-unknown-large
-    iterations: 1
-    clusterSize: [ 1 ]
-    size: [ 1, 5, 10 ]
-    length: [ 10 ]
-
   - name: latency-small
     iterations: 1
     clusterSize: [ 1 ]
@@ -52,12 +39,6 @@ benchmarks:
     clusterSize: [ 1 ]
     size: [ 100, 250, 500 ]
     length: [ 5 ]
-
-  - name: latency-large
-    iterations: 1
-    clusterSize: [ 1 ]
-    size: [ 100, 250 ]
-    length: [ 10 ]
 
   - name: sleep
     iterations: 1
