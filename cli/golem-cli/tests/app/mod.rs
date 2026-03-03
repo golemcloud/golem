@@ -82,7 +82,6 @@ mod flag {
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
-    pub static TEMPLATE_GROUP: &str = "--template-group";
     pub static YES: &str = "--yes";
 }
 
@@ -268,7 +267,6 @@ struct TestContext {
     working_dir: PathBuf,
     server_process: Option<Child>,
     env: HashMap<String, String>,
-    template_group: Option<String>,
 }
 
 impl Drop for TestContext {
@@ -334,7 +332,6 @@ impl TestContext {
             working_dir,
             server_process: None,
             env,
-            template_group: None,
         };
 
         info!(ctx = ?ctx ,"Created test context");
@@ -355,20 +352,6 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
-    #[allow(dead_code)]
-    fn use_generic_template_group(&mut self) {
-        self.use_template_group("generic")
-    }
-
-    fn use_template_group(&mut self, template_group: impl Into<String>) {
-        self.template_group = Some(template_group.into());
-    }
-
-    #[allow(dead_code)]
-    fn use_default_template_group(&mut self) {
-        self.template_group = None;
-    }
-
     #[must_use]
     async fn cli<I, S>(&self, args: I) -> Output
     where
@@ -380,10 +363,6 @@ impl TestContext {
                 "--config-dir".to_string(),
                 self.config_dir.path().to_str().unwrap().to_string(),
             ];
-            if let Some(template_group) = &self.template_group {
-                all_args.push(flag::TEMPLATE_GROUP.to_string());
-                all_args.push(template_group.to_string());
-            }
             all_args.extend(
                 args.into_iter()
                     .map(|a| a.as_ref().to_str().unwrap().to_string()),

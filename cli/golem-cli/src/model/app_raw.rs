@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app_template::APP_MANIFEST_JSON_SCHEMA;
-use crate::fs;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use crate::model::GuestLanguage;
+use crate::{fs, APP_MANIFEST_JSON_SCHEMA};
 use anyhow::{anyhow, Context};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
@@ -88,8 +87,6 @@ pub struct Application {
     pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temp_dir: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub component_templates: IndexMap<String, ComponentTemplate>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]

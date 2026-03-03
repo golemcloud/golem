@@ -31,7 +31,7 @@ pub mod text;
 pub mod wave;
 pub mod worker;
 
-use crate::app_template::model::{Template, TemplateName};
+use crate::app::template::{AppTemplate, AppTemplateName};
 use crate::command::shared_args::ComponentTemplateName;
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
@@ -67,6 +67,14 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            _ => None,
+        }
+    }
+
+    pub fn from_id_string(s: impl AsRef<str>) -> Option<GuestLanguage> {
+        match s.as_ref().to_lowercase().as_str() {
+            "rust" => Some(GuestLanguage::Rust),
+            "ts" => Some(GuestLanguage::TypeScript),
             _ => None,
         }
     }
@@ -144,17 +152,17 @@ impl TypedValueParser for JsonValueParser {
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize)]
 pub struct TemplateDescription {
-    pub name: TemplateName,
+    pub name: AppTemplateName,
     pub language: GuestLanguage,
     pub description: String,
 }
 
 impl TemplateDescription {
-    pub fn from_template(template: &Template) -> Self {
+    pub fn from_template(template: &AppTemplate) -> Self {
         Self {
             name: template.name.clone(),
             language: template.language,
-            description: template.description.clone(),
+            description: template.description().to_string(),
         }
     }
 }
