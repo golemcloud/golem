@@ -16,7 +16,7 @@ use crate::mcp::McpCapabilityLookup;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind, ResourceUri};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::invoke::{agent_invoke, resource_invoke};
+use crate::mcp::invoke::{invoke_tool, invoke_resource};
 use crate::service::worker::WorkerService;
 use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
@@ -58,12 +58,12 @@ impl GolemAgentMcpServer {
         }
     }
 
-    pub async fn invoke(
+    pub async fn invoke_tool(
         &self,
         args_map: JsonObject,
         mcp_tool: &AgentMcpTool,
     ) -> Result<CallToolResult, ErrorData> {
-        agent_invoke(&self.worker_service, args_map, mcp_tool).await
+        invoke_tool(&self.worker_service, args_map, mcp_tool).await
     }
 
     async fn build_capabilities(
@@ -305,7 +305,7 @@ impl ServerHandler for GolemAgentMcpServer {
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         if let Some(entry) = self.static_resources.get(&uri) {
-            return resource_invoke(&self.worker_service, entry.value(), &uri, None).await;
+            return invoke_resource(&self.worker_service, entry.value(), &uri, None).await;
         }
 
         let templates = self.template_resources.read().await;
@@ -318,7 +318,7 @@ impl ServerHandler for GolemAgentMcpServer {
                 if let Ok(params) =
                     AgentMcpResource::extract_params_from_uri(&template.uri_template, &uri)
                 {
-                    return resource_invoke(&self.worker_service, resource, &uri, Some(params))
+                    return invoke_resource(&self.worker_service, resource, &uri, Some(params))
                         .await;
                 }
             }
