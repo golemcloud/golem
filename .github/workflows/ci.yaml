@@ -226,7 +226,7 @@ jobs:
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()
