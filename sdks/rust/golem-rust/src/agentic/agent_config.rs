@@ -55,10 +55,7 @@ impl<T> Secret<T> {
     {
         let typ = T::get_type();
         let value = get_config_value(&self.path, &typ);
-        T::from_value_and_type(ValueAndType {
-            value,
-            typ,
-        })
+        T::from_value_and_type(ValueAndType { value, typ })
     }
 }
 
@@ -129,10 +126,7 @@ impl<T: ComponentModelConfigLeaf> ConfigField for T {
     fn load(path: &[String]) -> Result<Self, String> {
         let typ = <Self as IntoValue>::get_type();
         let value = get_config_value(path, &typ);
-        <Self as FromValueAndType>::from_value_and_type(ValueAndType {
-            value,
-            typ,
-        })
+        <Self as FromValueAndType>::from_value_and_type(ValueAndType { value, typ })
     }
 }
 

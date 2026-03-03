@@ -249,18 +249,18 @@ export class Secret<T> {
 }
 
 export class Config<T> {
-  private _value: T
+  private _value: T;
 
   constructor(readonly properties: Type.ConfigProperty[]) {
-    this._value = this.loadConfig()
+    this._value = this.loadConfig();
   }
 
   get value(): T {
-    return this._value
+    return this._value;
   }
 
   reload(): void {
-    this._value = this.loadConfig()
+    this._value = this.loadConfig();
   }
 
   private loadConfig(): T {
@@ -289,6 +289,6 @@ export class Config<T> {
       current[leafKey] = leafValue;
     }
 
-    return root as T
+    return root as T;
   }
 }

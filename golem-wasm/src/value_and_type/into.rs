@@ -897,7 +897,9 @@ fn build_tree(
                     analysed_type::field(name, field_type)
                 })
                 .collect();
-            analysed_type::record(fields).with_optional_name(node.name.clone())
+            analysed_type::record(fields)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::VariantType(cases) => {
             let cases = cases
@@ -910,7 +912,9 @@ fn build_tree(
                     None => analysed_type::unit_case(name),
                 })
                 .collect();
-            variant(cases).with_optional_name(node.name.clone())
+            variant(cases)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::EnumType(names) => AnalysedType::Enum(crate::analysis::TypeEnum {
             cases: names.clone(),
@@ -927,31 +931,45 @@ fn build_tree(
                 .iter()
                 .map(|idx| build_tree(&nodes[*idx as usize], nodes))
                 .collect();
-            tuple(types).with_optional_name(node.name.clone())
+            tuple(types)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::ListType(elem_type) => {
             let elem_type = build_tree(&nodes[*elem_type as usize], nodes);
-            list(elem_type).with_optional_name(node.name.clone())
+            list(elem_type)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::OptionType(inner_type) => {
             let inner_type = build_tree(&nodes[*inner_type as usize], nodes);
-            option(inner_type).with_optional_name(node.name.clone())
+            option(inner_type)
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone())
         }
         crate::WitTypeNode::ResultType((ok_type, err_type)) => match (ok_type, err_type) {
             (Some(ok_type), Some(err_type)) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
-                result(ok_type, err_type).with_optional_name(node.name.clone())
+                result(ok_type, err_type)
+                    .with_optional_name(node.name.clone())
+                    .with_optional_owner(node.owner.clone())
             }
             (None, Some(err_type)) => {
                 let err_type = build_tree(&nodes[*err_type as usize], nodes);
-                result_err(err_type).with_optional_name(node.name.clone())
+                result_err(err_type)
+                    .with_optional_name(node.name.clone())
+                    .with_optional_owner(node.owner.clone())
             }
             (Some(ok_type), None) => {
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
-                result_ok(ok_type).with_optional_name(node.name.clone())
+                result_ok(ok_type)
+                    .with_optional_name(node.name.clone())
+                    .with_optional_owner(node.owner.clone())
             }
-            (None, None) => analysed_type::unit_result().with_optional_name(node.name.clone()),
+            (None, None) => analysed_type::unit_result()
+                .with_optional_name(node.name.clone())
+                .with_optional_owner(node.owner.clone()),
         },
         crate::WitTypeNode::PrimU8Type => analysed_type::u8(),
         crate::WitTypeNode::PrimU16Type => analysed_type::u16(),
@@ -973,7 +991,8 @@ fn build_tree(
                 crate::ResourceMode::Borrowed => crate::analysis::AnalysedResourceMode::Borrowed,
             },
         )
-        .with_optional_name(node.name.clone()),
+        .with_optional_name(node.name.clone())
+        .with_optional_owner(node.owner.clone()),
     }
 }
 
@@ -1218,6 +1237,7 @@ impl IntoValue for Url {
 mod tests {
     use crate::analysis::AnalysedType;
     use crate::{IntoValue, WitType, WitValue};
+    use pretty_assertions::assert_eq;
     use test_r::test;
 
     #[test]
