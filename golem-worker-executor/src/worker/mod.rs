@@ -1523,7 +1523,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await?;
 
-                let current_oplog_idx = current_status.oplog_idx;
                 let current_status = Arc::new(tokio::sync::RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
@@ -1554,7 +1553,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .open(
                         owned_worker_id,
-                        current_oplog_idx,
+                        None,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(current_status.clone()),
                         read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),

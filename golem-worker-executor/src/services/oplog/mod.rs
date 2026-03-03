@@ -78,10 +78,19 @@ pub trait OplogService: Debug + Send + Sync {
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
+    /// Opens an existing oplog for the given worker.
+    ///
+    /// `last_oplog_index` controls how the oplog's internal write cursor is initialized:
+    /// - `None` — the implementation resolves the last index from storage at construction time.
+    ///   This is the recommended default for production callers, as it avoids TOCTOU races
+    ///   between reading the index and opening the oplog.
+    /// - `Some(idx)` — uses the provided index. This is intended for outer layers (e.g.
+    ///   `MultiLayerOplogService`) that have already resolved the correct global last index
+    ///   across all layers and need to pass it down to inner layers.
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
