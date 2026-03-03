@@ -194,6 +194,7 @@ pub enum EnvironmentAction {
     CreateEnvironmentPluginGrant,
     CreateHttpApiDefinition,
     CreateHttpApiDeployment,
+    CreateMcpDeployment,
     CreateSecurityScheme,
     CreateShare,
     CreateWorker,
@@ -203,6 +204,7 @@ pub enum EnvironmentAction {
     DeleteEnvironmentPluginGrant,
     DeleteHttpApiDefinition,
     DeleteHttpApiDeployment,
+    DeleteMcpDeployment,
     DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
@@ -211,6 +213,7 @@ pub enum EnvironmentAction {
     UpdateEnvironment,
     UpdateHttpApiDefinition,
     UpdateHttpApiDeployment,
+    UpdateMcpDeployment,
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
@@ -223,6 +226,7 @@ pub enum EnvironmentAction {
     ViewEnvironmentPluginGrant,
     ViewHttpApiDefinition,
     ViewHttpApiDeployment,
+    ViewMcpDeployment,
     ViewSecurityScheme,
     ViewShares,
     ViewWorker,
@@ -611,6 +615,27 @@ impl AuthCtx {
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
             EnvironmentAction::ViewHttpApiDeployment => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            // Mcp deployment
+            EnvironmentAction::CreateMcpDeployment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateMcpDeployment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::DeleteMcpDeployment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewMcpDeployment => has_any_role(
                 roles_from_shares,
                 &[
                     EnvironmentRole::Admin,

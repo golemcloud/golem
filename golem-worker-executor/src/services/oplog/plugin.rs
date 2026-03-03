@@ -308,7 +308,7 @@ struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
     initial_entry: Option<OplogEntry>,
     inner: Arc<dyn OplogService>,
-    last_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
     initial_worker_metadata: AgentMetadata,
@@ -321,7 +321,7 @@ impl CreateOplogConstructor {
         owned_agent_id: OwnedAgentId,
         initial_entry: Option<OplogEntry>,
         inner: Arc<dyn OplogService>,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
         initial_worker_metadata: AgentMetadata,
@@ -345,6 +345,10 @@ impl CreateOplogConstructor {
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
+        let last_oplog_index = match self.last_oplog_index {
+            Some(idx) => idx,
+            None => self.inner.get_last_index(&self.owned_agent_id).await,
+        };
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
@@ -359,7 +363,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.inner
                 .open(
                     &self.owned_agent_id,
-                    self.last_oplog_index,
+                    Some(last_oplog_index),
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
                     self.execution_status.clone(),
@@ -373,7 +377,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.components,
             self.initial_worker_metadata,
             self.last_known_status,
-            self.last_oplog_index,
+            last_oplog_index,
             close,
         ))
     }
@@ -425,7 +429,7 @@ impl OplogService for ForwardingOplogService {
                     owned_agent_id.clone(),
                     Some(initial_entry),
                     self.inner.clone(),
-                    OplogIndex::INITIAL,
+                    Some(OplogIndex::INITIAL),
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     initial_worker_metadata,
@@ -439,7 +443,7 @@ impl OplogService for ForwardingOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,

@@ -48,7 +48,7 @@ use colored::Colorize;
 
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
-    AgentUpdateMode, WorkerMetadata, WorkerMetadataView, RawAgentId, WorkerNameMatch,
+    AgentUpdateMode, RawAgentId, WorkerMetadata, WorkerMetadataView, WorkerNameMatch,
     WorkersMetadataResponseView,
 };
 use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};

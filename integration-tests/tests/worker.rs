@@ -528,6 +528,7 @@ async fn get_running_workers(
     }
 
     // Testing looking for a single worker - with retry for eventual consistency
+    info!("Phase 1: Looking for a single worker by name");
     let single_agent_name = agent_ids.iter().next().unwrap().agent_id.clone();
     let start = tokio::time::Instant::now();
     let enum_deadline = Duration::from_secs(30);
@@ -566,8 +567,13 @@ async fn get_running_workers(
         sleep(Duration::from_millis(200)).await;
     };
     assert_eq!(single_result.len(), 1);
+    info!(
+        "Phase 1 complete: found single worker in {:?}",
+        start.elapsed()
+    );
 
     // Testing looking for all the workers - with retry for eventual consistency
+    info!("Phase 2: Looking for all {workers_count} workers");
     let start = tokio::time::Instant::now();
     loop {
         let mut cursor = ScanCursor::default();
@@ -598,8 +604,13 @@ async fn get_running_workers(
         }
         sleep(Duration::from_millis(200)).await;
     }
+    info!(
+        "Phase 2 complete: found all workers in {:?}",
+        start.elapsed()
+    );
 
     // Testing looking for running workers - with retry for eventual consistency
+    info!("Phase 3: Looking for running workers");
     let start = tokio::time::Instant::now();
     loop {
         let mut cursor = ScanCursor::default();
@@ -635,10 +646,20 @@ async fn get_running_workers(
         }
         sleep(Duration::from_millis(200)).await;
     }
+    info!(
+        "Phase 3 complete: found running workers in {:?}",
+        start.elapsed()
+    );
 
+    info!("Phase 4: Sending stop signal to workers");
     *response.lock().unwrap() = "stop".to_string();
 
     // Wait for all workers to become Idle in parallel with a generous timeout
+    info!(
+        "Phase 5: Waiting for all {} workers to become Idle",
+        agent_ids.len()
+    );
+    let idle_start = tokio::time::Instant::now();
     let idle_futs: Vec<_> = agent_ids
         .iter()
         .map(|agent_id| user.wait_for_status(agent_id, AgentStatus::Idle, Duration::from_secs(30)))
@@ -649,11 +670,17 @@ async fn get_running_workers(
             .as_ref()
             .map_err(|e| anyhow!("Worker failed to become Idle: {e}"))?;
     }
+    info!(
+        "Phase 5 complete: all workers idle in {:?}",
+        idle_start.elapsed()
+    );
 
     // Delete workers after all are idle
+    info!("Phase 6: Deleting {} workers", agent_ids.len());
     for agent_id in &agent_ids {
         user.delete_worker(agent_id).await?;
     }
+    info!("Phase 6 complete: all workers deleted");
 
     http_server.abort();
     Ok(())

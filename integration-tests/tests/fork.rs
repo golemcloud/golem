@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use test_r::{inherit_test_dep, non_flaky, test, timeout};
+use test_r::{inherit_test_dep, test, timeout};
 use tracing::{info, Instrument};
 use uuid::Uuid;
 
