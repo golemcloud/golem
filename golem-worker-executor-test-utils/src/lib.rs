@@ -134,6 +134,8 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tower::ServiceBuilder;
 use tracing::{debug, info, Level};
 use uuid::Uuid;
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
@@ -215,7 +217,7 @@ impl WorkerExecutorTestDependencies {
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
     pub deps: WorkerExecutorTestDependencies,
-    pub client: WorkerExecutorClient<Channel>,
+    pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
 }
 
@@ -419,9 +421,16 @@ pub async fn start_customized(
     let start = std::time::Instant::now();
     loop {
         info!("Waiting for worker-executor to be reachable on port {grpc_port}");
-        let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
+        let channel = Channel::from_shared(format!("http://127.0.0.1:{grpc_port}"))
+            .expect("Valid URI")
+            .connect()
+            .await;
 
-        if let Ok(client) = client {
+        if let Ok(channel) = channel {
+            let otel_channel = ServiceBuilder::new()
+                .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
+                .service(channel);
+            let client = WorkerExecutorClient::new(otel_channel);
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 deps: deps.clone(),

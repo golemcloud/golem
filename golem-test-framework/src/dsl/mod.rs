@@ -496,6 +496,7 @@ pub trait TestDsl {
         self.wait_for_statuses(worker_id, &[status], timeout).await
     }
 
+    #[tracing::instrument(level = "info", skip(self, statuses, timeout), fields(%worker_id))]
     async fn wait_for_statuses(
         &self,
         worker_id: &WorkerId,

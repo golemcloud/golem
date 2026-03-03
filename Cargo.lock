@@ -4553,6 +4553,8 @@ dependencies = [
  "test-r",
  "tokio",
  "tonic 0.14.5",
+ "tonic-tracing-opentelemetry",
+ "tower 0.5.3",
  "tracing",
  "uuid",
  "wasmtime",
