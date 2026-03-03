@@ -39,7 +39,11 @@ pub async fn extract_agent_types_with_streams(
     enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
+    config.wasm_multi_value(true);
     config.wasm_component_model(true);
+    config.epoch_interruption(true);
+    config.consume_fuel(true);
+    config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
 
     if enable_fs_cache {
         config.cache(Some(
@@ -80,6 +84,8 @@ pub async fn extract_agent_types_with_streams(
 
     let component = Component::from_file(&engine, wasm_path)?;
     let mut store = Store::new(&engine, host);
+    store.set_fuel(u64::MAX)?;
+    store.set_epoch_deadline(u64::MAX);
 
     let mut linker_instance = linker.root();
     let component_type = component.component_type();

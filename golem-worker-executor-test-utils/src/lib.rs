@@ -146,6 +146,43 @@ use wasmtime_wasi_http::WasiHttpView;
 #[cfg(test)]
 test_r::enable!();
 
+pub use golem_test_framework::dsl::PrecompiledComponent;
+
+/// Defines a `#[test_dep]` function that pre-warms the analysis cache for a
+/// test component during test-r dependency initialization.
+///
+/// Usage: `test_component!(function_name, "tag_name", "wasm_file_name", "package:name");`
+///
+/// Each invocation must use a unique `tag_name` because test-r identifies deps
+/// of the same type by their tag. The tag is also used in test function parameters
+/// via `#[tagged_as("tag_name")] param: &PrecompiledComponent`.
+#[macro_export]
+macro_rules! test_component {
+    ($fn_name:ident, $tag:expr, $wasm_name:expr, $package_name:expr) => {
+        #[test_dep(tagged_as = $tag)]
+        pub async fn $fn_name(deps: &WorkerExecutorTestDependencies) -> PrecompiledComponent {
+            tracing::info!(
+                "Pre-compiling test component '{}' (package: '{}')",
+                $wasm_name,
+                $package_name
+            );
+            let wasm_path = deps
+                .component_directory
+                .join(format!("{}.wasm", $wasm_name));
+            deps.component_writer
+                .warm_cache(&wasm_path)
+                .await
+                .expect(concat!("Failed to warm cache for component ", $wasm_name));
+            tracing::info!(
+                "Pre-compiled test component '{}' (package: '{}') successfully",
+                $wasm_name,
+                $package_name
+            );
+            PrecompiledComponent::new($wasm_name, $package_name)
+        }
+    };
+}
+
 #[derive(Clone)]
 pub struct WorkerExecutorTestDependencies {
     pub redis: Arc<dyn Redis>,
