@@ -22,8 +22,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(Ok(self
             .state
             .config_vars
-            .read()
-            .unwrap()
             .get(&key)
             .cloned()))
     }
@@ -32,8 +30,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(Ok(self
             .state
             .config_vars
-            .read()
-            .unwrap()
             .clone()
             .into_iter()
             .collect()))

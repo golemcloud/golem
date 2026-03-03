@@ -30,7 +30,8 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
-use golem_wasm::WitValue;
+use golem_wasm::{NodeBuilder, WitValue, WitValueBuilderExtensions};
+use golem_wasm::analysis::AnalysedType;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -236,17 +237,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .config
             .iter()
             .find(|c| c.key == key);
+
         match declaration {
             Some(ConfigKeyValueType {
-                value: ConfigValueType::Local(_),
+                value: ConfigValueType::Local(config_declaration),
                 ..
             }) => {
-                let local_agent_config = self.state.local_agent_config.read().unwrap();
-                let config_value = local_agent_config
-                    .get(&key)
-                    .ok_or_else(|| anyhow!("No config declared for key {}", key.join(".")))?;
-
-                Ok(config_value.value.clone().into())
+                match self.state.local_agent_config.get(&key) {
+                    Some(config_value) => Ok(config_value.value.clone().into()),
+                    None if matches!(config_declaration.value, AnalysedType::Option(_)) => Ok(WitValue::builder().option_none()),
+                    None => Err(anyhow!("No config declared for key {}", key.join(".")))
+                }
             }
             Some(ConfigKeyValueType {
                 value: ConfigValueType::Shared(_),

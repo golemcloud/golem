@@ -79,6 +79,7 @@ use tracing::{debug, info, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
+use golem_wasm::analysis::AnalysedType;
 
 /// Represents worker that may be running or suspended.
 ///
@@ -1929,21 +1930,24 @@ pub fn validate_local_agent_config(
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
         if let ConfigValueType::Local(config_declaration) = &entry.value {
-            let config_value = local_agent_config.get(&entry.key).ok_or_else(|| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Config key {} was not provided a value",
-                    entry.key.join(".")
-                ))
-            })?;
-
-            if config_value.typ != config_declaration.value {
-                // TODO: better rendering of analysed type.
-                return Err(WorkerExecutorError::invalid_request(format!(
-                    "Type mismatch for config key {}. expected: {:?}; found: {:?}",
-                    entry.key.join("."),
-                    config_declaration.value,
-                    config_value.typ
-                )));
+            match local_agent_config.get(&entry.key) {
+                Some(config_value) => {
+                    if config_value.typ != config_declaration.value {
+                        // TODO: better rendering of analysed type.
+                        return Err(WorkerExecutorError::invalid_request(format!(
+                            "Type mismatch for config key {}. expected: {:?}; found: {:?}",
+                            entry.key.join("."),
+                            config_declaration.value,
+                            config_value.typ
+                        )));
+                    }
+                },
+                None if matches!(config_declaration.value, AnalysedType::Option(_)) => {}
+                None =>
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Config key {} was not provided a value",
+                        entry.key.join(".")
+                    )))
             }
         }
     }

@@ -68,7 +68,7 @@ use crate::worker::{
     effective_local_agent_config, validate_local_agent_config, RetryDecision, Worker,
 };
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, HasConfigVars, InvocationContextManagement,
+    ExternalOperations, FileSystemReading, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
@@ -973,12 +973,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasConfigVars for DurableWorkerCtx<Ctx> {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.state.config_vars.read().unwrap().clone()
-    }
-}
-
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
@@ -1429,8 +1423,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        let mut config_vars = self.state.config_vars.write().unwrap();
-        *config_vars = effective_config_vars(
+        self.state.config_vars = effective_config_vars(
             self.state.initial_config_vars.clone(),
             new_metadata.config_vars.clone(),
         );
@@ -1456,7 +1449,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             validate_local_agent_config(&updated_local_agent_config, agent_type)?;
 
-            *self.state.local_agent_config.write().unwrap() = updated_local_agent_config;
+            self.state.local_agent_config = updated_local_agent_config;
         };
 
         self.state.component_metadata = new_metadata;
@@ -2890,12 +2883,12 @@ struct PrivateDurableWorkerState {
     /// The initial config vars that the worker was configured with
     initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    config_vars: RwLock<BTreeMap<String, String>>,
+    config_vars: BTreeMap<String, String>,
 
     // The initial local agent config that the worker was configured with
     initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
     /// The current local agent config of the worker, taking into component version.
-    local_agent_config: RwLock<HashMap<Vec<String>, golem_wasm::ValueAndType>>,
+    local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
@@ -3016,9 +3009,9 @@ impl PrivateDurableWorkerState {
             file_loader,
             created_by,
             initial_config_vars,
-            config_vars: RwLock::new(config_vars),
+            config_vars,
             initial_local_agent_config,
-            local_agent_config: RwLock::new(local_agent_config),
+            local_agent_config,
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
