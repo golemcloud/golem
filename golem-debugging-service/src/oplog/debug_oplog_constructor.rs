@@ -26,7 +26,7 @@ use std::sync::Arc;
 pub struct CreateDebugOplogConstructor {
     owned_worker_id: OwnedWorkerId,
     initial_entry: Option<OplogEntry>,
-    last_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
     inner: Arc<dyn OplogService + Send + Sync>,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
     initial_worker_metadata: WorkerMetadata,
@@ -38,7 +38,7 @@ impl CreateDebugOplogConstructor {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_entry: Option<OplogEntry>,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         inner: Arc<dyn OplogService + Send + Sync>,
         debug_session: Arc<dyn DebugSessions + Send + Sync>,
         initial_worker_metadata: WorkerMetadata,
