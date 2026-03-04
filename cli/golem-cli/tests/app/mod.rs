@@ -516,12 +516,16 @@ where
     let mut patterns = patterns.into_iter();
     let mut pattern = patterns.next();
     let mut pattern_str = pattern.as_ref().map(|s| s.as_ref());
+    let mut unmatched_lines = vec![];
     for line in lines {
         match pattern_str {
             Some(p) => {
-                if line.as_ref().contains(p) {
+                let line = line.as_ref();
+                if line.contains(p) {
                     pattern = patterns.next();
                     pattern_str = pattern.as_ref().map(|s| s.as_ref());
+                } else {
+                    unmatched_lines.push(line.to_string());
                 }
             }
             None => {
@@ -535,15 +539,14 @@ where
         .chain(patterns.map(|s| s.as_ref().to_string()))
         .collect::<Vec<_>>();
     if !remaining_patterns.is_empty() {
-        println!("---\n{}", "Missing patterns:".red().underline());
+        println!("---\n{}", "### Missing patterns:".red().underline());
         for pattern in &remaining_patterns {
             println!("{pattern}");
         }
-        println!("{}", "Actual lines:".green().underline());
-        for line in lines {
+        println!("{}", "### Unmatched lines:".yellow().underline());
+        for line in unmatched_lines {
             println!("{line}");
         }
-        println!("---")
     }
     remaining_patterns.is_empty()
 }
