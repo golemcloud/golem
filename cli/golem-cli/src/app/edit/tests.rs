@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::edit::cargo_toml;
-use crate::edit::golem_yaml;
-use crate::edit::main_rs;
-use crate::edit::main_ts;
-use crate::edit::package_json;
-use crate::edit::tsconfig_json;
+use crate::app::edit::{cargo_toml, golem_yaml, main_rs, main_ts, package_json, tsconfig_json};
 use test_r::test;
 
 #[test]
@@ -35,7 +30,10 @@ fn package_json_merge_and_collect() {
 
     let updated = package_json::merge_dependencies(
         source,
-        &[("foo".to_string(), "1.2.0".to_string()), ("baz".to_string(), "3.0.0".to_string())],
+        &[
+            ("foo".to_string(), "1.2.0".to_string()),
+            ("baz".to_string(), "3.0.0".to_string()),
+        ],
         &[("qux".to_string(), "4.0.0".to_string())],
     )
     .unwrap();
@@ -105,7 +103,10 @@ fn tsconfig_merge_and_check() {
     )
     .unwrap();
     assert_eq!(missing.len(), 1);
-    assert_eq!(missing[0].path, vec!["compilerOptions".to_string(), "jsx".to_string()]);
+    assert_eq!(
+        missing[0].path,
+        vec!["compilerOptions".to_string(), "jsx".to_string()]
+    );
 }
 
 #[test]
@@ -140,7 +141,10 @@ workspace_shared = "2.0"
     assert!(updated.contains("anyhow = \"1.0\""));
 
     let doc: toml_edit::DocumentMut = updated.parse().unwrap();
-    let deps = doc.get("dependencies").and_then(|item| item.as_table()).unwrap();
+    let deps = doc
+        .get("dependencies")
+        .and_then(|item| item.as_table())
+        .unwrap();
     let foo_item = deps.get("foo").unwrap();
     let foo = table_like(foo_item);
     let features = foo
@@ -150,12 +154,17 @@ workspace_shared = "2.0"
         .iter()
         .filter_map(|value| value.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(foo.get("version").and_then(|item| item.as_str()), Some("1.2"));
+    assert_eq!(
+        foo.get("version").and_then(|item| item.as_str()),
+        Some("1.2")
+    );
     assert_eq!(features, vec!["a", "bar", "baz"]);
     let new_with_features_item = deps.get("new_with_features").unwrap();
     let new_with_features = table_like(new_with_features_item);
     assert_eq!(
-        new_with_features.get("version").and_then(|item| item.as_str()),
+        new_with_features
+            .get("version")
+            .and_then(|item| item.as_str()),
         Some("0.3")
     );
     let new_features = new_with_features
@@ -174,11 +183,8 @@ workspace_shared = "2.0"
         .unwrap_or(false));
     assert!(deps.get("skip_me").is_none());
 
-    let missing = cargo_toml::check_required_deps(
-        &updated,
-        &["serde", "tokio", "workspace_shared"],
-    )
-    .unwrap();
+    let missing =
+        cargo_toml::check_required_deps(&updated, &["serde", "tokio", "workspace_shared"]).unwrap();
     assert_eq!(missing, vec!["tokio".to_string()]);
 }
 
@@ -204,7 +210,8 @@ components:
 other: 1
 "#;
 
-    let docs = golem_yaml::split_documents(source, &["app", "components"], &["components"]).unwrap();
+    let docs =
+        golem_yaml::split_documents(source, &["app", "components"], &["components"]).unwrap();
     assert_eq!(docs.len(), 4);
     assert!(docs[0].contains("app:"));
     assert!(docs[1].contains("components:"));
@@ -265,12 +272,9 @@ fn main_rs_import_export() {
 
 fn main() {}
 "#;
-    let updated = main_rs::add_import_and_export(
-        source,
-        "use crate::foo::Bar;",
-        "pub use crate::foo::Baz;",
-    )
-    .unwrap();
+    let updated =
+        main_rs::add_import_and_export(source, "use crate::foo::Bar;", "pub use crate::foo::Baz;")
+            .unwrap();
     assert!(updated.contains("use crate::foo::Bar;"));
     assert!(updated.contains("pub use crate::foo::Baz;"));
 }
@@ -287,12 +291,9 @@ fn main_ts_preserves_formatting() {
 #[test]
 fn main_rs_preserves_formatting() {
     let source = "use  std::fmt;\n\nuse crate::old::Thing;\n\nfn main() {}\n";
-    let updated = main_rs::add_import_and_export(
-        source,
-        "use crate::foo::Bar;",
-        "pub  use crate::foo::Baz;",
-    )
-    .unwrap();
+    let updated =
+        main_rs::add_import_and_export(source, "use crate::foo::Bar;", "pub  use crate::foo::Baz;")
+            .unwrap();
     let expected = "use  std::fmt;\n\nuse crate::old::Thing;\nuse crate::foo::Bar;\npub  use crate::foo::Baz;\n\nfn main() {}\n";
     assert_eq!(updated, expected);
 }

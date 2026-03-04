@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::edit::text::{apply_edits, TextEdit};
+use crate::app::edit::text::{apply_edits, TextEdit};
 use anyhow::anyhow;
 use std::collections::BTreeMap;
 use tree_sitter::{Node, Parser, Tree};

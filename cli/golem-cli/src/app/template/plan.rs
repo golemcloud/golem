@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::edit;
 use crate::app::template::generator::InMemoryFs;
-use crate::edit::{gitignore, golem_yaml, json, main_ts};
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date};
 use anyhow::Context;
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TemplateApplyPlanEntry {
+pub enum TemplatePlanEntry {
     Create { new: String },
     Overwrite { current: String, new: String },
     Merge { current: String, new: String },
@@ -30,17 +30,17 @@ pub enum TemplateApplyPlanEntry {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct TemplateApplyPlan {
-    file_plans: BTreeMap<PathBuf, Vec<TemplateApplyPlanLayerEntry>>,
+pub struct TemplatePlan {
+    file_plans: BTreeMap<PathBuf, Vec<TemplatePlanLayerEntry>>,
     existing_files: BTreeMap<PathBuf, String>,
 }
 
-impl TemplateApplyPlan {
+impl TemplatePlan {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn entries(&self) -> &BTreeMap<PathBuf, Vec<TemplateApplyPlanLayerEntry>> {
+    pub fn entries(&self) -> &BTreeMap<PathBuf, Vec<TemplatePlanLayerEntry>> {
         &self.file_plans
     }
 
@@ -71,21 +71,21 @@ impl TemplateApplyPlan {
             };
 
             let entry = match current {
-                None => TemplateApplyPlanEntry::Create { new: new.clone() },
+                None => TemplatePlanEntry::Create { new: new.clone() },
                 Some(current) => {
                     if current == *new {
-                        TemplateApplyPlanEntry::SkipSame { current }
+                        TemplatePlanEntry::SkipSame { current }
                     } else if let Some(merged) = try_merge(path, &current, new)? {
                         if merged == current {
-                            TemplateApplyPlanEntry::SkipSame { current }
+                            TemplatePlanEntry::SkipSame { current }
                         } else {
-                            TemplateApplyPlanEntry::Merge {
+                            TemplatePlanEntry::Merge {
                                 new: merged,
                                 current,
                             }
                         }
                     } else {
-                        TemplateApplyPlanEntry::Overwrite {
+                        TemplatePlanEntry::Overwrite {
                             current,
                             new: new.clone(),
                         }
@@ -96,7 +96,7 @@ impl TemplateApplyPlan {
             self.file_plans
                 .entry(path.clone())
                 .or_default()
-                .push(TemplateApplyPlanLayerEntry {
+                .push(TemplatePlanLayerEntry {
                     layer_name: name.clone(),
                     entry,
                 });
@@ -111,19 +111,19 @@ impl TemplateApplyPlan {
                 continue;
             };
             match entry {
-                TemplateApplyPlanEntry::Create { new } => {
+                TemplatePlanEntry::Create { new } => {
                     log_action("Creating", format!("{}", path.display()));
                     fs::write_str(path, new)?;
                 }
-                TemplateApplyPlanEntry::Overwrite { new, .. } => {
+                TemplatePlanEntry::Overwrite { new, .. } => {
                     log_action("Overwriting", format!("{}", path.display()));
                     fs::write_str(path, new)?;
                 }
-                TemplateApplyPlanEntry::Merge { new, .. } => {
+                TemplatePlanEntry::Merge { new, .. } => {
                     log_action("Updating", format!("{}", path.display()));
                     fs::write_str(path, new)?;
                 }
-                TemplateApplyPlanEntry::SkipSame { .. } => {
+                TemplatePlanEntry::SkipSame { .. } => {
                     log_skipping_up_to_date(format!("updating {}", path.display()));
                 }
             }
@@ -131,7 +131,7 @@ impl TemplateApplyPlan {
         Ok(())
     }
 
-    fn latest_entry(&self, path: &Path) -> Option<&TemplateApplyPlanEntry> {
+    fn latest_entry(&self, path: &Path) -> Option<&TemplatePlanEntry> {
         self.file_plans
             .get(path)
             .and_then(|layers| layers.last())
@@ -140,30 +140,30 @@ impl TemplateApplyPlan {
 
     fn effective_entry<'a>(
         &self,
-        layers: &'a [TemplateApplyPlanLayerEntry],
-    ) -> Option<&'a TemplateApplyPlanEntry> {
+        layers: &'a [TemplatePlanLayerEntry],
+    ) -> Option<&'a TemplatePlanEntry> {
         layers
             .iter()
             .rev()
-            .find(|layer| !matches!(layer.entry, TemplateApplyPlanEntry::SkipSame { .. }))
+            .find(|layer| !matches!(layer.entry, TemplatePlanEntry::SkipSame { .. }))
             .map(|layer| &layer.entry)
             .or_else(|| layers.last().map(|layer| &layer.entry))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TemplateApplyPlanLayerEntry {
+pub struct TemplatePlanLayerEntry {
     pub layer_name: String,
-    pub entry: TemplateApplyPlanEntry,
+    pub entry: TemplatePlanEntry,
 }
 
-impl TemplateApplyPlanEntry {
+impl TemplatePlanEntry {
     fn planned_contents(&self) -> &str {
         match self {
-            TemplateApplyPlanEntry::Create { new } => new,
-            TemplateApplyPlanEntry::Overwrite { new, .. } => new,
-            TemplateApplyPlanEntry::Merge { new, .. } => new,
-            TemplateApplyPlanEntry::SkipSame { current } => current,
+            TemplatePlanEntry::Create { new } => new,
+            TemplatePlanEntry::Overwrite { new, .. } => new,
+            TemplatePlanEntry::Merge { new, .. } => new,
+            TemplatePlanEntry::SkipSame { current } => current,
         }
     }
 }
@@ -173,11 +173,11 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
 
     fn merge(file_name: &str, current: &str, new: &str) -> anyhow::Result<Option<String>> {
         Ok(match file_name {
-            ".gitignore" => Some(gitignore::merge(current, new)),
-            "golem.yaml" => Some(golem_yaml::merge_documents(current, new)?),
-            "main.ts" => Some(main_ts::merge_reexports(current, new)?),
-            "package.json" => Some(json::merge_object(current, new)?),
-            "tsconfig.json" => Some(json::merge_object(current, new)?),
+            ".gitignore" => Some(edit::gitignore::merge(current, new)),
+            "golem.yaml" => Some(edit::golem_yaml::merge_documents(current, new)?),
+            "main.ts" => Some(edit::main_ts::merge_reexports(current, new)?),
+            "package.json" => Some(edit::json::merge_object(current, new)?), // TODO: FCL: review if we still need the package.json specific editor
+            "tsconfig.json" => Some(edit::json::merge_object(current, new)?), // TODO: FCL: review if we still need the tsconfig.json specific editor
             _ => None,
         })
     }

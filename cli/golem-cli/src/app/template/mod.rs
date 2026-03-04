@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod apply_plan;
+mod plan;
 mod generator;
 mod metadata;
 mod repo;
@@ -20,7 +20,7 @@ mod snippet;
 #[allow(clippy::module_inception)]
 mod template;
 
-pub use apply_plan::{TemplateApplyPlan, TemplateApplyPlanEntry};
+pub use plan::{TemplatePlan, TemplatePlanEntry};
 pub use metadata::AppTemplateMetadata;
 pub use repo::AppTemplateRepo;
 pub use template::{

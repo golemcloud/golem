@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::edit::json::{collect_object_entries, update_object_entries};
+use crate::app::edit::json::{collect_object_entries, update_object_entries};
 use std::collections::BTreeMap;
 
 pub fn merge_dependencies(

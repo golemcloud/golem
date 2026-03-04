@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::edit::text::{apply_edits, TextEdit};
 use anyhow::anyhow;
 use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser, Tree};
+use crate::app::edit::text::{apply_edits, TextEdit};
 
 pub fn split_documents(
     source: &str,
@@ -59,9 +59,7 @@ pub fn split_documents(
                 if !header.ends_with('\n') {
                     doc.push('\n');
                 }
-                doc.push_str(
-                    &source[child.pair_node.start_byte()..child.pair_node.end_byte()],
-                );
+                doc.push_str(&source[child.pair_node.start_byte()..child.pair_node.end_byte()]);
                 docs.push(doc);
             }
         } else {
@@ -247,10 +245,7 @@ struct MappingPair<'a> {
     value_node: Option<Node<'a>>,
 }
 
-fn mapping_pairs<'a>(
-    mapping: Node<'a>,
-    source: &str,
-) -> anyhow::Result<Vec<MappingPair<'a>>> {
+fn mapping_pairs<'a>(mapping: Node<'a>, source: &str) -> anyhow::Result<Vec<MappingPair<'a>>> {
     let mut cursor = mapping.walk();
     let mut pairs = Vec::new();
     for child in mapping.named_children(&mut cursor) {
@@ -403,10 +398,7 @@ fn merge_mapping_nodes(
     let update_pairs = mapping_pairs(update_mapping, update_source)?;
     let mut base_index = std::collections::HashMap::new();
     for (idx, pair) in base_pairs.iter().enumerate() {
-        base_index.insert(
-            pair.key.clone(),
-            (idx, pair.pair_node, pair.value_node),
-        );
+        base_index.insert(pair.key.clone(), (idx, pair.pair_node, pair.value_node));
     }
 
     for update_pair in update_pairs {
@@ -479,9 +471,10 @@ fn merge_value_nodes(
     {
         return merge_mapping_nodes(base_source, base_map, update_source, update_map, edits);
     }
-    if let (Some(base_seq), Some(update_seq)) =
-        (as_block_sequence(base_value), as_block_sequence(update_value))
-    {
+    if let (Some(base_seq), Some(update_seq)) = (
+        as_block_sequence(base_value),
+        as_block_sequence(update_value),
+    ) {
         return merge_sequence_nodes(base_source, base_seq, update_source, update_seq, edits);
     }
 
@@ -606,7 +599,12 @@ fn reindent_block(source: &str, start: usize, end: usize, new_indent: usize) -> 
 }
 
 fn normalize_block_text(source: &str, start: usize, end: usize) -> String {
-    source[start..end].trim().replace(['\r', '\n'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    source[start..end]
+        .trim()
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn line_indent_at(source: &str, pos: usize) -> String {

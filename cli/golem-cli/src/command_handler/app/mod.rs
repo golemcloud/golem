@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::app::template::{AppTemplateName, TemplateApplyPlan};
+use crate::app::template::{AppTemplateName, TemplatePlan};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -227,7 +227,7 @@ impl AppCommandHandler {
         };
 
         let template_apply_plan = {
-            let mut template_apply_plan = TemplateApplyPlan::new();
+            let mut template_apply_plan = TemplatePlan::new();
 
             if let Some(common_template) = common_template {
                 template_apply_plan.add(
