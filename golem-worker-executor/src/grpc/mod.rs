@@ -354,14 +354,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
             info!("Interrupting worker before deletion");
-            if let Some(mut rx) = worker
+            worker
                 .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                .await
-            {
-                info!("Awaiting interruption");
-                let _ = rx.recv().await;
-                info!("Interrupted");
-            }
+                .await;
             info!("Marking worker for deletion");
             worker.start_deleting().await?;
 
