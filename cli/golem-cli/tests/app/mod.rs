@@ -535,10 +535,15 @@ where
         .chain(patterns.map(|s| s.as_ref().to_string()))
         .collect::<Vec<_>>();
     if !remaining_patterns.is_empty() {
-        println!("{}", "Missing patterns:".red().underline());
+        println!("---\n{}", "Missing patterns:".red().underline());
         for pattern in &remaining_patterns {
             println!("{pattern}");
         }
+        println!("{}", "Actual lines:".green().underline());
+        for line in lines {
+            println!("{line}");
+        }
+        println!("---")
     }
     remaining_patterns.is_empty()
 }
