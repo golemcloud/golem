@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod plan;
 mod generator;
 mod metadata;
+mod plan;
 mod repo;
 mod snippet;
 #[allow(clippy::module_inception)]
 mod template;
 
-pub use plan::{TemplatePlan, TemplatePlanEntry};
 pub use metadata::AppTemplateMetadata;
+pub use plan::{TemplatePlan, TemplatePlanEntry};
 pub use repo::AppTemplateRepo;
 pub use template::{
     AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
-    AppTemplateComponent,
-    AppTemplateName, AppTemplatesForLanguage,
+    AppTemplateComponent, AppTemplateName, AppTemplatesForLanguage,
 };

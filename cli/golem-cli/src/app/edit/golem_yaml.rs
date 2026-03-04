@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::edit::text::{apply_edits, TextEdit};
 use anyhow::anyhow;
 use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser, Tree};
-use crate::app::edit::text::{apply_edits, TextEdit};
 
 pub fn split_documents(
     source: &str,

@@ -249,12 +249,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::New {
                 application_path: app_path,
                 template,
-            } => {
-                self.ctx
-                    .app_handler()
-                    .cmd_new(app_path, template)
-                    .await
-            }
+            } => self.ctx.app_handler().cmd_new(app_path, template).await,
             GolemCliSubcommand::Build {
                 component_name,
                 build: build_args,

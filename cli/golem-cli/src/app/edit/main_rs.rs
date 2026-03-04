@@ -22,7 +22,8 @@ pub fn add_import_and_export(
 ) -> anyhow::Result<String> {
     let tree = parse_rust(source)?;
     let insert_at = last_use_end(source, &tree);
-    let mut output = String::with_capacity(source.len() + import_stmt.len() + export_stmt.len() + 4);
+    let mut output =
+        String::with_capacity(source.len() + import_stmt.len() + export_stmt.len() + 4);
     output.push_str(&source[..insert_at]);
     if !source[..insert_at].ends_with('\n') {
         output.push('\n');

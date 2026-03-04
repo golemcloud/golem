@@ -76,7 +76,10 @@ fn merge_table(
         if entry.is_str() {
             let mut table = Table::default();
             table["version"] = value(spec.version.as_str());
-            table["features"] = value(features_to_array(merge_features(Vec::new(), &spec.features)));
+            table["features"] = value(features_to_array(merge_features(
+                Vec::new(),
+                &spec.features,
+            )));
             *entry = Item::Table(table);
             continue;
         }

@@ -71,7 +71,9 @@ fn export_statements(source: &str) -> anyhow::Result<Vec<String>> {
     let mut exports = Vec::new();
     while let Some(node) = stack.pop() {
         if node.kind() == "export_statement" {
-            let text = source[node.start_byte()..node.end_byte()].trim().to_string();
+            let text = source[node.start_byte()..node.end_byte()]
+                .trim()
+                .to_string();
             exports.push((node.start_byte(), text));
         }
         for child in node.named_children(&mut cursor) {
