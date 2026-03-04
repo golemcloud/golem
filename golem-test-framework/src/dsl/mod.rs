@@ -558,6 +558,29 @@ pub trait TestDsl {
         ))
     }
 
+    #[tracing::instrument(level = "info", skip(self, timeout), fields(%worker_id))]
+    async fn wait_for_component_revision(
+        &self,
+        worker_id: &WorkerId,
+        target_revision: ComponentRevision,
+        timeout: Duration,
+    ) -> anyhow::Result<WorkerMetadataDto> {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            let metadata = self.get_worker_metadata(worker_id).await?;
+
+            if metadata.component_revision >= target_revision {
+                return Ok(metadata);
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(anyhow!(
+            "Timeout waiting for worker {worker_id} to reach component revision {target_revision}"
+        ))
+    }
+
     async fn cancel_invocation(
         &self,
         worker_id: &WorkerId,
