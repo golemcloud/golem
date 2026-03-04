@@ -173,7 +173,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
         .await?;
 
     // Grantee invokes the agent using owner's email
-    let agent_id = agent_id!("rpc-counter", "shared-counter-1");
+    let agent_id = agent_id!("RpcCounter", "shared-counter-1");
 
     let grantee_agent_client = deps
         .worker_service()
@@ -273,7 +273,7 @@ async fn invoke_agent_in_shared_environment_fails_without_share(
 
     // No share is created — non_shared_user should NOT be able to invoke
 
-    let agent_id = agent_id!("rpc-counter", "no-share-counter");
+    let agent_id = agent_id!("RpcCounter", "no-share-counter");
 
     let client = deps
         .worker_service()

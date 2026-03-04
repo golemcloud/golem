@@ -2138,7 +2138,7 @@ impl RunningWorker {
             parent.agent_webhooks(),
             parent.shard_service(),
             pending_update,
-            None,
+            worker_metadata.original_phantom_id,
         )
         .await?;
 

@@ -21,6 +21,7 @@ use super::shard_manager::ShardManager;
 use super::{
     wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response, EnvVarBuilder,
 };
+use std::process::Child;
 use async_trait::async_trait;
 use golem_client::api::{AgentClientLive, WorkerClientLive};
 use golem_client::{Context, Security};
@@ -75,11 +76,18 @@ async fn wait_for_startup(
     http_port: u16,
     custom_request_port: u16,
     timeout: Duration,
+    child: Option<&mut Child>,
 ) {
-    wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout).await;
-    wait_for_startup_http(host, http_port, "golem-worker-service", timeout).await;
-    wait_for_startup_http_any_response(host, custom_request_port, "golem-worker-service", timeout)
-        .await;
+    wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout, child).await;
+    wait_for_startup_http(host, http_port, "golem-worker-service", timeout, None).await;
+    wait_for_startup_http_any_response(
+        host,
+        custom_request_port,
+        "golem-worker-service",
+        timeout,
+        None,
+    )
+    .await;
 }
 
 async fn env_vars(

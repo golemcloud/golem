@@ -48,7 +48,7 @@ async fn rust_rpc_with_payload(
         .store()
         .await?;
 
-    let parent_agent_id = agent_id!("rust-parent", "rust_rpc_with_payload");
+    let parent_agent_id = agent_id!("RustParent", "rust_rpc_with_payload");
     let parent = executor
         .start_agent(&component.id, parent_agent_id.clone())
         .await?;
@@ -70,7 +70,7 @@ async fn rust_rpc_with_payload(
 
     let uuid = UuidRecord::from_value(uuid_as_value.clone()).expect("UUID expected");
 
-    let child_agent_id = agent_id!("rust-child", uuid);
+    let child_agent_id = agent_id!("RustChild", uuid);
 
     let get_result = executor
         .invoke_and_await_agent(&component, &child_agent_id, "get", data_value!())
@@ -112,7 +112,7 @@ async fn rust_rpc_missing_target(
         .store()
         .await?;
 
-    let parent_agent_id = agent_id!("rust-parent", "rust_rpc_with_payload");
+    let parent_agent_id = agent_id!("RustParent", "rust_rpc_with_payload");
     let parent = executor
         .start_agent(&component.id, parent_agent_id.clone())
         .await?;
@@ -156,7 +156,7 @@ async fn counter_resource_test_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_1");
+    let agent_id = agent_id!("RpcCaller", "counter_resource_test_1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -211,7 +211,7 @@ async fn counter_resource_test_2(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_2");
+    let agent_id = agent_id!("RpcCaller", "counter_resource_test_2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -258,7 +258,7 @@ async fn counter_resource_test_2_with_restart(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_2_with_restart");
+    let agent_id = agent_id!("RpcCaller", "counter_resource_test_2_with_restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -308,7 +308,7 @@ async fn counter_resource_test_3(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_3");
+    let agent_id = agent_id!("RpcCaller", "counter_resource_test_3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -355,7 +355,7 @@ async fn counter_resource_test_3_with_restart(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_3_with_restart");
+    let agent_id = agent_id!("RpcCaller", "counter_resource_test_3_with_restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -405,7 +405,7 @@ async fn context_inheritance(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "context_inheritance");
+    let agent_id = agent_id!("RpcCaller", "context_inheritance");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -490,7 +490,7 @@ async fn counter_resource_test_5(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "counter_resource_test_5");
+    let agent_id = agent_id!("RpcCaller", "counter_resource_test_5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -532,7 +532,7 @@ async fn wasm_rpc_bug_32_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "wasm_rpc_bug_32_test");
+    let agent_id = agent_id!("RpcCaller", "wasm_rpc_bug_32_test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -585,7 +585,7 @@ async fn golem_bug_1265_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("rpc-caller", "golem_bug_1265_test");
+    let agent_id = agent_id!("RpcCaller", "golem_bug_1265_test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -620,7 +620,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("counter", "ephemeral_worker_invocation_via_rpc1");
+    let agent_id = agent_id!("Counter", "ephemeral_worker_invocation_via_rpc1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -668,7 +668,7 @@ async fn ephemeral_worker_invocation_via_rpc2(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("counter", "ephemeral_worker_invocation_via_rpc2");
+    let agent_id = agent_id!("Counter", "ephemeral_worker_invocation_via_rpc2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

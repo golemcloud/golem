@@ -26,6 +26,7 @@ use golem_common::model::agent::{
     SystemVariable,
 };
 use golem_common::model::domain_registration::Domain;
+use heck::ToKebabCase;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
@@ -329,7 +330,7 @@ pub fn build_agent_http_api_deployment_details(
 
     if agent_webhook_suffix.is_empty() {
         agent_webhook_suffix.push(PathSegment::Literal {
-            value: agent_type_name.0.clone(),
+            value: agent_type_name.0.to_kebab_case(),
         });
     }
 
@@ -497,14 +498,14 @@ fn compile_agent_path_segment(
             value: inner.value.clone(),
         },
         AgentPathSegment::PathVariable(inner) => PathSegment::Variable {
-            display_name: inner.variable_name.clone(),
+            display_name: inner.variable_name.to_kebab_case(),
         },
         AgentPathSegment::RemainingPathVariable(inner) => PathSegment::CatchAll {
-            display_name: inner.variable_name.clone(),
+            display_name: inner.variable_name.to_kebab_case(),
         },
         AgentPathSegment::SystemVariable(system_var) => {
             let literal = match system_var.value {
-                SystemVariable::AgentType => agent.type_name.0.clone(),
+                SystemVariable::AgentType => agent.type_name.0.to_kebab_case(),
                 SystemVariable::AgentVersion => implementer.component_revision.get().to_string(),
             };
             PathSegment::Literal { value: literal }

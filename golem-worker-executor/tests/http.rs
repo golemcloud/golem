@@ -76,7 +76,7 @@ async fn http_client(
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
-    let agent_id = agent_id!("http-client");
+    let agent_id = agent_id!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
@@ -148,7 +148,7 @@ async fn http_client_using_reqwest(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client2");
+    let agent_id = agent_id!("HttpClient2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
@@ -229,7 +229,7 @@ async fn http_client_using_reqwest_async(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client3");
+    let agent_id = agent_id!("HttpClient3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
@@ -309,7 +309,7 @@ async fn http_client_using_reqwest_async_parallel(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client3");
+    let agent_id = agent_id!("HttpClient3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
@@ -417,7 +417,7 @@ async fn outgoing_http_contains_idempotency_key(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("http-client2");
+    let agent_id = agent_id!("HttpClient2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;

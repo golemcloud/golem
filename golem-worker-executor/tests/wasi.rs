@@ -67,7 +67,7 @@ async fn write_stdout(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("logging", "write-stdout-1");
+    let agent_id = agent_id!("Logging", "write-stdout-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -117,7 +117,7 @@ async fn write_stderr(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("logging", "write-stderr-1");
+    let agent_id = agent_id!("Logging", "write-stderr-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -168,7 +168,7 @@ async fn read_stdin(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("io", "read-stdin-1");
+    let agent_id = agent_id!("Io", "read-stdin-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -203,7 +203,7 @@ async fn clocks(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clocks", "clocks-1");
+    let agent_id = agent_id!("Clocks", "clocks-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -268,7 +268,7 @@ async fn file_write_read_delete(
         .with_env(vec![("RUST_BACKTRACE".to_string(), "full".to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-write-read-delete-1");
+    let agent_id = agent_id!("FileSystem", "file-write-read-delete-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -334,7 +334,7 @@ async fn initial_file_read_write(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
+    let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
@@ -400,7 +400,7 @@ async fn initial_file_listing_through_api(
         .store()
         .await?;
 
-    let agent_id = agent_id!("file-read-write", "initial-file-listing-1");
+    let agent_id = agent_id!("FileReadWrite", "initial-file-listing-1");
     let worker_id = executor.start_agent(&component.id, agent_id).await?;
 
     let result = executor.get_file_system_node(&worker_id, "/").await?;
@@ -531,7 +531,7 @@ async fn initial_file_reading_through_api(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
+    let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
         .await?;
@@ -577,7 +577,7 @@ async fn directories(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "directories-1");
+    let agent_id = agent_id!("FileSystem", "directories-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -650,7 +650,7 @@ async fn directories_replay(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "directories-1");
+    let agent_id = agent_id!("FileSystem", "directories-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -734,7 +734,7 @@ async fn file_write_read(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-1");
+    let agent_id = agent_id!("FileSystem", "file-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -799,7 +799,7 @@ async fn file_update_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ifs-update", "ifs-update-1");
+    let agent_id = agent_id!("IfsUpdate", "ifs-update-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1004,7 +1004,7 @@ async fn file_update_in_the_middle_of_exported_function(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ifs-update-inside-exported-function", "ifs-update-1");
+    let agent_id = agent_id!("IfsUpdateInsideExportedFunction", "ifs-update-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1087,7 +1087,7 @@ async fn environment_variables(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("environment", "environment-service-1");
+    let agent_id = agent_id!("Environment", "environment-service-1");
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
@@ -1181,7 +1181,7 @@ async fn http_client_response_persisted_between_invocations(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("http-client");
+    let agent_id = agent_id!("HttpClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -1273,7 +1273,7 @@ async fn http_client_interrupting_response_stream(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("http-client2");
+    let agent_id = agent_id!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -1402,7 +1402,7 @@ async fn http_client_interrupting_response_stream_async(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("http-client3");
+    let agent_id = agent_id!("HttpClient3");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -1489,7 +1489,7 @@ async fn sleep(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-1");
+    let agent_id = agent_id!("Clock", "clock-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1533,7 +1533,7 @@ async fn sleep_less_than_suspend_threshold(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-2");
+    let agent_id = agent_id!("Clock", "clock-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1579,7 +1579,7 @@ async fn sleep_longer_than_suspend_threshold(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-3");
+    let agent_id = agent_id!("Clock", "clock-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1698,7 +1698,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-4");
+    let agent_id = agent_id!("Clock", "clock-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1752,7 +1752,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-5");
+    let agent_id = agent_id!("Clock", "clock-service-5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1806,7 +1806,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-6");
+    let agent_id = agent_id!("Clock", "clock-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1861,7 +1861,7 @@ async fn sleep_and_awaiting_parallel_responses(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-7");
+    let agent_id = agent_id!("Clock", "clock-service-7");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1927,7 +1927,7 @@ async fn sleep_below_threshold_between_http_responses(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-8");
+    let agent_id = agent_id!("Clock", "clock-service-8");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1992,7 +1992,7 @@ async fn sleep_above_threshold_between_http_responses(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-9");
+    let agent_id = agent_id!("Clock", "clock-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2056,7 +2056,7 @@ async fn resuming_sleep(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-service-2");
+    let agent_id = agent_id!("Clock", "clock-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2120,7 +2120,7 @@ async fn failing_worker(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("failing-counter", "failing-worker-1");
+    let agent_id = agent_id!("FailingCounter", "failing-worker-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2185,7 +2185,7 @@ async fn file_service_write_direct(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-2");
+    let agent_id = agent_id!("FileSystem", "file-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2243,7 +2243,7 @@ async fn filesystem_write_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-3");
+    let agent_id = agent_id!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2309,7 +2309,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-4");
+    let agent_id = agent_id!("FileSystem", "file-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2365,7 +2365,7 @@ async fn file_hard_link(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-5");
+    let agent_id = agent_id!("FileSystem", "file-service-5");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2422,7 +2422,7 @@ async fn filesystem_link_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-6");
+    let agent_id = agent_id!("FileSystem", "file-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2528,7 +2528,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-7");
+    let agent_id = agent_id!("FileSystem", "file-service-7");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2602,7 +2602,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-8");
+    let agent_id = agent_id!("FileSystem", "file-service-8");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2708,7 +2708,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-9");
+    let agent_id = agent_id!("FileSystem", "file-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2827,7 +2827,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-10");
+    let agent_id = agent_id!("FileSystem", "file-service-10");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2919,7 +2919,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-3");
+    let agent_id = agent_id!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2985,7 +2985,7 @@ async fn filesystem_metadata_hash(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("file-system", "file-service-3");
+    let agent_id = agent_id!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3041,7 +3041,7 @@ async fn ip_address_resolve(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("networking", "ip-address-resolve-1");
+    let agent_id = agent_id!("Networking", "ip-address-resolve-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3099,7 +3099,7 @@ async fn wasi_config_initial_worker_config(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("wasi-config", "worker-1");
+    let agent_id = agent_id!("WasiConfig", "worker-1");
 
     let worker_id = executor
         .start_agent_with(
@@ -3194,7 +3194,7 @@ async fn wasi_config_component_update(
         .store()
         .await?;
 
-    let agent_id = agent_id!("wasi-config", "worker-1");
+    let agent_id = agent_id!("WasiConfig", "worker-1");
 
     let worker_id = executor
         .start_agent_with(
@@ -3323,7 +3323,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-oplog-replay-1");
+    let agent_id = agent_id!("Clock", "clock-oplog-replay-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3420,7 +3420,7 @@ async fn oplog_replay_after_parallel_http_requests(
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("clock", "clock-oplog-parallel-1");
+    let agent_id = agent_id!("Clock", "clock-oplog-parallel-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3532,7 +3532,7 @@ async fn oplog_replay_after_streaming_http_read(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("streaming-client");
+    let agent_id = agent_id!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -3639,7 +3639,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("streaming-client");
+    let agent_id = agent_id!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -3745,7 +3745,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("streaming-client");
+    let agent_id = agent_id!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -3850,7 +3850,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("streaming-client");
+    let agent_id = agent_id!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -3963,7 +3963,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
         .name("golem-it:http-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("streaming-client");
+    let agent_id = agent_id!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor

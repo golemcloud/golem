@@ -17,6 +17,7 @@ pub mod spawned;
 
 use crate::components::redis::Redis;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use std::process::Child;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
@@ -72,8 +73,13 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout).await
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
+    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout, child).await
 }
 
 async fn env_vars(

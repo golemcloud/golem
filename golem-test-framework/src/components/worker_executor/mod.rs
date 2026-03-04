@@ -17,6 +17,7 @@ use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::worker_service::WorkerService;
 use super::{wait_for_startup_grpc, EnvVarBuilder};
+use std::process::Child;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,8 +40,13 @@ pub trait WorkerExecutor: Send + Sync {
     async fn is_running(&self) -> bool;
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
-    wait_for_startup_grpc(host, grpc_port, "golem-worker-executor", timeout).await
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
+    wait_for_startup_grpc(host, grpc_port, "golem-worker-executor", timeout, child).await
 }
 
 async fn env_vars(

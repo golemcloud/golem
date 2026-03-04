@@ -89,6 +89,7 @@ impl SpawnedWorkerService {
             http_port,
             custom_request_port,
             Duration::from_secs(90),
+            Some(&mut child),
         )
         .await;
 

@@ -44,7 +44,7 @@ async fn agent_self_rpc_is_not_allowed(
         .name("golem-it:agent-rpc")
         .store()
         .await?;
-    let agent_id = agent_id!("self-rpc-agent", "worker-name");
+    let agent_id = agent_id!("SelfRpcAgent", "worker-name");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -78,7 +78,7 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!("test-agent", unique_id);
+    let agent_id = agent_id!("TestAgent", unique_id);
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -113,7 +113,7 @@ async fn agent_env_inheritance(
         .store()
         .await?;
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!("test-agent", unique_id);
+    let agent_id = agent_id!("TestAgent", unique_id);
 
     let mut env = HashMap::new();
     env.insert("ENV2".to_string(), "22".to_string());
@@ -131,7 +131,7 @@ async fn agent_env_inheritance(
 
     let child_worker_id = AgentId {
         component_id: worker_id.component_id,
-        agent_id: "child-agent(0)".to_string(),
+        agent_id: "ChildAgent(0.0)".to_string(),
     };
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -255,12 +255,12 @@ async fn ephemeral_agent_works(
         .store()
         .await?;
 
-    let agent_id1 = agent_id!("ephemeral-echo-agent", "param1");
+    let agent_id1 = agent_id!("EphemeralEchoAgent", "param1");
     let worker_id1 = executor
         .start_agent(&component.id, agent_id1.clone())
         .await?;
 
-    let agent_id2 = agent_id!("ephemeral-echo-agent", "param2");
+    let agent_id2 = agent_id!("EphemeralEchoAgent", "param2");
     let worker_id2 = executor
         .start_agent(&component.id, agent_id2.clone())
         .await?;

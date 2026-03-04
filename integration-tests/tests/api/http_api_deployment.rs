@@ -434,7 +434,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
-            AgentTypeName("http-agent".to_string()),
+            AgentTypeName("HttpAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),

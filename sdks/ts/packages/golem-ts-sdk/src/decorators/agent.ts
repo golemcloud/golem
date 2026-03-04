@@ -352,9 +352,9 @@ export function agent(options?: AgentDecoratorOptions) {
         const instance = new ctor(...deserializedConstructorArgs.val);
 
         const agentId = getRawSelfAgentId();
-        if (!agentId.value.startsWith(agentTypeName.asWit)) {
+        if (!agentId.value.startsWith(agentTypeName.value)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${agentId.value}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.value}", got "${agentId.value}"`,
           );
 
           return {

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use std::process::Child;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -29,12 +30,18 @@ pub trait ComponentCompilationService: Send + Sync {
     async fn kill(&self);
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    timeout: Duration,
+    child: Option<&mut Child>,
+) {
     wait_for_startup_grpc(
         host,
         grpc_port,
         "golem-component-compilation-service",
         timeout,
+        child,
     )
     .await
 }

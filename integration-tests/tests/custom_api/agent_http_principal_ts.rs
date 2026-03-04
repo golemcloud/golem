@@ -31,7 +31,7 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     make_test_context(
         deps,
         vec![(
-            AgentTypeName("principal-agent".to_string()),
+            AgentTypeName("PrincipalAgent".to_string()),
             HttpApiDeploymentAgentOptions {
                 security: Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(
                     TestSessionHeaderAgentSecurity {

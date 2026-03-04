@@ -17,10 +17,6 @@ import * as Either from '../../newTypes/either';
 import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common@1.5.0';
 import * as WitType from '../mapping/types/WitType';
 import { TypeInfoInternal } from '../typeInfoInternal';
-import {
-  convertAgentMethodNameToKebab,
-  convertVariantTypeNameToKebab,
-} from '../mapping/types/stringFormat';
 import { ParameterDetail } from '../mapping/values/dataValue';
 import { tryTaggedUnion, TaggedUnion } from '../mapping/types/taggedUnion';
 
@@ -91,7 +87,7 @@ export function getMultimodalParamDetails(
         };
 
         return Either.right({
-          name: convertVariantTypeNameToKebab(tagName),
+          name: tagName,
           type: typeInfoInternal,
         });
       }
@@ -112,7 +108,7 @@ export function getMultimodalParamDetails(
         };
 
         return Either.right({
-          name: convertVariantTypeNameToKebab(tagName),
+          name: tagName,
           type: typeInfoInternal,
         });
       }
@@ -132,7 +128,7 @@ export function getMultimodalParamDetails(
         };
 
         return {
-          name: convertVariantTypeNameToKebab(tagName),
+          name: tagName,
           type: typeInfoInternal,
         };
       });
@@ -259,8 +255,7 @@ export function validateMethodName(methodName: string): Either.Either<void, stri
     return Either.left(`Invalid method name \`${methodName}\`: cannot contain '\$'`);
   }
 
-  const kebabMethodName = convertAgentMethodNameToKebab(methodName);
-  if (kebabMethodName === 'initialize' || kebabMethodName === 'get-definition') {
+  if (methodName === 'initialize' || methodName === 'getDefinition') {
     return Either.left(`Invalid method name \`${methodName}\`: reserved method name`);
   }
 

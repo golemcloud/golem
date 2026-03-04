@@ -92,7 +92,7 @@ async fn custom_durability_1(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("custom-durability", "custom-durability-1");
+    let agent_id = agent_id!("CustomDurability", "custom-durability-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -191,7 +191,7 @@ async fn lazy_pollable(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("custom-durability", "lazy-pollable-1");
+    let agent_id = agent_id!("CustomDurability", "lazy-pollable-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -291,7 +291,7 @@ async fn automatic_snapshot_disabled(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter", "disabled");
+    let agent_id = agent_id!("SnapshotCounter", "disabled");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -337,7 +337,7 @@ async fn automatic_snapshot_every_2nd_invocation(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter", "every-2nd");
+    let agent_id = agent_id!("SnapshotCounter", "every-2nd");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -386,7 +386,7 @@ async fn automatic_snapshot_periodic(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter", "periodic");
+    let agent_id = agent_id!("SnapshotCounter", "periodic");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -439,7 +439,7 @@ async fn snapshot_based_recovery(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter", "recovery");
+    let agent_id = agent_id!("SnapshotCounter", "recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -531,7 +531,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter", "multi-restart");
+    let agent_id = agent_id!("SnapshotCounter", "multi-restart");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -611,7 +611,7 @@ async fn ts_default_json_snapshot_recovery(
         .name("golem-it:constructor-parameter-echo")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter-agent", "ts-recovery");
+    let agent_id = agent_id!("SnapshotCounterAgent", "ts-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -720,7 +720,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
         .name("golem-it:constructor-parameter-echo")
         .store()
         .await?;
-    let agent_id = agent_id!("snapshot-counter-agent", "ts-multi-restart");
+    let agent_id = agent_id!("SnapshotCounterAgent", "ts-multi-restart");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -831,7 +831,7 @@ async fn rust_default_json_snapshot_recovery(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("json-snapshot-counter", "rust-recovery");
+    let agent_id = agent_id!("JsonSnapshotCounter", "rust-recovery");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -947,7 +947,7 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
         .name("it:agent-counters")
         .store()
         .await?;
-    let agent_id = agent_id!("json-snapshot-counter", "rust-multi-restart");
+    let agent_id = agent_id!("JsonSnapshotCounter", "rust-multi-restart");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
