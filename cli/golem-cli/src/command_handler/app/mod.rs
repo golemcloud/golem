@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::app::template::{
-    AppTemplateCommon, AppTemplateComponent, AppTemplateName, TemplateApplyPlan,
-};
+use crate::app::template::{AppTemplateName, TemplateApplyPlan};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -33,8 +31,8 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
-    log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
+    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
+    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
     logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
@@ -95,120 +93,187 @@ impl AppCommandHandler {
 
     pub async fn cmd_new(
         &self,
-        application_name: Option<ApplicationName>,
-        languages: Vec<GuestLanguage>,
+        application_path: PathBuf,
+        template_names: Vec<String>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.opt();
-            match app_ctx {
-                Ok(None) => {
-                    // NOP, there is no app
-                }
-                _ => {
-                    /*
-                    log_error("The current directory is part of an existing application.");
-                    logln("");
-                    logln("Switch to a directory that is not part of an application or use");
-                    logln(format!(
-                        "the '{}' command to create a component in the current application.",
-                        "component new".log_color_highlight()
-                    ));
-                    logln("");
-                    bail!(NonSuccessfulExit);
-                     */
-                    // TODO: FCL
-                }
-            }
-        }
+        let is_dot_application_path = application_path.as_path() == Path::new(".");
 
-        let Some((application_name, components)) = ({
-            match application_name {
-                Some(application_name) => Some((application_name, vec![])),
-                None => self
-                    .ctx
-                    .interactive_handler()
-                    .select_new_app_name_and_components()?
-                    .map(|new_app| (new_app.app_name, new_app.templated_component_names)),
+        let (application_name_candidate, app_dir, component_languages): (
+            String,
+            PathBuf,
+            BTreeMap<ComponentName, GuestLanguage>,
+        ) = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.opt()?;
+            match app_ctx {
+                Some(app_ctx) => {
+                    if !is_dot_application_path {
+                        logln("");
+                        log_error(
+                            "Cannot create new application in existing application directory",
+                        );
+                        logln("");
+                        logln("To add new agents or component to the current application, use the 'golem new .' command!");
+                        logln("");
+                        logln("To create a new application, switch to new directory without one!");
+                        bail!(NonSuccessfulExit);
+                    }
+
+                    (
+                        app_ctx.application().application_name().0.clone(),
+                        app_ctx.application().app_root_dir().to_path_buf(),
+                        app_ctx
+                            .deployable_component_names()
+                            .into_iter()
+                            .filter_map(|component_name| {
+                                app_ctx
+                                    .application()
+                                    .component(&component_name)
+                                    .guess_language()
+                                    .map(|language| (component_name, language))
+                            })
+                            .collect(),
+                    )
+                }
+                None => {
+                    let application_path = fs::canonicalize_path(&application_path)?;
+                    (
+                        fs::file_name_to_str(&application_path)?.to_string(),
+                        application_path,
+                        BTreeMap::new(),
+                    )
+                }
             }
-        }) else {
-            log_error("Both APPLICATION_NAME and LANGUAGES are required in non-interactive mode");
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
         };
 
-        if components.is_empty() && languages.is_empty() {
-            log_error("LANGUAGES are required in non-interactive mode");
-            logln("");
-            logln("Either specify languages or use the new command without APPLICATION_NAME to use the interactive wizard!");
-            logln("");
-            bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
-        }
-
-        let app_dir = PathBuf::from(&application_name.0);
-        // TODO: FCL
-        /*
-        if app_dir.exists() {
-            bail!(
-                "Application directory already exists: {}",
-                app_dir.log_color_error_highlight()
-            );
-        }*/
-
-        if fs::create_dir_all(&app_dir)? {
-            log_action(
-                "Created",
-                format!(
-                    "application directory: {}",
-                    app_dir.display().to_string().log_color_highlight()
-                ),
-            );
-        }
-
-        let app_template_repo = self.ctx.app_template_repo()?;
-        let mut template_apply_plan = TemplateApplyPlan::new();
-
-        if components.is_empty() {
+        let application_name = match application_name_candidate.parse::<ApplicationName>() {
+            Ok(application_name) => application_name,
+            Err(err) => match self
+                .ctx
+                .interactive_handler()
+                .select_new_app_name(Some(&application_name_candidate))?
             {
-                let _indent = LogIndent::new();
-                for language in &languages {
-                    if let Some(common_template) = app_template_repo.common_template(*language)? {
-                        template_apply_plan.add(
-                            common_template.0.name.as_str(),
-                            &common_template.generate(
-                                &application_name,
-                                &app_dir,
-                                self.ctx.sdk_overrides(),
-                            )?,
-                        )?;
-                    }
+                Some(application_name) => application_name,
+                None => {
+                    logln("");
+                    log_error(format!("In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}", err));
+                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                }
+            },
+        };
+
+        let template_names = if template_names.is_empty() {
+            match self
+                .ctx
+                .interactive_handler()
+                .select_new_app_templates_ts()?
+            {
+                Some(template_names) => template_names,
+                None => {
+                    logln("");
+                    log_error("In non-interactive mode, at least one template must be specified");
+                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
                 }
             }
         } else {
-            for (template_name, component_name) in &components {
-                log_action(
-                    "Adding",
-                    format!("component {}", component_name.0.log_color_highlight()),
-                );
+            template_names
+        };
 
-                self.generate_component(
-                    &mut template_apply_plan,
-                    &application_name,
-                    component_name,
-                    &app_dir,
-                    template_name,
-                )?
+        let template_names: Vec<AppTemplateName> = template_names
+            .into_iter()
+            .map(AppTemplateName::from)
+            .collect();
+
+        // TODO: FCL: support multi lang, multi comp
+
+        let language = GuestLanguage::TypeScript;
+
+        let component_name = component_languages
+            .iter()
+            .find(|(_, &l)| l == language)
+            .map(|(component_name, _)| Ok(component_name.clone()))
+            .unwrap_or(
+                ComponentName::try_from(
+                    format!("{}:{}-main", application_name.0, language.id()).as_str(),
+                )
+                .map_err(|err| anyhow!(err)),
+            )?;
+
+        let app_template_repo = self.ctx.app_template_repo()?;
+        let common_template = app_template_repo.common_template(language)?;
+        let component_template = app_template_repo.component_template(language)?;
+        let agent_templates = {
+            let mut agent_templates = vec![];
+            for template_name in &template_names {
+                match app_template_repo.agent_template(language, template_name) {
+                    Ok(agent_template) => {
+                        agent_templates.push(agent_template);
+                    }
+                    Err(_) => {
+                        logln("");
+                        log_error(format!(
+                            "Template not found: {}",
+                            template_name.as_str().log_color_error_highlight()
+                        ));
+                        logln("");
+                        self.log_templates_help(Some(language), None)?;
+                        bail!(NonSuccessfulExit);
+                    }
+                }
             }
-        }
+            agent_templates
+        };
+
+        let template_apply_plan = {
+            let mut template_apply_plan = TemplateApplyPlan::new();
+
+            if let Some(common_template) = common_template {
+                template_apply_plan.add(
+                    common_template.0.name.as_str(),
+                    &common_template.generate(
+                        &application_name,
+                        &app_dir,
+                        self.ctx.sdk_overrides(),
+                    )?,
+                )?;
+            }
+
+            if let Some(component_template) = component_template {
+                template_apply_plan.add(
+                    component_template.0.name.as_str(),
+                    &component_template.generate(
+                        &application_name,
+                        &component_name,
+                        &app_dir,
+                        self.ctx.sdk_overrides(),
+                    )?,
+                )?;
+            }
+
+            for agent_template in agent_templates {
+                template_apply_plan.add(
+                    agent_template.0.name.as_str(),
+                    &agent_template.generate(
+                        &application_name,
+                        &component_name,
+                        &app_dir,
+                        self.ctx.sdk_overrides(),
+                    )?,
+                )?;
+            }
+
+            template_apply_plan
+        };
 
         debug!("template apply plan: {:#?}", template_apply_plan);
 
         // TODO: FCL: review and approve
 
         {
-            let indent = LogIndent::new();
+            log_action("Applying", "template(s)");
+            let _indent = LogIndent::new();
             template_apply_plan.apply()?;
         }
 
@@ -1933,6 +1998,8 @@ impl AppCommandHandler {
         Ok(true)
     }
 
+    // TODO: FCL
+    /*
     pub fn get_templates(
         &self,
         requested_template_name: &str,
@@ -2020,7 +2087,7 @@ impl AppCommandHandler {
         )?;
 
         Ok(())
-    }
+    }*/
 
     pub fn log_languages_help(&self) {
         logln(format!("\n{}", "Available languages:".underline().bold(),));
@@ -2050,7 +2117,7 @@ impl AppCommandHandler {
         let templates = self
             .ctx
             .app_template_repo()?
-            .search_component_templates(language_filter, template_filter);
+            .search_agent_templates(language_filter, template_filter);
 
         for (language, templates) in templates {
             logln(format!("- {}", language.to_string().bold()));

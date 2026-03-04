@@ -23,7 +23,11 @@ pub fn collect_value_text_by_path(source: &str, path: &[&str]) -> anyhow::Result
     let Some(value) = find_value_by_path(source, root, path)? else {
         return Ok(None);
     };
-    Ok(Some(source[value.start_byte()..value.end_byte()].trim().to_string()))
+    Ok(Some(
+        source[value.start_byte()..value.end_byte()]
+            .trim()
+            .to_string(),
+    ))
 }
 
 pub fn merge_object(base_source: &str, update_source: &str) -> anyhow::Result<String> {
@@ -149,10 +153,7 @@ fn find_value_by_path<'a>(
     Ok(None)
 }
 
-fn object_pairs<'a>(
-    object: Node<'a>,
-    source: &str,
-) -> anyhow::Result<Vec<(String, Node<'a>)>> {
+fn object_pairs<'a>(object: Node<'a>, source: &str) -> anyhow::Result<Vec<(String, Node<'a>)>> {
     Ok(object_pair_nodes(object, source)?
         .into_iter()
         .map(|(key, _pair, value)| (key, value))
@@ -176,13 +177,7 @@ fn merge_object_nodes(
         }
         if let Some(base_value) = base_value {
             if base_value.kind() == "object" && update_value.kind() == "object" {
-                merge_object_nodes(
-                    base_source,
-                    base_value,
-                    update_source,
-                    update_value,
-                    edits,
-                )?;
+                merge_object_nodes(base_source, base_value, update_source, update_value, edits)?;
             } else {
                 let replacement =
                     update_source[update_value.start_byte()..update_value.end_byte()].to_string();
@@ -238,10 +233,7 @@ fn merge_entries_into_object(
     Ok(edits)
 }
 
-fn format_new_object_literal(
-    source: &str,
-    entries: &[(String, String)],
-) -> anyhow::Result<String> {
+fn format_new_object_literal(source: &str, entries: &[(String, String)]) -> anyhow::Result<String> {
     let indent = detect_indent_for_new_object(source);
     let mut parts = Vec::new();
     for (key, value) in entries {
@@ -269,7 +261,12 @@ fn insert_object_pair_edit(
     if pairs.is_empty() {
         let insert_pos = object.end_byte() - 1;
         let insertion = if multiline {
-            format!("\n{}\"{}\": {}", indent, escape_json_string(key), value_literal)
+            format!(
+                "\n{}\"{}\": {}",
+                indent,
+                escape_json_string(key),
+                value_literal
+            )
         } else {
             format!(" \"{}\": {}", escape_json_string(key), value_literal)
         };
@@ -280,7 +277,12 @@ fn insert_object_pair_edit(
     if let Some(comma_pos) = find_trailing_comma(source, last_pair_end, object.end_byte()) {
         let insert_pos = comma_pos + 1;
         let insertion = if multiline {
-            format!("\n{}\"{}\": {}", indent, escape_json_string(key), value_literal)
+            format!(
+                "\n{}\"{}\": {}",
+                indent,
+                escape_json_string(key),
+                value_literal
+            )
         } else {
             format!(" \"{}\": {}", escape_json_string(key), value_literal)
         };
@@ -289,7 +291,12 @@ fn insert_object_pair_edit(
 
     let insert_pos = last_pair_end;
     let insertion = if multiline {
-        format!(",\n{}\"{}\": {}", indent, escape_json_string(key), value_literal)
+        format!(
+            ",\n{}\"{}\": {}",
+            indent,
+            escape_json_string(key),
+            value_literal
+        )
     } else {
         format!(", \"{}\": {}", escape_json_string(key), value_literal)
     };
@@ -308,11 +315,17 @@ fn detect_object_indent(source: &str, object: Node<'_>) -> anyhow::Result<(Strin
     if let Some(pair) = first_pair {
         let line_start = line_start_at(source, pair.start_byte());
         let indent = source[line_start..pair.start_byte()].to_string();
-        return Ok((indent, source[object.start_byte()..object.end_byte()].contains('\n')));
+        return Ok((
+            indent,
+            source[object.start_byte()..object.end_byte()].contains('\n'),
+        ));
     }
     let line_start = line_start_at(source, object.start_byte());
     let base_indent = &source[line_start..object.start_byte()];
-    Ok((format!("{}  ", base_indent), source[object.start_byte()..object.end_byte()].contains('\n')))
+    Ok((
+        format!("{}  ", base_indent),
+        source[object.start_byte()..object.end_byte()].contains('\n'),
+    ))
 }
 
 fn object_pair_nodes<'a>(
@@ -404,6 +417,7 @@ fn escape_json_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+// TODO: FCL: check if we can get rid of this
 fn sanitize_json(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out = bytes.to_vec();

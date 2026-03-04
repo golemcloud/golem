@@ -29,7 +29,7 @@ use golem_common::model::environment::EnvironmentName;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
-use inquire::{Confirm, CustomType, InquireError, Select, Text};
+use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -326,6 +326,62 @@ impl InteractiveHandler {
         .prompt()?)
     }
 
+    pub fn select_new_app_name(
+        &self,
+        placeholder: Option<&str>,
+    ) -> anyhow::Result<Option<ApplicationName>> {
+        let mut prompt = Text::new("Application name:");
+        if let Some(placeholder) = placeholder {
+            prompt = prompt.with_placeholder(placeholder);
+        }
+
+        let Some(app_name) = prompt
+            .with_validator(|value: &str| {
+                if let Err(error) = ApplicationName::from_str(value) {
+                    return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
+                }
+                Ok(Validation::Valid)
+            })
+            .prompt()
+            .none_if_not_interactive_logged()?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(ApplicationName(app_name)))
+    }
+
+    // TODO: FCL: generic one, with language selector
+    pub fn select_new_app_templates_ts(&self) -> anyhow::Result<Option<Vec<String>>> {
+        let template_options = self
+            .ctx
+            .app_template_repo()?
+            .agent_templates(GuestLanguage::TypeScript)?
+            .values()
+            .map(|template| TemplateOption {
+                template_name: template.0.name.to_string(),
+                description: template.0.description().to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let Some(selected) = MultiSelect::new(
+            "Select templates for the new TypeScript application:",
+            template_options,
+        )
+        .prompt()
+        .none_if_not_interactive_logged()?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            selected
+                .into_iter()
+                .map(|template| template.template_name)
+                .collect(),
+        ))
+    }
+
     pub fn select_new_app_name_and_components(&self) -> anyhow::Result<Option<NewInteractiveApp>> {
         let Some(app_name) = Text::new("Application name:")
             .with_validator(|value: &str| {
@@ -408,7 +464,7 @@ impl InteractiveHandler {
         let template_options = self
             .ctx
             .app_template_repo()?
-            .component_templates(language)?
+            .agent_templates(language)?
             .values()
             .map(|template| TemplateOption {
                 template_name: template.0.name.to_string(),
@@ -599,6 +655,7 @@ fn confirm<M: AsRef<str>>(
     result
 }
 
+#[derive(Clone)]
 struct TemplateOption {
     pub template_name: String,
     pub description: String,

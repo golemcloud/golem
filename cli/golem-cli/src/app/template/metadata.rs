@@ -14,10 +14,11 @@
 
 use crate::app::template::repo::TEMPLATES_DIR;
 
-use anyhow::{anyhow, Context};
-use clap::builder::TypedValueParser;
+use anyhow::anyhow;
 use serde_derive::{Deserialize, Serialize};
 use std::path::Path;
+
+// TODO: FCL: drop or support exclude
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
@@ -36,6 +37,12 @@ pub enum AppTemplateMetadata {
     },
     #[serde(rename_all = "camelCase")]
     Component {
+        description: String,
+        exclude: Option<Vec<String>>,
+        dev_only: Option<bool>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Agent {
         description: String,
         exclude: Option<Vec<String>>,
         dev_only: Option<bool>,
@@ -67,5 +74,9 @@ impl AppTemplateMetadata {
 
     pub fn is_component(&self) -> bool {
         matches!(self, AppTemplateMetadata::Component { .. })
+    }
+
+    pub fn is_agent(&self) -> bool {
+        matches!(self, AppTemplateMetadata::Agent { .. })
     }
 }

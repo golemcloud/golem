@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cargo_toml;
-pub mod gitignore;
-pub mod golem_yaml;
-pub mod json;
-pub mod main_rs;
-pub mod main_ts;
-pub mod package_json;
-pub mod text;
-pub mod tsconfig_json;
+use itertools::Itertools;
+use std::collections::BTreeSet;
 
-#[cfg(test)]
-mod tests;
+pub fn merge(source: &str, additional: &str) -> String {
+    source
+        .lines()
+        .chain(additional.lines())
+        .collect::<BTreeSet<&str>>()
+        .iter()
+        .join("\n")
+}

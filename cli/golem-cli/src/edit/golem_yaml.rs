@@ -32,7 +32,10 @@ pub fn split_documents(
 
     let mut docs = Vec::new();
     let mut unsplit_ranges = Vec::new();
-    for (key, pair_node, value_node) in root_pairs {
+    for pair in root_pairs {
+        let key = pair.key;
+        let pair_node = pair.pair_node;
+        let value_node = pair.value_node;
         let should_split = split_all || split_root.contains(key.as_str());
         if !should_split {
             unsplit_ranges.push(pair_node.start_byte()..pair_node.end_byte());
@@ -41,18 +44,24 @@ pub fn split_documents(
         if split_map.contains(key.as_str()) {
             let header_end = line_end_at(source, pair_node.start_byte());
             let header = source[pair_node.start_byte()..header_end].to_string();
+            let Some(value_node) = value_node else {
+                docs.push(source[pair_node.start_byte()..pair_node.end_byte()].to_string());
+                continue;
+            };
             let mapping_node = as_block_mapping(value_node).unwrap_or(value_node);
             if mapping_node.kind() != "block_mapping" {
                 docs.push(source[pair_node.start_byte()..pair_node.end_byte()].to_string());
                 continue;
             }
-            for (_, child_pair, _) in mapping_pairs(mapping_node, source)? {
+            for child in mapping_pairs(mapping_node, source)? {
                 let mut doc = String::new();
                 doc.push_str(&header);
                 if !header.ends_with('\n') {
                     doc.push('\n');
                 }
-                doc.push_str(&source[child_pair.start_byte()..child_pair.end_byte()]);
+                doc.push_str(
+                    &source[child.pair_node.start_byte()..child.pair_node.end_byte()],
+                );
                 docs.push(doc);
             }
         } else {
@@ -104,13 +113,16 @@ pub fn remove_map_entry(source: &str, path: &[&str], key: &str) -> anyhow::Resul
     let root = root_mapping(&tree, source)?;
     let mapping =
         find_mapping_by_path(source, root, path)?.ok_or_else(|| anyhow!("Missing map at path"))?;
-    for (pair_key, pair_node, _) in mapping_pairs(mapping, source)? {
-        if pair_key == key {
-            let mut end = pair_node.end_byte();
+    for pair in mapping_pairs(mapping, source)? {
+        if pair.key == key {
+            let mut end = pair.pair_node.end_byte();
             if source[end..].starts_with('\n') {
                 end += 1;
             }
-            return apply_edits(source, vec![TextEdit::new(pair_node.start_byte(), end, "")]);
+            return apply_edits(
+                source,
+                vec![TextEdit::new(pair.pair_node.start_byte(), end, "")],
+            );
         }
     }
     Err(anyhow!("Missing entry {}", key))
@@ -229,10 +241,16 @@ fn as_block_mapping<'a>(node: Node<'a>) -> Option<Node<'a>> {
     find_first_kind(node, "block_mapping")
 }
 
+struct MappingPair<'a> {
+    key: String,
+    pair_node: Node<'a>,
+    value_node: Option<Node<'a>>,
+}
+
 fn mapping_pairs<'a>(
     mapping: Node<'a>,
     source: &str,
-) -> anyhow::Result<Vec<(String, Node<'a>, Node<'a>)>> {
+) -> anyhow::Result<Vec<MappingPair<'a>>> {
     let mut cursor = mapping.walk();
     let mut pairs = Vec::new();
     for child in mapping.named_children(&mut cursor) {
@@ -242,15 +260,17 @@ fn mapping_pairs<'a>(
         let key_node = child
             .child_by_field_name("key")
             .ok_or_else(|| anyhow!("Missing key in YAML pair"))?;
-        let value_node = child
-            .child_by_field_name("value")
-            .ok_or_else(|| anyhow!("Missing value in YAML pair"))?;
+        let value_node = child.child_by_field_name("value");
         let key_text = source[key_node.start_byte()..key_node.end_byte()]
             .trim()
             .trim_matches('"')
             .trim_matches('\'')
             .to_string();
-        pairs.push((key_text, child, value_node));
+        pairs.push(MappingPair {
+            key: key_text,
+            pair_node: child,
+            value_node,
+        });
     }
     Ok(pairs)
 }
@@ -262,9 +282,9 @@ fn find_mapping_by_path<'a>(
 ) -> anyhow::Result<Option<Node<'a>>> {
     for key in path {
         let mut found = None;
-        for (pair_key, _, value_node) in mapping_pairs(mapping, source)? {
-            if pair_key == *key {
-                found = Some(value_node);
+        for pair in mapping_pairs(mapping, source)? {
+            if pair.key == *key {
+                found = pair.value_node;
                 break;
             }
         }
@@ -296,9 +316,12 @@ fn find_pair_by_path<'a>(
     let Some(parent) = parent else {
         return Ok(None);
     };
-    for (pair_key, pair_node, value_node) in mapping_pairs(parent, source)? {
-        if pair_key == path[path.len() - 1] {
-            return Ok(Some((pair_node, value_node)));
+    for pair in mapping_pairs(parent, source)? {
+        if pair.key == path[path.len() - 1] {
+            let Some(value_node) = pair.value_node else {
+                return Ok(None);
+            };
+            return Ok(Some((pair.pair_node, value_node)));
         }
     }
     Ok(None)
@@ -317,9 +340,7 @@ fn find_pair_anywhere<'a>(
             let key_node = node
                 .child_by_field_name("key")
                 .ok_or_else(|| anyhow!("Missing key in YAML pair"))?;
-            let value_node = node
-                .child_by_field_name("value")
-                .ok_or_else(|| anyhow!("Missing value in YAML pair"))?;
+            let value_node = node.child_by_field_name("value");
             let key_text = source[key_node.start_byte()..key_node.end_byte()]
                 .trim()
                 .trim_matches('"')
@@ -333,9 +354,11 @@ fn find_pair_anywhere<'a>(
                     }
                     current = parent;
                 }
-                match best {
-                    Some((best_depth, _, _)) if best_depth <= depth => {}
-                    _ => best = Some((depth, node, value_node)),
+                if let Some(value_node) = value_node {
+                    match best {
+                        Some((best_depth, _, _)) if best_depth <= depth => {}
+                        _ => best = Some((depth, node, value_node)),
+                    }
                 }
             }
         }
@@ -379,33 +402,54 @@ fn merge_mapping_nodes(
     let base_pairs = mapping_pairs(base_mapping, base_source)?;
     let update_pairs = mapping_pairs(update_mapping, update_source)?;
     let mut base_index = std::collections::HashMap::new();
-    for (idx, (key, pair_node, value_node)) in base_pairs.iter().enumerate() {
-        base_index.insert(key.clone(), (idx, *pair_node, *value_node));
+    for (idx, pair) in base_pairs.iter().enumerate() {
+        base_index.insert(
+            pair.key.clone(),
+            (idx, pair.pair_node, pair.value_node),
+        );
     }
 
-    for (key, update_pair, update_value) in update_pairs {
-        if let Some((_, _base_pair, base_value)) = base_index.get(&key) {
-            merge_value_nodes(
-                base_source,
-                *base_value,
-                update_source,
-                update_value,
-                edits,
-            )?;
+    for update_pair in update_pairs {
+        if let Some((_, base_pair, base_value)) = base_index.get(&update_pair.key) {
+            match (base_value, update_pair.value_node) {
+                (Some(base_value), Some(update_value)) => {
+                    merge_value_nodes(
+                        base_source,
+                        *base_value,
+                        update_source,
+                        update_value,
+                        edits,
+                    )?;
+                }
+                (None, Some(_)) => {
+                    let insertion = reindent_block(
+                        update_source,
+                        update_pair.pair_node.start_byte(),
+                        update_pair.pair_node.end_byte(),
+                        mapping_child_indent(base_source, base_mapping)?,
+                    );
+                    edits.push(TextEdit::new(
+                        base_pair.start_byte(),
+                        base_pair.end_byte(),
+                        insertion,
+                    ));
+                }
+                _ => {}
+            }
             continue;
         }
 
         let mut insertion = reindent_block(
             update_source,
-            update_pair.start_byte(),
-            update_pair.end_byte(),
+            update_pair.pair_node.start_byte(),
+            update_pair.pair_node.end_byte(),
             mapping_child_indent(base_source, base_mapping)?,
         );
         if !insertion.ends_with('\n') {
             insertion.push('\n');
         }
-        let insert_pos = if let Some((_, pair_node, _)) = base_pairs.last() {
-            pair_node.end_byte()
+        let insert_pos = if let Some(pair) = base_pairs.last() {
+            pair.pair_node.end_byte()
         } else {
             base_mapping.end_byte()
         };

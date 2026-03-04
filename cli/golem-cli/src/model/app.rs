@@ -1003,6 +1003,7 @@ impl<'a> Component<'a> {
         self.properties().component_type
     }
 
+    // TODO: FCL: cleanup this, and make lang ids reserved for template names
     pub fn guess_language(&self) -> Option<GuestLanguage> {
         self.applied_layers().iter().find_map(|(id, _)| {
             id.template_name()

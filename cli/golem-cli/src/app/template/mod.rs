@@ -24,6 +24,7 @@ pub use apply_plan::{TemplateApplyPlan, TemplateApplyPlanEntry};
 pub use metadata::AppTemplateMetadata;
 pub use repo::AppTemplateRepo;
 pub use template::{
-    AppTemplate, AppTemplateCommon, AppTemplateCommonOnDemand, AppTemplateComponent,
+    AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
+    AppTemplateComponent,
     AppTemplateName, AppTemplatesForLanguage,
 };

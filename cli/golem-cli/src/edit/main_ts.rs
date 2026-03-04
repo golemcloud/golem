@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
+use std::collections::BTreeSet;
 use tree_sitter::{Parser, Tree};
 
 pub fn add_reexport(source: &str, export_stmt: &str) -> anyhow::Result<String> {
@@ -31,6 +32,27 @@ pub fn add_reexport(source: &str, export_stmt: &str) -> anyhow::Result<String> {
     Ok(output)
 }
 
+pub fn merge_reexports(current: &str, update: &str) -> anyhow::Result<String> {
+    let current_exports = export_statements(current)?;
+    let update_exports = export_statements(update)?;
+
+    let mut existing = BTreeSet::new();
+    for export in current_exports {
+        existing.insert(export);
+    }
+
+    let mut merged = current.to_string();
+    for export in update_exports {
+        if export.is_empty() || existing.contains(&export) {
+            continue;
+        }
+        merged = add_reexport(&merged, &export)?;
+        existing.insert(export);
+    }
+
+    Ok(merged)
+}
+
 fn parse_ts(source: &str) -> anyhow::Result<Tree> {
     let mut parser = Parser::new();
     parser
@@ -39,6 +61,25 @@ fn parse_ts(source: &str) -> anyhow::Result<Tree> {
     parser
         .parse(source, None)
         .ok_or_else(|| anyhow!("Failed to parse TypeScript"))
+}
+
+fn export_statements(source: &str) -> anyhow::Result<Vec<String>> {
+    let tree = parse_ts(source)?;
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    let mut exports = Vec::new();
+    while let Some(node) = stack.pop() {
+        if node.kind() == "export_statement" {
+            let text = source[node.start_byte()..node.end_byte()].trim().to_string();
+            exports.push((node.start_byte(), text));
+        }
+        for child in node.named_children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    exports.sort_by_key(|(start, _)| *start);
+    Ok(exports.into_iter().map(|(_, text)| text).collect())
 }
 
 fn last_export_end(source: &str, tree: &Tree) -> usize {

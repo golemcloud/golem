@@ -7,10 +7,3 @@ httpApi:
       agents:
         workflow-agent: {}
         human-agent: {}
-
-components:
-  componentname:
-    templates: ts
-
-    # golem-app-manifest-env-doc
-    env:

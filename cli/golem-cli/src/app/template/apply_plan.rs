@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::app::template::generator::InMemoryFs;
-use crate::edit::{golem_yaml, json};
+use crate::edit::{gitignore, golem_yaml, json, main_ts};
 use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date};
+use anyhow::Context;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateApplyPlanEntry {
@@ -168,10 +170,24 @@ impl TemplateApplyPlanEntry {
 
 fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<String>> {
     let file_name = fs::file_name_to_str(path)?;
-    Ok(match file_name {
-        "golem.yaml" => Some(golem_yaml::merge_documents(current, new)?),
-        "tsconfig.json" => Some(json::merge_object(current, new)?),
-        "package.json" => Some(json::merge_object(current, new)?),
-        _ => None,
-    })
+
+    fn merge(file_name: &str, current: &str, new: &str) -> anyhow::Result<Option<String>> {
+        Ok(match file_name {
+            ".gitignore" => Some(gitignore::merge(current, new)),
+            "golem.yaml" => Some(golem_yaml::merge_documents(current, new)?),
+            "main.ts" => Some(main_ts::merge_reexports(current, new)?),
+            "package.json" => Some(json::merge_object(current, new)?),
+            "tsconfig.json" => Some(json::merge_object(current, new)?),
+            _ => None,
+        })
+    }
+
+    merge(file_name, current, new)
+        .map_err(|err| {
+            warn!("merge: file name: {}", file_name);
+            warn!("merge: current:\n{}\n", current);
+            warn!("merge: new:\n{}\n", new);
+            err
+        })
+        .with_context(|| format!("Failed to merge '{}'", file_name))
 }

@@ -232,6 +232,34 @@ export { b } from "./b";
 }
 
 #[test]
+fn main_ts_merge_reexports_adds_new() {
+    let current = r#"export { a } from "./a";
+export { b } from "./b";
+"#;
+    let update = r#"export { b } from "./b";
+export { c } from "./c";
+"#;
+    let merged = main_ts::merge_reexports(current, update).unwrap();
+    let expected = r#"export { a } from "./a";
+export { b } from "./b";
+export { c } from "./c";
+"#;
+    assert_eq!(merged, expected);
+}
+
+#[test]
+fn main_ts_merge_reexports_skips_existing() {
+    let current = r#"export { a } from "./a";
+export { b } from "./b";
+"#;
+    let update = r#"export { a } from "./a";
+export { b } from "./b";
+"#;
+    let merged = main_ts::merge_reexports(current, update).unwrap();
+    assert_eq!(merged, current);
+}
+
+#[test]
 fn main_rs_import_export() {
     let source = r#"use std::fmt;
 
@@ -402,4 +430,73 @@ other: 1
     assert!(components.contains_key(&serde_yaml::Value::String("alpha".to_string())));
     assert!(components.contains_key(&serde_yaml::Value::String("gamma".to_string())));
     assert!(merged_value.get("other").is_some());
+}
+
+#[test]
+fn golem_yaml_merge_keeps_schema_and_app_sections() {
+    let base = r#"# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+app: test-app
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release
+components:
+  test-app:ts-main:
+    templates: ts
+
+    # Component environment variables can reference system environment variables with minijinja syntax:
+    #
+    #   env:
+    #     ENV_VAR_1: "{{ ENV_VAR_1 }}"
+    #     RENAMED_VAR_2: "{{ ENV_VAR_2 }}"
+    #     COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
+    #
+    env:
+httpApi:
+  deployments:
+    local:
+    - domain: test-app.localhost:9006
+      agents:
+        counter-agent: {}
+
+"#;
+
+    let update = r#"# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+components:
+  test-app:ts-main:
+    templates: ts
+
+    # Component environment variables can reference system environment variables with minijinja syntax:
+    #
+    #   env:
+    #     ENV_VAR_1: "{{ ENV_VAR_1 }}"
+    #     RENAMED_VAR_2: "{{ ENV_VAR_2 }}"
+    #     COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
+    #
+    env:
+"#;
+
+    let merged = golem_yaml::merge_documents(base, update).unwrap();
+    assert!(merged.contains("app: test-app"));
+    assert!(merged.contains("environments:"));
+    assert!(merged.contains("httpApi:"));
+    assert!(merged.contains("components:"));
 }
