@@ -113,11 +113,14 @@ mod generated {
     bindgen!({
         path: "wit",
         world: "wasm-rpc",
-        tracing: false,
-        async: true,
-        trappable_imports: true,
+        imports: {
+            default: async | trappable,
+        },
+        exports: { default: async },
+        require_store_data_send: true,
+        anyhow: true,
         with: {
-            "wasi:io/poll/pollable": super::DynPollable,
+            "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
             "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
         },
         wasmtime_crate: ::wasmtime,

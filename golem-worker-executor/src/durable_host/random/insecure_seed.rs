@@ -18,16 +18,20 @@ use golem_common::model::oplog::{
     host_functions, DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed,
 };
 use wasmtime_wasi::p2::bindings::random::insecure_seed::Host;
+use wasmtime_wasi::random::WasiRandomView as _;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn insecure_seed(&mut self) -> anyhow::Result<(u64, u64)> {
+    async fn insecure_seed(&mut self) -> wasmtime::Result<(u64, u64)> {
         let durability = Durability::<host_functions::RandomInsecureSeedInsecureSeed>::new(
             self,
             DurableFunctionType::ReadLocal,
         )
         .await?;
         let result = if durability.is_live() {
-            let result = Host::insecure_seed(&mut self.as_wasi_view()).await?; // this supposed to never fail
+            let result = {
+                let mut view = self.as_wasi_view();
+                Host::insecure_seed(view.random()).await?
+            };
             durability
                 .persist(
                     self,

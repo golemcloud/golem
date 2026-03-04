@@ -56,7 +56,7 @@ use std::sync::{Arc, Weak};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context

@@ -499,6 +499,11 @@ async fn decode_param_impl(
                 }),
             }
         }
+        Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
+            Err(EncodingError::ParamTypeMismatch {
+                details: format!("in {context} unsupported type (future/stream/error-context)"),
+            })
+        }
         Type::Borrow(_) => match param {
             Value::Handle { uri, resource_id } => {
                 let uri = Uri { value: uri.clone() };
@@ -817,6 +822,11 @@ pub async fn encode_output(
                 resource_id: id,
             })
         }
+        Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
+            Err(EncodingError::ValueMismatch {
+                details: "Unsupported value type (future/stream/error-context)".to_string(),
+            })
+        }
     }
 }
 
@@ -888,6 +898,9 @@ pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
         Type::Own(_) => Err("Cannot extract information about owned resource type".to_string()),
         Type::Borrow(_) => {
             Err("Cannot extract information about borrowed resource type".to_string())
+        }
+        Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
+            Err("Cannot extract information about future/stream/error-context type".to_string())
         }
     }
 }

@@ -11,18 +11,3 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use tracing::debug;
-use wasmtime_wasi::p2::{WasiImpl, WasiView};
-
-use crate::preview2::wasi::logging::logging::{Host, Level};
-
-impl<T: WasiView> Host for WasiImpl<T> {
-    async fn log(&mut self, level: Level, context: String, message: String) -> anyhow::Result<()> {
-        debug!(
-            "logging::logging::log called: {:?} [{}] {}",
-            level, context, message
-        );
-        Ok(())
-    }
-}

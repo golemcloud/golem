@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> durability::HostLazyInitializedPollable for DurableWorkerCt
             "subscribe",
         );
 
-        dynamic_subscribe(self.table(), self_, None)
+        Ok(dynamic_subscribe(self.table(), self_, None)?)
     }
 
     async fn drop(&mut self, rep: Resource<LazyInitializedPollableEntry>) -> anyhow::Result<()> {

@@ -60,6 +60,27 @@ use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
 
+/// Represents a test component whose analysis cache has been pre-warmed
+/// during test-r dependency initialization. Tests that depend on a
+/// `PrecompiledComponent` are guaranteed that the expensive `extract_agent_types`
+/// and metadata analysis have already been performed.
+#[derive(Clone, Debug)]
+pub struct PrecompiledComponent {
+    /// The WASM file name (without .wasm extension) in the test-components directory
+    pub wasm_name: String,
+    /// The WIT package name used as the component name (passed to `.name()`)
+    pub package_name: String,
+}
+
+impl PrecompiledComponent {
+    pub fn new(wasm_name: &str, package_name: &str) -> Self {
+        Self {
+            wasm_name: wasm_name.to_string(),
+            package_name: package_name.to_string(),
+        }
+    }
+}
+
 pub struct EnvironmentOptions {
     pub compatibility_check: bool,
     pub version_check: bool,
@@ -89,6 +110,17 @@ pub trait TestDsl {
         name: &str,
     ) -> StoreComponentBuilder<'_, Self> {
         StoreComponentBuilder::new(self, *environment_id, name.to_string())
+    }
+
+    /// Creates a `StoreComponentBuilder` from a `PrecompiledComponent`, automatically
+    /// setting both the WASM file name and the package name.
+    fn component_dep(
+        &self,
+        environment_id: &EnvironmentId,
+        precompiled: &PrecompiledComponent,
+    ) -> StoreComponentBuilder<'_, Self> {
+        StoreComponentBuilder::new(self, *environment_id, precompiled.wasm_name.clone())
+            .name(&precompiled.package_name)
     }
 
     async fn store_component_with(
@@ -496,6 +528,7 @@ pub trait TestDsl {
         self.wait_for_statuses(worker_id, &[status], timeout).await
     }
 
+    #[tracing::instrument(level = "info", skip(self, statuses, timeout), fields(%worker_id))]
     async fn wait_for_statuses(
         &self,
         worker_id: &WorkerId,
