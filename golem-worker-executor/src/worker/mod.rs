@@ -2148,7 +2148,10 @@ impl RunningWorker {
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
 
-        store.set_epoch_deadline(parent.config().limits.epoch_ticks);
+        // Set initial epoch deadline to 0 so the callback fires immediately on the
+        // first epoch check point in WASM code, ensuring fuel is checked even for
+        // very fast invocations that complete within a single epoch tick interval.
+        store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
