@@ -27,8 +27,12 @@ pub mod bindings {
     wasmtime::component::bindgen!({
           path: "wit",
           world: "golem-common",
-          async: true,
-          trappable_imports: true,
+          imports: {
+            default: async | trappable,
+          },
+          exports: { default: async },
+          require_store_data_send: true,
+          anyhow: true,
           with: {
             "golem:core/types": golem_wasm::golem_core_1_5_x::types,
           },

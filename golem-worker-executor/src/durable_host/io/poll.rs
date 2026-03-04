@@ -14,7 +14,6 @@
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
-use anyhow::anyhow;
 use chrono::{Duration, Utc};
 use futures::future::Either;
 use futures::pin_mut;
@@ -28,17 +27,21 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
+use wasmtime_wasi::IoView as _;
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
-    async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
+    async fn ready(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
         let durability =
             Durability::<IoPollReady>::new(self, DurableFunctionType::ReadLocal).await?;
 
         let result = if durability.is_live() {
-            let result = HostPollable::ready(&mut self.as_wasi_view().0, self_)
-                .await
-                .map_err(|err| err.to_string());
+            let result = {
+                let mut view = self.as_wasi_view();
+                HostPollable::ready(&mut view.io_data(), self_)
+                    .await
+                    .map_err(|err| err.to_string())
+            };
             durability
                 .persist(
                     self,
@@ -50,10 +53,10 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        result.result.map_err(|err| anyhow!(err))
+        result.result.map_err(wasmtime::Error::msg)
     }
 
-    async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
+    async fn block(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<()> {
         self.observe_function_call("io::poll:pollable", "block");
         let in_ = vec![self_];
         let _ = self.poll(in_).await?;
@@ -61,14 +64,15 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    fn drop(&mut self, rep: Resource<Pollable>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<Pollable>) -> wasmtime::Result<()> {
         self.observe_function_call("io::poll:pollable", "drop");
-        HostPollable::drop(&mut self.as_wasi_view().0, rep)
+        let mut view = self.as_wasi_view();
+        HostPollable::drop(&mut view.io_data(), rep)
     }
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
+    async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> wasmtime::Result<Vec<u32>> {
         // check if all pollables are promise backed. In this case we can suspend immediately
         // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling
         // if we suspended in the last pass. Doing it this way also prevents us from initializing the promises until we are actually in live mode.
@@ -91,7 +95,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             if all_blocked {
                 debug!("Suspending worker until a promise gets completed");
-                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
+                return Err(wasmtime::Error::from_anyhow(
+                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
+                ));
             }
         };
 
@@ -108,8 +114,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let count = in_.len();
 
             let result = {
-                let view = &mut self.as_wasi_view().0;
-                let poll = Host::poll(view, in_);
+                let mut view = self.as_wasi_view();
+                let mut io_data = view.io_data();
+                let poll = Host::poll(&mut io_data, in_);
                 pin_mut!(poll);
 
                 let either_result = futures::future::select(poll, interrupt_signal).await;
@@ -117,7 +124,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     Either::Left((result, _)) => result,
                     Either::Right((interrupt_kind, _)) => {
                         tracing::info!("Interrupted while waiting for poll result");
-                        return Err(interrupt_kind.into());
+                        return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
                     }
                 }
             };
@@ -139,23 +146,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         match result {
-            Ok(result) => result.result.map_err(|err| anyhow!(err)),
+            Ok(result) => result.result.map_err(wasmtime::Error::msg),
             Err(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
-                Err(InterruptKind::Suspend(Timestamp::now_utc()).into())
+                Err(wasmtime::Error::from_anyhow(
+                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
+                ))
             }
         }
     }
 }
 
-fn is_suspend_for_sleep<T>(result: &Result<T, anyhow::Error>) -> Option<Duration> {
+fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<Duration> {
     if let Err(err) = result {
-        if let Some(SuspendForSleep(duration)) = err.root_cause().downcast_ref::<SuspendForSleep>()
-        {
-            Some(Duration::from_std(*duration).unwrap())
-        } else {
-            None
+        // Walk the error source chain, since wasmtime::Error may wrap the original error
+        let mut current: Option<&dyn std::error::Error> = Some(err.as_ref());
+        while let Some(e) = current {
+            if let Some(SuspendForSleep(duration)) = e.downcast_ref::<SuspendForSleep>() {
+                return Some(Duration::from_std(*duration).unwrap());
+            }
+            current = e.source();
         }
+        None
     } else {
         None
     }

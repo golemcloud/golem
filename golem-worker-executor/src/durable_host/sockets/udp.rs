@@ -22,6 +22,7 @@ use wasmtime_wasi::p2::bindings::sockets::udp::{
     OutgoingDatagramStream, Pollable, UdpSocket,
 };
 use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::sockets::WasiSocketsView as _;
 
 impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
     async fn start_bind(
@@ -31,12 +32,13 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         local_address: IpSocketAddress,
     ) -> Result<(), SocketError> {
         self.observe_function_call("sockets::udp", "start_bind");
-        HostUdpSocket::start_bind(&mut self.as_wasi_view(), self_, network, local_address).await
+        let mut view = self.as_wasi_view();
+        HostUdpSocket::start_bind(&mut view.sockets(), self_, network, local_address).await
     }
 
     fn finish_bind(&mut self, self_: Resource<UdpSocket>) -> Result<(), SocketError> {
         self.observe_function_call("sockets::udp", "finish_bind");
-        HostUdpSocket::finish_bind(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::finish_bind(&mut self.as_wasi_view().sockets(), self_)
     }
 
     async fn stream(
@@ -51,7 +53,8 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         SocketError,
     > {
         self.observe_function_call("sockets::udp", "stream");
-        HostUdpSocket::stream(&mut self.as_wasi_view(), self_, remote_address).await
+        let mut view = self.as_wasi_view();
+        HostUdpSocket::stream(&mut view.sockets(), self_, remote_address).await
     }
 
     fn local_address(
@@ -59,7 +62,7 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         self_: Resource<UdpSocket>,
     ) -> Result<IpSocketAddress, SocketError> {
         self.observe_function_call("sockets::udp", "local_address");
-        HostUdpSocket::local_address(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::local_address(&mut self.as_wasi_view().sockets(), self_)
     }
 
     fn remote_address(
@@ -67,17 +70,17 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         self_: Resource<UdpSocket>,
     ) -> Result<IpSocketAddress, SocketError> {
         self.observe_function_call("sockets::udp", "remote_address");
-        HostUdpSocket::remote_address(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::remote_address(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn address_family(&mut self, self_: Resource<UdpSocket>) -> anyhow::Result<IpAddressFamily> {
+    fn address_family(&mut self, self_: Resource<UdpSocket>) -> wasmtime::Result<IpAddressFamily> {
         self.observe_function_call("sockets::udp", "address_family");
-        HostUdpSocket::address_family(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::address_family(&mut self.as_wasi_view().sockets(), self_)
     }
 
     fn unicast_hop_limit(&mut self, self_: Resource<UdpSocket>) -> Result<u8, SocketError> {
         self.observe_function_call("sockets::udp", "unicast_hop_limit");
-        HostUdpSocket::unicast_hop_limit(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::unicast_hop_limit(&mut self.as_wasi_view().sockets(), self_)
     }
 
     fn set_unicast_hop_limit(
@@ -86,12 +89,12 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         value: u8,
     ) -> Result<(), SocketError> {
         self.observe_function_call("sockets::udp", "set_unicast_hop_limit");
-        HostUdpSocket::set_unicast_hop_limit(&mut self.as_wasi_view(), self_, value)
+        HostUdpSocket::set_unicast_hop_limit(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
     fn receive_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "receive_buffer_size");
-        HostUdpSocket::receive_buffer_size(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::receive_buffer_size(&mut self.as_wasi_view().sockets(), self_)
     }
 
     fn set_receive_buffer_size(
@@ -100,12 +103,12 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         value: u64,
     ) -> Result<(), SocketError> {
         self.observe_function_call("sockets::udp", "set_receive_buffer_size");
-        HostUdpSocket::set_receive_buffer_size(&mut self.as_wasi_view(), self_, value)
+        HostUdpSocket::set_receive_buffer_size(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
     fn send_buffer_size(&mut self, self_: Resource<UdpSocket>) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "send_buffer_size");
-        HostUdpSocket::send_buffer_size(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::send_buffer_size(&mut self.as_wasi_view().sockets(), self_)
     }
 
     fn set_send_buffer_size(
@@ -114,17 +117,17 @@ impl<Ctx: WorkerCtx> HostUdpSocket for DurableWorkerCtx<Ctx> {
         value: u64,
     ) -> Result<(), SocketError> {
         self.observe_function_call("sockets::udp", "set_send_buffer_size");
-        HostUdpSocket::set_send_buffer_size(&mut self.as_wasi_view(), self_, value)
+        HostUdpSocket::set_send_buffer_size(&mut self.as_wasi_view().sockets(), self_, value)
     }
 
-    fn subscribe(&mut self, self_: Resource<UdpSocket>) -> anyhow::Result<Resource<Pollable>> {
+    fn subscribe(&mut self, self_: Resource<UdpSocket>) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("sockets::udp", "subscribe");
-        HostUdpSocket::subscribe(&mut self.as_wasi_view(), self_)
+        HostUdpSocket::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<UdpSocket>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<UdpSocket>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::udp", "drop");
-        HostUdpSocket::drop(&mut self.as_wasi_view(), rep)
+        HostUdpSocket::drop(&mut self.as_wasi_view().sockets(), rep)
     }
 }
 
@@ -135,27 +138,27 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
         max_results: u64,
     ) -> Result<Vec<IncomingDatagram>, SocketError> {
         self.observe_function_call("sockets::udp", "receive");
-        HostIncomingDatagramStream::receive(&mut self.as_wasi_view(), self_, max_results)
+        HostIncomingDatagramStream::receive(&mut self.as_wasi_view().sockets(), self_, max_results)
     }
 
     fn subscribe(
         &mut self,
         self_: Resource<IncomingDatagramStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("sockets::udp", "subscribe");
-        HostIncomingDatagramStream::subscribe(&mut self.as_wasi_view(), self_)
+        HostIncomingDatagramStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<IncomingDatagramStream>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<IncomingDatagramStream>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::udp", "drop");
-        HostIncomingDatagramStream::drop(&mut self.as_wasi_view(), rep)
+        HostIncomingDatagramStream::drop(&mut self.as_wasi_view().sockets(), rep)
     }
 }
 
 impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
     fn check_send(&mut self, self_: Resource<OutgoingDatagramStream>) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "check_send");
-        HostOutgoingDatagramStream::check_send(&mut self.as_wasi_view(), self_)
+        HostOutgoingDatagramStream::check_send(&mut self.as_wasi_view().sockets(), self_)
     }
 
     async fn send(
@@ -164,20 +167,21 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
         datagrams: Vec<OutgoingDatagram>,
     ) -> Result<u64, SocketError> {
         self.observe_function_call("sockets::udp", "send");
-        HostOutgoingDatagramStream::send(&mut self.as_wasi_view(), self_, datagrams).await
+        let mut view = self.as_wasi_view();
+        HostOutgoingDatagramStream::send(&mut view.sockets(), self_, datagrams).await
     }
 
     fn subscribe(
         &mut self,
         self_: Resource<OutgoingDatagramStream>,
-    ) -> anyhow::Result<Resource<Pollable>> {
+    ) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("sockets::udp", "subscribe");
-        HostOutgoingDatagramStream::subscribe(&mut self.as_wasi_view(), self_)
+        HostOutgoingDatagramStream::subscribe(&mut self.as_wasi_view().sockets(), self_)
     }
 
-    fn drop(&mut self, rep: Resource<OutgoingDatagramStream>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<OutgoingDatagramStream>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::udp", "drop");
-        HostOutgoingDatagramStream::drop(&mut self.as_wasi_view(), rep)
+        HostOutgoingDatagramStream::drop(&mut self.as_wasi_view().sockets(), rep)
     }
 }
 

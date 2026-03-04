@@ -24,7 +24,7 @@ use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
 
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use http::HeaderMap;
 use log::info;
@@ -35,6 +35,18 @@ use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_update_v1")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -42,17 +54,14 @@ inherit_test_dep!(Tracing);
 async fn get_oplog_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -129,14 +138,14 @@ async fn get_oplog_1(
 async fn search_oplog_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -219,17 +228,14 @@ async fn search_oplog_1(
 async fn get_oplog_with_api_changing_updates(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
@@ -285,17 +291,14 @@ async fn get_oplog_with_api_changing_updates(
 async fn get_oplog_starting_with_updated_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_agent_update_v1_release",
-        )
-        .name("it:agent-update")
+        .component_dep(&context.default_environment_id, agent_update_v1)
         .unique()
         .store()
         .await?;
@@ -337,6 +340,7 @@ async fn get_oplog_starting_with_updated_component(
 async fn invocation_context_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -376,11 +380,7 @@ async fn invocation_context_test(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
