@@ -437,6 +437,7 @@ impl RustBridgeGenerator {
                 let mut into_value_cases = Vec::new();
                 let mut from_value_cases = Vec::new();
                 let mut case_names_lit = Vec::new();
+                let mut case_type_tokens = Vec::new();
 
                 for (idx, case) in variant.cases.iter().enumerate() {
                     let case_ident = Ident::new(
@@ -452,6 +453,10 @@ impl RustBridgeGenerator {
 
                             let inner = self.wit_type_to_typeref(typ)?;
                             cases.push(quote! { #case_ident(#inner) });
+
+                            // get_type() case — include the inner type
+                            let type_value = self.analysed_type_as_value(typ);
+                            case_type_tokens.push(quote! { Some(#type_value) });
 
                             // IntoValue implementation
                             into_value_cases.push(quote! {
@@ -471,6 +476,9 @@ impl RustBridgeGenerator {
                         }
                         None => {
                             cases.push(quote! { #case_ident });
+
+                            // get_type() case — no inner type
+                            case_type_tokens.push(quote! { None });
 
                             // IntoValue implementation
                             into_value_cases.push(quote! {
@@ -509,7 +517,7 @@ impl RustBridgeGenerator {
                                     #(
                                         golem_wasm::analysis::NameOptionTypePair {
                                             name: #case_names_lit.to_string(),
-                                            typ: None,
+                                            typ: #case_type_tokens,
                                         }
                                     ),*
                                 ],
