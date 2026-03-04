@@ -183,11 +183,10 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
     }
 
     merge(file_name, current, new)
-        .map_err(|err| {
+        .inspect_err(|_err| {
             warn!("merge: file name: {}", file_name);
             warn!("merge: current:\n{}\n", current);
             warn!("merge: new:\n{}\n", new);
-            err
         })
         .with_context(|| format!("Failed to merge '{}'", file_name))
 }

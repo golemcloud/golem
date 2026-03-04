@@ -1640,7 +1640,7 @@ mod app_builder {
 
             match Ok::<&PathBuf, anyhow::Error>(&app_root_dir).and_then(|app_root_dir| {
                 Ok((
-                    fs::path_to_str(&app_root_dir).map(|path| path.to_string())?,
+                    fs::path_to_str(app_root_dir).map(|path| path.to_string())?,
                     fs::path_to_str(&app_root_dir.join(TEMP_DIR)).map(|path| path.to_string())?,
                 ))
             }) {
@@ -1667,7 +1667,7 @@ mod app_builder {
             builder.validate_http_api_deployments(&mut validation, &environments);
 
             validation.build(Application {
-                app_root_dir: app_root_dir,
+                app_root_dir,
                 environments,
                 component_preset_selector: component_presets,
                 application_name,
@@ -2183,7 +2183,7 @@ mod app_builder {
             component_name: ComponentName,
         ) {
             let component_dir = match fs::parent_or_err(&source)
-                .and_then(|parent| fs::canonicalize_path(parent))
+                .and_then(fs::canonicalize_path)
                 .and_then(|path| fs::path_to_str(&path).map(|path| path.to_string()))
             {
                 Ok(path) => path,

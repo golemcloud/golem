@@ -55,7 +55,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
 
                     paths.extend(
                         fs::compile_and_collect_globs(
-                            &app_root_dir,
+                            app_root_dir,
                             &build_dir,
                             &build_step.targets(),
                         )?

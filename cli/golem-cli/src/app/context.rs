@@ -719,9 +719,7 @@ fn collect_sources_and_switch_to_app_root(
         } else {
             Some(
                 ValidatedResult::from_result(fs::compile_and_collect_globs(
-                    &source_dir,
-                    source_dir,
-                    &includes,
+                    source_dir, source_dir, &includes,
                 ))
                 .map(|mut sources| {
                     sources.insert(0, source.to_path_buf());

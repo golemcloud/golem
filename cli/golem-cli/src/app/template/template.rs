@@ -115,7 +115,7 @@ impl AppTemplate {
         target_path: &Path,
         sdk_overrides: &SdkOverrides,
     ) -> anyhow::Result<()> {
-        generate_on_demand_commons_by_template(self, target_path, sdk_overrides, StdFs::default())
+        generate_on_demand_commons_by_template(self, target_path, sdk_overrides, StdFs)
     }
 
     fn generate_component(

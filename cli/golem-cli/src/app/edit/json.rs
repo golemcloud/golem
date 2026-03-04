@@ -107,7 +107,7 @@ fn parse_json(source: &str) -> anyhow::Result<Tree> {
         .set_language(&tree_sitter_json::LANGUAGE.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-json"))?;
     parser
-        .parse(&sanitize_json(source), None)
+        .parse(sanitize_json(source), None)
         .ok_or_else(|| anyhow!("Failed to parse JSONC"))
 }
 

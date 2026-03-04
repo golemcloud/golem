@@ -400,12 +400,12 @@ other: 1
         .and_then(|value| value.as_mapping())
         .unwrap();
     let name = app
-        .get(&serde_yaml::Value::String("name".to_string()))
+        .get(serde_yaml::Value::String("name".to_string()))
         .and_then(|value| value.as_str())
         .unwrap();
     assert_eq!(name, "demo2");
     let tags = app
-        .get(&serde_yaml::Value::String("tags".to_string()))
+        .get(serde_yaml::Value::String("tags".to_string()))
         .and_then(|value| value.as_sequence())
         .unwrap();
     let tags = tags
@@ -419,17 +419,17 @@ other: 1
         .and_then(|value| value.as_mapping())
         .unwrap();
     let beta = components
-        .get(&serde_yaml::Value::String("beta".to_string()))
+        .get(serde_yaml::Value::String("beta".to_string()))
         .and_then(|value| value.as_mapping())
         .unwrap();
     let beta_image = beta
-        .get(&serde_yaml::Value::String("image".to_string()))
+        .get(serde_yaml::Value::String("image".to_string()))
         .and_then(|value| value.as_str())
         .unwrap();
     assert_eq!(beta_image, "beta2");
 
-    assert!(components.contains_key(&serde_yaml::Value::String("alpha".to_string())));
-    assert!(components.contains_key(&serde_yaml::Value::String("gamma".to_string())));
+    assert!(components.contains_key(serde_yaml::Value::String("alpha".to_string())));
+    assert!(components.contains_key(serde_yaml::Value::String("gamma".to_string())));
     assert!(merged_value.get("other").is_some());
 }
 
