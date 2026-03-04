@@ -1099,6 +1099,14 @@ async fn component_env_variables_update(
         .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
     let env = executor
         .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
