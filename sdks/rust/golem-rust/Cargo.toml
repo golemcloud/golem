@@ -37,10 +37,10 @@ serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1.0.145", optional = true }
 url = { version = "2.5.7", optional = true }
 uuid = { version = "1.19.0", features = ["v4"] }
-wasi = { version = "=0.14.1+wasi-0.2.3" }
-wstd = { version = "=0.5.4" }
+wasip2 = { version = "1.0.2" }
+wstd = { version = "=0.6.5" }
 wasi-logger = { version = "0.1.2", features = ["kv"] }
-wit-bindgen = { version = "=0.40.0" }
+wit-bindgen = { version = "=0.53.1" }
 
 [features]
 default = ["durability", "json", "macro"]

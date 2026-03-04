@@ -64,7 +64,7 @@ impl FromValueAndType for Level {
     }
 }
 
-impl IntoValue for wasi::io::error::Error {
+impl IntoValue for wasip2::io::error::Error {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         builder.string(&self.to_debug_string())
     }
@@ -74,7 +74,7 @@ impl IntoValue for wasi::io::error::Error {
     }
 }
 
-impl FromValueAndType for wasi::io::error::Error {
+impl FromValueAndType for wasip2::io::error::Error {
     fn from_extractor<'a, 'b>(
         _extractor: &'a impl WitValueExtractor<'a, 'b>,
     ) -> Result<Self, String> {

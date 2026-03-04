@@ -14,7 +14,7 @@
 
 use crate::golem_agentic::golem::agent::common::DataValue;
 use crate::golem_agentic::golem::agent::host::{FutureInvokeResult, RpcError};
-use wstd::wasi::io::poll::Pollable;
+use wasip2::io::poll::Pollable;
 
 pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<DataValue, RpcError> {
     loop {

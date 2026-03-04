@@ -4,8 +4,8 @@
 //   * with "wasi:io/poll@0.2.3" = "wstd::wasi::io::poll"
 //   * with "wasi:clocks/wall-clock@0.2.3" = "wstd::wasi::clocks::wall_clock"
 //   * generate_unused_types
-use wstd::wasi::clocks::wall_clock as __with_name0;
-use wstd::wasi::io::poll as __with_name1;
+use wasip2::clocks::wall_clock as __with_name0;
+use wasip2::io::poll as __with_name1;
 #[allow(dead_code, clippy::all)]
 pub mod golem {
   pub mod core {
