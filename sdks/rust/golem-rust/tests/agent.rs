@@ -30,7 +30,7 @@ mod tests {
     use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
     use test_r::test;
-    use wstd::wasi::clocks::wall_clock::Datetime;
+    use wasip2::clocks::wall_clock::Datetime;
 
     #[derive(Clone, Debug, Schema)]
     struct Config {
