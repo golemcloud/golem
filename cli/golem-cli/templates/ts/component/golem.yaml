@@ -1,0 +1,8 @@
+# golem-app-manifest-header
+
+components:
+  componentname:
+    templates: ts
+
+    # golem-app-manifest-env-doc
+    env:
