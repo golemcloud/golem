@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -555,6 +555,29 @@ pub trait TestDsl {
                 .map(|s| format!("{s:?}"))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ))
+    }
+
+    #[tracing::instrument(level = "info", skip(self, timeout), fields(%worker_id))]
+    async fn wait_for_component_revision(
+        &self,
+        worker_id: &WorkerId,
+        target_revision: ComponentRevision,
+        timeout: Duration,
+    ) -> anyhow::Result<WorkerMetadataDto> {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            let metadata = self.get_worker_metadata(worker_id).await?;
+
+            if metadata.component_revision >= target_revision {
+                return Ok(metadata);
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(anyhow!(
+            "Timeout waiting for worker {worker_id} to reach component revision {target_revision}"
         ))
     }
 
