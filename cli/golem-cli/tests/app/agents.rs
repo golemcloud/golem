@@ -36,19 +36,61 @@ async fn test_rust_counter() {
         .await;
     assert!(outputs.success_or_dump());
 
-    let uuid = Uuid::new_v4().to_string();
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("app:counter/counter-agent(\"{uuid}\")"),
-            "increment",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
+    // Test with CLI invoke
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::AGENT,
+                cmd::INVOKE,
+                &format!("app:counter/counter-agent(\"{uuid}\")"),
+                "increment",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+        assert!(outputs.stdout_contains("- 1"));
+    }
 
-    assert!(outputs.stdout_contains("- 1"));
+    // Test with TS REPL
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                cmd::REPL,
+                flag::LANGUAGE,
+                "ts",
+                flag::SCRIPT,
+                &format!("CounterAgent.get(\"{uuid}\").increment()"),
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(vec!["Preparing TypeScript REPL", "1"]));
+        assert!(outputs.stderr_contains_ordered(vec!["> awaiting Promise<number>"]));
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+    }
+
+    // TODO: fix "no debug for future"
+    // Test with Rust REPL
+    // {
+    //     let uuid = Uuid::new_v4().to_string();
+    //     let outputs = ctx
+    //         .cli([
+    //             cmd::REPL,
+    //             flag::LANGUAGE,
+    //             "rust",
+    //             flag::SCRIPT,
+    //             &format!("CounterAgent::get(\"{uuid}\").increment()"),
+    //         ])
+    //         .await;
+    //     assert!(outputs.success_or_dump());
+    //     assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
+    //     assert!(!outputs.stdout_contains("error"));
+    //     assert!(!outputs.stderr_contains("error"));
+    // }
 }
 
 #[test]
@@ -137,7 +179,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         cmd.extend_from_slice(args);
 
         let outputs = ctx.cli(cmd).await;
-        assert!(outputs.success(), "function {func} failed");
+        assert!(outputs.success_or_dump(), "function {func} failed");
     }
 
     run_and_assert(&ctx, "get-id", &[]).await;
@@ -479,19 +521,61 @@ async fn test_ts_counter() {
         .await;
     assert!(outputs.success_or_dump());
 
-    let uuid = Uuid::new_v4().to_string();
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("app:counter/counter-agent(\"{uuid}\")"),
-            "increment",
-        ])
-        .await;
-    assert!(outputs.success_or_dump());
+    // Test with CLI invoke
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::AGENT,
+                cmd::INVOKE,
+                &format!("app:counter/counter-agent(\"{uuid}\")"),
+                "increment",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+        assert!(outputs.stdout_contains("- 1"));
+    }
 
-    assert!(outputs.stdout_contains("- 1"));
+    // Test with TS REPL
+    {
+        let uuid = Uuid::new_v4().to_string();
+        let outputs = ctx
+            .cli([
+                cmd::REPL,
+                flag::LANGUAGE,
+                "ts",
+                flag::SCRIPT,
+                &format!("CounterAgent.get(\"{uuid}\").increment()"),
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert!(outputs.stdout_contains_ordered(vec!["Preparing TypeScript REPL", "1"]));
+        assert!(outputs.stderr_contains_ordered(vec!["> awaiting Promise<number>"]));
+        assert!(!outputs.stdout_contains("error"));
+        assert!(!outputs.stderr_contains("error"));
+    }
+
+    // TODO: fix "no debug for future"
+    // Test with Rust REPL
+    // {
+    //     let uuid = Uuid::new_v4().to_string();
+    //     let outputs = ctx
+    //         .cli([
+    //             cmd::REPL,
+    //             flag::LANGUAGE,
+    //             "rust",
+    //             flag::SCRIPT,
+    //             &format!("CounterAgent::get(\"{uuid}\").increment()"),
+    //         ])
+    //         .await;
+    //     assert!(outputs.success_or_dump());
+    //     assert!(outputs.stdout_contains_ordered(vec!["Preparing Rust REPL", "1"]));
+    //     assert!(!outputs.stdout_contains("error"));
+    //     assert!(!outputs.stderr_contains("error"));
+    // }
 }
 
 // Invocations on code-first typescript agents, with complex types / functions.
@@ -583,7 +667,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         cmd.extend_from_slice(args);
 
         let outputs = ctx.cli(cmd).await;
-        assert!(outputs.success(), "function {func} failed");
+        assert!(outputs.success_or_dump(), "function {func} failed");
     }
 
     // fun with void return

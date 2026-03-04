@@ -45,6 +45,7 @@ export type SnippetCompletion = {
 const SNIPPET_FILE_NAME = '__snippet__.ts';
 
 export class LanguageService {
+  private readonly config: Config;
   private readonly snippetImports;
   private project: tsm.Project;
   private snippetHistory: string;
@@ -53,6 +54,7 @@ export class LanguageService {
   private snippetStartPos: number;
 
   constructor(config: Config, replCliFlags: ReplCliFlags) {
+    this.config = config;
     this.snippetImports = replCliFlags.disableAutoImports
       ? ''
       : Object.entries(config.agents)
@@ -134,8 +136,30 @@ export class LanguageService {
 
     let formattedInfo = '';
 
+    let remoteMethodExpansion: string | undefined;
+    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
+    if (typeInfo) {
+      const checker = this.project.getTypeChecker();
+      const parameterNames = this.getRemoteMethodParameterNames(
+        typeInfo.fullExpressionNode,
+        checker,
+      );
+      remoteMethodExpansion = getRemoteMethodExpansion(
+        typeInfo.type,
+        typeInfo.fullExpressionNode,
+        checker,
+        parameterNames,
+      );
+    }
+
     if (info.displayParts?.length) {
-      formattedInfo += formatDisplayParts(info.displayParts);
+      formattedInfo += formatDisplayParts(info.displayParts, {
+        elideRemoteMethodGenerics: Boolean(remoteMethodExpansion),
+      });
+    }
+
+    if (remoteMethodExpansion) {
+      formattedInfo += formatTypeText(`<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`);
     }
 
     return { formattedInfo };
@@ -147,32 +171,29 @@ export class LanguageService {
     const snippet = this.getSnippet();
     if (!snippet) return;
 
-    const node = snippet.getDescendantAtPos(this.snippetEndPos);
-    if (!node) return;
+    const typeInfo = getTypeAtSnippetPosition(snippet, this.snippetEndPos);
+    if (!typeInfo) return;
 
-    const fullExpressionNode = getFullExpression(node);
-    if (fullExpressionNode.getKind() === ts.SyntaxKind.SourceFile) {
-      return;
-    }
+    const typeIsPromise = isPromise(typeInfo.type);
+    const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(typeInfo.type);
 
-    let nodeType;
-    try {
-      nodeType = fullExpressionNode.getType();
-    } catch (e) {
-      console.error();
-      console.error('If you see this, please report it!');
-      console.error(fullExpressionNode);
-      console.error(e);
-      console.error();
-    }
-    if (!nodeType) return;
-
-    const typeIsPromise = isPromise(nodeType);
-    const typeAsLiteralType = typeIsPromise ? undefined : asLiteralType(nodeType);
-
-    const typeText = typeAsLiteralType
+    const checker = this.project.getTypeChecker();
+    let typeText = typeAsLiteralType
       ? typeAsLiteralType
-      : this.project.getTypeChecker().getTypeText(nodeType, fullExpressionNode);
+      : checker.getTypeText(typeInfo.type, typeInfo.fullExpressionNode);
+    const parameterNames = this.getRemoteMethodParameterNames(typeInfo.fullExpressionNode, checker);
+    const remoteMethodExpansion = getRemoteMethodExpansion(
+      typeInfo.type,
+      typeInfo.fullExpressionNode,
+      checker,
+      parameterNames,
+    );
+    if (remoteMethodExpansion) {
+      typeText = REMOTE_METHOD_ALIAS;
+    }
+    if (remoteMethodExpansion) {
+      typeText = `${typeText}<...> = {\n${indentTypeBlock(remoteMethodExpansion)}\n}`;
+    }
 
     const formattedType = formatTypeText(typeText);
 
@@ -333,7 +354,18 @@ export class LanguageService {
         const signatures = propType.getCallSignatures();
         if (signatures.length === 0) return;
         const rawTypeText = checker.getTypeText(propType, clientDecl);
-        const typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        let typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        const methodParameterNames =
+          this.config.agents[agentTypeName]?.methodParameterNames?.[symbol.getName()];
+        const remoteMethodSignature = getRemoteMethodClientSignature(
+          propType,
+          checker,
+          clientDecl,
+          methodParameterNames,
+        );
+        if (remoteMethodSignature) {
+          typeText = remoteMethodSignature;
+        }
         return {
           name: symbol.getName(),
           signature: formatTypeText(typeText),
@@ -384,6 +416,61 @@ export class LanguageService {
       replaceStart: replaceRange.replaceStart,
       replaceEnd: replaceRange.replaceEnd,
     };
+  }
+
+  private getRemoteMethodParameterNames(
+    fullExpressionNode: tsm.Node,
+    checker: tsm.TypeChecker,
+  ): string[] | undefined {
+    const access = getRemoteMethodAccessExpression(fullExpressionNode);
+    if (!access) return;
+
+    const methodName = getRemoteMethodName(access);
+    if (!methodName) return;
+
+    const agentTypeName = this.getAgentTypeNameForAccess(access, checker);
+    return this.lookupMethodParameterNames(methodName, agentTypeName);
+  }
+
+  private lookupMethodParameterNames(
+    methodName: string,
+    agentTypeName?: string,
+  ): string[] | undefined {
+    if (agentTypeName) {
+      return this.config.agents[agentTypeName]?.methodParameterNames?.[methodName];
+    }
+
+    let found: string[] | undefined;
+    for (const agentConfig of Object.values(this.config.agents)) {
+      const args = agentConfig.methodParameterNames?.[methodName];
+      if (!args) continue;
+      if (found) {
+        return undefined;
+      }
+      found = args;
+    }
+
+    return found;
+  }
+
+  private getAgentTypeNameForAccess(
+    access: tsm.PropertyAccessExpression | tsm.ElementAccessExpression,
+    checker: tsm.TypeChecker,
+  ): string | undefined {
+    const agentTypeNames = Object.keys(this.config.agents);
+    if (!agentTypeNames.length) return;
+
+    const receiver = access.getExpression();
+    const direct = getAgentTypeNameFromReceiver(receiver, agentTypeNames);
+    if (direct) return direct;
+
+    try {
+      const receiverType = receiver.getType();
+      const typeText = checker.getTypeText(receiverType, receiver);
+      return matchAgentTypeNameInTypeText(typeText, agentTypeNames);
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -1139,7 +1226,14 @@ function getSymbolType(symbol: tsm.Symbol, checker: tsm.TypeChecker): tsm.Type |
   return checker.getTypeAtLocation(decl);
 }
 
-function formatDisplayParts(parts: Array<{ text: string; kind: string }>): string {
+function formatDisplayParts(
+  parts: Array<{ text: string; kind: string }>,
+  options?: { elideRemoteMethodGenerics?: boolean },
+): string {
+  if (options?.elideRemoteMethodGenerics) {
+    const infoText = ts.displayPartsToString(parts as ts.SymbolDisplayPart[]);
+    return formatTypeText(elideRemoteMethodGenerics(infoText));
+  }
   return parts.map((p) => colorizePart(p.kind, p.text)).join('');
 }
 
@@ -1172,6 +1266,190 @@ function formatTypeText(typeText: string): string {
   }
 
   return formatDisplayParts(parts);
+}
+
+function elideRemoteMethodGenerics(text: string): string {
+  const needle = `${REMOTE_METHOD_ALIAS}<`;
+  let result = '';
+  let i = 0;
+
+  while (i < text.length) {
+    const idx = text.indexOf(needle, i);
+    if (idx === -1) {
+      result += text.slice(i);
+      break;
+    }
+
+    result += text.slice(i, idx + REMOTE_METHOD_ALIAS.length);
+    let cursor = idx + REMOTE_METHOD_ALIAS.length;
+
+    if (text[cursor] !== '<') {
+      i = cursor;
+      continue;
+    }
+
+    let depth = 0;
+    let closed = false;
+    for (; cursor < text.length; cursor++) {
+      const ch = text[cursor];
+      if (ch === '<') {
+        depth++;
+      } else if (ch === '>') {
+        depth--;
+        if (depth === 0) {
+          cursor++;
+          closed = true;
+          break;
+        }
+      }
+    }
+
+    i = closed ? cursor : text.length;
+  }
+
+  return result;
+}
+
+const REMOTE_METHOD_ALIAS = 'RemoteMethod';
+const IMPORT_TYPE_PREFIX = /import\([^)]*\)\./g;
+
+function getRemoteMethodExpansion(
+  type: tsm.Type,
+  node: tsm.Node,
+  checker: tsm.TypeChecker,
+  parameterNames?: string[],
+): string | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
+
+  const aliasArgs = type.getAliasTypeArguments();
+  if (aliasArgs.length < 2) return;
+
+  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, node, parameterNames);
+  const returnText = checker
+    .getTypeText(aliasArgs[1], node, ts.TypeFormatFlags.NoTruncation)
+    .replace(IMPORT_TYPE_PREFIX, '')
+    .trim();
+
+  const scheduleAtText = getRemoteMethodScheduleParam(type, checker, node);
+  const scheduleArgs = argsText ? `${scheduleAtText}, ${argsText}` : scheduleAtText;
+
+  const lines = [
+    `(${argsText}): Promise<${returnText}>;`,
+    `trigger: (${argsText}) => void;`,
+    `schedule: (${scheduleArgs}) => void;`,
+  ];
+
+  return lines.map((line) => line.replace(/\(\)/g, '()')).join('\n');
+}
+
+function getRemoteMethodClientSignature(
+  type: tsm.Type,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+  parameterNames?: string[],
+): string | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol || aliasSymbol.getName() !== REMOTE_METHOD_ALIAS) return;
+
+  const aliasArgs = type.getAliasTypeArguments();
+  if (aliasArgs.length < 2) return;
+
+  const argsText = formatRemoteMethodArgs(aliasArgs[0], checker, location, parameterNames);
+  const returnText = checker
+    .getTypeText(aliasArgs[1], location, ts.TypeFormatFlags.NoTruncation)
+    .replace(IMPORT_TYPE_PREFIX, '')
+    .trim();
+
+  return `(${argsText}) => ${returnText}`;
+}
+
+function formatRemoteMethodArgs(
+  argsType: tsm.Type,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+  parameterNames?: string[],
+): string {
+  const tupleType = argsType.isTuple()
+    ? argsType
+    : argsType.getApparentType().isTuple()
+      ? argsType.getApparentType()
+      : undefined;
+
+  if (tupleType) {
+    const tupleElements = tupleType.getTupleElements();
+    if (!tupleElements.length) return '';
+    return tupleElements
+      .map((elementType, index) => {
+        const name = parameterNames?.[index] ?? parameterNameForIndex(index);
+        const typeText = checker
+          .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
+          .replace(IMPORT_TYPE_PREFIX, '')
+          .trim();
+        return `${name}: ${typeText}`;
+      })
+      .join(', ');
+  }
+
+  const elementType =
+    argsType.getArrayElementType() ??
+    argsType.getNumberIndexType() ??
+    argsType.getApparentType().getArrayElementType() ??
+    argsType.getApparentType().getNumberIndexType();
+
+  if (elementType) {
+    const typeText = checker
+      .getTypeText(elementType, location, ts.TypeFormatFlags.NoTruncation)
+      .replace(IMPORT_TYPE_PREFIX, '')
+      .trim();
+    const restName = parameterNames?.[0] ?? 'args';
+    return `...${restName}: ${typeText}`;
+  }
+
+  const fallbackTypeText = checker
+    .getTypeText(argsType, location, ts.TypeFormatFlags.NoTruncation)
+    .replace(IMPORT_TYPE_PREFIX, '')
+    .trim();
+  return `...args: ${fallbackTypeText}`;
+}
+
+function getRemoteMethodScheduleParam(
+  type: tsm.Type,
+  checker: tsm.TypeChecker,
+  location: tsm.Node,
+): string {
+  const apparent = type.getApparentType();
+  const scheduleProp = apparent.getProperty('schedule') ?? type.getProperty('schedule');
+  if (scheduleProp) {
+    const scheduleType = checker.getTypeOfSymbolAtLocation(scheduleProp, location);
+    const signature = scheduleType.getCallSignatures()[0];
+    const param = signature?.getParameters()[0];
+    if (param) {
+      const paramType = checker.getTypeOfSymbolAtLocation(param, location);
+      const paramText = checker
+        .getTypeText(paramType, location, ts.TypeFormatFlags.NoTruncation)
+        .replace(IMPORT_TYPE_PREFIX, '')
+        .trim();
+      if (paramText) {
+        return `scheduleAt: ${paramText}`;
+      }
+    }
+  }
+  return 'scheduleAt: string';
+}
+
+function parameterNameForIndex(index: number): string {
+  if (index >= 0 && index < 26) {
+    return String.fromCharCode('a'.charCodeAt(0) + index);
+  }
+  return `arg${index}`;
+}
+
+function indentTypeBlock(text: string, indent = '  '): string {
+  return text
+    .split('\n')
+    .map((line) => indent + line)
+    .join('\n');
 }
 
 function tokenKindToDisplayPartKind(kind: ts.SyntaxKind): string {
@@ -1327,4 +1605,97 @@ function lastNonWhitespaceIndex(text: string): number {
     if (!/\s/.test(text[i])) return i;
   }
   return -1;
+}
+
+function getTypeAtSnippetPosition(
+  snippet: tsm.SourceFile,
+  pos: number,
+): { fullExpressionNode: tsm.Node; type: tsm.Type } | undefined {
+  if (pos < 0) return;
+  const node = snippet.getDescendantAtPos(pos);
+  if (!node) return;
+
+  const fullExpressionNode = getFullExpression(node);
+  if (fullExpressionNode.getKind() === ts.SyntaxKind.SourceFile) return;
+
+  try {
+    const type = fullExpressionNode.getType();
+    return { fullExpressionNode, type };
+  } catch (e) {
+    console.error();
+    console.error('If you see this, please report it!');
+    console.error(fullExpressionNode);
+    console.error(e);
+    console.error();
+  }
+}
+
+function getRemoteMethodAccessExpression(
+  node: tsm.Node,
+): tsm.PropertyAccessExpression | tsm.ElementAccessExpression | undefined {
+  const target = tsm.Node.isCallExpression(node) ? node.getExpression() : node;
+  if (tsm.Node.isPropertyAccessExpression(target) || tsm.Node.isElementAccessExpression(target)) {
+    return target;
+  }
+  return undefined;
+}
+
+function getRemoteMethodName(
+  access: tsm.PropertyAccessExpression | tsm.ElementAccessExpression,
+): string | undefined {
+  if (tsm.Node.isPropertyAccessExpression(access)) {
+    return access.getName();
+  }
+
+  const arg = access.getArgumentExpression();
+  if (!arg) return;
+  if (tsm.Node.isStringLiteral(arg) || tsm.Node.isNoSubstitutionTemplateLiteral(arg)) {
+    return arg.getLiteralText();
+  }
+  return undefined;
+}
+
+function getAgentTypeNameFromReceiver(
+  receiver: tsm.Expression,
+  agentTypeNames: string[],
+): string | undefined {
+  if (tsm.Node.isCallExpression(receiver)) {
+    const called = receiver.getExpression();
+    if (tsm.Node.isPropertyAccessExpression(called) && called.getName() === 'get') {
+      const base = called.getExpression();
+      if (tsm.Node.isIdentifier(base)) {
+        const name = base.getText();
+        if (agentTypeNames.includes(name)) {
+          return name;
+        }
+      }
+    }
+  }
+
+  if (tsm.Node.isIdentifier(receiver)) {
+    const name = receiver.getText();
+    if (agentTypeNames.includes(name)) {
+      return name;
+    }
+  }
+
+  return undefined;
+}
+
+function matchAgentTypeNameInTypeText(
+  typeText: string,
+  agentTypeNames: string[],
+): string | undefined {
+  const sorted = [...agentTypeNames].sort((a, b) => b.length - a.length);
+  for (const name of sorted) {
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`);
+    if (pattern.test(typeText)) {
+      return name;
+    }
+  }
+  return undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -57,7 +57,10 @@ impl CliReplInterop {
     pub fn complete(&self, line: &str, pos: usize) -> Option<CompletionResult> {
         let line_prefix = line.get(..pos)?;
         let trimmed_start = line_prefix.trim_start();
-        let start_trimmed = trimmed_start.strip_prefix(':')?;
+        let start_trimmed = match trimmed_start.strip_prefix(':') {
+            Some(value) => value,
+            None => trimmed_start.strip_prefix('.')?,
+        };
 
         let ends_with_space = line_prefix.chars().last().is_some_and(char::is_whitespace);
         let tokens = parse_raw_args(start_trimmed);
@@ -159,7 +162,10 @@ impl CliReplInterop {
         let trimmed_start = line.trim_start();
         let start_trimmed = match trimmed_start.strip_prefix(':') {
             Some(value) => value.trim_start(),
-            None => return Ok(false),
+            None => match trimmed_start.strip_prefix('.') {
+                Some(value) => value.trim_start(),
+                None => return Ok(false),
+            },
         };
         if start_trimmed.is_empty() {
             return Ok(false);
@@ -170,17 +176,18 @@ impl CliReplInterop {
             Some((name, rest)) => (name.clone(), rest.to_vec()),
             None => return Ok(false),
         };
+        let normalized_command = command_name.replace('_', "-");
 
-        if command_name == "help" {
+        if normalized_command == "help" {
             self.print_help();
             return Ok(true);
         }
 
-        if self.builtin_commands.contains_key(&command_name) {
+        if self.builtin_commands.contains_key(&normalized_command) {
             return Ok(false);
         }
 
-        let command = match self.commands_by_name.get(&command_name) {
+        let command = match self.commands_by_name.get(&normalized_command) {
             Some(command) => command,
             None => return Ok(false),
         };
@@ -667,22 +674,10 @@ fn command_path_to_repl_command_name(segments: &[String]) -> String {
         .iter()
         .flat_map(|segment| segment.split(&['-', '_'][..]))
         .filter(|segment| !segment.is_empty())
-        .map(|segment| segment.to_string())
+        .map(|segment| segment.to_ascii_lowercase())
         .collect();
 
-    let mut result = String::new();
-    for (index, part) in parts.iter().enumerate() {
-        if index == 0 {
-            result.push_str(&part.to_lowercase());
-        } else {
-            let mut chars = part.chars();
-            if let Some(first) = chars.next() {
-                result.push(first.to_ascii_uppercase());
-                result.push_str(&chars.as_str().to_ascii_lowercase());
-            }
-        }
-    }
-    result
+    parts.join("-")
 }
 
 fn parse_raw_args(raw_args: &str) -> Vec<String> {
