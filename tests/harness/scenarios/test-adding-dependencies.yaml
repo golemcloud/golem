@@ -1,0 +1,6 @@
+name: "test-adding-dependencies"
+steps:
+  - id: "add-dep"
+    prompt: "I want to add a new dependency called `rand` to `golem-common`. Make sure you read the adding-dependencies skill first."
+    expectedSkills:
+      - "adding-dependencies"

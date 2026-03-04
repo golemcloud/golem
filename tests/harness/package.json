@@ -1,0 +1,27 @@
+{
+  "name": "golem-skill-harness",
+  "version": "0.1.0",
+  "description": "Skill testing harness for Golem coding agents",
+  "type": "module",
+  "main": "dist/src/run.js",
+  "scripts": {
+    "start": "tsx src/run.ts",
+    "test": "node --test dist/tests/**/*.test.js",
+    "build": "tsc",
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --no-error-on-unmatched-pattern",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
+  },
+  "dependencies": {
+    "yaml": "^2.3.4",
+    "tsx": "^4.7.0",
+    "zod": "^3.22.4",
+    "jsonpath-plus": "^10.4.0",
+    "chalk": "^5.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.6",
+    "eslint": "^8.56.0",
+    "prettier": "^3.1.1"
+  }
+}
