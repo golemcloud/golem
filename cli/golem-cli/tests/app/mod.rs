@@ -303,6 +303,8 @@ impl TestContext {
             "true".to_string(),
         );
 
+        env.insert("NO_COLOR".to_string(), "1".to_string());
+
         for key in [
             "GOLEM_RUST_PATH",
             "GOLEM_RUST_VERSION",
