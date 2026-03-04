@@ -102,7 +102,17 @@ impl Repl {
                     .map(|name| (name.to_string(), desc.trim_start().to_string()))
             })
             .collect::<HashMap<String, String>>();
-        Ok(commands)
+
+        let mut kebab_commands = HashMap::new();
+        for (name, desc) in commands {
+            kebab_commands.insert(name.replace('_', "-"), desc);
+        }
+
+        if let Some(desc) = kebab_commands.get("quit").cloned() {
+            kebab_commands.insert("exit".to_string(), desc);
+        }
+
+        Ok(kebab_commands)
     }
 
     fn build_editor(
@@ -264,10 +274,11 @@ impl Repl {
                     }
 
                     let result = {
-                        let is_builtin = line.trim_start().starts_with(':');
+                        let line_start = line.trim_start();
+                        let is_builtin = line_start.starts_with(':') || line_start.starts_with('.');
 
                         let command = if is_builtin {
-                            line.clone()
+                            normalize_builtin_line(&line).unwrap_or_else(|| line.clone())
                         } else {
                             format!("golem_repl_configure_clients();\n{}", line)
                         };
@@ -560,6 +571,26 @@ fn open_tty_writer() -> Option<Box<dyn FnMut(String) + Send + 'static>> {
         let _ = file.write_all(text.as_bytes());
         let _ = file.flush();
     }))
+}
+
+fn normalize_builtin_line(line: &str) -> Option<String> {
+    let leading_len = line.chars().take_while(|c| c.is_whitespace()).count();
+    let (leading_ws, rest) = line.split_at(leading_len);
+    let rest = rest.strip_prefix(':').or_else(|| rest.strip_prefix('.'))?;
+    let rest_trimmed = rest.trim_start();
+    if rest_trimmed.is_empty() {
+        return None;
+    }
+    let ws_after_prefix = &rest[..rest.len() - rest_trimmed.len()];
+    let split_idx = rest_trimmed
+        .find(char::is_whitespace)
+        .unwrap_or(rest_trimmed.len());
+    let command = &rest_trimmed[..split_idx];
+    let remainder = &rest_trimmed[split_idx..];
+    let normalized_command = command.replace('-', "_");
+    Some(format!(
+        "{leading_ws}:{ws_after_prefix}{normalized_command}{remainder}"
+    ))
 }
 
 struct ReplRustyLineEditorHelper {

@@ -237,7 +237,7 @@ impl ResolvedEnvironmentIdentity {
                     "The current environment {} has no deployment.",
                     self.text_format()
                 ));
-                logln("Use 'golem deploy' for deploying, or select a different environment.");
+                logln("Use the 'golem deploy' CLI command, or the '.deploy' REPL command, or select a different environment.");
                 logln("");
                 Ok(R::default())
             }

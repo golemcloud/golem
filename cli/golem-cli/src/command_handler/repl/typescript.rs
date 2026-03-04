@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::extract_agent_type::extract_and_store_agent_types;
 use crate::app::build::task_result_marker::GenerateBridgeReplMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
@@ -25,6 +26,8 @@ use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::model::GuestLanguage;
 use crate::process::{CommandExt, ExitStatusExt};
 use crate::{binary_path_to_string, fs};
+use golem_common::model::agent::DataSchema;
+use golem_common::model::component::ComponentName;
 use heck::ToLowerCamelCase;
 use indoc::formatdoc;
 use itertools::Itertools;
@@ -89,7 +92,10 @@ impl TypeScriptRepl {
         )?)?
         .replace("\\", "/");
 
-        new_task_up_to_date_check(&BuildContext::new(app_ctx, &BuildConfig::new()))
+        let build_config = BuildConfig::new();
+        let build_ctx = BuildContext::new(app_ctx, &build_config);
+
+        new_task_up_to_date_check(&build_ctx)
             .with_task_result_marker(GenerateBridgeReplMarkerHash {
                 language: GuestLanguage::TypeScript,
                 agent_type_names: repl_metadata.agents.keys().sorted().as_slice(),
@@ -115,7 +121,20 @@ impl TypeScriptRepl {
                         &relative_bridge_sdk_unix_path,
                         &tsconfig_json_path,
                     )?;
-                    self.generate_repl_ts(args, &repl_metadata, &repl_ts_path)?;
+
+                    let method_parameter_names = self
+                        .collect_agent_method_parameter_names(
+                            &build_ctx,
+                            &args.component_names,
+                            &repl_metadata,
+                        )
+                        .await?;
+                    self.generate_repl_ts(
+                        args,
+                        &repl_metadata,
+                        &method_parameter_names,
+                        &repl_ts_path,
+                    )?;
 
                     Command::new("npm")
                         .arg("install")
@@ -212,6 +231,7 @@ impl TypeScriptRepl {
         &self,
         args: &BridgeReplArgs,
         repl_metadata: &ReplMetadata,
+        method_parameter_names: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
         repl_ts_path: &Path,
     ) -> anyhow::Result<()> {
         let agents_config = repl_metadata
@@ -220,10 +240,15 @@ impl TypeScriptRepl {
             .map(|agent_type_name| {
                 let client_package_name = bridge_client_directory_name(agent_type_name);
                 let client_package_imported_name = client_package_name.to_lower_camel_case();
+                let parameter_names_json = method_parameter_names
+                    .get(agent_type_name.as_str())
+                    .map(serde_json::to_string)
+                    .unwrap_or_else(|| Ok("{}".to_string()))?;
                 Ok::<String, anyhow::Error>(formatdoc! {"
                     '{agent_type_name}': {{
                       clientPackageName: {client_package_name},
                       clientPackageImportedName: {client_package_imported_name},
+                      methodParameterNames: {parameter_names_json},
                       package: await import({client_package_name}),
                     }}",
                     client_package_name = js_string_literal(client_package_name)?,
@@ -267,6 +292,47 @@ impl TypeScriptRepl {
         };
 
         fs::write_str(repl_ts_path, repl_ts)
+    }
+
+    async fn collect_agent_method_parameter_names(
+        &self,
+        build_ctx: &BuildContext<'_>,
+        component_names: &[ComponentName],
+        repl_metadata: &ReplMetadata,
+    ) -> anyhow::Result<BTreeMap<String, BTreeMap<String, Vec<String>>>> {
+        let mut method_parameter_names = BTreeMap::new();
+        let agent_type_names = repl_metadata
+            .agents
+            .keys()
+            .map(|name| name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for component_name in component_names {
+            let agent_types = extract_and_store_agent_types(build_ctx, component_name).await?;
+
+            for agent_type in agent_types {
+                if !agent_type_names.contains(agent_type.type_name.as_str()) {
+                    continue;
+                }
+
+                let entry = method_parameter_names
+                    .entry(agent_type.type_name.as_str().to_string())
+                    .or_insert_with(BTreeMap::new);
+
+                for method in agent_type.methods {
+                    let args = match method.input_schema {
+                        DataSchema::Tuple(schema) | DataSchema::Multimodal(schema) => schema
+                            .elements
+                            .into_iter()
+                            .map(|element| element.name)
+                            .collect(),
+                    };
+                    entry.entry(method.name).or_insert(args);
+                }
+            }
+        }
+
+        Ok(method_parameter_names)
     }
 
     async fn prepare_command(&self, args: &BridgeReplArgs) -> anyhow::Result<Command> {
