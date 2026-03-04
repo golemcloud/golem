@@ -137,6 +137,8 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> = Arc::new(TestAuthService::new(
             self.regular_worker_executor_context.context.clone(),
@@ -164,6 +166,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         let resource_limits = resource_limits::configured(
             &ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
             registry_service.clone(),
+            shutdown_token.clone(),
         );
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -196,7 +199,9 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             resource_limits.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            shutdown_token.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -227,9 +232,11 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         Ok(All::new(
@@ -260,7 +267,9 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            shutdown_token,
             additional_deps,
+            leak_sentinel,
         ))
     }
 

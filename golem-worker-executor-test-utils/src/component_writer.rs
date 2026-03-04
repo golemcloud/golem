@@ -392,6 +392,55 @@ impl FileSystemComponentWriter {
         Ok(component)
     }
 
+    /// Pre-warms the analysis cache for a given WASM component file.
+    /// This performs the expensive `extract_agent_types` and metadata analysis
+    /// ahead of time so that subsequent `write_component_to_filesystem` calls
+    /// for the same WASM binary hit the cache instead of doing cold compilation.
+    #[tracing::instrument(level = "info", skip_all, fields(source_path = %source_path.display()))]
+    pub async fn warm_cache(&self, source_path: &Path) -> anyhow::Result<()> {
+        info!("Pre-warming analysis cache for {}", source_path.display());
+        let start = std::time::Instant::now();
+
+        let content = tokio::fs::read(source_path).await?;
+        let blake3_hash = blake3::hash(&content);
+
+        self.analysis_cache
+            .get_or_insert_simple(&blake3_hash, async || {
+                info!(
+                    "Compiling and analyzing {} (hash {blake3_hash})",
+                    source_path.display()
+                );
+
+                let (raw_component_metadata, memories, exports) =
+                    Self::analyze_memories_and_exports(source_path)
+                        .await
+                        .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
+
+                let agent_types = extract_agent_types(source_path, false, true)
+                    .await
+                    .map_err(|err| format!("Failed analyzing component: {err}"))?;
+
+                Ok(CachedAnalysis {
+                    memories,
+                    exports,
+                    agent_types,
+                    root_package_name: raw_component_metadata.root_package_name,
+                    root_package_version: raw_component_metadata.root_package_version,
+                })
+            })
+            .await
+            .map_err(|err| anyhow!("{err}"))?;
+
+        let elapsed = start.elapsed();
+        info!(
+            "Pre-warming complete for {} in {:.2}s",
+            source_path.display(),
+            elapsed.as_secs_f64()
+        );
+
+        Ok(())
+    }
+
     pub async fn get_latest_revision(&self, component_id: &ComponentId) -> ComponentRevision {
         if let Some(rev) = self.latest_revisions.lock().unwrap().get(component_id) {
             return *rev;

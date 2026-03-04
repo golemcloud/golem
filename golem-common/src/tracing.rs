@@ -44,6 +44,7 @@ pub enum Output {
     Stderr,
     File,
     TracingConsole,
+    Otlp,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -523,7 +524,7 @@ where
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
         result_tracer = Some(tracer);
 
-        layers.push(telemetry.boxed());
+        layers.push(telemetry.with_filter(make_filter(Output::Otlp)).boxed());
     }
 
     if config.stdout.enabled {

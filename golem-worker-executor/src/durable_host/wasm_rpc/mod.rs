@@ -549,7 +549,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
-        wasmtime_wasi::dynamic_subscribe(self.table(), this, None)
+        Ok(wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?)
     }
 
     async fn get(

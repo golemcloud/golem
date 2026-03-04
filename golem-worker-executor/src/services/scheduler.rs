@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, span, warn, Instrument, Level};
 
 #[async_trait]
@@ -141,6 +142,7 @@ impl SchedulerServiceDefault {
         oplog_service: Arc<dyn OplogService>,
         worker_service: Arc<dyn WorkerService>,
         process_interval: Duration,
+        shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
             key_value_storage,
@@ -153,11 +155,24 @@ impl SchedulerServiceDefault {
         };
         let svc = Arc::new(svc);
         let background_handle = {
-            let svc = svc.clone();
+            let svc_weak = Arc::downgrade(&svc);
             tokio::spawn(
                 async move {
                     loop {
-                        tokio::time::sleep(process_interval).await;
+                        tokio::select! {
+                            _ = shutdown_token.cancelled() => {
+                                info!("Shutdown requested, stopping scheduler background loop");
+                                break;
+                            }
+                            _ = tokio::time::sleep(process_interval) => {}
+                        }
+                        let svc = match svc_weak.upgrade() {
+                            Some(s) => s,
+                            None => {
+                                info!("Scheduler service dropped, stopping background loop");
+                                break;
+                            }
+                        };
                         if svc.shard_service.is_ready() {
                             let r = svc.process(Utc::now()).await;
                             if let Err(err) = r {
@@ -454,6 +469,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::test;
+    use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
@@ -575,6 +591,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -706,6 +723,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -820,6 +838,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -938,6 +957,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -1053,6 +1073,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -1175,6 +1196,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
