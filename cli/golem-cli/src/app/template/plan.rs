@@ -15,155 +15,237 @@
 use crate::app::edit;
 use crate::app::template::generator::InMemoryFs;
 use crate::fs;
-use crate::log::{log_action, log_skipping_up_to_date};
-use anyhow::Context;
+use anyhow::{bail, Context};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TemplatePlanEntry {
+pub enum TemplatePlanStep {
     Create { new: String },
     Overwrite { current: String, new: String },
     Merge { current: String, new: String },
     SkipSame { current: String },
 }
 
-#[derive(Debug, Default, Clone)]
 pub struct TemplatePlan {
-    file_plans: BTreeMap<PathBuf, Vec<TemplatePlanLayerEntry>>,
-    existing_files: BTreeMap<PathBuf, String>,
+    file_steps: BTreeMap<PathBuf, anyhow::Result<TemplatePlanStep>>,
 }
 
 impl TemplatePlan {
+    pub fn file_steps(&self) -> &BTreeMap<PathBuf, anyhow::Result<TemplatePlanStep>> {
+        &self.file_steps
+    }
+
+    pub fn overwrites(&self) -> impl Iterator<Item = &Path> {
+        self.file_steps
+            .iter()
+            .filter_map(|(path, step)| match step {
+                Ok(TemplatePlanStep::Overwrite { .. }) => Some(path.as_ref()),
+                _ => None,
+            })
+    }
+
+    pub fn failed_plans(&self) -> impl Iterator<Item = (&PathBuf, &anyhow::Error)> {
+        self.file_steps
+            .iter()
+            .filter_map(|(path, step)| step.as_ref().err().map(|err| (path, err)))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TemplatePlanBuilder {
+    file_steps: BTreeMap<PathBuf, Vec<FallibleNamedTemplatePlanStep>>,
+}
+
+impl TemplatePlanBuilder {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn entries(&self) -> &BTreeMap<PathBuf, Vec<TemplatePlanLayerEntry>> {
-        &self.file_plans
+    pub fn entries(&self) -> &BTreeMap<PathBuf, Vec<FallibleNamedTemplatePlanStep>> {
+        &self.file_steps
     }
 
-    pub fn existing_files(&self) -> &BTreeMap<PathBuf, String> {
-        &self.existing_files
-    }
-
-    pub fn add(
-        &mut self,
-        name: impl Into<String>,
-        in_memory_fs: &InMemoryFs,
-    ) -> anyhow::Result<()> {
+    pub fn add(&mut self, name: impl Into<String>, in_memory_fs: &InMemoryFs) {
         let name = name.into();
         for (path, new) in in_memory_fs.files() {
-            let current = if let Some(existing) = self.latest_entry(path) {
-                Some(existing.planned_contents().to_string())
-            } else {
-                let current = path
-                    .exists()
-                    .then(|| fs::read_to_string(path))
-                    .transpose()?;
-                if let Some(loaded) = current.as_ref() {
-                    self.existing_files
-                        .entry(path.clone())
-                        .or_insert_with(|| loaded.clone());
-                }
-                current
+            let last_step = match self.last_step(path) {
+                Some(step) => Some(step.step.as_ref().ok()),
+                None => Some(None),
             };
 
-            let entry = match current {
-                None => TemplatePlanEntry::Create { new: new.clone() },
-                Some(current) => {
-                    if current == *new {
-                        TemplatePlanEntry::SkipSame { current }
-                    } else if let Some(merged) = try_merge(path, &current, new)? {
-                        if merged == current {
-                            TemplatePlanEntry::SkipSame { current }
-                        } else {
-                            TemplatePlanEntry::Merge {
-                                new: merged,
-                                current,
-                            }
-                        }
-                    } else {
-                        TemplatePlanEntry::Overwrite {
-                            current,
-                            new: new.clone(),
-                        }
-                    }
-                }
-            };
-
-            self.file_plans
-                .entry(path.clone())
-                .or_default()
-                .push(TemplatePlanLayerEntry {
-                    layer_name: name.clone(),
-                    entry,
-                });
-        }
-
-        Ok(())
-    }
-
-    pub fn apply(&self) -> anyhow::Result<()> {
-        for (path, layers) in &self.file_plans {
-            let Some(entry) = self.effective_entry(layers) else {
+            let Some(last_step) = last_step else {
                 continue;
             };
-            match entry {
-                TemplatePlanEntry::Create { new } => {
-                    log_action("Creating", format!("{}", path.display()));
-                    fs::write_str(path, new)?;
-                }
-                TemplatePlanEntry::Overwrite { new, .. } => {
-                    log_action("Overwriting", format!("{}", path.display()));
-                    fs::write_str(path, new)?;
-                }
-                TemplatePlanEntry::Merge { new, .. } => {
-                    log_action("Updating", format!("{}", path.display()));
-                    fs::write_str(path, new)?;
-                }
-                TemplatePlanEntry::SkipSame { .. } => {
-                    log_skipping_up_to_date(format!("updating {}", path.display()));
+
+            let next_step = self.plan_next_step_for_file(path, new, last_step);
+
+            self.file_steps
+                .entry(path.clone())
+                .or_default()
+                .push(FallibleNamedTemplatePlanStep {
+                    name: name.clone(),
+                    step: next_step,
+                });
+        }
+    }
+
+    fn plan_next_step_for_file(
+        &self,
+        path: &Path,
+        new: &str,
+        last_step: Option<&TemplatePlanStep>,
+    ) -> anyhow::Result<TemplatePlanStep> {
+        let current = if let Some(existing) = last_step {
+            Some(existing.planned_contents().to_string())
+        } else {
+            path.exists()
+                .then(|| fs::read_to_string(path))
+                .transpose()?
+        };
+
+        Ok(match current {
+            None => TemplatePlanStep::Create {
+                new: new.to_string(),
+            },
+            Some(current) => {
+                if current == *new {
+                    TemplatePlanStep::SkipSame { current }
+                } else if let Some(merged) = try_merge(path, &current, new)? {
+                    if merged == current {
+                        TemplatePlanStep::SkipSame { current }
+                    } else {
+                        TemplatePlanStep::Merge {
+                            new: merged,
+                            current,
+                        }
+                    }
+                } else {
+                    TemplatePlanStep::Overwrite {
+                        current,
+                        new: new.to_string(),
+                    }
                 }
             }
+        })
+    }
+
+    fn last_step(&self, path: &Path) -> Option<&FallibleNamedTemplatePlanStep> {
+        self.file_steps.get(path).and_then(|steps| steps.last())
+    }
+
+    pub fn build(self) -> TemplatePlan {
+        let mut file_steps = BTreeMap::new();
+
+        for (path, steps) in self.file_steps {
+            let flattened_step =
+                steps
+                    .into_iter()
+                    .map(|named_step| named_step.step)
+                    .reduce(|flattened, next| {
+                        let flattened = flattened?;
+                        let next = next?;
+
+                        Ok(match flattened {
+                            TemplatePlanStep::Create { .. } => match next {
+                                TemplatePlanStep::Create { .. } => {
+                                    bail!("Illegal template step sequence: Create, Create");
+                                }
+                                TemplatePlanStep::Overwrite { .. } => {
+                                    bail!("Illegal template step sequence: Create, Overwrite");
+                                }
+                                TemplatePlanStep::Merge { current: _, new } => {
+                                    TemplatePlanStep::Create { new }
+                                }
+                                TemplatePlanStep::SkipSame { current } => {
+                                    TemplatePlanStep::Create { new: current }
+                                }
+                            },
+                            TemplatePlanStep::Overwrite {
+                                current: prev_current,
+                                new: prev_new,
+                            } => match next {
+                                TemplatePlanStep::Create { .. } => {
+                                    bail!("Illegal template step sequence: Overwrite, Create");
+                                }
+                                TemplatePlanStep::Overwrite { current, new } => {
+                                    TemplatePlanStep::Overwrite { current, new }
+                                }
+                                TemplatePlanStep::Merge { .. } => {
+                                    bail!("Illegal template step sequence: Overwrite, Merge")
+                                }
+                                TemplatePlanStep::SkipSame { .. } => TemplatePlanStep::Overwrite {
+                                    current: prev_current,
+                                    new: prev_new,
+                                },
+                            },
+                            TemplatePlanStep::Merge {
+                                current: prev_current,
+                                new: prev_new,
+                            } => match next {
+                                TemplatePlanStep::Create { .. } => {
+                                    bail!("Illegal template step sequence: Merge, Create");
+                                }
+                                TemplatePlanStep::Overwrite { .. } => {
+                                    bail!("Illegal template step sequence: Merge, Overwrite");
+                                }
+                                TemplatePlanStep::Merge { current: _, new } => {
+                                    if prev_current == new {
+                                        TemplatePlanStep::SkipSame {
+                                            current: prev_current,
+                                        }
+                                    } else {
+                                        TemplatePlanStep::Merge {
+                                            current: prev_current,
+                                            new,
+                                        }
+                                    }
+                                }
+                                TemplatePlanStep::SkipSame { .. } => TemplatePlanStep::Merge {
+                                    current: prev_current,
+                                    new: prev_new,
+                                },
+                            },
+                            TemplatePlanStep::SkipSame { .. } => match next {
+                                TemplatePlanStep::Create { .. } => {
+                                    bail!("Illegal template step sequence: SkipSame, Create");
+                                }
+                                TemplatePlanStep::Overwrite { .. } => {
+                                    bail!("Illegal template step sequence: SkipSame, Overwrite");
+                                }
+                                TemplatePlanStep::Merge { current, new } => {
+                                    TemplatePlanStep::Merge { current, new }
+                                }
+                                TemplatePlanStep::SkipSame { current } => {
+                                    TemplatePlanStep::SkipSame { current }
+                                }
+                            },
+                        })
+                    });
+
+            if let Some(flattened_step) = flattened_step {
+                file_steps.insert(path.to_path_buf(), flattened_step);
+            }
         }
-        Ok(())
-    }
 
-    fn latest_entry(&self, path: &Path) -> Option<&TemplatePlanEntry> {
-        self.file_plans
-            .get(path)
-            .and_then(|layers| layers.last())
-            .map(|layer| &layer.entry)
-    }
-
-    fn effective_entry<'a>(
-        &self,
-        layers: &'a [TemplatePlanLayerEntry],
-    ) -> Option<&'a TemplatePlanEntry> {
-        layers
-            .iter()
-            .rev()
-            .find(|layer| !matches!(layer.entry, TemplatePlanEntry::SkipSame { .. }))
-            .map(|layer| &layer.entry)
-            .or_else(|| layers.last().map(|layer| &layer.entry))
+        TemplatePlan { file_steps }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TemplatePlanLayerEntry {
-    pub layer_name: String,
-    pub entry: TemplatePlanEntry,
+#[derive(Debug)]
+pub struct FallibleNamedTemplatePlanStep {
+    pub name: String,
+    pub step: anyhow::Result<TemplatePlanStep>,
 }
 
-impl TemplatePlanEntry {
+impl TemplatePlanStep {
     fn planned_contents(&self) -> &str {
         match self {
-            TemplatePlanEntry::Create { new } => new,
-            TemplatePlanEntry::Overwrite { new, .. } => new,
-            TemplatePlanEntry::Merge { new, .. } => new,
-            TemplatePlanEntry::SkipSame { current } => current,
+            TemplatePlanStep::Create { new } => new,
+            TemplatePlanStep::Overwrite { new, .. } => new,
+            TemplatePlanStep::Merge { new, .. } => new,
+            TemplatePlanStep::SkipSame { current } => current,
         }
     }
 }

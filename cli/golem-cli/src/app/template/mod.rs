@@ -21,7 +21,7 @@ mod snippet;
 mod template;
 
 pub use metadata::AppTemplateMetadata;
-pub use plan::{TemplatePlan, TemplatePlanEntry};
+pub use plan::{TemplatePlanBuilder, TemplatePlanStep};
 pub use repo::AppTemplateRepo;
 pub use template::{
     AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,

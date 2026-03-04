@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::error::CustomCommandError;
-use crate::app::template::{AppTemplateName, TemplatePlan};
+use crate::app::template::{AppTemplateName, TemplatePlanBuilder, TemplatePlanStep};
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -31,8 +31,8 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
-    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
+    log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
+    log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
     logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{
@@ -226,22 +226,24 @@ impl AppCommandHandler {
             agent_templates
         };
 
-        let template_apply_plan = {
-            let mut template_apply_plan = TemplatePlan::new();
+        let template_plan_builder = {
+            let mut template_plan_builder = TemplatePlanBuilder::new();
 
+            // TODO: FCL: should we skip adding this if the app already exists? (vs build time dep checkd)
             if let Some(common_template) = common_template {
-                template_apply_plan.add(
+                template_plan_builder.add(
                     common_template.0.name.as_str(),
                     &common_template.generate(
                         &application_name,
                         &app_dir,
                         self.ctx.sdk_overrides(),
                     )?,
-                )?;
+                );
             }
 
+            // TODO: FCL: should we skip adding this if the component already exists? (vs build time dep checks)
             if let Some(component_template) = component_template {
-                template_apply_plan.add(
+                template_plan_builder.add(
                     component_template.0.name.as_str(),
                     &component_template.generate(
                         &application_name,
@@ -249,11 +251,11 @@ impl AppCommandHandler {
                         &app_dir,
                         self.ctx.sdk_overrides(),
                     )?,
-                )?;
+                );
             }
 
             for agent_template in agent_templates {
-                template_apply_plan.add(
+                template_plan_builder.add(
                     agent_template.0.name.as_str(),
                     &agent_template.generate(
                         &application_name,
@@ -261,23 +263,133 @@ impl AppCommandHandler {
                         &app_dir,
                         self.ctx.sdk_overrides(),
                     )?,
-                )?;
+                );
             }
 
-            template_apply_plan
+            template_plan_builder
         };
 
-        debug!("template apply plan: {:#?}", template_apply_plan);
+        debug!("template plan steps: {:#?}", template_plan_builder);
 
+        let template_plan = template_plan_builder.build();
+        let overwrites = template_plan.overwrites().collect::<Vec<_>>();
+        let failed_plans = template_plan.failed_plans().collect::<Vec<_>>();
+
+        if !overwrites.is_empty() || !failed_plans.is_empty() {
+            logln("");
+            log_failed_to("plan the required changes to apply the selected template(s)");
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+
+            if !overwrites.is_empty() {
+                logln(
+                    "Already existing non-mergeable files:"
+                        .log_color_help_group()
+                        .to_string(),
+                );
+                for path in &overwrites {
+                    logln(format!("  - {}", path.log_color_highlight()));
+                }
+            }
+
+            if !failed_plans.is_empty() {
+                logln(
+                    "Template planning errors:"
+                        .log_color_help_group()
+                        .to_string(),
+                );
+                for (path, err) in &failed_plans {
+                    logln(format!("  - {}", path.log_color_highlight()));
+                    let _indent = LogIndent::new();
+                    log_anyhow_error(err)
+                }
+            }
+
+            bail!(NonSuccessfulExit);
+        }
+
+        // TODO: FCL: create a safe subset of the template plan?
         // TODO: FCL: review and approve
+        {
+            logln("");
+            log_action(
+                "Planned",
+                "required changes for applying the selected template(s)",
+            );
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            for (path, step) in template_plan.file_steps() {
+                if let Ok(step) = step {
+                    match step {
+                        TemplatePlanStep::Create { .. } => {
+                            logln(format!(
+                                "- {} {}",
+                                "create".green(),
+                                path.log_color_highlight()
+                            ));
+                        }
+                        TemplatePlanStep::Overwrite { .. } => {
+                            logln(format!(
+                                "- {} {}",
+                                "overwrite".red(),
+                                path.log_color_highlight()
+                            ));
+                        }
+                        TemplatePlanStep::Merge { current, new } => {
+                            logln(format!(
+                                "- {} {}",
+                                "update".green(),
+                                path.log_color_highlight()
+                            ));
+                            let _indent = LogIndent::new();
+                            let _indent = self.ctx.log_handler().nested_text_view_indent();
+                            log_unified_diff(&diff::unified_diff(current, new));
+                        }
+                        TemplatePlanStep::SkipSame { .. } => {
+                            logln(format!(
+                                "- {} {}",
+                                "skip".yellow(),
+                                path.log_color_highlight(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
 
         {
+            logln("");
             log_action("Applying", "template(s)");
             let _indent = LogIndent::new();
-            template_apply_plan.apply()?;
+
+            for (path, step) in template_plan.file_steps() {
+                if let Ok(step) = step {
+                    match step {
+                        TemplatePlanStep::Create { new } => {
+                            log_action("Creating", format!("{}", path.log_color_highlight()));
+                            fs::write_str(path, new)?;
+                        }
+                        TemplatePlanStep::Overwrite { new, .. } => {
+                            log_action("Overwriting", format!("{}", path.log_color_highlight()));
+                            fs::write_str(path, new)?;
+                        }
+                        TemplatePlanStep::Merge { new, .. } => {
+                            log_action("Updating", format!("{}", path.log_color_highlight()));
+                            fs::write_str(path, new)?;
+                        }
+                        TemplatePlanStep::SkipSame { .. } => {
+                            log_skipping_up_to_date(format!(
+                                "updating {}",
+                                path.log_color_highlight()
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
         // TODO: FCL: ok, done, help messages
+
+        logln("");
+        log_finished_ok("applying template(s)");
 
         /*log_action(
             "Created",
