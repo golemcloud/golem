@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -562,7 +562,10 @@ impl WorkerCommandHandler {
             .list_agent_types(&environment)
             .await?
             .into_iter()
-            .find(|t| t.agent_type.type_name.0 == agent_type_name)
+            .find(|t| {
+                t.agent_type.type_name.0 == agent_type_name
+                    || t.agent_type.wrapper_type_name() == agent_type_name
+            })
         else {
             bail!("Agent type not found: {}", agent_type_name);
         };
@@ -587,7 +590,7 @@ impl WorkerCommandHandler {
         let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
-            &component.id,
+            &agent_type.implemented_by.component_id,
             agent_name.0.clone(),
             stream_args.into(),
             self.ctx.allow_insecure(),

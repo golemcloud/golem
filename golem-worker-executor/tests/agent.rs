@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,7 +19,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
@@ -27,6 +27,14 @@ use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -34,14 +42,14 @@ inherit_test_dep!(Tracing);
 async fn agent_self_rpc_is_not_allowed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_agent_rpc")
-        .name("golem-it:agent-rpc")
+        .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
     let agent_id = agent_id!("SelfRpcAgent", "worker-name");
@@ -66,14 +74,14 @@ async fn agent_self_rpc_is_not_allowed(
 async fn agent_await_parallel_rpc_calls(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_agent_rpc")
-        .name("golem-it:agent-rpc")
+        .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
 
@@ -98,14 +106,14 @@ async fn agent_await_parallel_rpc_calls(
 async fn agent_env_inheritance(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_agent_rpc")
-        .name("golem-it:agent-rpc")
+        .component_dep(&context.default_environment_id, agent_rpc)
         .with_env(vec![
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "2".to_string()),
@@ -242,15 +250,17 @@ async fn agent_env_inheritance(
 async fn ephemeral_agent_works(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
     let component = executor
-        .component(
+        .component_dep(
             &context.default_environment_id,
-            "golem_it_constructor_parameter_echo",
+            constructor_parameter_echo_unnamed,
         )
         .store()
         .await?;

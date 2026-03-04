@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -72,7 +72,7 @@ impl RustRepl {
             )?
             .to_string(),
             repl_metadata_json_path: fs::path_to_str(&args.repl_metadata_json_path)?.to_string(),
-            golem_client_dependency: self.ctx.template_sdk_overrides().golem_client_dep()?,
+            golem_client_dependency: self.ctx.sdk_overrides().golem_client_dep()?,
         };
         fs::write(&config_path, serde_json::to_string(&config)?)?;
         Ok(())

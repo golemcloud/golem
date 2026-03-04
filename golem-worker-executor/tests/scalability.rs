@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,7 +20,8 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, start_customized, LastUniqueId, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
 use std::future::Future;
@@ -32,6 +33,18 @@ use tracing::{info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("large_dynamic_memory")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("large_initial_memory")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -39,6 +52,7 @@ inherit_test_dep!(Tracing);
 async fn spawning_many_workers_that_sleep(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -58,11 +72,7 @@ async fn spawning_many_workers_that_sleep(
 
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -159,6 +169,7 @@ async fn spawning_many_workers_that_sleep(
 async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -178,11 +189,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -296,16 +303,13 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 async fn initial_large_memory_allocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("large_initial_memory")] large_initial_memory: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None, None).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "scalability_large_initial_memory_release",
-        )
-        .name("scalability:large-initial-memory")
+        .component_dep(&context.default_environment_id, large_initial_memory)
         .store()
         .await?;
 
@@ -351,16 +355,13 @@ async fn initial_large_memory_allocation(
 async fn dynamic_large_memory_allocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("large_dynamic_memory")] large_dynamic_memory: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None, None).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "scalability_large_dynamic_memory_release",
-        )
-        .name("scalability:large-dynamic-memory")
+        .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
         .await?;
 

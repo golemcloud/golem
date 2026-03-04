@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,7 +21,9 @@ use crate::model::public_oplog::{
 };
 use crate::model::{LastError, ReadFileResult};
 use crate::services::events::Event;
-use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
+use crate::services::worker_activator::{
+    DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
+};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
@@ -90,6 +92,9 @@ pub struct WorkerExecutorImpl<
 > {
     /// Reference to all the initialized services
     services: Svcs,
+    /// Holds the strong Arc to the worker activator so the Weak reference
+    /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
+    _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -99,6 +104,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),
+            _worker_activator: self._worker_activator.clone(),
             ctx: PhantomData,
         }
     }
@@ -115,13 +121,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
         port: u16,
     ) -> Result<Self, Error> {
+        let worker_activator: Arc<dyn WorkerActivator<Ctx>> =
+            Arc::new(DefaultWorkerActivator::new(services.clone()));
+
+        lazy_worker_activator.set(worker_activator.clone());
+
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
+            _worker_activator: worker_activator,
             ctx: PhantomData,
         };
-        let worker_activator = Arc::new(DefaultWorkerActivator::new(services.clone()));
-
-        lazy_worker_activator.set(worker_activator);
 
         let host = gethostname().to_string_lossy().to_string();
 
@@ -139,7 +148,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!("Registered worker executor, waiting for shard assignment...");
 
-        Ctx::on_shard_assignment_changed(&worker_executor).await?;
+        Ctx::on_shard_assignment_changed(&worker_executor)
+            .await
+            .map_err(wasmtime::Error::from_anyhow)?;
 
         Ok(worker_executor)
     }
@@ -354,14 +365,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
             info!("Interrupting worker before deletion");
-            if let Some(mut rx) = worker
+            worker
                 .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                .await
-            {
-                info!("Awaiting interruption");
-                let _ = rx.recv().await;
-                info!("Interrupted");
-            }
+                .await;
             info!("Marking worker for deletion");
             worker.start_deleting().await?;
 
