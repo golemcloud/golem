@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: blacksmith-32vcpu-windows-2025
+    runs-on: windows-latest-large
     env:
       CARGO_BUILD_JOBS: 10
     steps:
