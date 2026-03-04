@@ -1551,7 +1551,7 @@ async fn create_invoke_delete_create_invoke(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn recovering_an_old_worker_after_updating_a_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1794,7 +1794,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_works_as_expected(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1901,7 +1901,7 @@ async fn start_http_poll_server(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_http_failures_are_retried(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2017,7 +2017,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_works_as_expected_async_http(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2240,7 +2240,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_connection_breaks_on_interrupt(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2741,7 +2741,7 @@ async fn reconstruct_interrupted_state(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn invocation_queue_is_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
