@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../golem-temp/common/ts/tsconfig.component.json",
+  "include": [
+    "src/**/*.ts"
+  ]
+}

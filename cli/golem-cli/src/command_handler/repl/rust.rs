@@ -72,7 +72,7 @@ impl RustRepl {
             )?
             .to_string(),
             repl_metadata_json_path: fs::path_to_str(&args.repl_metadata_json_path)?.to_string(),
-            golem_client_dependency: self.ctx.template_sdk_overrides().golem_client_dep()?,
+            golem_client_dependency: self.ctx.sdk_overrides().golem_client_dep()?,
         };
         fs::write(&config_path, serde_json::to_string(&config)?)?;
         Ok(())

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app_template::model::TemplateName;
+use crate::app::template::AppTemplateName;
 use crate::model::text::fmt::*;
 use crate::model::{GuestLanguage, TemplateDescription};
 use cli_table::Table;
@@ -20,7 +20,7 @@ use cli_table::Table;
 #[derive(Table)]
 pub struct TemplateDescriptionTableView {
     #[table(title = "Name")]
-    pub name: TemplateName,
+    pub name: AppTemplateName,
     #[table(title = "Language")]
     pub language: GuestLanguage,
     #[table(title = "Description")]
