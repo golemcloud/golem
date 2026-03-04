@@ -88,6 +88,40 @@ inherit_test_dep!(
 
 #[test]
 #[tracing::instrument]
+#[timeout("2m")]
+async fn dropping_executor_releases_services(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let leak_detector = executor.leak_detector();
+
+    // Verify the sentinel is alive while the executor is running
+    assert!(
+        leak_detector.upgrade().is_some(),
+        "Leak sentinel should be alive while executor is running"
+    );
+
+    drop(executor);
+
+    // Give background tasks a moment to be aborted and cleaned up
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // After dropping the executor, the service graph should be fully deallocated.
+    // If this assertion fails, there is a circular Arc reference preventing cleanup.
+    assert!(
+        leak_detector.upgrade().is_none(),
+        "Service graph leaked! The All struct was not deallocated after dropping the executor. \
+         This indicates a circular Arc reference in the service dependency graph."
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout("4m")]
 async fn interruption(
     last_unique_id: &LastUniqueId,

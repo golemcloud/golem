@@ -49,7 +49,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
-use crate::services::promise::{DefaultPromiseService, PromiseService};
+use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
@@ -60,7 +60,10 @@ use crate::services::worker_enumeration::{
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use crate::services::{rdbms, shard_manager, All, HasConfig};
+use crate::services::{
+    rdbms, shard_manager, All, HasActiveWorkers, HasComponentService, HasConfig, HasOplogService,
+    HasWorkerActivator, HasWorkerService,
+};
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
@@ -90,6 +93,7 @@ use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use tokio::net::TcpListener;
@@ -108,6 +112,23 @@ pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
     pub epoch_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    pub epoch_stop: Arc<AtomicBool>,
+    /// Graph-wide shutdown signal. Cancelled in `Drop` before stopping the
+    /// epoch thread so that all service background tasks exit promptly.
+    pub shutdown: services::shutdown::Shutdown,
+    /// Weak reference to a sentinel inside `All`. When `All` is properly
+    /// deallocated, `upgrade()` returns `None`. Used by tests to detect leaks.
+    pub leak_detector: std::sync::Weak<()>,
+}
+
+impl Drop for RunDetails {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        self.epoch_stop.store(true, Ordering::Release);
+        if let Some(handle) = self.epoch_thread.lock().unwrap().take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -228,6 +249,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         agent_type_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -275,14 +298,19 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         );
 
         let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
+        let shutdown = services::shutdown::Shutdown::new();
 
-        let (worker_executor_impl, epoch_thread) = create_worker_executor_impl::<Ctx, Self>(
-            golem_config.clone(),
-            self,
-            runtime.clone(),
-            &lazy_worker_activator,
-        )
-        .await?;
+        let (worker_executor_impl, epoch_thread, epoch_stop) =
+            create_worker_executor_impl::<Ctx, Self>(
+                golem_config.clone(),
+                self,
+                runtime.clone(),
+                &lazy_worker_activator,
+                shutdown.token(),
+            )
+            .await?;
+
+        let leak_detector = worker_executor_impl.leak_detector();
 
         let grpc_port = self
             .run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set)
@@ -300,6 +328,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             http_port,
             grpc_port,
             epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
+            epoch_stop,
+            shutdown,
+            leak_detector,
         })
     }
 }
@@ -309,7 +340,8 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     bootstrap: &A,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-) -> Result<(All<Ctx>, std::thread::JoinHandle<()>), anyhow::Error> {
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> Result<(All<Ctx>, std::thread::JoinHandle<()>, Arc<AtomicBool>), anyhow::Error> {
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -529,9 +561,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let engine_ref: Arc<Engine> = engine.clone();
 
     let epoch_interval = golem_config.limits.epoch_interval;
-    let epoch_thread = std::thread::spawn(move || loop {
-        std::thread::sleep(epoch_interval);
-        engine_ref.increment_epoch();
+    let epoch_stop = Arc::new(AtomicBool::new(false));
+    let epoch_stop_clone = epoch_stop.clone();
+    let epoch_thread = std::thread::spawn(move || {
+        while !epoch_stop_clone.load(Ordering::Acquire) {
+            std::thread::sleep(epoch_interval);
+            engine_ref.increment_epoch();
+        }
     });
 
     let linker = Arc::new(linker);
@@ -584,7 +620,10 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         oplog_service.clone(),
         worker_service.clone(),
         golem_config.scheduler.refresh_interval,
+        shutdown_token.clone(),
     );
+
+    let leak_sentinel = Arc::new(());
 
     let all = bootstrap
         .create_services(
@@ -613,15 +652,26 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             agent_type_service,
             agent_webhooks_service,
             registry_service,
+            shutdown_token,
+            leak_sentinel,
         )
         .await?;
+
+    let promise_worker_access = Arc::new(DefaultPromiseWorkerAccess::new(
+        all.component_service(),
+        all.worker_service(),
+        all.active_workers(),
+        all.oplog_service(),
+        all.config(),
+        all.worker_activator(),
+    ));
 
     promise_service
         .set_implementation(DefaultPromiseService::new(
             key_value_storage.clone(),
-            all.clone(),
+            promise_worker_access,
         ))
         .await;
 
-    Ok((all, epoch_thread))
+    Ok((all, epoch_thread, epoch_stop))
 }

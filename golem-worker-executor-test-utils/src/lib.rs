@@ -253,12 +253,24 @@ impl WorkerExecutorTestDependencies {
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
+    /// Holds the `RunDetails` to keep the shutdown token (and epoch thread)
+    /// alive for the duration of the test. Dropping this triggers the
+    /// graph-wide shutdown signal.
+    _run_details: Arc<RunDetails>,
     pub deps: WorkerExecutorTestDependencies,
     pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
+    leak_detector: std::sync::Weak<()>,
 }
 
 impl TestWorkerExecutor {
+    /// Returns a weak reference that can be used to verify that the
+    /// service graph (`All`) was properly deallocated after the executor
+    /// is dropped. If `upgrade()` returns `Some`, services have leaked.
+    pub fn leak_detector(&self) -> std::sync::Weak<()> {
+        self.leak_detector.clone()
+    }
+
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
@@ -454,6 +466,8 @@ pub async fn start_customized(
     )
     .await?;
     let grpc_port = details.grpc_port;
+    let leak_detector = details.leak_detector.clone();
+    let details = Arc::new(details);
 
     let start = std::time::Instant::now();
     loop {
@@ -470,9 +484,11 @@ pub async fn start_customized(
             let client = WorkerExecutorClient::new(otel_channel);
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
+                _run_details: details,
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -1122,9 +1138,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let resource_limits =
-            resource_limits::configured(&golem_config.resource_limits, registry_service);
+        let resource_limits = resource_limits::configured(
+            &golem_config.resource_limits,
+            registry_service,
+            shutdown_token.clone(),
+        );
         let extra_deps = AdditionalTestDeps::new();
         let rdbms_service: Arc<dyn rdbms::RdbmsService> = Arc::new(TestRdmsService::new(
             rdbms_service.clone(),
@@ -1160,7 +1181,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             resource_limits.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            shutdown_token.clone(),
             extra_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -1191,9 +1214,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             extra_deps.clone(),
+            leak_sentinel.clone(),
         ));
         Ok(All::new(
             active_workers,
@@ -1223,7 +1248,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             file_loader,
             oplog_processor_plugin,
             resource_limits,
+            shutdown_token,
             extra_deps.clone(),
+            leak_sentinel,
         ))
     }
 

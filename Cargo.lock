@@ -4552,6 +4552,7 @@ dependencies = [
  "tempfile",
  "test-r",
  "tokio",
+ "tokio-util",
  "tonic 0.14.5",
  "tonic-tracing-opentelemetry",
  "tower 0.5.3",

@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::{error, span, Instrument, Level};
 
@@ -112,11 +113,14 @@ pub trait ResourceLimits: Send + Sync {
 pub fn configured(
     config: &ResourceLimitsConfig,
     registry_service: Arc<dyn RegistryService>,
+    shutdown_token: CancellationToken,
 ) -> Arc<dyn ResourceLimits> {
     match config {
-        ResourceLimitsConfig::Grpc(config) => {
-            ResourceLimitsGrpc::new(registry_service, config.batch_update_interval)
-        }
+        ResourceLimitsConfig::Grpc(config) => ResourceLimitsGrpc::new(
+            registry_service,
+            config.batch_update_interval,
+            shutdown_token,
+        ),
         ResourceLimitsConfig::Disabled(_) => Arc::new(ResourceLimitsDisabled),
     }
 }
@@ -134,6 +138,7 @@ impl ResourceLimitsGrpc {
     pub fn new(
         registry_service: Arc<dyn RegistryService>,
         batch_update_interval: Duration,
+        shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
             client: registry_service,
@@ -147,7 +152,12 @@ impl ResourceLimitsGrpc {
             async move {
                 let mut tick = tokio::time::interval(batch_update_interval);
                 loop {
-                    tick.tick().await;
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            break;
+                        }
+                        _ = tick.tick() => {}
+                    }
 
                     let svc_arc = match svc_weak.upgrade() {
                         Some(s) => s,

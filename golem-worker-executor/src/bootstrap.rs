@@ -104,9 +104,14 @@ impl Bootstrap<Context> for ServerBootstrap {
         agent_type_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Context>> {
-        let resource_limits =
-            resource_limits::configured(&golem_config.resource_limits, registry_service.clone());
+        let resource_limits = resource_limits::configured(
+            &golem_config.resource_limits,
+            registry_service.clone(),
+            shutdown_token.clone(),
+        );
 
         let additional_deps = NoAdditionalDeps {};
 
@@ -140,7 +145,9 @@ impl Bootstrap<Context> for ServerBootstrap {
             resource_limits.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
+            shutdown_token.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -171,9 +178,11 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            shutdown_token.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         Ok(All::new(
@@ -204,7 +213,9 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            shutdown_token,
             additional_deps,
+            leak_sentinel,
         ))
     }
 

@@ -140,6 +140,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> =
             Arc::new(GrpcAuthService::new(registry_service.clone()));
@@ -153,8 +155,11 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 
         let additional_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
-        let resource_limits =
-            resource_limits::configured(&golem_config.resource_limits, registry_service);
+        let resource_limits = resource_limits::configured(
+            &golem_config.resource_limits,
+            registry_service,
+            shutdown_token.clone(),
+        );
 
         // When it comes to fork, we need the original oplog service
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -189,7 +194,9 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             resource_limits.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            shutdown_token.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -220,9 +227,11 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         Ok(All::new(
@@ -253,7 +262,9 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            shutdown_token,
             additional_deps,
+            leak_sentinel,
         ))
     }
 
@@ -301,14 +312,17 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     );
 
     let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
+    let shutdown = golem_worker_executor::services::shutdown::Shutdown::new();
 
-    let (worker_executor_impl, epoch_thread) = create_worker_executor_impl::<DebugContext, T>(
-        golem_config.clone(),
-        bootstrap,
-        runtime.clone(),
-        &lazy_worker_activator,
-    )
-    .await?;
+    let (worker_executor_impl, epoch_thread, epoch_stop) =
+        create_worker_executor_impl::<DebugContext, T>(
+            golem_config.clone(),
+            bootstrap,
+            runtime.clone(),
+            &lazy_worker_activator,
+            shutdown.token(),
+        )
+        .await?;
 
     let http_port = start_http_server(
         &worker_executor_impl,
@@ -324,6 +338,9 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
         // TODO: no grpc config running, this should not be exposed here
         grpc_port: golem_config.grpc.port,
         epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
+        epoch_stop,
+        shutdown,
+        leak_detector: worker_executor_impl.leak_detector(),
     })
 }
 
