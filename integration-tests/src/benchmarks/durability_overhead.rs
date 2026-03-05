@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -218,7 +218,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, true, false),
                 )
                 .await
@@ -238,7 +238,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, false, false),
                 )
                 .await
@@ -262,7 +262,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, false, false),
                 )
                 .await
@@ -282,7 +282,7 @@ impl Benchmark for DurabilityOverhead {
                     &user_clone,
                     &context.component,
                     agent_id,
-                    "oplog-heavy",
+                    "oplog_heavy",
                     data_value!(length, true, true),
                 )
                 .await

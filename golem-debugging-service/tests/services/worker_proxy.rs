@@ -22,6 +22,7 @@ use golem_worker_executor_test_utils::TestContext;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 // Worker Proxy will be internally used by fork functionality,
 // Fork will be resuming the worker (the target) in the real executor by
@@ -30,14 +31,14 @@ use tonic::transport::Channel;
 // Here the proxy implementation bypasses the worker service
 // however place it in the real executor
 pub struct TestWorkerProxy {
-    client: WorkerExecutorClient<Channel>,
+    client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     component_service: Arc<FileSystemComponentWriter>,
     test_ctx: TestContext,
 }
 
 impl TestWorkerProxy {
     pub fn new(
-        client: WorkerExecutorClient<Channel>,
+        client: WorkerExecutorClient<OtelGrpcService<Channel>>,
         component_service: Arc<FileSystemComponentWriter>,
         test_ctx: TestContext,
     ) -> Self {

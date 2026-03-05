@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -109,6 +109,10 @@ impl<T: Clone> GrpcClient<T> {
                 let mut endpoint = Endpoint::new(self.endpoint.clone())?
                     .connect_timeout(self.config.connect_timeout);
 
+                if let Some(request_timeout) = self.config.request_timeout {
+                    endpoint = endpoint.timeout(request_timeout);
+                }
+
                 if let GrpcClientTlsConfig::Enabled(tls) = &self.config.tls {
                     endpoint = endpoint.tls_config(tls.to_tonic())?;
                 }
@@ -208,6 +212,10 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             Entry::Vacant(entry) => {
                 let mut endpoint = Endpoint::new(endpoint)?.connect_timeout(connect_timeout);
 
+                if let Some(request_timeout) = self.config.request_timeout {
+                    endpoint = endpoint.timeout(request_timeout);
+                }
+
                 if let GrpcClientTlsConfig::Enabled(tls) = &self.config.tls {
                     endpoint = endpoint.tls_config(tls.to_tonic())?;
                 }
@@ -232,6 +240,8 @@ pub struct GrpcClientConnection<T: Clone> {
 pub struct GrpcClientConfig {
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
+    #[serde(default, with = "humantime_serde::option")]
+    pub request_timeout: Option<Duration>,
     pub retries_on_unavailable: RetryConfig,
     pub tls: GrpcClientTlsConfig,
 }
@@ -246,6 +256,7 @@ impl Default for GrpcClientConfig {
     fn default() -> Self {
         Self {
             connect_timeout: Duration::from_secs(10),
+            request_timeout: None,
             retries_on_unavailable: RetryConfig::default(),
             tls: GrpcClientTlsConfig::Disabled(Empty {}),
         }
@@ -256,6 +267,7 @@ impl SafeDisplay for GrpcClientConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "request_timeout: {:?}", self.request_timeout);
         let _ = writeln!(&mut result, "retries_on_unavailable:");
         let _ = writeln!(
             &mut result,

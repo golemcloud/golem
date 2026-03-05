@@ -42,10 +42,12 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
-backtrace-on-stack-overflow = { workspace = true }
 goldenfile = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+backtrace-on-stack-overflow = { workspace = true }
 
 [lib]
 harness = false

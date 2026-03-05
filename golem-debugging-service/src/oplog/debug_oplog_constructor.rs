@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -26,7 +26,7 @@ use std::sync::Arc;
 pub struct CreateDebugOplogConstructor {
     owned_worker_id: OwnedWorkerId,
     initial_entry: Option<OplogEntry>,
-    last_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
     inner: Arc<dyn OplogService + Send + Sync>,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
     initial_worker_metadata: WorkerMetadata,
@@ -38,7 +38,7 @@ impl CreateDebugOplogConstructor {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_entry: Option<OplogEntry>,
-        last_oplog_index: OplogIndex,
+        last_oplog_index: Option<OplogIndex>,
         inner: Arc<dyn OplogService + Send + Sync>,
         debug_session: Arc<dyn DebugSessions + Send + Sync>,
         initial_worker_metadata: WorkerMetadata,

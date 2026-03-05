@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -14,7 +14,9 @@
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
-use golem_worker_executor_test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
+use golem_worker_executor_test_utils::{
+    test_component, LastUniqueId, PrecompiledComponent, WorkerExecutorTestDependencies,
+};
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::atomic::AtomicU16;
@@ -48,14 +50,15 @@ tag_suite!(http, group1);
 tag_suite!(rdbms, group1);
 tag_suite!(agent, group1);
 
-tag_suite!(transactions, group2);
-tag_suite!(wasi, group2);
-tag_suite!(revert, group2);
-tag_suite!(durability, group2);
-tag_suite!(observability, group2);
-tag_suite!(scalability, group2);
 tag_suite!(hot_update, group2);
-tag_suite!(rpc, group2);
+tag_suite!(transactions, group2);
+tag_suite!(observability, group2);
+
+tag_suite!(durability, group3);
+tag_suite!(rpc, group3);
+tag_suite!(wasi, group3);
+tag_suite!(scalability, group3);
+tag_suite!(revert, group3);
 
 tag_suite!(rdbms_service, rdbms_service);
 
@@ -89,3 +92,86 @@ pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
         AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
     )
 }
+
+// Pre-compiled test components - these warm the analysis cache during
+// test-r dependency initialization so that tests don't pay the cold
+// compilation cost of `extract_agent_types`.
+
+test_component!(
+    host_api_tests,
+    "host_api_tests",
+    "golem_it_host_api_tests_release",
+    "golem-it:host-api-tests"
+);
+test_component!(
+    agent_rpc,
+    "agent_rpc",
+    "golem_it_agent_rpc",
+    "golem-it:agent-rpc"
+);
+test_component!(
+    agent_rpc_rust,
+    "agent_rpc_rust",
+    "golem_it_agent_rpc_rust_release",
+    "golem-it:agent-rpc-rust"
+);
+test_component!(
+    agent_rpc_rust_as_resolve_target,
+    "agent_rpc_rust_as_resolve_target",
+    "golem_it_agent_rpc_rust_release",
+    "component-resolve-target"
+);
+test_component!(
+    agent_counters,
+    "agent_counters",
+    "it_agent_counters_release",
+    "it:agent-counters"
+);
+test_component!(
+    http_tests,
+    "http_tests",
+    "golem_it_http_tests_release",
+    "golem-it:http-tests"
+);
+test_component!(
+    constructor_parameter_echo,
+    "constructor_parameter_echo",
+    "golem_it_constructor_parameter_echo",
+    "golem-it:constructor-parameter-echo"
+);
+test_component!(
+    constructor_parameter_echo_unnamed,
+    "constructor_parameter_echo_unnamed",
+    "golem_it_constructor_parameter_echo",
+    "golem_it_constructor_parameter_echo"
+);
+test_component!(
+    agent_update_v1,
+    "agent_update_v1",
+    "it_agent_update_v1_release",
+    "it:agent-update"
+);
+test_component!(
+    agent_update_v2,
+    "agent_update_v2",
+    "it_agent_update_v2_release",
+    "it:agent-update"
+);
+test_component!(
+    initial_file_system,
+    "initial_file_system",
+    "it_initial_file_system_release",
+    "golem-it:initial-file-system"
+);
+test_component!(
+    large_dynamic_memory,
+    "large_dynamic_memory",
+    "scalability_large_dynamic_memory_release",
+    "scalability:large-dynamic-memory"
+);
+test_component!(
+    large_initial_memory,
+    "large_initial_memory",
+    "scalability_large_initial_memory_release",
+    "scalability:large-initial-memory"
+);
