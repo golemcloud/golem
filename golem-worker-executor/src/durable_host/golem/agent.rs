@@ -237,9 +237,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let declaration = self
             .component_metadata()
             .metadata
-            .agent_types()
-            .iter()
-            .find(|at| at.type_name == agent_id.agent_type)
+            .find_agent_type_by_name(&agent_id.agent_type)
             .expect("Active agent type of agent was not declared in component metadata")
             .config
             .iter()

@@ -60,13 +60,12 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host;
+use crate::worker::agent_config::{effective_local_agent_config, validate_local_agent_config};
 use crate::worker::invocation::{
     invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
-use crate::worker::{
-    effective_local_agent_config, validate_local_agent_config, RetryDecision, Worker,
-};
+use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
     InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
@@ -1427,9 +1426,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if let Some(agent_id) = self.agent_id() {
             let agent_type = new_metadata
                 .metadata
-                .agent_types()
-                .iter()
-                .find(|at| at.type_name == agent_id.agent_type)
+                .find_agent_type_by_name(&agent_id.agent_type)
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(format!(
                         "Agent type {} not found in updated agent metadata",
@@ -1443,7 +1440,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &agent_id.agent_type,
             );
 
-            validate_local_agent_config(&updated_local_agent_config, agent_type)?;
+            validate_local_agent_config(&updated_local_agent_config, &agent_type)?;
 
             self.state.local_agent_config = updated_local_agent_config;
         };

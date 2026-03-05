@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentTypeName};
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -65,6 +65,7 @@ pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
+    agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -94,6 +95,7 @@ pub async fn get_public_oplog_chunk(
             oplog_service.clone(),
             components.clone(),
             owned_worker_id,
+            agent_type_name,
             current_component_revision,
         )
         .await?;
@@ -121,6 +123,7 @@ pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
+    agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -138,6 +141,7 @@ pub async fn search_public_oplog(
             component_service.clone(),
             oplog_service.clone(),
             owned_worker_id,
+            agent_type_name,
             current_component_revision,
             current_index,
             count,
@@ -205,6 +209,7 @@ pub trait PublicOplogEntryOps: Sized {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_worker_id: &OwnedWorkerId,
+        agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String>;
 }
@@ -217,6 +222,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_worker_id: &OwnedWorkerId,
+        agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
         match value {
@@ -249,6 +255,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .filter(|p| initial_active_plugins.contains(&p.priority))
                     .map(make_plugin_installation_description)
                     .collect();
+
+                let local_agent_config = local_agent_config
+                    .into_iter()
+                    .map(|lac| lac.enrich_with_type(&metadata.metadata, agent_type_name))
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,

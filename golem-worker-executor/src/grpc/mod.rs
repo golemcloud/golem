@@ -1019,7 +1019,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_worker_id.worker_id.worker_name,
             &component_metadata.metadata,
         ) {
-            if let Ok(Some(agent_type)) = component_metadata
+            if let Some(agent_type) = component_metadata
                 .metadata
                 .find_agent_type_by_name(&agent_id.agent_type)
             {
@@ -1217,6 +1217,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
+        let agent_type_name =
+            AgentId::parse_agent_type_name(&owned_worker_id.worker_id.worker_name).ok();
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1230,6 +1233,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_worker_id,
+                    agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
                     min(
@@ -1250,6 +1254,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_worker_id,
+                    agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
                     min(
@@ -1299,6 +1304,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
+        let agent_type_name =
+            AgentId::parse_agent_type_name(&owned_worker_id.worker_id.worker_name).ok();
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1312,6 +1320,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_worker_id,
+                    agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
                     min(
@@ -1332,6 +1341,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_worker_id,
+                    agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
                     min(

@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent::AgentTypeName;
+use super::component_metadata::ComponentMetadata;
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::oplog::WorkerResourceId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{OplogIndex, Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
+use crate::model::agent::{ConfigKeyValueType, ConfigValueType};
 use crate::{declare_enums, declare_structs, declare_unions};
+use golem_wasm::ValueAndType;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -52,6 +56,57 @@ declare_unions! {
     pub enum RevertWorkerTarget {
         RevertToOplogIndex(RevertToOplogIndex),
         RevertLastInvocations(RevertLastInvocations),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct UntypedParsedWorkerCreationLocalAgentConfigEntry {
+    pub key: Vec<String>,
+    pub value: golem_wasm::Value,
+}
+
+impl UntypedParsedWorkerCreationLocalAgentConfigEntry {
+    pub fn enrich_with_type(
+        self,
+        component_metadata: &ComponentMetadata,
+        agent_type_name: Option<&AgentTypeName>,
+    ) -> Result<ParsedWorkerCreationLocalAgentConfigEntry, String> {
+        let agent_type_name = agent_type_name.ok_or_else(|| {
+            "cannot enrich local agent config for non-agentic workers".to_string()
+        })?;
+
+        let value_type = component_metadata
+            .find_agent_type_by_name(agent_type_name)
+            .ok_or("did not find expected agent type in the metadata")?
+            .config
+            .into_iter()
+            .find_map(|c| match c {
+                ConfigKeyValueType {
+                    key,
+                    value: ConfigValueType::Local(inner),
+                } if key == self.key => Some(inner),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "did not find config key {} in the metadata",
+                    self.key.join(".")
+                )
+            })?;
+
+        Ok(ParsedWorkerCreationLocalAgentConfigEntry {
+            key: self.key,
+            value: ValueAndType::new(self.value, value_type.value),
+        })
     }
 }
 
@@ -152,5 +207,16 @@ declare_enums! {
     pub enum WorkerUpdateMode {
         Automatic,
         Manual,
+    }
+}
+
+impl From<ParsedWorkerCreationLocalAgentConfigEntry>
+    for UntypedParsedWorkerCreationLocalAgentConfigEntry
+{
+    fn from(value: ParsedWorkerCreationLocalAgentConfigEntry) -> Self {
+        Self {
+            key: value.key,
+            value: value.value.value,
+        }
     }
 }
