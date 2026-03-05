@@ -15,7 +15,10 @@
 use crate::app::edit;
 use crate::app::template::generator::InMemoryFs;
 use crate::fs;
+use crate::log::LogColorize;
 use anyhow::{bail, Context};
+use serde_json::Value as JsonValue;
+use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tracing::warn;
@@ -256,10 +259,30 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
     fn merge(file_name: &str, current: &str, new: &str) -> anyhow::Result<Option<String>> {
         Ok(match file_name {
             ".gitignore" => Some(edit::gitignore::merge(current, new)),
-            "golem.yaml" => Some(edit::golem_yaml::merge_documents(current, new)?),
-            "main.ts" => Some(edit::main_ts::merge_reexports(current, new)?),
-            "package.json" => Some(edit::json::merge_object(current, new)?), // TODO: FCL: review if we still need the package.json specific editor
-            "tsconfig.json" => Some(edit::json::merge_object(current, new)?), // TODO: FCL: review if we still need the tsconfig.json specific editor
+            "golem.yaml" => Some(merge_with_validation(
+                current,
+                new,
+                validate_yaml,
+                edit::golem_yaml::merge_documents,
+            )?),
+            "main.ts" => Some(merge_with_validation(
+                current,
+                new,
+                edit::main_ts::validate,
+                edit::main_ts::merge_reexports,
+            )?),
+            "package.json" => Some(merge_with_validation(
+                current,
+                new,
+                validate_json,
+                edit::json::merge_object,
+            )?), // TODO: FCL: review if we still need the package.json specific editor
+            "tsconfig.json" => Some(merge_with_validation(
+                current,
+                new,
+                validate_json,
+                edit::json::merge_object,
+            )?), // TODO: FCL: review if we still need the tsconfig.json specific editor
             _ => None,
         })
     }
@@ -270,5 +293,37 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
             warn!("merge: current:\n{}\n", current);
             warn!("merge: new:\n{}\n", new);
         })
-        .with_context(|| format!("Failed to merge '{}'", file_name))
+        .with_context(|| format!("Failed to merge {}", file_name.log_color_error_highlight()))
+}
+
+fn ensure_valid(
+    label: &str,
+    source: &str,
+    parse: fn(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    parse(source).with_context(|| format!("{} content is not valid", label))?;
+    Ok(())
+}
+
+fn merge_with_validation(
+    current: &str,
+    new: &str,
+    parse: fn(&str) -> anyhow::Result<()>,
+    merge: fn(&str, &str) -> anyhow::Result<String>,
+) -> anyhow::Result<String> {
+    ensure_valid("current", current, parse)?;
+    ensure_valid("new", new, parse)?;
+    let merged = merge(current, new)?;
+    ensure_valid("merged", &merged, parse)?;
+    Ok(merged)
+}
+
+fn validate_json(source: &str) -> anyhow::Result<()> {
+    serde_json::from_str::<JsonValue>(source)?;
+    Ok(())
+}
+
+fn validate_yaml(source: &str) -> anyhow::Result<()> {
+    serde_yaml::from_str::<YamlValue>(source)?;
+    Ok(())
 }

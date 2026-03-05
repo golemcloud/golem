@@ -107,8 +107,8 @@ fn parse_json(source: &str) -> anyhow::Result<Tree> {
         .set_language(&tree_sitter_json::LANGUAGE.into())
         .map_err(|_| anyhow!("Failed to load tree-sitter-json"))?;
     parser
-        .parse(sanitize_json(source), None)
-        .ok_or_else(|| anyhow!("Failed to parse JSONC"))
+        .parse(source, None)
+        .ok_or_else(|| anyhow!("Failed to parse JSON"))
 }
 
 fn root_object<'a>(tree: &'a Tree, _source: &str) -> anyhow::Result<Node<'a>> {
@@ -415,121 +415,4 @@ fn unquote_json_string(value: &str) -> anyhow::Result<String> {
 
 fn escape_json_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-// TODO: FCL: check if we can get rid of this
-fn sanitize_json(source: &str) -> String {
-    let bytes = source.as_bytes();
-    let mut out = bytes.to_vec();
-    let mut i = 0usize;
-    let mut in_string = false;
-    let mut escape = false;
-
-    while i < bytes.len() {
-        let ch = bytes[i] as char;
-        if in_string {
-            if escape {
-                escape = false;
-                i += 1;
-                continue;
-            }
-            if ch == '\\' {
-                escape = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if ch == '"' {
-            in_string = true;
-            i += 1;
-            continue;
-        }
-
-        if ch == '/' && i + 1 < bytes.len() {
-            let next = bytes[i + 1] as char;
-            if next == '/' {
-                out[i] = b' ';
-                out[i + 1] = b' ';
-                i += 2;
-                while i < bytes.len() {
-                    let c = bytes[i] as char;
-                    if c == '\n' {
-                        break;
-                    }
-                    out[i] = b' ';
-                    i += 1;
-                }
-                continue;
-            }
-            if next == '*' {
-                out[i] = b' ';
-                out[i + 1] = b' ';
-                i += 2;
-                while i + 1 < bytes.len() {
-                    let c = bytes[i] as char;
-                    let c_next = bytes[i + 1] as char;
-                    if c == '*' && c_next == '/' {
-                        out[i] = b' ';
-                        out[i + 1] = b' ';
-                        i += 2;
-                        break;
-                    }
-                    if c != '\n' {
-                        out[i] = b' ';
-                    }
-                    i += 1;
-                }
-                continue;
-            }
-        }
-
-        if ch == ',' {
-            if let Some(next) = next_significant(bytes, i + 1) {
-                if next == '}' || next == ']' {
-                    out[i] = b' ';
-                }
-            }
-        }
-        i += 1;
-    }
-
-    String::from_utf8_lossy(&out).to_string()
-}
-
-fn next_significant(bytes: &[u8], mut idx: usize) -> Option<char> {
-    while idx < bytes.len() {
-        let ch = bytes[idx] as char;
-        if ch.is_whitespace() {
-            idx += 1;
-            continue;
-        }
-        if ch == '/' && idx + 1 < bytes.len() {
-            let next = bytes[idx + 1] as char;
-            if next == '/' {
-                idx += 2;
-                while idx < bytes.len() && bytes[idx] as char != '\n' {
-                    idx += 1;
-                }
-                continue;
-            }
-            if next == '*' {
-                idx += 2;
-                while idx + 1 < bytes.len() {
-                    let c = bytes[idx] as char;
-                    let c_next = bytes[idx + 1] as char;
-                    if c == '*' && c_next == '/' {
-                        idx += 2;
-                        break;
-                    }
-                    idx += 1;
-                }
-                continue;
-            }
-        }
-        return Some(ch);
-    }
-    None
 }

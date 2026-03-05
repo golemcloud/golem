@@ -53,6 +53,10 @@ pub fn merge_reexports(current: &str, update: &str) -> anyhow::Result<String> {
     Ok(merged)
 }
 
+pub fn validate(source: &str) -> anyhow::Result<()> {
+    parse_ts(source).map(|_| ())
+}
+
 fn parse_ts(source: &str) -> anyhow::Result<Tree> {
     let mut parser = Parser::new();
     parser

@@ -280,6 +280,8 @@ impl AppCommandHandler {
             log_failed_to("plan the required changes to apply the selected template(s)");
             let _indent = self.ctx.log_handler().nested_text_view_indent();
 
+            logln("");
+
             if !overwrites.is_empty() {
                 logln(
                     "Already existing non-mergeable files:"
@@ -289,6 +291,7 @@ impl AppCommandHandler {
                 for path in &overwrites {
                     logln(format!("  - {}", path.log_color_highlight()));
                 }
+                logln("");
             }
 
             if !failed_plans.is_empty() {
@@ -298,10 +301,11 @@ impl AppCommandHandler {
                         .to_string(),
                 );
                 for (path, err) in &failed_plans {
-                    logln(format!("  - {}", path.log_color_highlight()));
-                    let _indent = LogIndent::new();
+                    logln(format!("  - {}:", path.log_color_highlight()));
+                    let _indent = LogIndent::prefix("    ");
                     log_anyhow_error(err)
                 }
+                logln("");
             }
 
             bail!(NonSuccessfulExit);
