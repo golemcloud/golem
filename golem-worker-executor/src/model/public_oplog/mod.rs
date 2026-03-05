@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -788,6 +788,20 @@ async fn enrich_golem_rpc_scheduled_invocation(
     payload
 }
 
+fn resolve_agent_type_from_worker_name(
+    metadata: &golem_common::model::component_metadata::ComponentMetadata,
+    worker_name: &str,
+) -> Option<golem_common::model::agent::AgentType> {
+    AgentId::parse_agent_type_name(worker_name)
+        .ok()
+        .and_then(|type_name| {
+            metadata
+                .find_agent_type_by_wrapper_name(&type_name)
+                .ok()
+                .flatten()
+        })
+}
+
 async fn agent_invocation_to_public(
     components: Arc<dyn ComponentService>,
     owned_worker_id: &OwnedWorkerId,
@@ -809,11 +823,12 @@ async fn agent_invocation_to_public(
                 .await
                 .map_err(|err| err.to_string())?;
 
-            let constructor_schema = metadata
-                .metadata
-                .agent_types()
-                .first()
-                .map(|at| at.constructor.input_schema.clone());
+            let agent_type = resolve_agent_type_from_worker_name(
+                &metadata.metadata,
+                &owned_worker_id.worker_id.worker_name,
+            );
+
+            let constructor_schema = agent_type.map(|at| at.constructor.input_schema.clone());
 
             let constructor_parameters = match constructor_schema {
                 Some(schema) => DataValue::try_from_untyped(input, schema)
@@ -848,11 +863,13 @@ async fn agent_invocation_to_public(
                 .await
                 .map_err(|err| err.to_string())?;
 
-            let method_schema = metadata
-                .metadata
-                .agent_types()
-                .first()
-                .and_then(|at| at.methods.iter().find(|m| m.name == method_name))
+            let agent_type = resolve_agent_type_from_worker_name(
+                &metadata.metadata,
+                &owned_worker_id.worker_id.worker_name,
+            );
+
+            let method_schema = agent_type
+                .and_then(|at| at.methods.iter().find(|m| m.name == method_name).cloned())
                 .map(|m| m.input_schema.clone());
 
             let function_input = match method_schema {

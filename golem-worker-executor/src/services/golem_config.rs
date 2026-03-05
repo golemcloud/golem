@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -211,7 +211,13 @@ impl Default for GolemConfig {
             agent_types_service: AgentTypesServiceConfig::default(),
             agent_deployments_service: AgentDeploymentsServiceConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
-            registry_service: GrpcRegistryServiceConfig::default(),
+            registry_service: GrpcRegistryServiceConfig {
+                client_config: GrpcClientConfig {
+                    request_timeout: Some(Duration::from_secs(30)),
+                    ..GrpcClientConfig::default()
+                },
+                ..GrpcRegistryServiceConfig::default()
+            },
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
             http_address: "0.0.0.0".to_string(),

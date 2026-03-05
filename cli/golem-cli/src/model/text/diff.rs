@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -181,6 +181,35 @@ impl TextView for DeploymentDiff {
                             }
                         }
                     },
+                }
+            }
+            logln("");
+        }
+        if !self.mcp_deployments.is_empty() {
+            logln("MCP deployment changes:".log_color_help_group().to_string());
+            for (domain, mcp_deployment_diff) in &self.mcp_deployments {
+                match mcp_deployment_diff {
+                    BTreeMapDiffValue::Create => {
+                        logln(format!(
+                            "  - {} MCP deployment {}",
+                            "create".green(),
+                            domain.log_color_highlight()
+                        ));
+                    }
+                    BTreeMapDiffValue::Delete => {
+                        logln(format!(
+                            "  - {} MCP deployment {}",
+                            "delete".red(),
+                            domain.log_color_highlight()
+                        ));
+                    }
+                    BTreeMapDiffValue::Update(_diff) => {
+                        logln(format!(
+                            "  - {} MCP deployment {}",
+                            "update".yellow(),
+                            domain.log_color_highlight()
+                        ));
+                    }
                 }
             }
             logln("");

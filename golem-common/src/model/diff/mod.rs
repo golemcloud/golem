@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,6 +17,7 @@ mod deployment;
 mod environment;
 mod hash;
 mod http_api_deployment;
+mod mcp_deployment;
 mod plugin;
 mod ser;
 
@@ -25,6 +26,7 @@ pub use deployment::*;
 pub use environment::*;
 pub use hash::*;
 pub use http_api_deployment::*;
+pub use mcp_deployment::*;
 pub use plugin::*;
 pub use ser::*;
 

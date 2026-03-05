@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -636,38 +636,33 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        match (from, query) {
-            (Some(_), Some(_)) => Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![
-                    "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                ],
-                cause: None,
-            }))),
+        let response = match (from, query) {
+            (Some(_), Some(_)) => {
+                return Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
+                    errors: vec![
+                        "Cannot specify both the 'from' and the 'query' parameters".to_string(),
+                    ],
+                    cause: None,
+                })));
+            }
             (Some(from), None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(&worker_id, OplogIndex::from_u64(from), cursor, count, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
             (None, Some(query)) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .search_oplog(&worker_id, cursor, count, query, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
             (None, None) => {
-                let response = self
-                    .worker_service
+                self.worker_service
                     .get_oplog(&worker_id, OplogIndex::INITIAL, cursor, count, auth)
-                    .await?;
-
-                Ok(Json(response))
+                    .await?
             }
-        }
+        };
+
+        Ok(Json(response))
     }
 
     /// List files in a worker

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,7 +20,7 @@ use golem_client::api::{
     ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
     ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, GrantClientLive,
     HealthCheckClientLive, HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive,
-    PluginClientLive, TokenClientLive, WorkerClientLive,
+    McpDeploymentClientLive, PluginClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
@@ -47,6 +47,7 @@ pub struct GolemClients {
     pub grant: GrantClientLive,
     pub limits: LimitsClientLive,
     pub login: LoginClientLive,
+    pub mcp_deployment: McpDeploymentClientLive,
     pub plugin: PluginClientLive,
     pub token: TokenClientLive,
     pub worker: WorkerClientLive,
@@ -158,6 +159,9 @@ impl GolemClients {
             },
             login: LoginClientLive {
                 context: login_context(),
+            },
+            mcp_deployment: McpDeploymentClientLive {
+                context: registry_context(),
             },
             plugin: PluginClientLive {
                 context: registry_context(),

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,7 +16,7 @@ use crate::services::account_usage::error::{AccountUsageError, LimitExceededErro
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
-use crate::services::deployment::{DeployedRoutesError, DeploymentError};
+use crate::services::deployment::{DeployedMcpError, DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -212,6 +212,22 @@ impl From<DeployedRoutesError> for GrpcApiError {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
             DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
+impl From<DeployedMcpError> for GrpcApiError {
+    fn from(value: DeployedMcpError) -> Self {
+        let error: String = value.to_string();
+
+        match value {
+            DeployedMcpError::NoActiveMcpForDomain(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+            DeployedMcpError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             }),

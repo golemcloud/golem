@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -17,6 +17,7 @@ use crate::base_model::diff::Hash;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
+use crate::base_model::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
 
@@ -75,7 +76,8 @@ declare_structs! {
         pub current_revision: Option<CurrentDeploymentRevision>,
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
-        pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>
+        pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>,
+        pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
     }
 
     /// Summary of all entities tracked by the deployment
@@ -83,7 +85,8 @@ declare_structs! {
         pub deployment_revision: DeploymentRevision,
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
-        pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>
+        pub http_api_deployments: Vec<DeploymentPlanHttpApiDeploymentEntry>,
+        pub mcp_deployments: Vec<DeploymentPlanMcpDeploymentEntry>,
     }
 
     pub struct DeploymentPlanComponentEntry {
@@ -96,6 +99,13 @@ declare_structs! {
     pub struct DeploymentPlanHttpApiDeploymentEntry {
         pub id: HttpApiDeploymentId,
         pub revision: HttpApiDeploymentRevision,
+        pub domain: Domain,
+        pub hash: Hash,
+    }
+
+    pub struct DeploymentPlanMcpDeploymentEntry {
+        pub id: McpDeploymentId,
+        pub revision: McpDeploymentRevision,
         pub domain: Domain,
         pub hash: Hash,
     }

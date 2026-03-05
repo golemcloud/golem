@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -311,9 +311,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // We might have crashed between creating the oplog and writing it, so just check here for it.
         if let Some(agent_id) = &agent_id {
             if last_oplog_idx <= OplogIndex::from_u64(2) {
+                let init_idempotency_key =
+                    IdempotencyKey::new(format!("init-{}", worker.worker_id()));
                 worker
                     .enqueue_worker_invocation(AgentInvocation::AgentInitialization {
-                        idempotency_key: IdempotencyKey::fresh(),
+                        idempotency_key: init_idempotency_key,
                         input: agent_id.parameters.clone().into(),
                         invocation_context: invocation_context_stack.clone(),
                         principal,
@@ -1521,7 +1523,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await?;
 
-                let current_oplog_idx = current_status.oplog_idx;
                 let current_status = Arc::new(tokio::sync::RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
@@ -1552,7 +1553,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .open(
                         owned_worker_id,
-                        current_oplog_idx,
+                        None,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(current_status.clone()),
                         read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
@@ -2147,7 +2148,10 @@ impl RunningWorker {
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
 
-        store.set_epoch_deadline(parent.config().limits.epoch_ticks);
+        // Set initial epoch deadline to 0 so the callback fires immediately on the
+        // first epoch check point in WASM code, ensuring fuel is checked even for
+        // very fast invocations that complete within a single epoch tick interval.
+        store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
@@ -2161,7 +2165,9 @@ impl RunningWorker {
                 None => Ok(UpdateDeadline::Yield(1)),
             }
         });
-        store.set_fuel(u64::MAX)?;
+        store
+            .set_fuel(u64::MAX)
+            .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 

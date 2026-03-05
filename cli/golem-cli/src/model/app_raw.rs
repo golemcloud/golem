@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app_template::APP_MANIFEST_JSON_SCHEMA;
-use crate::fs;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use crate::model::GuestLanguage;
+use crate::{fs, APP_MANIFEST_JSON_SCHEMA};
 use anyhow::{anyhow, Context};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
@@ -88,8 +87,6 @@ pub struct Application {
     pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temp_dir: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub component_templates: IndexMap<String, ComponentTemplate>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -100,6 +97,8 @@ pub struct Application {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_api: Option<HttpApi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<Mcp>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub environments: IndexMap<String, Environment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +254,27 @@ pub struct HttpApiDeployment {
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Mcp {
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub deployments: IndexMap<EnvironmentName, Vec<McpDeployment>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpDeployment {
+    pub domain: Domain,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDeploymentAgentOptions {
+    // MCP agent configuration options coming soon
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

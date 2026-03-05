@@ -1,0 +1,5 @@
+{
+  "type": "component",
+  "description": "An example agent using the golem-ai library to search the web and summarize the results.",
+  "devOnly": true
+}

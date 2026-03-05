@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,6 +21,7 @@ use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::environment_share::EnvironmentShareRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
+use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
 };
@@ -56,6 +57,7 @@ pub struct Deps {
     pub plan_repo: Box<dyn PlanRepo>,
     pub component_repo: Box<dyn ComponentRepo>,
     pub http_api_deployment_repo: Box<dyn HttpApiDeploymentRepo>,
+    pub mcp_deployment_repo: Box<dyn McpDeploymentRepo>,
     pub deployment_repo: Box<dyn HttpApiDeploymentRepo>,
     pub full_deployment_repo: Box<dyn DeploymentRepo>,
     pub environment_share_repo: Box<dyn EnvironmentShareRepo>,

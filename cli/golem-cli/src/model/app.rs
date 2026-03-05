@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::http_api::HttpApiDeploymentDeployProperties;
+use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::bridge_gen::bridge_client_directory_name;
 use crate::fs;
 use crate::log::LogColorize;
@@ -28,7 +28,7 @@ use crate::model::template::Template;
 use crate::model::{app_raw, GuestLanguage};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 
-use crate::app_template::model::TemplateName;
+use crate::app::template::AppTemplateName;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
@@ -51,7 +51,7 @@ use std::str::FromStr;
 use url::Url;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
-pub const DEFAULT_TEMP_DIR: &str = "golem-temp";
+pub const TEMP_DIR: &str = "golem-temp";
 pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug, Default)]
@@ -328,16 +328,14 @@ pub struct Application {
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
-    // TODO: atomic
-    #[allow(unused)]
-    temp_dir: Option<WithSource<String>>,
-    resolved_temp_dir: PathBuf,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
+    mcp_deployments:
+        BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -346,6 +344,27 @@ impl Application {
         apps: &[app_raw::ApplicationWithSource],
     ) -> ValidatedResult<ApplicationNameAndEnvironments> {
         build_environments(apps)
+    }
+
+    pub fn language_templates_from_raw_apps(
+        apps: &[app_raw::ApplicationWithSource],
+    ) -> HashSet<GuestLanguage> {
+        apps.iter()
+            .flat_map(|app| {
+                app.application
+                    .component_templates
+                    .values()
+                    .map(|template| &template.templates)
+                    .chain(
+                        app.application
+                            .components
+                            .values()
+                            .map(|component| &component.templates),
+                    )
+                    .flat_map(|templates| templates.clone().into_vec())
+                    .filter_map(GuestLanguage::from_id_string)
+            })
+            .collect()
     }
 
     pub fn application_name(&self) -> &ApplicationName {
@@ -412,8 +431,16 @@ impl Application {
         custom_commands
     }
 
+    pub fn on_demand_common_dir() -> PathBuf {
+        Path::new(TEMP_DIR).join("common")
+    }
+
+    pub fn on_demand_common_dir_for_language(language: GuestLanguage) -> PathBuf {
+        Self::on_demand_common_dir().join(language.id())
+    }
+
     pub fn temp_dir(&self) -> &Path {
-        &self.resolved_temp_dir
+        Path::new(TEMP_DIR)
     }
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
@@ -485,6 +512,13 @@ impl Application {
     ) -> Option<&BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>> {
         self.http_api_deployments.get(environment)
     }
+
+    pub fn mcp_deployments(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Option<&BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>> {
+        self.mcp_deployments.get(environment)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -548,9 +582,9 @@ impl PartitionedComponentPresets {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ComponentLayerId {
-    TemplateCommon(TemplateName),
-    TemplateEnvironmentPresets(TemplateName),
-    TemplateCustomPresets(TemplateName),
+    TemplateCommon(AppTemplateName),
+    TemplateEnvironmentPresets(AppTemplateName),
+    TemplateCustomPresets(AppTemplateName),
     ComponentCommon(ComponentName),
     ComponentEnvironmentPresets(ComponentName),
     ComponentCustomPresets(ComponentName),
@@ -615,7 +649,7 @@ impl ComponentLayerId {
         }
     }
 
-    pub fn template_name(&self) -> Option<&TemplateName> {
+    pub fn template_name(&self) -> Option<&AppTemplateName> {
         match self {
             ComponentLayerId::TemplateCommon(template_name)
             | ComponentLayerId::TemplateEnvironmentPresets(template_name)
@@ -1431,18 +1465,19 @@ impl PluginInstallation {
 }
 
 mod app_builder {
-    use crate::app_template::model::TemplateName;
+    use crate::app::template::AppTemplateName;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
         Application, ApplicationNameAndEnvironments, ComponentLayer, ComponentLayerId,
         ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
         ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets, WithSource,
-        DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
-    use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::http_api::{
+        HttpApiDeploymentDeployProperties, McpDeploymentAgentOptions, McpDeploymentDeployProperties,
+    };
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
@@ -1481,9 +1516,8 @@ mod app_builder {
     enum UniqueSourceCheckedEntityKey {
         App,
         Include,
-        TempDir,
         CustomCommand(String),
-        Template(TemplateName),
+        Template(AppTemplateName),
         Component(ComponentName),
         Environment(EnvironmentName),
         Bridge,
@@ -1495,7 +1529,6 @@ mod app_builder {
             match self {
                 UniqueSourceCheckedEntityKey::App => property,
                 UniqueSourceCheckedEntityKey::Include => property,
-                UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
@@ -1509,9 +1542,6 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::App => "app".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Include => {
                     "include".log_color_highlight().to_string()
-                }
-                UniqueSourceCheckedEntityKey::TempDir => {
-                    "tempDir".log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::CustomCommand(command_name) => {
                     command_name.log_color_highlight().to_string()
@@ -1539,7 +1569,6 @@ mod app_builder {
 
         // For app build
         include: Vec<String>,
-        temp_dir: Option<WithSource<String>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
 
@@ -1555,6 +1584,9 @@ mod app_builder {
             EnvironmentName,
             BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>,
         >,
+
+        mcp_deployments:
+            BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
@@ -1585,24 +1617,16 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
-            let resolved_temp_dir = {
-                match builder.temp_dir.as_ref() {
-                    Some(temp_dir) => temp_dir.source.join(&temp_dir.value),
-                    None => Path::new(DEFAULT_TEMP_DIR).to_path_buf(),
-                }
-            };
-
             validation.build(Application {
                 environments,
                 component_preset_selector: component_presets,
                 application_name,
                 all_sources: builder.all_sources,
-                temp_dir: builder.temp_dir,
-                resolved_temp_dir,
                 components: builder.components,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
+                mcp_deployments: builder.mcp_deployments,
                 bridge_sdks: builder.bridge_sdks,
             })
         }
@@ -1681,15 +1705,6 @@ mod app_builder {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
                     self.all_sources.insert(app.source.clone());
 
-                    if let Some(dir) = app.application.temp_dir {
-                        if self
-                            .add_entity_source(UniqueSourceCheckedEntityKey::TempDir, &app.source)
-                        {
-                            self.temp_dir =
-                                Some(WithSource::new(app_source_dir.to_path_buf(), dir));
-                        }
-                    }
-
                     if !app.application.includes.is_empty()
                         && self
                         .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
@@ -1698,7 +1713,7 @@ mod app_builder {
                     }
 
                     for (template_name, template) in app.application.component_templates {
-                        let template_name = TemplateName::from(template_name);
+                        let template_name = AppTemplateName::from(template_name);
                         if self.add_entity_source(
                             UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                             &app.source,
@@ -1771,8 +1786,27 @@ mod app_builder {
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
                                         webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
-                                        agents
+                                        agents,
                                     },
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(mcp) = app.application.mcp {
+                        for (environment, deployments) in mcp.deployments {
+                            for mcp_deployment in deployments {
+                                let mcp_deployments =
+                                    self.mcp_deployments.entry(environment.clone()).or_default();
+
+                                let agents = mcp_deployment.agents
+                                    .into_iter()
+                                    .map(|(k, _v)| (k, McpDeploymentAgentOptions {}))
+                                    .collect();
+
+                                mcp_deployments.entry(mcp_deployment.domain.clone()).or_insert(WithSource::new(
+                                    app.source.to_path_buf(),
+                                    McpDeploymentDeployProperties { agents },
                                 ));
                             }
                         }
@@ -1894,7 +1928,7 @@ mod app_builder {
         fn add_component_template(
             &mut self,
             validation: &mut ValidationBuilder,
-            template_name: TemplateName,
+            template_name: AppTemplateName,
             template: app_raw::ComponentTemplate,
         ) {
             validation.with_context(

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -40,6 +40,11 @@ impl DeploymentPlan {
                 .iter()
                 .map(|had| (had.domain.0.clone(), had.hash.into()))
                 .collect(),
+            mcp_deployments: self
+                .mcp_deployments
+                .iter()
+                .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
+                .collect(),
         }
     }
 }
@@ -56,6 +61,11 @@ impl DeploymentSummary {
                 .http_api_deployments
                 .iter()
                 .map(|had| (had.domain.0.clone(), had.hash.into()))
+                .collect(),
+            mcp_deployments: self
+                .mcp_deployments
+                .iter()
+                .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
                 .collect(),
         }
     }

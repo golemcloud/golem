@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -95,7 +95,6 @@ impl GolemCliCommand {
                     "preset",
                     "profile",
                     "show_sensitive",
-                    "template_group",
                 ],
                 exclude_hidden: true,
             },
@@ -197,10 +196,6 @@ pub struct GolemCliGlobalFlags {
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 112)]
     pub dev_mode: bool,
-
-    /// Switch to experimental or development-only template groups
-    #[arg(long, global = true, display_order = 113)]
-    pub template_group: Option<String>,
 
     #[command(flatten)]
     verbosity: Verbosity,
@@ -1573,6 +1568,10 @@ pub mod server {
         #[clap(long)]
         pub custom_request_port: Option<u16>,
 
+        /// Port to serve custom requests on, defaults to 9006
+        #[clap(long)]
+        pub mcp_port: Option<u16>,
+
         /// Directory to store data in. Defaults to $XDG_STATE_HOME/golem
         #[clap(long)]
         pub data_dir: Option<PathBuf>,
@@ -1593,6 +1592,9 @@ pub mod server {
 
         pub fn custom_request_port(&self) -> u16 {
             self.custom_request_port.unwrap_or(9006)
+        }
+        pub fn mcp_port(&self) -> u16 {
+            self.mcp_port.unwrap_or(9007)
         }
     }
 

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -49,6 +49,9 @@ use golem_registry_service::repo::model::environment_share::EnvironmentShareRevi
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
+};
+use golem_registry_service::repo::model::mcp_deployment::{
+    McpDeploymentData, McpDeploymentRepoError, McpDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
@@ -1263,7 +1266,9 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         hash: SqlBlake3Hash::empty(),
         components: vec![],
         http_api_deployments: vec![],
+        mcp_deployments: vec![],
         compiled_routes: vec![],
+        compiled_mcp: vec![],
         registered_agent_types: vec![agent_type_record],
     };
 
@@ -1480,4 +1485,184 @@ pub async fn test_resolve_agent_type_unknown_email_returns_none(deps: &Deps) {
         .unwrap();
 
     assert!(result.is_none());
+}
+
+pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
+    let user = deps.create_account().await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let deployment_id = new_repo_uuid();
+    let domain = "test-mcp.com";
+    let revision_0 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _created_deployment = deps
+        .mcp_deployment_repo
+        .create(env.revision.environment_id, domain, revision_0.clone())
+        .await
+        .unwrap();
+
+    let fetched_deployment = deps
+        .mcp_deployment_repo
+        .get_staged_by_id(deployment_id)
+        .await
+        .unwrap();
+    let_assert!(Some(fetched_deployment) = fetched_deployment);
+    assert!(fetched_deployment.revision.revision_id == revision_0.revision_id);
+    assert!(fetched_deployment.domain == domain);
+
+    let fetched_by_domain = deps
+        .mcp_deployment_repo
+        .get_staged_by_domain(env.revision.environment_id, domain)
+        .await
+        .unwrap();
+    let_assert!(Some(fetched_by_domain) = fetched_by_domain);
+    assert!(fetched_by_domain.revision.revision_id == revision_0.revision_id);
+    assert!(fetched_by_domain.domain == domain);
+
+    // Update the deployment (domain stays the same, only data changes)
+    let revision_1 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 1,
+        hash: SqlBlake3Hash::empty(),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let updated_deployment = deps
+        .mcp_deployment_repo
+        .update(revision_1.clone())
+        .await
+        .unwrap();
+
+    assert!(updated_deployment.revision.revision_id == revision_1.revision_id);
+    assert!(updated_deployment.domain == domain);
+
+    // Domain should still be found
+    let domain_query = deps
+        .mcp_deployment_repo
+        .get_staged_by_domain(env.revision.environment_id, domain)
+        .await
+        .unwrap();
+    let_assert!(Some(domain_query) = domain_query);
+    assert!(domain_query.revision.revision_id == revision_1.revision_id);
+    assert!(domain_query.domain == domain);
+}
+
+pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
+    let user = deps.create_account().await;
+    let app = deps.create_application(user.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+
+    let deployment_id = new_repo_uuid();
+    let domain = "test-mcp-1.com";
+    let revision_0 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _created_deployment = deps
+        .mcp_deployment_repo
+        .create(env.revision.environment_id, domain, revision_0.clone())
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
+
+    // Update the deployment
+    let revision_1 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: deployment_id,
+        revision_id: 1,
+        hash: SqlBlake3Hash::empty(),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _updated_deployment = deps
+        .mcp_deployment_repo
+        .update(revision_1.clone())
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
+
+    // Create another deployment
+    let other_deployment_id = new_repo_uuid();
+    let other_domain = "test-mcp-2.com";
+    let other_revision_0 = McpDeploymentRevisionRecord {
+        mcp_deployment_id: other_deployment_id,
+        revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
+        data: Blob::new(McpDeploymentData {
+            agents: Default::default(),
+        }),
+        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+    };
+
+    let _created_other_deployment = deps
+        .mcp_deployment_repo
+        .create(
+            env.revision.environment_id,
+            other_domain,
+            other_revision_0.clone(),
+        )
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 2);
+
+    let delete_with_old_revision = deps
+        .mcp_deployment_repo
+        .delete(user.revision.account_id, deployment_id, 1)
+        .await;
+
+    let_assert!(Err(McpDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
+
+    deps.mcp_deployment_repo
+        .delete(user.revision.account_id, deployment_id, 2)
+        .await
+        .unwrap();
+
+    let deployments = deps
+        .mcp_deployment_repo
+        .list_staged(env.revision.environment_id)
+        .await
+        .unwrap();
+
+    assert!(deployments.len() == 1);
 }
