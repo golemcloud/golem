@@ -6,7 +6,7 @@
   "main": "dist/src/run.js",
   "scripts": {
     "start": "tsx src/run.ts",
-    "test": "node --test dist/tests/**/*.test.js",
+    "test": "node --test dist/tests/*.test.js",
     "build": "tsc",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --no-error-on-unmatched-pattern",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
