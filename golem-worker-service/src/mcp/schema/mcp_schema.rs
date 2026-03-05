@@ -18,6 +18,8 @@ use golem_common::base_model::agent::{
 use golem_wasm::analysis::AnalysedType;
 use serde_json::{Map, Value, json};
 
+pub const MULTIMODAL_PARTS_FIELD: &str = "parts";
+
 #[derive(Default)]
 pub struct McpSchema {
     pub properties: Map<FieldName, JsonTypeDescription>,
@@ -110,6 +112,39 @@ impl McpSchema {
         }
     }
 
+    pub fn from_multimodal_element_schemas(schemas: &[NamedElementSchema]) -> McpSchema {
+        let one_of: Vec<Value> = schemas
+            .iter()
+            .map(|s| {
+                let value_schema = element_schema_to_json_schema(&s.schema);
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "const": s.name},
+                        "value": value_schema
+                    },
+                    "required": ["name", "value"],
+                    "additionalProperties": false
+                })
+            })
+            .collect();
+
+        let array_schema = json!({
+            "type": "array",
+            "items": {
+                "oneOf": one_of
+            }
+        });
+
+        let mut properties: Map<String, JsonTypeDescription> = Map::new();
+        properties.insert(MULTIMODAL_PARTS_FIELD.to_string(), array_schema);
+
+        McpSchema {
+            properties,
+            required: vec![MULTIMODAL_PARTS_FIELD.to_string()],
+        }
+    }
+
     pub fn from_record_fields(fields: &[(&str, &AnalysedType)]) -> McpSchema {
         let mut properties: Map<String, JsonTypeDescription> = Map::new();
         let mut required = Vec::new();
@@ -130,6 +165,50 @@ impl McpSchema {
 
 pub type JsonTypeDescription = Value;
 pub type FieldName = String;
+
+fn element_schema_to_json_schema(schema: &ElementSchema) -> JsonTypeDescription {
+    match schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            analysed_type_to_json_schema(element_type)
+        }
+        ElementSchema::UnstructuredText(descriptor) => {
+            let language_code_description = match &descriptor.restrictions {
+                Some(types) if !types.is_empty() => {
+                    let codes: Vec<&str> =
+                        types.iter().map(|t| t.language_code.as_str()).collect();
+                    format!("Language code. Must be one of: {}", codes.join(", "))
+                }
+                _ => "Language code".to_string(),
+            };
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Text content"},
+                    "languageCode": {"type": "string", "description": language_code_description}
+                },
+                "required": ["data"]
+            })
+        }
+        ElementSchema::UnstructuredBinary(descriptor) => {
+            let mime_type_description = match &descriptor.restrictions {
+                Some(types) if !types.is_empty() => {
+                    let mimes: Vec<&str> =
+                        types.iter().map(|t| t.mime_type.as_str()).collect();
+                    format!("MIME type. Must be one of: {}", mimes.join(", "))
+                }
+                _ => "MIME type".to_string(),
+            };
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "string", "description": "Base64-encoded binary data"},
+                    "mimeType": {"type": "string", "description": mime_type_description}
+                },
+                "required": ["data", "mimeType"]
+            })
+        }
+    }
+}
 
 // Based on https://modelcontextprotocol.io/specification/2025-11-25/server/tools and
 // https://json-schema.org/draft/2020-12/json-schema-core (Example: oneOf)

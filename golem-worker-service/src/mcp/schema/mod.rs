@@ -15,6 +15,6 @@
 pub use mcp_schema_mapping::*;
 pub use mcp_tool_schema::*;
 
-mod mcp_schema;
+pub(crate) mod mcp_schema;
 mod mcp_schema_mapping;
 mod mcp_tool_schema;

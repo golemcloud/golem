@@ -14,6 +14,7 @@
 
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
+use crate::mcp::schema::mcp_schema::MULTIMODAL_PARTS_FIELD;
 use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::WorkerId;
@@ -385,12 +386,51 @@ fn extract_method_parameters(
             Ok(UntypedDataValue::Tuple(elements))
         }
         DataSchema::Multimodal(named_schemas) => {
+            let parts_array = args_map
+                .get(MULTIMODAL_PARTS_FIELD)
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| {
+                    format!(
+                        "Multimodal input requires a '{}' array field",
+                        MULTIMODAL_PARTS_FIELD
+                    )
+                })?;
+
+            let schema_map: std::collections::HashMap<&str, &ElementSchema> = named_schemas
+                .elements
+                .iter()
+                .map(|s| (s.name.as_str(), &s.schema))
+                .collect();
+
             let mut named_elements = Vec::new();
-            for schema_element in &named_schemas.elements {
+            for (i, part) in parts_array.iter().enumerate() {
+                let obj = part.as_object().ok_or_else(|| {
+                    format!("parts[{}] must be an object with 'name' and 'value'", i)
+                })?;
+
+                let name = obj
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("parts[{}] is missing 'name' string field", i))?;
+
+                let elem_schema = schema_map.get(name).ok_or_else(|| {
+                    format!(
+                        "parts[{}]: unknown element name '{}'. Expected one of: {}",
+                        i,
+                        name,
+                        schema_map.keys().copied().collect::<Vec<_>>().join(", ")
+                    )
+                })?;
+
+                let value_json = obj
+                    .get("value")
+                    .ok_or_else(|| format!("parts[{}] is missing 'value' field", i))?;
+
                 let element =
-                    extract_single_element_value(args_map, &schema_element.name, &schema_element.schema)?;
+                    extract_multimodal_element_value(name, value_json, elem_schema, i)?;
+
                 named_elements.push(UntypedNamedElementValue {
-                    name: schema_element.name.clone(),
+                    name: name.to_string(),
                     value: element,
                 });
             }
@@ -410,6 +450,124 @@ fn extract_element_values(
         params.push(element);
     }
     Ok(params)
+}
+
+fn extract_multimodal_element_value(
+    name: &str,
+    value_json: &serde_json::Value,
+    elem_schema: &ElementSchema,
+    index: usize,
+) -> Result<UntypedElementValue, String> {
+    match elem_schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            let value_and_type =
+                golem_wasm::ValueAndType::parse_with_type(value_json, element_type).map_err(
+                    |errs| {
+                        format!(
+                            "parts[{}] '{}': failed to parse value: {}",
+                            index,
+                            name,
+                            errs.join(", ")
+                        )
+                    },
+                )?;
+            Ok(UntypedElementValue::ComponentModel(value_and_type.value))
+        }
+        ElementSchema::UnstructuredText(descriptor) => {
+            let obj = value_json.as_object().ok_or_else(|| {
+                format!(
+                    "parts[{}] '{}': value must be an object with 'data' and optional 'languageCode'",
+                    index, name
+                )
+            })?;
+
+            let data = obj
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!("parts[{}] '{}': missing 'data' string field", index, name)
+                })?
+                .to_string();
+
+            let language_code = obj.get("languageCode").and_then(|v| v.as_str());
+
+            if let Some(code) = language_code {
+                if let Some(allowed) = &descriptor.restrictions {
+                    if !allowed.is_empty()
+                        && !allowed.iter().any(|t| t.language_code == code)
+                    {
+                        let expected: Vec<&str> =
+                            allowed.iter().map(|t| t.language_code.as_str()).collect();
+                        return Err(format!(
+                            "parts[{}] '{}': language code '{}' is not allowed. Expected one of: {}",
+                            index, name, code, expected.join(", ")
+                        ));
+                    }
+                }
+            }
+
+            let text_type = language_code.map(|code| TextType {
+                language_code: code.to_string(),
+            });
+
+            Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource { data, text_type }),
+            }))
+        }
+        ElementSchema::UnstructuredBinary(descriptor) => {
+            let obj = value_json.as_object().ok_or_else(|| {
+                format!(
+                    "parts[{}] '{}': value must be an object with 'data' and 'mimeType'",
+                    index, name
+                )
+            })?;
+
+            let b64 = obj.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
+                format!("parts[{}] '{}': missing 'data' string field", index, name)
+            })?;
+
+            let mime_type = obj
+                .get("mimeType")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "parts[{}] '{}': missing 'mimeType' string field",
+                        index, name
+                    )
+                })?;
+
+            if let Some(allowed) = &descriptor.restrictions {
+                if !allowed.is_empty() && !allowed.iter().any(|t| t.mime_type == mime_type) {
+                    let expected: Vec<&str> =
+                        allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                    return Err(format!(
+                        "parts[{}] '{}': MIME type '{}' is not allowed. Expected one of: {}",
+                        index, name, mime_type, expected.join(", ")
+                    ));
+                }
+            }
+
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| {
+                    format!(
+                        "parts[{}] '{}': failed to decode base64: {}",
+                        index, name, e
+                    )
+                })?;
+
+            Ok(UntypedElementValue::UnstructuredBinary(
+                BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data,
+                        binary_type: BinaryType {
+                            mime_type: mime_type.to_string(),
+                        },
+                    }),
+                },
+            ))
+        }
+    }
 }
 
 fn extract_single_element_value(
