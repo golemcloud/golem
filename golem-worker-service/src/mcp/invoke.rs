@@ -15,8 +15,8 @@
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::service::worker::WorkerService;
-use golem_common::base_model::WorkerId;
 use base64::Engine;
+use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
@@ -57,15 +57,11 @@ pub async fn invoke_tool(
         None,
     );
 
-    let method_params =
-        extract_method_parameters(&args_map, &mcp_tool.raw_method.input_schema)
-            .map_err(|e| {
-                tracing::error!("Failed to extract method parameters: {}", e);
-                ErrorData::invalid_params(
-                    format!("Failed to extract method parameters: {}", e),
-                    None,
-                )
-            })?;
+    let method_params = extract_method_parameters(&args_map, &mcp_tool.raw_method.input_schema)
+        .map_err(|e| {
+            tracing::error!("Failed to extract method parameters: {}", e);
+            ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
+        })?;
 
     let method_params_data_value = UntypedDataValue::Tuple(method_params);
 
@@ -319,18 +315,51 @@ fn extract_method_parameters(
 
                         UntypedElementValue::ComponentModel(value_and_type.value)
                     }
-                    ElementSchema::UnstructuredText(_) => {
-                        let text = match json_value {
-                            Some(serde_json::Value::String(s)) => s.clone(),
-                            Some(v) => v.to_string(),
+                    ElementSchema::UnstructuredText(descriptor) => {
+                        let obj = match json_value {
+                            Some(serde_json::Value::Object(o)) => o,
+                            Some(_) => {
+                                return Err(format!(
+                                    "Parameter '{}' must be an object with 'data' and optional 'languageCode'",
+                                    name
+                                ));
+                            }
                             None => return Err(format!("Missing parameter: {}", name)),
                         };
 
+                        let data = obj
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                format!("Parameter '{}' is missing 'data' string field", name)
+                            })?
+                            .to_string();
+
+                        let language_code = obj.get("languageCode").and_then(|v| v.as_str());
+
+                        if let Some(code) = language_code {
+                            if let Some(allowed) = &descriptor.restrictions {
+                                if !allowed.is_empty()
+                                    && !allowed.iter().any(|t| t.language_code == code)
+                                {
+                                    let expected: Vec<&str> =
+                                        allowed.iter().map(|t| t.language_code.as_str()).collect();
+                                    return Err(format!(
+                                        "Parameter '{}': language code '{}' is not allowed. Expected one of: {}",
+                                        name,
+                                        code,
+                                        expected.join(", ")
+                                    ));
+                                }
+                            }
+                        }
+
+                        let text_type = language_code.map(|code| TextType {
+                            language_code: code.to_string(),
+                        });
+
                         UntypedElementValue::UnstructuredText(TextReferenceValue {
-                            value: TextReference::Inline(TextSource {
-                                data: text,
-                                text_type: None,
-                            }),
+                            value: TextReference::Inline(TextSource { data, text_type }),
                         })
                     }
                     ElementSchema::UnstructuredBinary(descriptor) => {
@@ -340,24 +369,24 @@ fn extract_method_parameters(
                                 return Err(format!(
                                     "Parameter '{}' must be an object with 'data' and 'mimeType'",
                                     name
-                                ))
+                                ));
                             }
                             None => return Err(format!("Missing parameter: {}", name)),
                         };
 
-                        let b64 = obj
-                            .get("data")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                format!("Parameter '{}' is missing 'data' string field", name)
-                            })?;
+                        let b64 = obj.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
+                            format!("Parameter '{}' is missing 'data' string field", name)
+                        })?;
 
-                        let mime_type = obj
-                            .get("mimeType")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                format!("Parameter '{}' is missing 'mimeType' string field", name)
-                            })?;
+                        let mime_type =
+                            obj.get("mimeType")
+                                .and_then(|v| v.as_str())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "Parameter '{}' is missing 'mimeType' string field",
+                                        name
+                                    )
+                                })?;
 
                         if let Some(allowed) = &descriptor.restrictions {
                             if !allowed.is_empty()
@@ -374,10 +403,11 @@ fn extract_method_parameters(
                             }
                         }
 
-                        let data =
-                            base64::engine::general_purpose::STANDARD.decode(b64).map_err(
-                                |e| format!("Failed to decode base64 parameter '{}': {}", name, e),
-                            )?;
+                        let data = base64::engine::general_purpose::STANDARD
+                            .decode(b64)
+                            .map_err(|e| {
+                                format!("Failed to decode base64 parameter '{}': {}", name, e)
+                            })?;
 
                         UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
                             value: BinaryReference::Inline(BinarySource {

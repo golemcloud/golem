@@ -340,8 +340,7 @@ impl ServerHandler for GolemAgentMcpServer {
 
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                let (router, agent_resources) =
-                    self.build_capabilities(&domain).await;
+                let (router, agent_resources) = self.build_capabilities(&domain).await;
 
                 let tools_by_name = router
                     .list_all()
@@ -349,7 +348,10 @@ impl ServerHandler for GolemAgentMcpServer {
                     .map(|t| (t.name.to_string(), t))
                     .collect();
 
-                *self.tools.write().await = Some(ToolRegistry { tools_by_name, router });
+                *self.tools.write().await = Some(ToolRegistry {
+                    tools_by_name,
+                    router,
+                });
 
                 let mut resources = self.resources.write().await;
                 for resource in agent_resources {

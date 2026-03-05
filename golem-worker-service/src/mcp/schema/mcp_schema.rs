@@ -61,9 +61,24 @@ impl McpSchema {
                     }
                     analysed_type_to_json_schema(element_type)
                 }
-                ElementSchema::UnstructuredText(_) => {
+                ElementSchema::UnstructuredText(descriptor) => {
                     required.push(s.name.clone());
-                    json!({"type": "string"})
+                    let language_code_description = match &descriptor.restrictions {
+                        Some(types) if !types.is_empty() => {
+                            let codes: Vec<&str> =
+                                types.iter().map(|t| t.language_code.as_str()).collect();
+                            format!("Language code. Must be one of: {}", codes.join(", "))
+                        }
+                        _ => "Language code".to_string(),
+                    };
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "data": {"type": "string", "description": "Text content"},
+                            "languageCode": {"type": "string", "description": language_code_description}
+                        },
+                        "required": ["data"]
+                    })
                 }
                 ElementSchema::UnstructuredBinary(descriptor) => {
                     required.push(s.name.clone());
