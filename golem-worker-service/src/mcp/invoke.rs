@@ -31,20 +31,16 @@ pub async fn invoke_tool(
     args_map: JsonObject,
     mcp_tool: &AgentMcpTool,
 ) -> Result<CallToolResult, ErrorData> {
-    let constructor_params = extract_parameters_by_schema(
-        &args_map,
-        &mcp_tool.constructor.input_schema,
-        |value_and_type| ComponentModelElementValue {
-            value: value_and_type,
-        },
-    )
-    .map_err(|e| {
-        tracing::error!("Failed to extract constructor parameters: {}", e);
-        ErrorData::invalid_params(
-            format!("Failed to extract constructor parameters: {}", e),
-            None,
-        )
-    })?;
+    let constructor_params =
+        extract_constructor_parameters(&args_map, &mcp_tool.constructor.input_schema).map_err(
+            |e| {
+                tracing::error!("Failed to extract constructor parameters: {}", e);
+                ErrorData::invalid_params(
+                    format!("Failed to extract constructor parameters: {}", e),
+                    None,
+                )
+            },
+        )?;
 
     let agent_id = AgentId::new(
         mcp_tool.agent_type_name.clone(),
@@ -198,20 +194,14 @@ pub async fn invoke_resource(
                     serde_json::Value::String(param.value.clone()),
                 );
             }
-            extract_parameters_by_schema(
-                &args_map,
-                &mcp_resource.constructor.input_schema,
-                |value_and_type| ComponentModelElementValue {
-                    value: value_and_type,
-                },
-            )
-            .map_err(|e| {
-                tracing::error!("Failed to extract constructor parameters from URI: {}", e);
-                ErrorData::invalid_params(
-                    format!("Failed to extract constructor parameters from URI: {}", e),
-                    None,
-                )
-            })?
+            extract_constructor_parameters(&args_map, &mcp_resource.constructor.input_schema)
+                .map_err(|e| {
+                    tracing::error!("Failed to extract constructor parameters from URI: {}", e);
+                    ErrorData::invalid_params(
+                        format!("Failed to extract constructor parameters from URI: {}", e),
+                        None,
+                    )
+                })?
         }
     };
 
@@ -429,14 +419,10 @@ fn extract_method_parameters(
     }
 }
 
-fn extract_parameters_by_schema<F, A>(
+fn extract_constructor_parameters(
     args_map: &JsonObject,
     schema: &DataSchema,
-    f: F,
-) -> Result<Vec<A>, String>
-where
-    F: Fn(ValueAndType) -> A,
-{
+) -> Result<Vec<ComponentModelElementValue>, String> {
     match schema {
         DataSchema::Tuple(named_schemas) => {
             let mut params = Vec::new();
@@ -469,11 +455,13 @@ where
                                     )
                                 })?;
 
-                        params.push(f(value_and_type));
+                        params.push(ComponentModelElementValue {
+                            value: value_and_type,
+                        });
                     }
                     _ => {
                         return Err(format!(
-                            "Unsupported element schema type for parameter '{}'",
+                            "Unsupported element schema type for constructor parameter '{}'",
                             name
                         ));
                     }
