@@ -39,108 +39,105 @@ impl McpAgentCapability {
         constructor: &AgentConstructor,
         component_id: ComponentId,
     ) -> Self {
-        match &method.input_schema {
-            DataSchema::Tuple(schemas) => {
-                if !schemas.elements.is_empty() {
-                    tracing::debug!(
-                        "Method {} of agent type {} has input parameters, exposing as tool",
-                        method.name,
-                        agent_type_name.0
-                    );
+        let schemas = match &method.input_schema {
+            DataSchema::Tuple(schemas) | DataSchema::Multimodal(schemas) => schemas,
+        };
 
-                    let constructor_schema = get_mcp_schema(&constructor.input_schema);
+        if !schemas.elements.is_empty() {
+            tracing::debug!(
+                "Method {} of agent type {} has input parameters, exposing as tool",
+                method.name,
+                agent_type_name.0
+            );
 
-                    let McpToolSchema {
-                        mut input_schema,
-                        output_schema,
-                    } = get_mcp_tool_schema(method);
+            let constructor_schema = get_mcp_schema(&constructor.input_schema);
 
-                    input_schema.prepend_schema(constructor_schema);
+            let McpToolSchema {
+                mut input_schema,
+                output_schema,
+            } = get_mcp_tool_schema(method);
 
-                    let tool = Tool {
-                        name: Cow::from(get_tool_name(agent_type_name, method)),
+            input_schema.prepend_schema(constructor_schema);
+
+            let tool = Tool {
+                name: Cow::from(get_tool_name(agent_type_name, method)),
+                title: None,
+                description: Some(method.description.clone().into()),
+                input_schema: Arc::new(rmcp::model::JsonObject::from(input_schema)),
+                output_schema: output_schema
+                    .map(|internal| Arc::new(rmcp::model::JsonObject::from(internal))),
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            };
+
+            Self::Tool(Box::new(AgentMcpTool {
+                environment_id: *environment_id,
+                account_id: *account_id,
+                constructor: constructor.clone(),
+                raw_method: method.clone(),
+                tool,
+                component_id,
+                agent_type_name: agent_type_name.clone(),
+            }))
+        } else {
+            tracing::debug!(
+                "Method {} of agent type {} has no input parameters, exposing as resource",
+                method.name,
+                agent_type_name.0
+            );
+
+            let constructor_param_names =
+                AgentMcpResource::constructor_param_names(constructor);
+            let name = AgentMcpResource::resource_name(agent_type_name, method);
+
+            let kind = if constructor_param_names.is_empty() {
+                let uri = AgentMcpResource::static_uri(agent_type_name, method);
+                AgentMcpResourceKind::Static(Annotated::new(
+                    RawResource {
+                        uri,
+                        name,
                         title: None,
-                        description: Some(method.description.clone().into()),
-                        input_schema: Arc::new(rmcp::model::JsonObject::from(input_schema)),
-                        output_schema: output_schema
-                            .map(|internal| Arc::new(rmcp::model::JsonObject::from(internal))),
-                        annotations: None,
-                        execution: None,
+                        description: Some(method.description.clone()),
+                        mime_type: Some("application/json".to_string()),
+                        size: None,
                         icons: None,
                         meta: None,
-                    };
-
-                    Self::Tool(Box::new(AgentMcpTool {
-                        environment_id: *environment_id,
-                        account_id: *account_id,
-                        constructor: constructor.clone(),
-                        raw_method: method.clone(),
-                        tool,
-                        component_id,
-                        agent_type_name: agent_type_name.clone(),
-                    }))
-                } else {
-                    tracing::debug!(
-                        "Method {} of agent type {} has no input parameters, exposing as resource",
-                        method.name,
-                        agent_type_name.0
-                    );
-
-                    let constructor_param_names =
-                        AgentMcpResource::constructor_param_names(constructor);
-                    let name = AgentMcpResource::resource_name(agent_type_name, method);
-
-                    let kind = if constructor_param_names.is_empty() {
-                        let uri = AgentMcpResource::static_uri(agent_type_name, method);
-                        AgentMcpResourceKind::Static(Annotated::new(
-                            RawResource {
-                                uri,
-                                name,
-                                title: None,
-                                description: Some(method.description.clone()),
-                                mime_type: Some("application/json".to_string()),
-                                size: None,
-                                icons: None,
-                                meta: None,
-                            },
-                            None,
-                        ))
-                    } else {
-                        let uri_template = AgentMcpResource::template_uri(
-                            agent_type_name,
-                            method,
-                            &constructor_param_names,
-                        );
-                        AgentMcpResourceKind::Template {
-                            template: Annotated::new(
-                                RawResourceTemplate {
-                                    uri_template,
-                                    name,
-                                    title: None,
-                                    description: Some(method.description.clone()),
-                                    mime_type: Some("application/json".to_string()),
-                                    icons: None,
-                                },
-                                None,
-                            ),
-                            constructor_param_names,
-                        }
-                    };
-
-                    Self::Resource(AgentMcpResource {
-                        kind,
-                        environment_id: *environment_id,
-                        account_id: *account_id,
-                        constructor: constructor.clone(),
-                        raw_method: method.clone(),
-                        component_id,
-                        agent_type_name: agent_type_name.clone(),
-                    })
+                    },
+                    None,
+                ))
+            } else {
+                let uri_template = AgentMcpResource::template_uri(
+                    agent_type_name,
+                    method,
+                    &constructor_param_names,
+                );
+                AgentMcpResourceKind::Template {
+                    template: Annotated::new(
+                        RawResourceTemplate {
+                            uri_template,
+                            name,
+                            title: None,
+                            description: Some(method.description.clone()),
+                            mime_type: Some("application/json".to_string()),
+                            icons: None,
+                        },
+                        None,
+                    ),
+                    constructor_param_names,
                 }
-            }
-            DataSchema::Multimodal(_) => {
-                todo!("Multimodal schema handling not implemented yet")
-            }
+            };
+
+            Self::Resource(AgentMcpResource {
+                kind,
+                environment_id: *environment_id,
+                account_id: *account_id,
+                constructor: constructor.clone(),
+                raw_method: method.clone(),
+                component_id,
+                agent_type_name: agent_type_name.clone(),
+            })
         }
     }
 }

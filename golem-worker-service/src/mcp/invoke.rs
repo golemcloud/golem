@@ -18,11 +18,12 @@ use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::WorkerId;
 use golem_common::base_model::agent::*;
-use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
-use rmcp::model::{CallToolResult, JsonObject, ReadResourceResult, ResourceContents};
+use rmcp::model::{
+    CallToolResult, Content, JsonObject, ReadResourceResult, ResourceContents,
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -53,13 +54,11 @@ pub async fn invoke_tool(
         None,
     );
 
-    let method_params = extract_method_parameters(&args_map, &mcp_tool.raw_method.input_schema)
-        .map_err(|e| {
+    let method_params_data_value =
+        extract_method_parameters(&args_map, &mcp_tool.raw_method.input_schema).map_err(|e| {
             tracing::error!("Failed to extract method parameters: {}", e);
             ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
         })?;
-
-    let method_params_data_value = UntypedDataValue::Tuple(method_params);
 
     let proto_method_parameters: golem_api_grpc::proto::golem::component::UntypedDataValue =
         method_params_data_value.into();
@@ -97,8 +96,19 @@ pub async fn invoke_tool(
         _ => None,
     };
 
-    interpret_agent_response(agent_result, &mcp_tool.raw_method.output_schema)
-        .map(CallToolResult::structured)
+    interpret_agent_response_as_tool_result(agent_result, &mcp_tool.raw_method.output_schema)
+}
+
+fn interpret_agent_response_as_tool_result(
+    invoke_result: Option<UntypedDataValue>,
+    expected_type: &DataSchema,
+) -> Result<CallToolResult, ErrorData> {
+    match invoke_result {
+        Some(untyped_data_value) => {
+            map_agent_response_to_contents(untyped_data_value, expected_type)
+        }
+        None => Ok(CallToolResult::success(vec![])),
+    }
 }
 
 pub fn interpret_agent_response(
@@ -107,7 +117,15 @@ pub fn interpret_agent_response(
 ) -> Result<serde_json::Value, ErrorData> {
     match invoke_result {
         Some(untyped_data_value) => {
-            map_successful_agent_response(untyped_data_value, expected_type)
+            let typed_value = DataValue::try_from_untyped(untyped_data_value, expected_type.clone())
+                .map_err(|error| {
+                    ErrorData::internal_error(
+                        format!("Agent response type mismatch: {error}"),
+                        None,
+                    )
+                })?;
+
+            map_data_value_to_json(typed_value)
                 .map(|json_value| {
                     json!({
                         "return-value": json_value,
@@ -125,10 +143,10 @@ pub fn interpret_agent_response(
     }
 }
 
-fn map_successful_agent_response(
+fn map_agent_response_to_contents(
     agent_response: UntypedDataValue,
     expected_type: &DataSchema,
-) -> Result<serde_json::Value, ErrorData> {
+) -> Result<CallToolResult, ErrorData> {
     let typed_value =
         DataValue::try_from_untyped(agent_response, expected_type.clone()).map_err(|error| {
             ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
@@ -136,43 +154,134 @@ fn map_successful_agent_response(
 
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
-            0 => Ok(json!({})),
-            1 => map_single_element_agent_response(elements.into_iter().next().unwrap()).map_err(
-                |e| {
-                    tracing::error!("Failed to map single element agent response: {}", e);
-                    ErrorData::internal_error(
-                        format!("Failed to map single element agent response: {}", e),
-                        None,
-                    )
-                },
-            ),
+            0 => Ok(CallToolResult::success(vec![])),
+            1 => element_value_to_content(elements.into_iter().next().unwrap()).map(|content| {
+                CallToolResult::success(vec![content])
+            }),
             _ => Err(ErrorData::internal_error(
                 "Unexpected number of response tuple elements".to_string(),
                 None,
             )),
         },
-        DataValue::Multimodal(_) => Err(ErrorData::internal_error(
-            "multi modal response not yet supported".to_string(),
-            None,
-        )),
+        DataValue::Multimodal(NamedElementValues { elements }) => {
+            let contents = elements
+                .into_iter()
+                .map(|named| element_value_to_content(named.value))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(CallToolResult::success(contents))
+        }
     }
 }
 
-fn map_single_element_agent_response(element: ElementValue) -> Result<serde_json::Value, String> {
+fn element_value_to_content(element: ElementValue) -> Result<Content, ErrorData> {
     match element {
         ElementValue::ComponentModel(component_model_value) => {
-            component_model_value.value.to_json_value()
+            let json_value = component_model_value.value.to_json_value().map_err(|e| {
+                ErrorData::internal_error(
+                    format!("Failed to serialize component model response: {e}"),
+                    None,
+                )
+            })?;
+            Ok(Content::text(json_value.to_string()))
         }
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
+            match value {
+                TextReference::Inline(TextSource { data, .. }) => Ok(Content::text(data)),
+                TextReference::Url(url) => Ok(Content::text(url.value)),
+            }
+        }
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
+            match value {
+                BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    Ok(Content::image(b64, binary_type.mime_type))
+                }
+                BinaryReference::Url(url) => Ok(Content::text(url.value)),
+            }
+        }
+    }
+}
 
-        ElementValue::UnstructuredBinary(_) => Err(
-            "Received unstructured binary response, which is not supported in this context"
-                .to_string(),
-        ),
-
-        ElementValue::UnstructuredText(_) => Err(
-            "Received unstructured text response, which is not supported in this context"
-                .to_string(),
-        ),
+fn map_data_value_to_json(typed_value: DataValue) -> Result<serde_json::Value, ErrorData> {
+    match typed_value {
+        DataValue::Tuple(ElementValues { elements }) => match elements.len() {
+            0 => Ok(json!({})),
+            1 => {
+                let element = elements.into_iter().next().unwrap();
+                match element {
+                    ElementValue::ComponentModel(v) => v.value.to_json_value().map_err(|e| {
+                        ErrorData::internal_error(
+                            format!("Failed to serialize component model response: {e}"),
+                            None,
+                        )
+                    }),
+                    ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                        value, ..
+                    }) => match value {
+                        TextReference::Inline(TextSource { data, .. }) => {
+                            Ok(serde_json::Value::String(data))
+                        }
+                        TextReference::Url(url) => Ok(serde_json::Value::String(url.value)),
+                    },
+                    ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                        value,
+                        ..
+                    }) => match value {
+                        BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                            Ok(json!({
+                                "data": b64,
+                                "mimeType": binary_type.mime_type,
+                            }))
+                        }
+                        BinaryReference::Url(url) => Ok(serde_json::Value::String(url.value)),
+                    },
+                }
+            }
+            _ => Err(ErrorData::internal_error(
+                "Unexpected number of response tuple elements".to_string(),
+                None,
+            )),
+        },
+        DataValue::Multimodal(NamedElementValues { elements }) => {
+            let mut result = serde_json::Map::new();
+            for named in elements {
+                let value = match named.value {
+                    ElementValue::ComponentModel(v) => {
+                        v.value.to_json_value().map_err(|e| {
+                            ErrorData::internal_error(
+                                format!("Failed to serialize component model response: {e}"),
+                                None,
+                            )
+                        })?
+                    }
+                    ElementValue::UnstructuredText(UnstructuredTextElementValue {
+                        value,
+                        ..
+                    }) => match value {
+                        TextReference::Inline(TextSource { data, .. }) => {
+                            serde_json::Value::String(data)
+                        }
+                        TextReference::Url(url) => serde_json::Value::String(url.value),
+                    },
+                    ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+                        value,
+                        ..
+                    }) => match value {
+                        BinaryReference::Inline(BinarySource { data, binary_type }) => {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                            json!({
+                                "data": b64,
+                                "mimeType": binary_type.mime_type,
+                            })
+                        }
+                        BinaryReference::Url(url) => serde_json::Value::String(url.value),
+                    },
+                };
+                result.insert(named.name, value);
+            }
+            Ok(serde_json::Value::Object(result))
+        }
     }
 }
 
@@ -269,153 +378,171 @@ pub async fn invoke_resource(
 fn extract_method_parameters(
     args_map: &JsonObject,
     schema: &DataSchema,
-) -> Result<Vec<UntypedElementValue>, String> {
+) -> Result<UntypedDataValue, String> {
     match schema {
         DataSchema::Tuple(named_schemas) => {
-            let mut params = Vec::new();
+            let elements = extract_element_values(args_map, &named_schemas.elements)?;
+            Ok(UntypedDataValue::Tuple(elements))
+        }
+        DataSchema::Multimodal(named_schemas) => {
+            let mut named_elements = Vec::new();
+            for schema_element in &named_schemas.elements {
+                let element =
+                    extract_single_element_value(args_map, &schema_element.name, &schema_element.schema)?;
+                named_elements.push(UntypedNamedElementValue {
+                    name: schema_element.name.clone(),
+                    value: element,
+                });
+            }
+            Ok(UntypedDataValue::Multimodal(named_elements))
+        }
+    }
+}
 
-            for NamedElementSchema {
-                name,
-                schema: elem_schema,
-            } in &named_schemas.elements
-            {
-                let json_value = args_map.get(name);
-                let element = match elem_schema {
-                    ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-                        let json_value = match json_value {
-                            Some(value) => value.clone(),
-                            None => {
-                                if matches!(element_type, AnalysedType::Option(_)) {
-                                    serde_json::Value::Null
-                                } else {
-                                    return Err(format!("Missing parameter: {}", name));
-                                }
-                            }
-                        };
+fn extract_element_values(
+    args_map: &JsonObject,
+    schemas: &[NamedElementSchema],
+) -> Result<Vec<UntypedElementValue>, String> {
+    let mut params = Vec::new();
+    for schema_element in schemas {
+        let element =
+            extract_single_element_value(args_map, &schema_element.name, &schema_element.schema)?;
+        params.push(element);
+    }
+    Ok(params)
+}
 
-                        let value_and_type =
-                            golem_wasm::ValueAndType::parse_with_type(&json_value, element_type)
-                                .map_err(|errs| {
-                                    format!(
-                                        "Failed to parse parameter '{}': {}",
-                                        name,
-                                        errs.join(", ")
-                                    )
-                                })?;
-
-                        UntypedElementValue::ComponentModel(value_and_type.value)
+fn extract_single_element_value(
+    args_map: &JsonObject,
+    name: &str,
+    elem_schema: &ElementSchema,
+) -> Result<UntypedElementValue, String> {
+    let json_value = args_map.get(name);
+    match elem_schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            let json_value = match json_value {
+                Some(value) => value.clone(),
+                None => {
+                    if matches!(element_type, AnalysedType::Option(_)) {
+                        serde_json::Value::Null
+                    } else {
+                        return Err(format!("Missing parameter: {}", name));
                     }
-                    ElementSchema::UnstructuredText(descriptor) => {
-                        let obj = match json_value {
-                            Some(serde_json::Value::Object(o)) => o,
-                            Some(_) => {
-                                return Err(format!(
-                                    "Parameter '{}' must be an object with 'data' and optional 'languageCode'",
-                                    name
-                                ));
-                            }
-                            None => return Err(format!("Missing parameter: {}", name)),
-                        };
+                }
+            };
 
-                        let data = obj
-                            .get("data")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                format!("Parameter '{}' is missing 'data' string field", name)
-                            })?
-                            .to_string();
+            let value_and_type =
+                golem_wasm::ValueAndType::parse_with_type(&json_value, element_type).map_err(
+                    |errs| {
+                        format!(
+                            "Failed to parse parameter '{}': {}",
+                            name,
+                            errs.join(", ")
+                        )
+                    },
+                )?;
 
-                        let language_code = obj.get("languageCode").and_then(|v| v.as_str());
+            Ok(UntypedElementValue::ComponentModel(value_and_type.value))
+        }
+        ElementSchema::UnstructuredText(descriptor) => {
+            let obj = match json_value {
+                Some(serde_json::Value::Object(o)) => o,
+                Some(_) => {
+                    return Err(format!(
+                        "Parameter '{}' must be an object with 'data' and optional 'languageCode'",
+                        name
+                    ));
+                }
+                None => return Err(format!("Missing parameter: {}", name)),
+            };
 
-                        if let Some(code) = language_code {
-                            if let Some(allowed) = &descriptor.restrictions {
-                                if !allowed.is_empty()
-                                    && !allowed.iter().any(|t| t.language_code == code)
-                                {
-                                    let expected: Vec<&str> =
-                                        allowed.iter().map(|t| t.language_code.as_str()).collect();
-                                    return Err(format!(
-                                        "Parameter '{}': language code '{}' is not allowed. Expected one of: {}",
-                                        name,
-                                        code,
-                                        expected.join(", ")
-                                    ));
-                                }
-                            }
-                        }
+            let data = obj
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("Parameter '{}' is missing 'data' string field", name))?
+                .to_string();
 
-                        let text_type = language_code.map(|code| TextType {
-                            language_code: code.to_string(),
-                        });
+            let language_code = obj.get("languageCode").and_then(|v| v.as_str());
 
-                        UntypedElementValue::UnstructuredText(TextReferenceValue {
-                            value: TextReference::Inline(TextSource { data, text_type }),
-                        })
+            if let Some(code) = language_code {
+                if let Some(allowed) = &descriptor.restrictions {
+                    if !allowed.is_empty()
+                        && !allowed.iter().any(|t| t.language_code == code)
+                    {
+                        let expected: Vec<&str> =
+                            allowed.iter().map(|t| t.language_code.as_str()).collect();
+                        return Err(format!(
+                            "Parameter '{}': language code '{}' is not allowed. Expected one of: {}",
+                            name,
+                            code,
+                            expected.join(", ")
+                        ));
                     }
-                    ElementSchema::UnstructuredBinary(descriptor) => {
-                        let obj = match json_value {
-                            Some(serde_json::Value::Object(o)) => o,
-                            Some(_) => {
-                                return Err(format!(
-                                    "Parameter '{}' must be an object with 'data' and 'mimeType'",
-                                    name
-                                ));
-                            }
-                            None => return Err(format!("Missing parameter: {}", name)),
-                        };
-
-                        let b64 = obj.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
-                            format!("Parameter '{}' is missing 'data' string field", name)
-                        })?;
-
-                        let mime_type =
-                            obj.get("mimeType")
-                                .and_then(|v| v.as_str())
-                                .ok_or_else(|| {
-                                    format!(
-                                        "Parameter '{}' is missing 'mimeType' string field",
-                                        name
-                                    )
-                                })?;
-
-                        if let Some(allowed) = &descriptor.restrictions {
-                            if !allowed.is_empty()
-                                && !allowed.iter().any(|t| t.mime_type == mime_type)
-                            {
-                                let expected: Vec<&str> =
-                                    allowed.iter().map(|t| t.mime_type.as_str()).collect();
-                                return Err(format!(
-                                    "Parameter '{}': MIME type '{}' is not allowed. Expected one of: {}",
-                                    name,
-                                    mime_type,
-                                    expected.join(", ")
-                                ));
-                            }
-                        }
-
-                        let data = base64::engine::general_purpose::STANDARD
-                            .decode(b64)
-                            .map_err(|e| {
-                                format!("Failed to decode base64 parameter '{}': {}", name, e)
-                            })?;
-
-                        UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
-                            value: BinaryReference::Inline(BinarySource {
-                                data,
-                                binary_type: BinaryType {
-                                    mime_type: mime_type.to_string(),
-                                },
-                            }),
-                        })
-                    }
-                };
-
-                params.push(element);
+                }
             }
 
-            Ok(params)
+            let text_type = language_code.map(|code| TextType {
+                language_code: code.to_string(),
+            });
+
+            Ok(UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource { data, text_type }),
+            }))
         }
-        DataSchema::Multimodal(_) => Err("Multimodal schema is not yet supported".to_string()),
+        ElementSchema::UnstructuredBinary(descriptor) => {
+            let obj = match json_value {
+                Some(serde_json::Value::Object(o)) => o,
+                Some(_) => {
+                    return Err(format!(
+                        "Parameter '{}' must be an object with 'data' and 'mimeType'",
+                        name
+                    ));
+                }
+                None => return Err(format!("Missing parameter: {}", name)),
+            };
+
+            let b64 = obj.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
+                format!("Parameter '{}' is missing 'data' string field", name)
+            })?;
+
+            let mime_type = obj
+                .get("mimeType")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "Parameter '{}' is missing 'mimeType' string field",
+                        name
+                    )
+                })?;
+
+            if let Some(allowed) = &descriptor.restrictions {
+                if !allowed.is_empty() && !allowed.iter().any(|t| t.mime_type == mime_type) {
+                    let expected: Vec<&str> =
+                        allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                    return Err(format!(
+                        "Parameter '{}': MIME type '{}' is not allowed. Expected one of: {}",
+                        name,
+                        mime_type,
+                        expected.join(", ")
+                    ));
+                }
+            }
+
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| format!("Failed to decode base64 parameter '{}': {}", name, e))?;
+
+            Ok(UntypedElementValue::UnstructuredBinary(
+                BinaryReferenceValue {
+                    value: BinaryReference::Inline(BinarySource {
+                        data,
+                        binary_type: BinaryType {
+                            mime_type: mime_type.to_string(),
+                        },
+                    }),
+                },
+            ))
+        }
     }
 }
 
@@ -470,6 +597,8 @@ fn extract_constructor_input_values(
 
             Ok(params)
         }
-        DataSchema::Multimodal(_) => Err("Multimodal schema is not yet supported".to_string()),
+        DataSchema::Multimodal(_) => {
+            Err("Multimodal constructor parameters not yet supported".to_string())
+        }
     }
 }
