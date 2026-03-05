@@ -1,0 +1,123 @@
+name: Skills Test Harness
+
+on:
+  push:
+    paths:
+      - '.agents/skills/**'
+      - 'tests/harness/**'
+  pull_request:
+    paths:
+      - '.agents/skills/**'
+      - 'tests/harness/**'
+  schedule:
+    - cron: '0 6 * * 1' # Weekly Monday 6am UTC
+  workflow_dispatch:
+    inputs:
+      golem_version:
+        description: 'Golem version to test'
+        required: true
+        default: 'latest'
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: tests/harness/package.json
+
+      - name: Install and Build
+        run: |
+          cd tests/harness
+          npm install
+          npm run build
+
+      - name: Run Unit Tests
+        run: |
+          cd tests/harness
+          npm test
+
+  integration-test:
+    name: ${{ matrix.agent }} x ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude-code, gemini]
+        language: [ts]
+        exclude:
+          - agent: claude-code
+            language: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: tests/harness/package.json
+
+      - name: Install Rust (with wasm32-wasip2)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install Golem
+        run: |
+          curl -Lo golem https://github.com/golemcloud/golem/releases/download/v1.4.2/golem-x86_64-unknown-linux-gnu
+          chmod +x golem
+          sudo mv golem /usr/local/bin/golem
+          golem --version
+
+      - name: Start Golem Server
+        run: |
+          golem server run &
+          for i in {1..30}; do
+            if curl -fsS http://localhost:9881/healthcheck > /dev/null 2>&1; then
+              echo "Golem server is ready"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Install Filesystem Watcher
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install Claude Code
+        if: matrix.agent == 'claude-code'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install Gemini CLI
+        if: matrix.agent == 'gemini'
+        run: |
+          # Gemini CLI installation TBD
+          # npm install -g @google/gemini-cli
+          echo "Gemini CLI installation placeholder"
+
+      - name: Install Harness Dependencies
+        run: |
+          cd tests/harness
+          npm install
+
+      - name: Run Skill Tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          cd tests/harness
+          npx tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.agent }}-${{ matrix.language }}
+          path: tests/harness/results/

@@ -1,0 +1,8 @@
+name: "golem-new-project-ts"
+steps:
+  - id: "create-project"
+    prompt: "Create a new Golem application called test-app with TypeScript"
+    expectedSkills:
+      - "golem-new-project"
+    verify:
+      build: true
