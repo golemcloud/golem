@@ -272,7 +272,7 @@ impl TextView for InvokeResultView {
     fn log(&self) {
         fn log_results_format(format: &str) {
             logln(format!(
-                "Invocation results in {} format:",
+                "Invocation results in {}:",
                 format_message_highlight(format),
             ))
         }
@@ -285,7 +285,7 @@ impl TextView for InvokeResultView {
             if wave_values.is_empty() {
                 logln("Empty result.")
             } else {
-                log_results_format("WAVE");
+                log_results_format(&self.result_format);
                 for wave in wave_values {
                     logln(format!("  - {wave}"));
                 }
@@ -293,8 +293,8 @@ impl TextView for InvokeResultView {
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
                 "
-                Failed to convert invocation result to WAVE format.
-                At the moment WAVE does not support Handle (aka Resource) data type.
+                Failed to convert invocation result to the requested format.
+                At the moment it does not support Handle (aka Resource) data type.
                 "
             )));
             log_results_format("JSON");

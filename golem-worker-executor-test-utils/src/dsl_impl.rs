@@ -458,7 +458,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -486,7 +486,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
@@ -555,7 +555,7 @@ impl TestDsl for TestWorkerExecutor {
         Ok(result)
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, query))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
@@ -614,7 +614,7 @@ impl TestDsl for TestWorkerExecutor {
         Ok(result)
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, recover_immediately))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, recover_immediately))]
     async fn interrupt_with_optional_recovery(
         &self,
         agent_id: &AgentId,
@@ -646,7 +646,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, force))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, force))]
     async fn resume(&self, agent_id: &AgentId, force: bool) -> anyhow::Result<()> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -701,7 +701,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn make_worker_log_event_stream(
         &self,
         agent_id: &AgentId,
@@ -726,7 +726,7 @@ impl TestDsl for TestWorkerExecutor {
         Ok(GrpcWorkerLogEventStream(stream))
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, target_revision, disable_wakeup))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn auto_update_worker(
         &self,
         agent_id: &AgentId,
@@ -761,7 +761,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, target_revision, disable_wakeup))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn manual_update_worker(
         &self,
         agent_id: &AgentId,
@@ -796,7 +796,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn delete_worker(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -823,7 +823,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn get_worker_metadata_opt(
         &self,
         agent_id: &AgentId,
@@ -907,7 +907,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
@@ -939,7 +939,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, path))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, path))]
     async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
@@ -996,7 +996,7 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%worker_id, path))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, path))]
     async fn get_file_contents(&self, agent_id: &AgentId, path: &str) -> anyhow::Result<Bytes> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -1045,7 +1045,7 @@ impl TestDsl for TestWorkerExecutor {
         Ok(Bytes::from(bytes))
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%source_worker_id, target_worker_name))]
+    #[tracing::instrument(level = "info", skip_all, fields(%source_agent_id, target_agent_name))]
     async fn fork_worker(
         &self,
         source_agent_id: &AgentId,

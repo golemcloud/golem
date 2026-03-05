@@ -164,12 +164,19 @@ impl ErrorHandler {
                     )
                     .await
                 {
+                    let canonical_agent_name = self
+                        .ctx
+                        .worker_handler()
+                        .try_recanonicalize_agent_name(
+                            &agent_name_match.agent_name,
+                            &component,
+                        );
                     let agent_id = self
                         .ctx
                         .worker_handler()
                         .validate_worker_and_function_names(
                             &component,
-                            &agent_name_match.agent_name,
+                            &canonical_agent_name,
                             None,
                         )?;
 

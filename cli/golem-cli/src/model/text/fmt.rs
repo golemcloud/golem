@@ -230,6 +230,7 @@ pub fn format_retry_count(retry_count: &u32) -> String {
 }
 
 static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
+    // WIT primitives
     "bool",
     "s8", "s16", "s32", "s64",
     "u8", "u16", "u32", "u64",
@@ -241,17 +242,34 @@ static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
     "result",
     "tuple",
     "record",
+    // Rust types
+    "String",
+    "Option",
+    "Vec",
+    "Result",
+    "Some",
+    "None",
+    "i8", "i16", "i32", "i64",
+    "enum",
+    "flags",
+    // TypeScript types
+    "number",
+    "boolean",
+    "undefined",
+    "Uint8Array",
+    "void",
+    "never",
+    "true",
 };
 
-// TODO: should handle '->'
-// A very naive highlighter for basic coloring of builtin types and user defined names
+// A naive highlighter for basic coloring of builtin types and user defined names
 pub fn format_export(export: &str) -> String {
     if !SHOULD_COLORIZE.should_colorize() {
         return export.to_string();
     }
 
     let separator =
-        Regex::new(r"[ :/.{}()<>,]").expect("Failed to compile export separator pattern");
+        Regex::new(r#"[\s:/.{}()\[\]<>,;|?"]"#).expect("Failed to compile export separator pattern");
     let mut formatted = String::with_capacity(export.len());
 
     fn format_token(target: &mut String, token: &str) {

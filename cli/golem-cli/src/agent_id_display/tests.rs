@@ -934,3 +934,275 @@ use proptest::prelude::*;
             "Unknown language should produce canonical structural format"
         );
     }
+
+#[test]
+fn rust_language_specific_parsed_first() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("Some(42)", &schema, &SourceLanguage::Rust).unwrap();
+    let expected = cm_value(
+        Value::Option(Some(Box::new(Value::U32(42)))),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn ts_language_specific_parsed_first() {
+    let typ = AnalysedType::Record(TypeRecord {
+        name: None,
+        owner: None,
+        fields: vec![NameTypePair {
+            name: "fieldOne".to_string(),
+            typ: AnalysedType::U32(TypeU32),
+        }],
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed =
+        parse_agent_id_params("{ fieldOne: 42 }", &schema, &SourceLanguage::TypeScript).unwrap();
+    let expected = cm_value(Value::Record(vec![Value::U32(42)]), typ);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn canonical_fallback_for_rust_language() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::Rust).unwrap();
+    let expected = cm_value(
+        Value::Option(Some(Box::new(Value::U32(42)))),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn canonical_fallback_for_ts_language() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed =
+        parse_agent_id_params("s(42)", &schema, &SourceLanguage::TypeScript).unwrap();
+    let expected = cm_value(
+        Value::Option(Some(Box::new(Value::U32(42)))),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn combined_error_on_both_failures() {
+    let schema = cm_schema(AnalysedType::U32(TypeU32));
+    let result =
+        parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::Rust);
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("Rust parser"),
+        "error should mention Rust parser: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Structural parser"),
+        "error should mention Structural parser: {}",
+        err.message
+    );
+}
+
+#[test]
+fn combined_error_on_both_failures_ts() {
+    let schema = cm_schema(AnalysedType::U32(TypeU32));
+    let result = parse_agent_id_params(
+        "not_a_number_at_all!!!",
+        &schema,
+        &SourceLanguage::TypeScript,
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("TypeScript parser"),
+        "error should mention TypeScript parser: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Structural parser"),
+        "error should mention Structural parser: {}",
+        err.message
+    );
+}
+
+#[test]
+fn unknown_language_uses_canonical_only() {
+    let schema = cm_schema(AnalysedType::U32(TypeU32));
+    let parsed = parse_agent_id_params(
+        "42",
+        &schema,
+        &SourceLanguage::Other("go".into()),
+    )
+    .unwrap();
+    let expected = cm_value(Value::U32(42), AnalysedType::U32(TypeU32));
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn rust_option_none_parsed() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("None", &schema, &SourceLanguage::Rust).unwrap();
+    let expected = cm_value(Value::Option(None), typ);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn rust_result_ok_parsed() {
+    let typ = AnalysedType::Result(TypeResult {
+        name: None,
+        owner: None,
+        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("Ok(42)", &schema, &SourceLanguage::Rust).unwrap();
+    let expected = cm_value(
+        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn rust_result_err_parsed() {
+    let typ = AnalysedType::Result(TypeResult {
+        name: None,
+        owner: None,
+        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed =
+        parse_agent_id_params(r#"Err("fail")"#, &schema, &SourceLanguage::Rust).unwrap();
+    let expected = cm_value(
+        Value::Result(Err(Some(Box::new(Value::String("fail".into()))))),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn ts_record_camel_case_fields() {
+    let typ = AnalysedType::Record(TypeRecord {
+        name: None,
+        owner: None,
+        fields: vec![
+            NameTypePair {
+                name: "myField".to_string(),
+                typ: AnalysedType::U32(TypeU32),
+            },
+            NameTypePair {
+                name: "anotherField".to_string(),
+                typ: AnalysedType::Str(TypeStr),
+            },
+        ],
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params(
+        r#"{ myField: 10, anotherField: "hi" }"#,
+        &schema,
+        &SourceLanguage::TypeScript,
+    )
+    .unwrap();
+    let expected = cm_value(
+        Value::Record(vec![Value::U32(10), Value::String("hi".into())]),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn rust_variant_pascal_case() {
+    let typ = AnalysedType::Variant(TypeVariant {
+        name: None,
+        owner: None,
+        cases: vec![
+            NameOptionTypePair {
+                name: "MyCase".to_string(),
+                typ: Some(AnalysedType::U32(TypeU32)),
+            },
+            NameOptionTypePair {
+                name: "OtherCase".to_string(),
+                typ: None,
+            },
+        ],
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("MyCase(5)", &schema, &SourceLanguage::Rust).unwrap();
+    let expected = cm_value(
+        Value::Variant {
+            case_idx: 0,
+            case_value: Some(Box::new(Value::U32(5))),
+        },
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn multi_param_rust_syntax() {
+    let schema = DataSchema::Tuple(NamedElementSchemas {
+        elements: vec![
+            NamedElementSchema {
+                name: "p1".to_string(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: AnalysedType::U32(TypeU32),
+                }),
+            },
+            NamedElementSchema {
+                name: "p2".to_string(),
+                schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                    element_type: AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::Str(TypeStr)),
+                    }),
+                }),
+            },
+        ],
+    });
+    let parsed = parse_agent_id_params(
+        r#"42, Some("hello")"#,
+        &schema,
+        &SourceLanguage::Rust,
+    )
+    .unwrap();
+    let expected = DataValue::Tuple(ElementValues {
+        elements: vec![
+            ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(Value::U32(42), AnalysedType::U32(TypeU32)),
+            }),
+            ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::Option(Some(Box::new(Value::String("hello".into())))),
+                    AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::Str(TypeStr)),
+                    }),
+                ),
+            }),
+        ],
+    });
+    assert_eq!(parsed, expected);
+}

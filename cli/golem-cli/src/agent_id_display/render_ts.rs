@@ -17,9 +17,9 @@ use golem_common::model::agent::{
     NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue,
 };
-use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use golem_wasm::Value;
-use heck::ToLowerCamelCase;
+use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::fmt::Write;
 
 pub(super) fn render_value_and_type_ts(vat: &golem_wasm::ValueAndType) -> String {
@@ -202,7 +202,7 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
             Some(inner) => {
                 if matches!(&*type_opt.inner, AnalysedType::Option(_)) {
                     // Nested Option<Option<…>>: wrap Some in `{ some: <inner> }`
-                    // so it can be distinguished from None (`null`) at any depth.
+                    // so it can be distinguished from None (`undefined`) at any depth.
                     buf.push_str("{ some: ");
                     render_cm_value(buf, inner, &type_opt.inner);
                     buf.push_str(" }");
@@ -210,14 +210,14 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
                     render_cm_value(buf, inner, &type_opt.inner);
                 }
             }
-            None => buf.push_str("null"),
+            None => buf.push_str("undefined"),
         },
         (Value::Result(res), AnalysedType::Result(type_res)) => match res {
             Ok(ok_val) => {
                 buf.push_str("{ ok: ");
                 match (ok_val, &type_res.ok) {
                     (Some(v), Some(t)) => render_cm_value(buf, v, t),
-                    _ => buf.push_str("null"),
+                    _ => buf.push_str("undefined"),
                 }
                 buf.push_str(" }");
             }
@@ -225,7 +225,7 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
                 buf.push_str("{ error: ");
                 match (err_val, &type_res.err) {
                     (Some(v), Some(t)) => render_cm_value(buf, v, t),
-                    _ => buf.push_str("null"),
+                    _ => buf.push_str("undefined"),
                 }
                 buf.push_str(" }");
             }
@@ -246,9 +246,158 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
             buf.push_str(" }");
         }
         _ => {
-            buf.push_str("null");
+            buf.push_str("undefined");
         }
     }
+}
+
+pub fn render_type_ts(typ: &AnalysedType, prefer_name: bool) -> String {
+    match typ {
+        AnalysedType::Str(_) | AnalysedType::Chr(_) => "string".to_string(),
+        AnalysedType::Bool(_) => "boolean".to_string(),
+        AnalysedType::U8(_)
+        | AnalysedType::U16(_)
+        | AnalysedType::U32(_)
+        | AnalysedType::U64(_)
+        | AnalysedType::S8(_)
+        | AnalysedType::S16(_)
+        | AnalysedType::S32(_)
+        | AnalysedType::S64(_)
+        | AnalysedType::F32(_)
+        | AnalysedType::F64(_) => "number".to_string(),
+        AnalysedType::Option(to) => {
+            format!("{} | undefined", render_type_ts(&to.inner, prefer_name))
+        }
+        AnalysedType::List(tl) => {
+            if matches!(*tl.inner, AnalysedType::U8(_)) {
+                return "Uint8Array".to_string();
+            }
+            let inner = render_type_ts(&tl.inner, prefer_name);
+            if inner.contains('|') {
+                format!("({inner})[]")
+            } else {
+                format!("{inner}[]")
+            }
+        }
+        AnalysedType::Result(tr) => {
+            let ok = tr
+                .ok
+                .as_ref()
+                .map(|t| render_type_ts(t, prefer_name))
+                .unwrap_or_else(|| "void".to_string());
+            let err = tr
+                .err
+                .as_ref()
+                .map(|t| render_type_ts(t, prefer_name))
+                .unwrap_or_else(|| "void".to_string());
+            format!("Result<{ok}, {err}>")
+        }
+        AnalysedType::Tuple(tt) => render_type_tuple_ts(tt, prefer_name),
+        AnalysedType::Record(tr) => render_type_record_ts(tr, prefer_name),
+        AnalysedType::Variant(tv) => render_type_variant_ts(tv, prefer_name),
+        AnalysedType::Enum(te) => render_type_enum_ts(te, prefer_name),
+        AnalysedType::Flags(tf) => render_type_flags_ts(tf, prefer_name),
+        AnalysedType::Handle(_) => {
+            panic!("Handle types are not supported in type rendering")
+        }
+    }
+}
+
+fn render_type_tuple_ts(tt: &TypeTuple, prefer_name: bool) -> String {
+    let mut buf = String::from("[");
+    for (i, item) in tt.items.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        buf.push_str(&render_type_ts(item, prefer_name));
+    }
+    buf.push(']');
+    buf
+}
+
+fn render_type_record_ts(tr: &TypeRecord, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &tr.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    let mut buf = String::from("{ ");
+    for (i, field) in tr.fields.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(" ");
+        }
+        let key = field.name.to_lower_camel_case();
+        if let AnalysedType::Option(to) = &field.typ {
+            let inner = render_type_ts(&to.inner, prefer_name);
+            let _ = write!(buf, "{key}?: {inner};");
+        } else {
+            let _ = write!(buf, "{key}: {};", render_type_ts(&field.typ, prefer_name));
+        }
+    }
+    buf.push_str(" }");
+    buf
+}
+
+fn render_type_variant_ts(tv: &TypeVariant, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &tv.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    if tv.cases.is_empty() {
+        return "never".to_string();
+    }
+    let mut parts = Vec::new();
+    for case in &tv.cases {
+        let mut tag = String::new();
+        write_json_escaped(&mut tag, &case.name);
+        if let Some(t) = &case.typ {
+            parts.push(format!(
+                "{{ tag: \"{tag}\"; value: {} }}",
+                render_type_ts(t, prefer_name)
+            ));
+        } else {
+            parts.push(format!("{{ tag: \"{tag}\" }}"));
+        }
+    }
+    parts.join(" | ")
+}
+
+fn render_type_enum_ts(te: &TypeEnum, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &te.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    if te.cases.is_empty() {
+        return "never".to_string();
+    }
+    te.cases
+        .iter()
+        .map(|c| {
+            let mut escaped = String::new();
+            write_json_escaped(&mut escaped, c);
+            format!("\"{escaped}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn render_type_flags_ts(tf: &TypeFlags, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &tf.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    let mut buf = String::from("{ ");
+    for (i, flag) in tf.names.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(" ");
+        }
+        let _ = write!(buf, "{}?: true;", flag.to_lower_camel_case());
+    }
+    buf.push_str(" }");
+    buf
 }
 
 fn render_f32(buf: &mut String, v: f32) {

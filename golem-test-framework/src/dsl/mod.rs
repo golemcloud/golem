@@ -527,7 +527,7 @@ pub trait TestDsl {
         self.wait_for_statuses(agent_id, &[status], timeout).await
     }
 
-    #[tracing::instrument(level = "info", skip(self, statuses, timeout), fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip(self, statuses, timeout), fields(%agent_id))]
     async fn wait_for_statuses(
         &self,
         agent_id: &AgentId,
@@ -557,16 +557,16 @@ pub trait TestDsl {
         ))
     }
 
-    #[tracing::instrument(level = "info", skip(self, timeout), fields(%worker_id))]
+    #[tracing::instrument(level = "info", skip(self, timeout), fields(%agent_id))]
     async fn wait_for_component_revision(
         &self,
-        worker_id: &WorkerId,
+        agent_id: &AgentId,
         target_revision: ComponentRevision,
         timeout: Duration,
-    ) -> anyhow::Result<WorkerMetadataDto> {
+    ) -> anyhow::Result<AgentMetadataDto> {
         let start = Instant::now();
         while start.elapsed() < timeout {
-            let metadata = self.get_worker_metadata(worker_id).await?;
+            let metadata = self.get_worker_metadata(agent_id).await?;
 
             if metadata.component_revision >= target_revision {
                 return Ok(metadata);
@@ -576,7 +576,7 @@ pub trait TestDsl {
         }
 
         Err(anyhow!(
-            "Timeout waiting for worker {worker_id} to reach component revision {target_revision}"
+            "Timeout waiting for agent {agent_id} to reach component revision {target_revision}"
         ))
     }
 

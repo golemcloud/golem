@@ -17,7 +17,7 @@ use golem_common::model::agent::{
     NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue,
 };
-use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use golem_wasm::Value;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use std::fmt::Write;
@@ -245,6 +245,142 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
         }
         _ => buf.push_str("<unknown>"),
     }
+}
+
+pub fn render_type_rust(typ: &AnalysedType, prefer_name: bool) -> String {
+    match typ {
+        AnalysedType::Str(_) => "String".to_string(),
+        AnalysedType::Chr(_) => "char".to_string(),
+        AnalysedType::Bool(_) => "bool".to_string(),
+        AnalysedType::U8(_) => "u8".to_string(),
+        AnalysedType::U16(_) => "u16".to_string(),
+        AnalysedType::U32(_) => "u32".to_string(),
+        AnalysedType::U64(_) => "u64".to_string(),
+        AnalysedType::S8(_) => "i8".to_string(),
+        AnalysedType::S16(_) => "i16".to_string(),
+        AnalysedType::S32(_) => "i32".to_string(),
+        AnalysedType::S64(_) => "i64".to_string(),
+        AnalysedType::F32(_) => "f32".to_string(),
+        AnalysedType::F64(_) => "f64".to_string(),
+        AnalysedType::Option(to) => {
+            format!("Option<{}>", render_type_rust(&to.inner, prefer_name))
+        }
+        AnalysedType::List(tl) => {
+            format!("Vec<{}>", render_type_rust(&tl.inner, prefer_name))
+        }
+        AnalysedType::Result(tr) => {
+            let ok = tr
+                .ok
+                .as_ref()
+                .map(|t| render_type_rust(t, prefer_name))
+                .unwrap_or_else(|| "()".to_string());
+            let err = tr
+                .err
+                .as_ref()
+                .map(|t| render_type_rust(t, prefer_name))
+                .unwrap_or_else(|| "()".to_string());
+            format!("Result<{ok}, {err}>")
+        }
+        AnalysedType::Tuple(tt) => render_type_tuple_rust(tt, prefer_name),
+        AnalysedType::Record(tr) => render_type_record_rust(tr, prefer_name),
+        AnalysedType::Variant(tv) => render_type_variant_rust(tv, prefer_name),
+        AnalysedType::Enum(te) => render_type_enum_rust(te, prefer_name),
+        AnalysedType::Flags(tf) => render_type_flags_rust(tf, prefer_name),
+        AnalysedType::Handle(_) => {
+            panic!("Handle types are not supported in type rendering")
+        }
+    }
+}
+
+fn render_type_tuple_rust(tt: &TypeTuple, prefer_name: bool) -> String {
+    let mut buf = String::from("(");
+    for (i, item) in tt.items.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        buf.push_str(&render_type_rust(item, prefer_name));
+    }
+    if tt.items.len() == 1 {
+        buf.push(',');
+    }
+    buf.push(')');
+    buf
+}
+
+fn render_type_record_rust(tr: &TypeRecord, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &tr.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    let mut buf = String::from("{ ");
+    for (i, field) in tr.fields.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        let _ = write!(
+            buf,
+            "{}: {}",
+            field.name.to_snake_case(),
+            render_type_rust(&field.typ, prefer_name)
+        );
+    }
+    buf.push_str(" }");
+    buf
+}
+
+fn render_type_variant_rust(tv: &TypeVariant, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &tv.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    let mut buf = String::from("enum { ");
+    for (i, case) in tv.cases.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        buf.push_str(&case.name.to_upper_camel_case());
+        if let Some(t) = &case.typ {
+            let _ = write!(buf, "({})", render_type_rust(t, prefer_name));
+        }
+    }
+    buf.push_str(" }");
+    buf
+}
+
+fn render_type_enum_rust(te: &TypeEnum, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &te.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    let mut buf = String::from("enum { ");
+    for (i, case) in te.cases.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        buf.push_str(&case.to_upper_camel_case());
+    }
+    buf.push_str(" }");
+    buf
+}
+
+fn render_type_flags_rust(tf: &TypeFlags, prefer_name: bool) -> String {
+    if prefer_name {
+        if let Some(name) = &tf.name {
+            return name.to_upper_camel_case();
+        }
+    }
+    let mut buf = String::from("flags { ");
+    for (i, flag) in tf.names.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        buf.push_str(&flag.to_snake_case());
+    }
+    buf.push_str(" }");
+    buf
 }
 
 fn render_f64(buf: &mut String, v: f64) {

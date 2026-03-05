@@ -442,7 +442,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = self.worker_service.get(&owned_worker_id).await
+        }) = self.worker_service.get(&owned_agent_id).await
         {
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),
@@ -450,7 +450,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             };
             let last_known_status = calculate_last_known_status(
                 &status_deps,
-                &owned_worker_id,
+                &owned_agent_id,
                 last_known_status,
             )
             .await
@@ -459,7 +459,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             initial_worker_metadata
         } else {
             return Err(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
+                owned_agent_id.agent_id(),
             ));
         };
 

@@ -560,7 +560,7 @@ impl<'a> RetryState<'a> {
         error: WorkerServiceError,
         pod: &Option<Pod>,
     ) -> Result<Option<T>, WorkerServiceError> {
-        error!(
+        info!(
             error = error.to_string(),
             pod = format_pod(pod),
             op = self.op,

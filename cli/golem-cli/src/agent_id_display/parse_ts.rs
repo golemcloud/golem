@@ -280,8 +280,8 @@ fn parse_cm_value(lex: &mut Lexer, typ: &AnalysedType) -> Result<ValueAndType, P
                     let val = match &tr.ok {
                         Some(ok_type) => Some(Box::new(parse_cm_value(lex, ok_type)?.value)),
                         None => {
-                            // Unit ok: expect null
-                            if *lex.peek()? == Token::Null { lex.next_token()?; }
+                            // Unit ok: accept null or undefined
+                            if matches!(lex.peek()?, Token::Null | Token::Undefined) { lex.next_token()?; }
                             None
                         }
                     };
@@ -291,8 +291,8 @@ fn parse_cm_value(lex: &mut Lexer, typ: &AnalysedType) -> Result<ValueAndType, P
                     let val = match &tr.err {
                         Some(err_type) => Some(Box::new(parse_cm_value(lex, err_type)?.value)),
                         None => {
-                            // Unit err: expect null
-                            if *lex.peek()? == Token::Null { lex.next_token()?; }
+                            // Unit err: accept null or undefined
+                            if matches!(lex.peek()?, Token::Null | Token::Undefined) { lex.next_token()?; }
                             None
                         }
                     };

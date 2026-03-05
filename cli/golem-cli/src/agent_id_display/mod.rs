@@ -21,7 +21,7 @@ mod render_ts;
 #[cfg(test)]
 mod tests;
 
-use golem_common::model::agent::structural_format::{format_structural, parse_structural};
+use golem_common::model::agent::structural_format::parse_structural;
 use golem_common::model::agent::{DataSchema, DataValue, ParsedAgentId};
 use golem_wasm::ValueAndType;
 
@@ -112,8 +112,7 @@ impl From<parse_ts::ParseError> for ParseError {
 pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_data_value_rust(data_value),
-        SourceLanguage::TypeScript => render_ts::render_data_value_ts(data_value),
-        _ => format_structural(data_value).unwrap_or_else(|_| format!("{data_value:?}")),
+        SourceLanguage::TypeScript | SourceLanguage::Other(_) => render_ts::render_data_value_ts(data_value),
     }
 }
 
@@ -127,8 +126,7 @@ pub fn render_value_and_type(
 ) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_value_and_type_rust(vat),
-        SourceLanguage::TypeScript => render_ts::render_value_and_type_ts(vat),
-        _ => format!("{:?}", vat.value),
+        SourceLanguage::TypeScript | SourceLanguage::Other(_) => render_ts::render_value_and_type_ts(vat),
     }
 }
 
@@ -147,21 +145,64 @@ pub fn render_agent_id(
     result
 }
 
+/// Renders an [`AnalysedType`] as a human-readable type expression using language-specific syntax.
+///
+/// When `prefer_name` is true and the type has a name (e.g., named records, variants),
+/// the name is used instead of the inline structural representation.
+pub fn render_type_for_language(
+    lang: &SourceLanguage,
+    typ: &golem_wasm::analysis::AnalysedType,
+    prefer_name: bool,
+) -> String {
+    match lang {
+        SourceLanguage::Rust => render_rust::render_type_rust(typ, prefer_name),
+        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
+            render_ts::render_type_ts(typ, prefer_name)
+        }
+    }
+}
+
 /// Parses the parameter portion of an agent ID string into a [`DataValue`].
 ///
-/// First attempts parsing using the canonical structural format. If that fails,
-/// falls back to language-specific parsing based on `source_language`.
+/// For known source languages (Rust, TypeScript), first attempts language-specific
+/// parsing. If that fails, falls back to canonical structural parsing. If both fail,
+/// returns a combined error message showing both failures.
+///
+/// For unknown source languages, uses canonical structural parsing directly.
 pub fn parse_agent_id_params(
     input: &str,
     schema: &DataSchema,
     source_language: &SourceLanguage,
 ) -> Result<DataValue, ParseError> {
-    if let Ok(value) = parse_structural(input, schema) {
-        return Ok(value);
-    }
     match source_language {
-        SourceLanguage::Rust => parse_rust::parse_data_value_rust(input, schema).map_err(Into::into),
-        SourceLanguage::TypeScript => parse_ts::parse_data_value_ts(input, schema).map_err(Into::into),
+        SourceLanguage::Rust => {
+            match parse_rust::parse_data_value_rust(input, schema) {
+                Ok(value) => Ok(value),
+                Err(lang_err) => {
+                    parse_structural(input, schema).map_err(|structural_err| ParseError {
+                        position: 0,
+                        message: format!(
+                            "Rust parser: {}; Structural parser: {}",
+                            lang_err, structural_err
+                        ),
+                    })
+                }
+            }
+        }
+        SourceLanguage::TypeScript => {
+            match parse_ts::parse_data_value_ts(input, schema) {
+                Ok(value) => Ok(value),
+                Err(lang_err) => {
+                    parse_structural(input, schema).map_err(|structural_err| ParseError {
+                        position: 0,
+                        message: format!(
+                            "TypeScript parser: {}; Structural parser: {}",
+                            lang_err, structural_err
+                        ),
+                    })
+                }
+            }
+        }
         _ => parse_structural(input, schema).map_err(|e| ParseError {
             position: 0,
             message: e.to_string(),

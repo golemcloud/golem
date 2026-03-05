@@ -245,7 +245,8 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        self.validate_worker_and_function_names(&component, &agent_name_match.agent_name, None)?;
+        let agent_name = self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
+        self.validate_worker_and_function_names(&component, &agent_name, None)?;
 
         log_action(
             "Creating",
@@ -254,7 +255,7 @@ impl WorkerCommandHandler {
 
         self.new_worker(
             component.id.0,
-            agent_name_match.agent_name.0.clone(),
+            agent_name.0.clone(),
             env.into_iter().collect(),
             BTreeMap::from_iter(config_vars),
         )
@@ -263,7 +264,7 @@ impl WorkerCommandHandler {
         logln("");
         self.ctx.log_handler().log_view(&WorkerCreateView {
             component_name: agent_name_match.component_name,
-            agent_name: Some(agent_name_match.agent_name),
+            agent_name: Some(agent_name),
         });
 
         Ok(())
@@ -327,9 +328,10 @@ impl WorkerCommandHandler {
             .await?;
 
         // First, validate without the function name
+        let agent_name = self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
         let agent_id_and_type = self.validate_worker_and_function_names(
             &component,
-            &agent_name_match.agent_name,
+            &agent_name,
             None,
         )?;
 
@@ -564,7 +566,6 @@ impl WorkerCommandHandler {
             .into_iter()
             .find(|t| {
                 t.agent_type.type_name.0 == agent_type_name
-                    || t.agent_type.wrapper_type_name() == agent_type_name
             })
         else {
             bail!("Agent type not found: {}", agent_type_name);
@@ -921,8 +922,36 @@ impl WorkerCommandHandler {
                 )
                 .await?;
 
-            view.workers
-                .extend(workers.into_iter().map(WorkerMetadataView::from));
+            view.workers.extend(workers.into_iter().map(|w| {
+                let raw_agent_name = w.agent_id.agent_id.clone();
+                let source_language = ParsedAgentId::parse_agent_type_name(&raw_agent_name)
+                    .ok()
+                    .and_then(|type_name| {
+                        component
+                            .metadata
+                            .agent_types()
+                            .iter()
+                            .find(|at| at.type_name == type_name)
+                            .map(|at| SourceLanguage::from(at.source_language.as_str()))
+                    })
+                    .unwrap_or_default();
+
+                let mut view = WorkerMetadataView::from(w);
+
+                if source_language.is_known() {
+                    if let Ok(parsed) =
+                        ParsedAgentId::parse(&raw_agent_name, &component.metadata)
+                    {
+                        view.agent_name = crate::agent_id_display::render_agent_id(
+                            &parsed,
+                            &source_language,
+                        )
+                        .into();
+                    }
+                }
+
+                view.with_source_language(source_language)
+            }));
             scan_cursor.into_iter().for_each(|scan_cursor| {
                 view.cursors.insert(
                     component.component_name.to_string(),
@@ -1752,25 +1781,20 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
-        // Try to re-canonicalize the agent name using language-aware parsing
-        let agent_name = if agent_name_match.source_language.is_known() {
-            self.try_recanonicalize_agent_name(
-                &agent_name_match.agent_name,
-                &component,
-                &agent_name_match.source_language,
-            )
-        } else {
-            agent_name_match.agent_name.clone()
-        };
+        // Try to re-canonicalize the agent name using language-aware parsing.
+        // Language is auto-detected from agent type metadata.
+        let agent_name = self.try_recanonicalize_agent_name(
+            &agent_name_match.agent_name,
+            &component,
+        );
 
         Ok((component, agent_name))
     }
 
-    fn try_recanonicalize_agent_name(
+    pub(crate) fn try_recanonicalize_agent_name(
         &self,
         agent_name: &RawAgentId,
         component: &ComponentDto,
-        source_language: &SourceLanguage,
     ) -> RawAgentId {
         let raw = &agent_name.0;
 
@@ -1820,11 +1844,15 @@ impl WorkerCommandHandler {
             return agent_name.clone();
         };
 
+        // Derive source language from agent type metadata
+        let source_language =
+            SourceLanguage::from(agent_type.source_language.as_str());
+
         // Try language-aware parse
         let Ok(data_value) = crate::agent_id_display::parse_agent_id_params(
             params_str,
             &agent_type.constructor.input_schema,
-            source_language,
+            &source_language,
         ) else {
             return agent_name.clone();
         };
@@ -1836,7 +1864,7 @@ impl WorkerCommandHandler {
             return agent_name.clone();
         };
 
-        let mut new_id = format!("{type_name}({canonical})");
+        let mut new_id = format!("{}({canonical})", agent_type.type_name.0);
         if let Some(phantom) = phantom_str {
             new_id.push_str(phantom);
         }

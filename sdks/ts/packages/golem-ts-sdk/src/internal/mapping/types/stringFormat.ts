@@ -22,5 +22,3 @@ export function trimQuotes(s: string): string {
   }
   return s;
 }
-
-

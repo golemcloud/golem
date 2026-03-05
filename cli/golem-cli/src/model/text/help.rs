@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::log::{logln, LogColorize};
-use crate::model::component::render_type;
+use crate::agent_id_display::{render_type_for_language, SourceLanguage};
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
@@ -322,6 +322,7 @@ pub struct ArgumentError {
     pub type_: Option<AnalysedType>,
     pub value: Option<String>,
     pub error: Option<String>,
+    pub source_language: SourceLanguage,
 }
 
 // TODO: limit long values
@@ -339,7 +340,7 @@ impl From<&ArgumentError> for ParameterErrorTable {
     fn from(value: &ArgumentError) -> Self {
         Self {
             parameter_type_: textwrap::wrap(
-                &value.type_.as_ref().map(render_type).unwrap_or_default(),
+                &value.type_.as_ref().map(|t| render_type_for_language(&value.source_language, t, true)).unwrap_or_default(),
                 textwrap::Options::new(30).word_splitter(WordSplitter::NoHyphenation),
             )
             .join("\n"),

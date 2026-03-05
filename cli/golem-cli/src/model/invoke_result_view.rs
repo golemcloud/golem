@@ -28,6 +28,12 @@ pub struct InvokeResultView {
     pub result_json: Option<ValueAndType>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result_wave: Option<Vec<String>>,
+    #[serde(default = "default_result_format")]
+    pub result_format: String,
+}
+
+fn default_result_format() -> String {
+    "WAVE".to_string()
 }
 
 impl InvokeResultView {
@@ -38,6 +44,13 @@ impl InvokeResultView {
         method_name: &str,
     ) -> Self {
         let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+
+        let result_format = match &source_language {
+            SourceLanguage::Rust => "Rust syntax",
+            SourceLanguage::TypeScript => "TypeScript syntax",
+            SourceLanguage::Other(_) => "WAVE",
+        }
+        .to_string();
 
         let rendered =
             match Self::try_render_agent_result(&result, agent_type, method_name, &source_language)
@@ -94,6 +107,7 @@ impl InvokeResultView {
             idempotency_key: idempotency_key.value,
             result_json,
             result_wave: rendered,
+            result_format,
         }
     }
 
@@ -102,6 +116,7 @@ impl InvokeResultView {
             idempotency_key: idempotency_key.value,
             result_json: None,
             result_wave: None,
+            result_format: default_result_format(),
         }
     }
 

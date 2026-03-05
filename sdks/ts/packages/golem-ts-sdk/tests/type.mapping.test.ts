@@ -224,7 +224,11 @@ test('Union with literals to AnalysedType', () => {
           name: 'UnionWithLiterals1',
           typ: {
             kind: 'record',
-            value: { fields: [{ name: 'n', typ: { kind: 'f64' } }], name: undefined, owner: undefined },
+            value: {
+              fields: [{ name: 'n', typ: { kind: 'f64' } }],
+              name: undefined,
+              owner: undefined,
+            },
           },
         },
       ],
