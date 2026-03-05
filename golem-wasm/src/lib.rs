@@ -87,7 +87,7 @@ pub mod derive {
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use wstd::wasi;
+pub use wasip2 as wasi;
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
@@ -102,7 +102,7 @@ pub use golem_core_1_5_x::types::{
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
-pub use wstd::wasi::io::poll::Pollable;
+pub use wasip2::io::poll::Pollable;
 
 #[cfg(feature = "host")]
 pub use wasmtime_wasi::p2::DynPollable;
