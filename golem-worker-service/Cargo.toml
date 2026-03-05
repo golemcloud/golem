@@ -38,6 +38,7 @@ golem-wasm = { workspace = true, default-features = true }
 golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
+base64 = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bytes = { workspace = true }

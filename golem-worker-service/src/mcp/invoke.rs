@@ -16,6 +16,7 @@ use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::service::worker::WorkerService;
 use golem_common::base_model::WorkerId;
+use base64::Engine;
 use golem_common::base_model::agent::*;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
@@ -57,13 +58,14 @@ pub async fn invoke_tool(
     );
 
     let method_params =
-        extract_parameters_by_schema(&args_map, &mcp_tool.raw_method.input_schema, |vat| {
-            UntypedElementValue::ComponentModel(vat.value)
-        })
-        .map_err(|e| {
-            tracing::error!("Failed to extract method parameters: {}", e);
-            ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
-        })?;
+        extract_method_parameters(&args_map, &mcp_tool.raw_method.input_schema)
+            .map_err(|e| {
+                tracing::error!("Failed to extract method parameters: {}", e);
+                ErrorData::invalid_params(
+                    format!("Failed to extract method parameters: {}", e),
+                    None,
+                )
+            })?;
 
     let method_params_data_value = UntypedDataValue::Tuple(method_params);
 
@@ -276,6 +278,125 @@ pub async fn invoke_resource(
     Ok(ReadResourceResult {
         contents: vec![ResourceContents::text(json_value.to_string(), uri)],
     })
+}
+
+fn extract_method_parameters(
+    args_map: &JsonObject,
+    schema: &DataSchema,
+) -> Result<Vec<UntypedElementValue>, String> {
+    match schema {
+        DataSchema::Tuple(named_schemas) => {
+            let mut params = Vec::new();
+
+            for NamedElementSchema {
+                name,
+                schema: elem_schema,
+            } in &named_schemas.elements
+            {
+                let json_value = args_map.get(name);
+                let element = match elem_schema {
+                    ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+                        let json_value = match json_value {
+                            Some(value) => value.clone(),
+                            None => {
+                                if matches!(element_type, AnalysedType::Option(_)) {
+                                    serde_json::Value::Null
+                                } else {
+                                    return Err(format!("Missing parameter: {}", name));
+                                }
+                            }
+                        };
+
+                        let value_and_type =
+                            golem_wasm::ValueAndType::parse_with_type(&json_value, element_type)
+                                .map_err(|errs| {
+                                    format!(
+                                        "Failed to parse parameter '{}': {}",
+                                        name,
+                                        errs.join(", ")
+                                    )
+                                })?;
+
+                        UntypedElementValue::ComponentModel(value_and_type.value)
+                    }
+                    ElementSchema::UnstructuredText(_) => {
+                        let text = match json_value {
+                            Some(serde_json::Value::String(s)) => s.clone(),
+                            Some(v) => v.to_string(),
+                            None => return Err(format!("Missing parameter: {}", name)),
+                        };
+
+                        UntypedElementValue::UnstructuredText(TextReferenceValue {
+                            value: TextReference::Inline(TextSource {
+                                data: text,
+                                text_type: None,
+                            }),
+                        })
+                    }
+                    ElementSchema::UnstructuredBinary(descriptor) => {
+                        let obj = match json_value {
+                            Some(serde_json::Value::Object(o)) => o,
+                            Some(_) => {
+                                return Err(format!(
+                                    "Parameter '{}' must be an object with 'data' and 'mimeType'",
+                                    name
+                                ))
+                            }
+                            None => return Err(format!("Missing parameter: {}", name)),
+                        };
+
+                        let b64 = obj
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                format!("Parameter '{}' is missing 'data' string field", name)
+                            })?;
+
+                        let mime_type = obj
+                            .get("mimeType")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                format!("Parameter '{}' is missing 'mimeType' string field", name)
+                            })?;
+
+                        if let Some(allowed) = &descriptor.restrictions {
+                            if !allowed.is_empty()
+                                && !allowed.iter().any(|t| t.mime_type == mime_type)
+                            {
+                                let expected: Vec<&str> =
+                                    allowed.iter().map(|t| t.mime_type.as_str()).collect();
+                                return Err(format!(
+                                    "Parameter '{}': MIME type '{}' is not allowed. Expected one of: {}",
+                                    name,
+                                    mime_type,
+                                    expected.join(", ")
+                                ));
+                            }
+                        }
+
+                        let data =
+                            base64::engine::general_purpose::STANDARD.decode(b64).map_err(
+                                |e| format!("Failed to decode base64 parameter '{}': {}", name, e),
+                            )?;
+
+                        UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                            value: BinaryReference::Inline(BinarySource {
+                                data,
+                                binary_type: BinaryType {
+                                    mime_type: mime_type.to_string(),
+                                },
+                            }),
+                        })
+                    }
+                };
+
+                params.push(element);
+            }
+
+            Ok(params)
+        }
+        DataSchema::Multimodal(_) => Err("Multimodal schema is not yet supported".to_string()),
+    }
 }
 
 fn extract_parameters_by_schema<F, A>(

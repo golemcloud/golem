@@ -50,17 +50,49 @@ impl McpSchema {
     }
 
     pub fn from_named_element_schemas(schemas: &[NamedElementSchema]) -> McpSchema {
-        let named_types: Vec<(&str, &AnalysedType)> = schemas
-            .iter()
-            .map(|s| match &s.schema {
-                ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-                    (s.name.as_str(), element_type)
-                }
-                _ => todo!("Unsupported element schema type in MCP schema mapping"),
-            })
-            .collect();
+        let mut properties: Map<String, JsonTypeDescription> = Map::new();
+        let mut required = Vec::new();
 
-        Self::from_record_fields(&named_types)
+        for s in schemas {
+            let schema = match &s.schema {
+                ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+                    if !matches!(element_type, AnalysedType::Option(_)) {
+                        required.push(s.name.clone());
+                    }
+                    analysed_type_to_json_schema(element_type)
+                }
+                ElementSchema::UnstructuredText(_) => {
+                    required.push(s.name.clone());
+                    json!({"type": "string"})
+                }
+                ElementSchema::UnstructuredBinary(descriptor) => {
+                    required.push(s.name.clone());
+                    let mime_type_description = match &descriptor.restrictions {
+                        Some(types) if !types.is_empty() => {
+                            let mimes: Vec<&str> =
+                                types.iter().map(|t| t.mime_type.as_str()).collect();
+                            format!("MIME type. Must be one of: {}", mimes.join(", "))
+                        }
+                        _ => "MIME type".to_string(),
+                    };
+
+                    json!({
+                        "type": "object",
+                        "properties": {
+                            "data": {"type": "string", "description": "Base64-encoded binary data"},
+                            "mimeType": {"type": "string", "description": mime_type_description}
+                        },
+                        "required": ["data", "mimeType"]
+                    })
+                }
+            };
+            properties.insert(s.name.clone(), schema);
+        }
+
+        McpSchema {
+            properties,
+            required,
+        }
     }
 
     pub fn from_record_fields(fields: &[(&str, &AnalysedType)]) -> McpSchema {
