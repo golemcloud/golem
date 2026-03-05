@@ -25,6 +25,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AccountId = golemCore150Types.AccountId;
   export type DataValue = golemCore150Types.DataValue;
   export type DataSchema = golemCore150Types.DataSchema;
+  export type WitValue = golemCore150Types.WitValue;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type PersistenceLevel = golemApi150Host.PersistenceLevel;
@@ -77,6 +78,10 @@ declare module 'golem:api/oplog@1.5.0' {
     name: string;
     version: string;
     parameters: [string, string][];
+  };
+  export type RawLocalAgentConfigEntry = {
+    key: string[];
+    value: WitValue;
   };
   export type LocalAgentConfigEntry = {
     key: string[];
@@ -405,7 +410,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: number[];
     configVars: [string, string][];
-    localAgentConfig: LocalAgentConfigEntry[];
+    localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
   };
   export type RawHostCallParameters = {

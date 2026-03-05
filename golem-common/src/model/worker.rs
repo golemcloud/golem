@@ -12,7 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::agent::AgentTypeName;
+use super::component_metadata::ComponentMetadata;
 pub use crate::base_model::worker::*;
+use crate::model::agent::{ConfigKeyValueType, ConfigValueType};
+use golem_wasm::ValueAndType;
+
+impl UntypedParsedWorkerCreationLocalAgentConfigEntry {
+    pub fn enrich_with_type(
+        self,
+        component_metadata: &ComponentMetadata,
+        agent_type_name: Option<&AgentTypeName>,
+    ) -> Result<ParsedWorkerCreationLocalAgentConfigEntry, String> {
+        let agent_type_name = agent_type_name.ok_or_else(|| {
+            "cannot enrich local agent config for non-agentic workers".to_string()
+        })?;
+
+        let value_type = component_metadata
+            .find_agent_type_by_name(agent_type_name)
+            .ok_or("did not find expected agent type in the metadata")?
+            .config
+            .into_iter()
+            .find_map(|c| match c {
+                ConfigKeyValueType {
+                    key,
+                    value: ConfigValueType::Local(inner),
+                } if key == self.key => Some(inner),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "did not find config key {} in the metadata",
+                    self.key.join(".")
+                )
+            })?;
+
+        Ok(ParsedWorkerCreationLocalAgentConfigEntry {
+            key: self.key,
+            value: ValueAndType::new(self.value, value_type.value),
+        })
+    }
+}
 
 mod protobuf {
     use super::{
