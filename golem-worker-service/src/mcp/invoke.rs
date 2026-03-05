@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::mcp::agent_mcp_resource::AgentMcpResource;
+use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
 use crate::service::worker::WorkerService;
 use golem_common::base_model::WorkerId;
@@ -186,16 +186,16 @@ pub async fn invoke_resource(
     worker_service: &Arc<WorkerService>,
     mcp_resource: &AgentMcpResource,
     uri: &str,
-    uri_params: Option<Vec<(String, String)>>,
+    extracted_params: Option<Vec<ConstructorParam>>,
 ) -> Result<ReadResourceResult, ErrorData> {
-    let constructor_params = match uri_params {
+    let constructor_params = match extracted_params {
         None => {
             vec![]
         }
         Some(params) => {
             let mut args_map = JsonObject::default();
-            for (name, value) in &params {
-                args_map.insert(name.clone(), serde_json::Value::String(value.clone()));
+            for param in &params {
+                args_map.insert(param.name.clone(), serde_json::Value::String(param.value.clone()));
             }
             extract_parameters_by_schema(
                 &args_map,
