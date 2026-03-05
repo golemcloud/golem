@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -27,7 +27,7 @@ use golem_test_framework::dsl::{drain_connection, stderr_events, stdout_events, 
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
@@ -45,6 +45,22 @@ use tracing::{debug, info, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("initial_file_system")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -52,6 +68,7 @@ inherit_test_dep!(Tracing);
 async fn write_stdout(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -60,11 +77,7 @@ async fn write_stdout(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("logging", "write-stdout-1");
@@ -102,6 +115,7 @@ async fn write_stdout(
 async fn write_stderr(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -110,11 +124,7 @@ async fn write_stderr(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("logging", "write-stderr-1");
@@ -153,6 +163,7 @@ async fn write_stderr(
 async fn read_stdin(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -161,11 +172,7 @@ async fn read_stdin(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("io", "read-stdin-1");
@@ -188,6 +195,7 @@ async fn read_stdin(
 async fn clocks(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -196,11 +204,7 @@ async fn clocks(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clocks", "clocks-1");
@@ -252,6 +256,7 @@ async fn clocks(
 async fn file_write_read_delete(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -260,11 +265,7 @@ async fn file_write_read_delete(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("RUST_BACKTRACE".to_string(), "full".to_string())])
         .store()
         .await?;
@@ -303,6 +304,7 @@ async fn file_write_read_delete(
 async fn initial_file_read_write(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -311,11 +313,7 @@ async fn initial_file_read_write(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_initial_file_system_release",
-        )
-        .name("golem-it:initial-file-system")
+        .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
         .with_files(&[
             IFSEntry {
@@ -366,6 +364,7 @@ async fn initial_file_read_write(
 async fn initial_file_listing_through_api(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::agent_id;
@@ -374,11 +373,7 @@ async fn initial_file_listing_through_api(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_initial_file_system_release",
-        )
-        .name("golem-it:initial-file-system")
+        .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
         .with_files(&[
             IFSEntry {
@@ -500,6 +495,7 @@ async fn initial_file_listing_through_api(
 async fn initial_file_reading_through_api(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -508,11 +504,7 @@ async fn initial_file_reading_through_api(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_initial_file_system_release",
-        )
-        .name("golem-it:initial-file-system")
+        .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
         .with_files(&[
             IFSEntry {
@@ -562,6 +554,7 @@ async fn initial_file_reading_through_api(
 async fn directories(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -570,11 +563,7 @@ async fn directories(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "directories-1");
@@ -635,6 +624,7 @@ async fn directories(
 async fn directories_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -643,11 +633,7 @@ async fn directories_replay(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "directories-1");
@@ -719,6 +705,7 @@ async fn directories_replay(
 async fn file_write_read(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -727,11 +714,7 @@ async fn file_write_read(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-1");
@@ -777,6 +760,7 @@ async fn file_write_read(
 async fn file_update_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -785,11 +769,7 @@ async fn file_update_1(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_initial_file_system_release",
-        )
-        .name("golem-it:initial-file-system")
+        .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
         .with_files(&[IFSEntry {
             source_path: PathBuf::from("initial-file-system/files/foo.txt"),
@@ -951,6 +931,7 @@ async fn file_update_1(
 async fn file_update_in_the_middle_of_exported_function(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -986,11 +967,7 @@ async fn file_update_in_the_middle_of_exported_function(
     };
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "it_initial_file_system_release",
-        )
-        .name("golem-it:initial-file-system")
+        .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
         .with_files(&[IFSEntry {
             source_path: PathBuf::from("initial-file-system/files/foo.txt"),
@@ -1072,6 +1049,7 @@ async fn file_update_in_the_middle_of_exported_function(
 async fn environment_variables(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1080,11 +1058,7 @@ async fn environment_variables(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("environment", "environment-service-1");
@@ -1141,6 +1115,7 @@ async fn environment_variables(
 async fn http_client_response_persisted_between_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1174,11 +1149,7 @@ async fn http_client_response_persisted_between_invocations(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client");
@@ -1217,6 +1188,7 @@ async fn http_client_response_persisted_between_invocations(
 async fn http_client_interrupting_response_stream(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1266,11 +1238,7 @@ async fn http_client_interrupting_response_stream(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -1346,6 +1314,7 @@ async fn http_client_interrupting_response_stream(
 async fn http_client_interrupting_response_stream_async(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1395,11 +1364,7 @@ async fn http_client_interrupting_response_stream_async(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client3");
@@ -1474,6 +1439,7 @@ async fn http_client_interrupting_response_stream_async(
 async fn sleep(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1482,11 +1448,7 @@ async fn sleep(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clock", "clock-service-1");
@@ -1518,6 +1480,7 @@ async fn sleep(
 async fn sleep_less_than_suspend_threshold(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1526,11 +1489,7 @@ async fn sleep_less_than_suspend_threshold(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clock", "clock-service-2");
@@ -1564,6 +1523,7 @@ async fn sleep_less_than_suspend_threshold(
 async fn sleep_longer_than_suspend_threshold(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1572,11 +1532,7 @@ async fn sleep_longer_than_suspend_threshold(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clock", "clock-service-3");
@@ -1680,6 +1636,7 @@ async fn streaming_chunk_server(
 async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1690,11 +1647,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     let (port, server) = simulated_slow_request_server(Duration::from_secs(10)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -1734,6 +1687,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
 async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1744,11 +1698,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     let (port, server) = simulated_slow_request_server(Duration::from_secs(5)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -1788,6 +1738,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
 async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1798,11 +1749,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     let (port, server) = simulated_slow_request_server(Duration::from_secs(30)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -1843,6 +1790,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 async fn sleep_and_awaiting_parallel_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1853,11 +1801,7 @@ async fn sleep_and_awaiting_parallel_responses(
     let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -1909,6 +1853,7 @@ async fn sleep_and_awaiting_parallel_responses(
 async fn sleep_below_threshold_between_http_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1919,11 +1864,7 @@ async fn sleep_below_threshold_between_http_responses(
     let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -1974,6 +1915,7 @@ async fn sleep_below_threshold_between_http_responses(
 async fn sleep_above_threshold_between_http_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -1984,11 +1926,7 @@ async fn sleep_above_threshold_between_http_responses(
     let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -2041,6 +1979,7 @@ async fn sleep_above_threshold_between_http_responses(
 async fn resuming_sleep(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2049,11 +1988,7 @@ async fn resuming_sleep(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clock", "clock-service-2");
@@ -2108,6 +2043,7 @@ async fn resuming_sleep(
 async fn failing_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
@@ -2116,8 +2052,7 @@ async fn failing_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("failing-counter", "failing-worker-1");
@@ -2170,6 +2105,7 @@ async fn failing_worker(
 async fn file_service_write_direct(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2178,11 +2114,7 @@ async fn file_service_write_direct(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-2");
@@ -2228,6 +2160,7 @@ async fn file_service_write_direct(
 async fn filesystem_write_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2236,11 +2169,7 @@ async fn filesystem_write_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-3");
@@ -2294,6 +2223,7 @@ async fn filesystem_write_replay_restores_file_times(
 async fn filesystem_create_dir_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2302,11 +2232,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-4");
@@ -2350,6 +2276,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
 async fn file_hard_link(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2358,11 +2285,7 @@ async fn file_hard_link(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-5");
@@ -2407,6 +2330,7 @@ async fn file_hard_link(
 async fn filesystem_link_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2415,11 +2339,7 @@ async fn filesystem_link_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-6");
@@ -2513,6 +2433,7 @@ async fn filesystem_link_replay_restores_file_times(
 async fn filesystem_remove_dir_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2521,11 +2442,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-7");
@@ -2587,6 +2504,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 async fn filesystem_symlink_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2595,11 +2513,7 @@ async fn filesystem_symlink_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-8");
@@ -2693,6 +2607,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 async fn filesystem_rename_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2701,11 +2616,7 @@ async fn filesystem_rename_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-9");
@@ -2812,6 +2723,7 @@ async fn filesystem_rename_replay_restores_file_times(
 async fn filesystem_remove_file_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2820,11 +2732,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-10");
@@ -2904,6 +2812,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
 async fn filesystem_write_via_stream_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2912,11 +2821,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-3");
@@ -2970,6 +2875,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 async fn filesystem_metadata_hash(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -2978,11 +2884,7 @@ async fn filesystem_metadata_hash(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("file-system", "file-service-3");
@@ -3026,6 +2928,7 @@ async fn filesystem_metadata_hash(
 async fn ip_address_resolve(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3034,11 +2937,7 @@ async fn ip_address_resolve(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("networking", "ip-address-resolve-1");
@@ -3084,6 +2983,7 @@ async fn ip_address_resolve(
 async fn wasi_config_initial_worker_config(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3092,11 +2992,7 @@ async fn wasi_config_initial_worker_config(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("wasi-config", "worker-1");
@@ -3174,6 +3070,7 @@ async fn wasi_config_initial_worker_config(
 async fn wasi_config_component_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3182,11 +3079,7 @@ async fn wasi_config_component_update(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_config_vars(vec![
             ("k1".to_string(), "v0".to_string()),
             ("k3".to_string(), "v3".to_string()),
@@ -3304,6 +3197,7 @@ async fn wasi_config_component_update(
 async fn oplog_replay_after_http_requests_with_suspend(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3315,11 +3209,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
     let (port, server) = simulated_slow_request_server(Duration::from_millis(100)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -3401,6 +3291,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
 async fn oplog_replay_after_parallel_http_requests(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3412,11 +3303,7 @@ async fn oplog_replay_after_parallel_http_requests(
     let (port, server) = simulated_slow_request_server(Duration::from_millis(100)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
@@ -3514,6 +3401,7 @@ async fn oplog_replay_after_parallel_http_requests(
 async fn oplog_replay_after_streaming_http_read(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3525,11 +3413,7 @@ async fn oplog_replay_after_streaming_http_read(
     let (port, server) = streaming_chunk_server(50, Duration::from_millis(10)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("streaming-client");
@@ -3621,6 +3505,7 @@ async fn oplog_replay_after_streaming_http_read(
 async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3632,11 +3517,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
     let (port, server) = streaming_chunk_server(20, Duration::from_millis(5)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("streaming-client");
@@ -3727,6 +3608,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
 async fn oplog_replay_after_parallel_streaming_http_reads(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3738,11 +3620,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
     let (port, server) = streaming_chunk_server(30, Duration::from_millis(10)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("streaming-client");
@@ -3832,6 +3710,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
 async fn oplog_replay_after_raw_streaming_http_read(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3843,11 +3722,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
     let (port, server) = streaming_chunk_server(50, Duration::from_millis(10)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("streaming-client");
@@ -3945,6 +3820,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
 async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
@@ -3956,11 +3832,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     let (port, server) = streaming_chunk_server(30, Duration::from_millis(10)).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("streaming-client");

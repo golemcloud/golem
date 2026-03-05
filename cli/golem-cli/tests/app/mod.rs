@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -184,20 +184,24 @@ impl Output {
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();
         if !success {
-            let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
-            let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
-            for output in &self.output {
-                match output {
-                    CommandOutput::Stdout(line) => {
-                        println!("{} {}", std_out_prefix, line);
-                    }
-                    CommandOutput::Stderr(line) => {
-                        println!("{} {}", std_err_prefix, line);
-                    }
+            self.dump();
+        }
+        success
+    }
+
+    fn dump(&self) {
+        let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
+        let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
+        for output in &self.output {
+            match output {
+                CommandOutput::Stdout(line) => {
+                    println!("{} {}", std_out_prefix, line);
+                }
+                CommandOutput::Stderr(line) => {
+                    println!("{} {}", std_err_prefix, line);
                 }
             }
         }
-        success
     }
 
     #[must_use]
@@ -298,6 +302,8 @@ impl TestContext {
             "GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(),
             "true".to_string(),
         );
+
+        env.insert("NO_COLOR".to_string(), "1".to_string());
 
         for key in [
             "GOLEM_RUST_PATH",
@@ -512,12 +518,16 @@ where
     let mut patterns = patterns.into_iter();
     let mut pattern = patterns.next();
     let mut pattern_str = pattern.as_ref().map(|s| s.as_ref());
+    let mut unmatched_lines = vec![];
     for line in lines {
         match pattern_str {
             Some(p) => {
-                if line.as_ref().contains(p) {
+                let line = line.as_ref();
+                if line.contains(p) {
                     pattern = patterns.next();
                     pattern_str = pattern.as_ref().map(|s| s.as_ref());
+                } else {
+                    unmatched_lines.push(line.to_string());
                 }
             }
             None => {
@@ -531,9 +541,13 @@ where
         .chain(patterns.map(|s| s.as_ref().to_string()))
         .collect::<Vec<_>>();
     if !remaining_patterns.is_empty() {
-        println!("{}", "Missing patterns:".red().underline());
+        println!("---\n{}", "### Missing patterns:".red().underline());
         for pattern in &remaining_patterns {
             println!("{pattern}");
+        }
+        println!("{}", "### Unmatched lines:".yellow().underline());
+        for line in unmatched_lines {
+            println!("{line}");
         }
     }
     remaining_patterns.is_empty()

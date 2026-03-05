@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -30,6 +30,7 @@ pub mod rpc;
 pub mod scheduler;
 pub mod shard;
 pub mod shard_manager;
+pub mod shutdown;
 pub mod worker;
 pub mod worker_activator;
 pub mod worker_enumeration;
@@ -45,6 +46,7 @@ use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
 use std::sync::Arc;
 use tokio::runtime::Handle;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct NoAdditionalDeps {}
@@ -178,6 +180,14 @@ pub trait HasResourceLimits {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits>;
 }
 
+pub trait HasShutdownToken {
+    fn shutdown_token(&self) -> tokio_util::sync::CancellationToken;
+}
+
+pub trait HasLeakSentinel {
+    fn leak_sentinel(&self) -> Arc<()>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -205,7 +215,9 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasFileLoader
     + HasOplogProcessorPlugin
     + HasResourceLimits
+    + HasShutdownToken
     + HasExtraDeps<Ctx>
+    + HasLeakSentinel
     + Clone
     + Sync
 {
@@ -238,7 +250,9 @@ impl<
             + HasFileLoader
             + HasOplogProcessorPlugin
             + HasResourceLimits
+            + HasShutdownToken
             + HasExtraDeps<Ctx>
+            + HasLeakSentinel
             + Clone
             + Sync,
     > HasAll<Ctx> for T
@@ -276,7 +290,12 @@ pub struct All<Ctx: WorkerCtx> {
     file_loader: Arc<FileLoader>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
+    shutdown_token: CancellationToken,
     extra_deps: Ctx::ExtraDeps,
+    /// A no-op sentinel that participates in the `All` lifecycle.
+    /// Tests can hold a `Weak<()>` to it and verify that `All` (and all
+    /// the services it contains) is actually deallocated on drop.
+    leak_sentinel: Arc<()>,
 }
 
 impl<Ctx: WorkerCtx> Clone for All<Ctx> {
@@ -309,7 +328,9 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             file_loader: self.file_loader.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            shutdown_token: self.shutdown_token.clone(),
             extra_deps: self.extra_deps.clone(),
+            leak_sentinel: self.leak_sentinel.clone(),
         }
     }
 }
@@ -346,7 +367,9 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
+        shutdown_token: CancellationToken,
         extra_deps: Ctx::ExtraDeps,
+        leak_sentinel: Arc<()>,
     ) -> Self {
         Self {
             active_workers,
@@ -376,8 +399,17 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             file_loader,
             oplog_processor_plugin,
             resource_limits,
+            shutdown_token,
             extra_deps,
+            leak_sentinel,
         }
+    }
+
+    /// Returns a weak reference to the leak sentinel, which can be used
+    /// to verify that `All` (and the services it holds) is properly
+    /// deallocated after the executor is dropped.
+    pub fn leak_detector(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.leak_sentinel)
     }
 
     pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
@@ -409,7 +441,9 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.file_loader(),
             this.oplog_processor_plugin(),
             this.resource_limits(),
+            this.shutdown_token(),
             this.extra_deps(),
+            this.leak_sentinel(),
         )
     }
 }
@@ -588,8 +622,20 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasResourceLimits for T {
     }
 }
 
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasShutdownToken for T {
+    fn shutdown_token(&self) -> CancellationToken {
+        self.all().shutdown_token.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasExtraDeps<Ctx> for T {
     fn extra_deps(&self) -> Ctx::ExtraDeps {
         self.all().extra_deps.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasLeakSentinel for T {
+    fn leak_sentinel(&self) -> Arc<()> {
+        self.all().leak_sentinel.clone()
     }
 }

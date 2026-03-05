@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -19,16 +19,20 @@ use golem_common::model::oplog::{
     HostResponseRandomBytes, HostResponseRandomU64,
 };
 use wasmtime_wasi::p2::bindings::random::random::Host;
+use wasmtime_wasi::random::WasiRandomView as _;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_random_bytes(&mut self, length: u64) -> anyhow::Result<Vec<u8>> {
+    async fn get_random_bytes(&mut self, length: u64) -> wasmtime::Result<Vec<u8>> {
         let durability = Durability::<host_functions::RandomGetRandomBytes>::new(
             self,
             DurableFunctionType::ReadLocal,
         )
         .await?;
         let result = if durability.is_live() {
-            let bytes = Host::get_random_bytes(&mut self.as_wasi_view(), length).await?; // this supposed to never fail
+            let bytes = {
+                let mut view = self.as_wasi_view();
+                Host::get_random_bytes(view.random(), length).await?
+            };
             durability
                 .persist(
                     self,
@@ -43,14 +47,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(result.bytes)
     }
 
-    async fn get_random_u64(&mut self) -> anyhow::Result<u64> {
+    async fn get_random_u64(&mut self) -> wasmtime::Result<u64> {
         let durability = Durability::<host_functions::RandomGetRandomU64>::new(
             self,
             DurableFunctionType::ReadLocal,
         )
         .await?;
         let result = if durability.is_live() {
-            let value = Host::get_random_u64(&mut self.as_wasi_view()).await?; // this supposed to never fail
+            let value = {
+                let mut view = self.as_wasi_view();
+                Host::get_random_u64(view.random()).await?
+            };
             durability
                 .persist(self, HostRequestNoInput {}, HostResponseRandomU64 { value })
                 .await
