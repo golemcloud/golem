@@ -13126,6 +13126,19 @@ components:
       - revision
       - version
       - deploymentHash
+    DeploymentAgentSecretDefault:
+      title: DeploymentAgentSecretDefault
+      description: Default values of secrets registered as part of the current deployment
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        secretValue: {}
+      required:
+      - path
+      - secretValue
     DeploymentCreation:
       title: DeploymentCreation
       type: object
@@ -13138,9 +13151,14 @@ components:
           format: hash
         version:
           type: string
+        agentSecretDefaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentAgentSecretDefault'
       required:
       - expectedDeploymentHash
       - version
+      - agentSecretDefaults
     DeploymentPlan:
       title: DeploymentPlan
       description: Planned deployment including the current revision
