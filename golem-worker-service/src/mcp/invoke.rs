@@ -32,7 +32,7 @@ pub async fn invoke_tool(
     mcp_tool: &AgentMcpTool,
 ) -> Result<CallToolResult, ErrorData> {
     let constructor_params =
-        extract_constructor_parameters(&args_map, &mcp_tool.constructor.input_schema).map_err(
+        extract_constructor_input_values(&args_map, &mcp_tool.constructor.input_schema).map_err(
             |e| {
                 tracing::error!("Failed to extract constructor parameters: {}", e);
                 ErrorData::invalid_params(
@@ -194,7 +194,7 @@ pub async fn invoke_resource(
                     serde_json::Value::String(param.value.clone()),
                 );
             }
-            extract_constructor_parameters(&args_map, &mcp_resource.constructor.input_schema)
+            extract_constructor_input_values(&args_map, &mcp_resource.constructor.input_schema)
                 .map_err(|e| {
                     tracing::error!("Failed to extract constructor parameters from URI: {}", e);
                     ErrorData::invalid_params(
@@ -419,7 +419,7 @@ fn extract_method_parameters(
     }
 }
 
-fn extract_constructor_parameters(
+fn extract_constructor_input_values(
     args_map: &JsonObject,
     schema: &DataSchema,
 ) -> Result<Vec<ComponentModelElementValue>, String> {
