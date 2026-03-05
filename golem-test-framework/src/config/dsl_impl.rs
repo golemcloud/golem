@@ -966,6 +966,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                     current_revision: plan.current_revision,
                     expected_deployment_hash: plan.deployment_hash,
                     version: DeploymentVersion(Uuid::new_v4().to_string()),
+                    agent_secret_defaults: Vec::new(),
                 },
             )
             .await?;
