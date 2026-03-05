@@ -42,8 +42,8 @@ wasm-wave = { workspace = true, optional = true }
 wasm-metadata = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
-wasi = { version = "=0.14.1+wasi-0.2.3", optional = true }
-wstd = { version = "=0.5.4", optional = true }
+wasip2 = { version = "1.0.2", optional = true }
+wstd = { version = "=0.6.5", optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
@@ -88,7 +88,7 @@ host = [
 
 derive = ["dep:golem-wasm-derive"]
 
-stub = ["dep:wit-bindgen-rt", "dep:wstd", "dep:wasi"]
+stub = ["dep:wit-bindgen-rt", "dep:wstd", "dep:wasip2"]
 
 client = ["derive", "dep:serde", "dep:serde_json", "dep:bigdecimal", "dep:bit-vec", "dep:url"]
 
@@ -109,8 +109,8 @@ world = "wasm-rpc"
 generate_unused_types = true
 
 [package.metadata.component.bindings.with]
-"wasi:io/poll@0.2.3" = "wstd::wasi::io::poll"
-"wasi:clocks/wall-clock@0.2.3" = "wstd::wasi::clocks::wall_clock"
+"wasi:io/poll@0.2.3" = "wasip2::io::poll"
+"wasi:clocks/wall-clock@0.2.3" = "wasip2::clocks::wall_clock"
 
 [[test]]
 name = "exports"
