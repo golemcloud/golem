@@ -16,7 +16,7 @@ use crate::mcp::McpCapabilityLookup;
 use crate::mcp::agent_mcp_capability::McpAgentCapability;
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, McpResourceUri, ResourceRegistry};
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
-use crate::mcp::invoke::{invoke_tool, invoke_resource};
+use crate::mcp::invoke::{invoke_resource, invoke_tool};
 use crate::service::worker::WorkerService;
 use dashmap::DashMap;
 use golem_common::base_model::domain_registration::Domain;
@@ -138,9 +138,9 @@ pub async fn get_agent_capabilities(
                 );
 
                 let agent_type = &registered_agent_type.agent_type;
-                
+
                 let component_id = registered_agent_type.implemented_by.component_id;
-                
+
                 for method in &agent_type.methods {
                     let agent_method_mcp = McpAgentCapability::from(
                         &account_id,
@@ -297,13 +297,12 @@ impl ServerHandler for GolemAgentMcpServer {
             return invoke_resource(&self.worker_service, resource, &uri, None).await;
         }
 
-        let parsed_resource_uri = McpResourceUri::parse(&uri).map_err(|e| {
-            McpError::invalid_params(format!("Invalid resource URI: {e}"), None)
-        })?;
+        let parsed_resource_uri = McpResourceUri::parse(&uri)
+            .map_err(|e| McpError::invalid_params(format!("Invalid resource URI: {e}"), None))?;
 
-        if let Some((resource, params)) = 
-            registry.extract_mcp_resource_with_input(&parsed_resource_uri) {
-            
+        if let Some((resource, params)) =
+            registry.extract_mcp_resource_with_input(&parsed_resource_uri)
+        {
             return invoke_resource(&self.worker_service, resource, &uri, Some(params)).await;
         }
 
@@ -338,15 +337,14 @@ impl ServerHandler for GolemAgentMcpServer {
 
             if let Some(host) = parts.headers.get("host") {
                 let domain = Domain(host.to_str().unwrap().to_string());
-                let (tool_router, agent_resources) = 
-                    self.build_capabilities(&domain).await;
+                let (tool_router, agent_resources) = self.build_capabilities(&domain).await;
 
                 for tool in tool_router.list_all() {
                     self.tools.insert(tool.name.to_string(), tool);
                 }
 
                 let mut registry = self.resources.write().await;
-                
+
                 for resource in agent_resources {
                     registry.insert(resource);
                 }

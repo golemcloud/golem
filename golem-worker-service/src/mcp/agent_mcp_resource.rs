@@ -95,10 +95,7 @@ fn percent_decode(s: &str) -> String {
             let hi = chars.next();
             let lo = chars.next();
             if let (Some(hi), Some(lo)) = (hi, lo) {
-                if let Ok(byte) = u8::from_str_radix(
-                    &format!("{}{}", hi as char, lo as char),
-                    16,
-                ) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hi as char, lo as char), 16) {
                     result.push(byte as char);
                     continue;
                 }
@@ -110,7 +107,6 @@ fn percent_decode(s: &str) -> String {
     }
     result
 }
-
 
 type StaticResourceUri = String;
 

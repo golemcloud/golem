@@ -195,7 +195,10 @@ pub async fn invoke_resource(
         Some(params) => {
             let mut args_map = JsonObject::default();
             for param in &params {
-                args_map.insert(param.name.clone(), serde_json::Value::String(param.value.clone()));
+                args_map.insert(
+                    param.name.clone(),
+                    serde_json::Value::String(param.value.clone()),
+                );
             }
             extract_parameters_by_schema(
                 &args_map,
