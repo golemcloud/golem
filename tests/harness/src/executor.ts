@@ -241,7 +241,7 @@ export class ScenarioExecutor {
 
     const serverCheck = await this.runLocalCommand(
       'curl',
-      ['-fsS', 'http://localhost:9881/version'],
+      ['-fsS', 'http://localhost:9881/healthcheck'],
       30,
       this.workspace
     );

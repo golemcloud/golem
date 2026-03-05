@@ -53,22 +53,25 @@ async function main() {
   const scenarioFiles = (await fs.readdir(scenariosDir)).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
   console.log(chalk.gray(`Config: agent=${agent}, language=${language}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? 'default'}`));
 
+  let hasFailures = false;
+
   for (const file of scenarioFiles) {
     const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
-    
+
     if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
     console.log(chalk.blue(`Running scenario: ${spec.name}`));
     const workspace = path.join(process.cwd(), 'workspaces', spec.name.replace(/\s+/g, '-').toLowerCase());
     const executor = new ScenarioExecutor(driver, watcher, workspace, skillsDir, { globalTimeoutSeconds });
-    
+
     const scenarioResult = await executor.execute(spec);
     const results = scenarioResult.stepResults;
-    
+
     const allPassed = scenarioResult.status === 'pass';
     if (allPassed) {
       console.log(chalk.green(`Scenario ${spec.name} PASSED`));
     } else {
+      hasFailures = true;
       console.log(chalk.red(`Scenario ${spec.name} FAILED`));
       for (const res of results) {
         if (!res.success) {
@@ -91,6 +94,10 @@ async function main() {
       artifactPaths: scenarioResult.artifactPaths,
     }, null, 2));
     console.log(`${allPassed ? 'PASS' : 'FAIL'} ${spec.name} steps=${results.length}/${spec.steps.length}`);
+  }
+
+  if (hasFailures) {
+    process.exit(1);
   }
 }
 

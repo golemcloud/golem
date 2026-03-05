@@ -72,15 +72,16 @@ jobs:
 
       - name: Install Golem
         run: |
-          curl -L https://github.com/golemcloud/golem-cli/releases/latest/download/golem-cli-x86_64-unknown-linux-gnu.tar.gz | tar xz
-          sudo mv golem-cli /usr/local/bin/golem
+          curl -Lo golem https://github.com/golemcloud/golem/releases/download/v1.4.2/golem-x86_64-unknown-linux-gnu
+          chmod +x golem
+          sudo mv golem /usr/local/bin/golem
           golem --version
 
       - name: Start Golem Server
         run: |
-          golem server run --clean &
+          golem server run &
           for i in {1..30}; do
-            if golem component list 2>/dev/null; then
+            if curl -fsS http://localhost:9881/healthcheck > /dev/null 2>&1; then
               echo "Golem server is ready"
               break
             fi
