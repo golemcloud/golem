@@ -85,6 +85,7 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
             key_prefix: random_prefix.to_string(),
             username: None,
             password: None,
+            tls: false,
         })
         .await
         .unwrap();

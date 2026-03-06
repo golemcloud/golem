@@ -24,7 +24,7 @@ use openidconnect::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::{define_matrix_dimension, inherit_test_dep, test};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -32,8 +32,9 @@ inherit_test_dep!(#[tagged_as("redis")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("redis_fast_expiry")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("sqlite_fast_expiry")] Arc<dyn SessionStore>);
+inherit_test_dep!(#[tagged_as("redis_tls")] Arc<dyn SessionStore>);
 
-define_matrix_dimension!(session_store: Arc<dyn SessionStore> -> "redis", "sqlite");
+define_matrix_dimension!(session_store: Arc<dyn SessionStore> -> "redis", "sqlite", "redis_tls");
 define_matrix_dimension!(session_store_fast_expiry: Arc<dyn SessionStore> -> "redis_fast_expiry", "sqlite_fast_expiry");
 
 fn sample_pending_login() -> PendingOidcLogin {
@@ -78,6 +79,7 @@ fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
 }
 
 #[test]
+#[timeout("30s")]
 async fn pending_login_store_and_take(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -101,6 +103,7 @@ async fn pending_login_store_and_take(
 }
 
 #[test]
+#[timeout("30s")]
 async fn pending_login_expires(
     #[dimension(session_store_fast_expiry)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -120,6 +123,7 @@ async fn pending_login_expires(
 }
 
 #[test]
+#[timeout("30s")]
 async fn authenticated_session_roundtrip(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -138,6 +142,7 @@ async fn authenticated_session_roundtrip(
 }
 
 #[test]
+#[timeout("30s")]
 async fn authenticated_session_expiry(
     #[dimension(session_store_fast_expiry)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -158,6 +163,7 @@ async fn authenticated_session_expiry(
 }
 
 #[test]
+#[timeout("30s")]
 async fn multiple_pending_logins(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -190,6 +196,7 @@ async fn multiple_pending_logins(
 }
 
 #[test]
+#[timeout("30s")]
 async fn authenticated_session_overwrite(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -214,6 +221,7 @@ async fn authenticated_session_overwrite(
 }
 
 #[test]
+#[timeout("30s")]
 async fn take_nonexistent_pending_login_returns_none(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -227,6 +235,7 @@ async fn take_nonexistent_pending_login_returns_none(
 }
 
 #[test]
+#[timeout("30s")]
 async fn get_nonexistent_authenticated_session_returns_none(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
@@ -241,6 +250,7 @@ async fn get_nonexistent_authenticated_session_returns_none(
 }
 
 #[test]
+#[timeout("30s")]
 async fn pending_login_multiple_take_attempts(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
