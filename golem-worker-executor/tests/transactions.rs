@@ -164,7 +164,13 @@ async fn golem_rust_jump(
 
     let agent_id = agent_id!("golem-host-api", "jump");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -333,7 +339,13 @@ async fn golem_rust_atomic_region(
 
     let agent_id = agent_id!("golem-host-api", "atomic-region");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor
@@ -380,7 +392,13 @@ async fn golem_rust_idempotence_on(
 
     let agent_id = agent_id!("golem-host-api", "idempotence-flag-on");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor
@@ -424,7 +442,13 @@ async fn golem_rust_idempotence_off(
 
     let agent_id = agent_id!("golem-host-api", "idempotence-flag-off");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -475,7 +499,13 @@ async fn golem_rust_persist_nothing(
 
     let agent_id = agent_id!("golem-host-api", "persist-nothing");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -528,7 +558,13 @@ async fn golem_rust_fallible_transaction(
 
     let agent_id = agent_id!("golem-host-api", "fallible-transaction");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -596,7 +632,13 @@ async fn golem_rust_infallible_transaction(
 
     let agent_id = agent_id!("golem-host-api", "infallible-transaction");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;

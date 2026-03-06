@@ -60,14 +60,15 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::wasi_host;
+use crate::worker::agent_config::{effective_local_agent_config, validate_local_agent_config};
 use crate::worker::invocation::{
     invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, HasConfigVars, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
+    InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
@@ -94,6 +95,7 @@ use golem_common::model::oplog::{
     WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
@@ -103,8 +105,9 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::component::Component;
 use golem_service_base::model::{
-    Component, ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
 };
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
@@ -217,6 +220,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             component_metadata.config_vars.clone(),
         );
 
+        let local_agent_config = if let Some(agent_id) = &agent_id {
+            effective_local_agent_config(
+                worker_config.initial_local_agent_config.clone(),
+                component_metadata.local_agent_config.clone(),
+                &agent_id.agent_type,
+            )
+        } else {
+            HashMap::new()
+        };
+
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
@@ -272,6 +285,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.created_by,
                 worker_config.initial_config_vars,
                 config_vars,
+                worker_config.initial_local_agent_config,
+                local_agent_config,
                 shard_service,
                 pending_update,
                 original_phantom_id,
@@ -953,12 +968,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasConfigVars for DurableWorkerCtx<Ctx> {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.state.config_vars.read().unwrap().clone()
-    }
-}
-
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
@@ -1409,11 +1418,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        let mut config_vars = self.state.config_vars.write().unwrap();
-        *config_vars = effective_config_vars(
+        self.state.config_vars = effective_config_vars(
             self.state.initial_config_vars.clone(),
             new_metadata.config_vars.clone(),
         );
+
+        if let Some(agent_id) = self.agent_id() {
+            let agent_type = new_metadata
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "Agent type {} not found in updated agent metadata",
+                        agent_id.agent_type
+                    ))
+                })?;
+
+            let updated_local_agent_config = effective_local_agent_config(
+                self.state.initial_local_agent_config.clone(),
+                new_metadata.local_agent_config.clone(),
+                &agent_id.agent_type,
+            );
+
+            validate_local_agent_config(&updated_local_agent_config, &agent_type)?;
+
+            self.state.local_agent_config = updated_local_agent_config;
+        };
 
         self.state.component_metadata = new_metadata;
 
@@ -2415,6 +2445,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         &owned_worker_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -2850,7 +2881,12 @@ struct PrivateDurableWorkerState {
     /// The initial config vars that the worker was configured with
     initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    config_vars: RwLock<BTreeMap<String, String>>,
+    config_vars: BTreeMap<String, String>,
+
+    // The initial local agent config that the worker was configured with
+    initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+    /// The current local agent config of the worker, taking the component revision into account
+    local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
@@ -2908,6 +2944,8 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        initial_local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
+        local_agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -2969,7 +3007,9 @@ impl PrivateDurableWorkerState {
             file_loader,
             created_by,
             initial_config_vars,
-            config_vars: RwLock::new(config_vars),
+            config_vars,
+            initial_local_agent_config,
+            local_agent_config,
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
