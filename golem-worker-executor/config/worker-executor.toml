@@ -7,14 +7,6 @@ tracing_file_name_with_port = true
 drop_when_full = 0.25
 ttl = "8h"
 
-[agent_deployments_service]
-cache_capacity = 1000
-cache_eviction_interval = "1m"
-
-[agent_deployments_service.cache_ttl]
-nanos = 0
-secs = 300
-
 [agent_types_service]
 type = "Grpc"
 
@@ -44,6 +36,14 @@ time_to_idle = "12h"
 
 [engine]
 enable_fs_cache = false
+
+[environment_state_service]
+cache_capacity = 1000
+cache_eviction_interval = "1m"
+
+[environment_state_service.cache_ttl]
+nanos = 0
+secs = 300
 
 [grpc]
 port = 9093
@@ -262,14 +262,6 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
-# [agent_deployments_service]
-# cache_capacity = 1000
-# cache_eviction_interval = "1m"
-# 
-# [agent_deployments_service.cache_ttl]
-# nanos = 0
-# secs = 300
-# 
 # [agent_types_service]
 # type = "Grpc"
 # 
@@ -313,6 +305,14 @@ without_time = false
 # 
 # [engine]
 # enable_fs_cache = false
+# 
+# [environment_state_service]
+# cache_capacity = 1000
+# cache_eviction_interval = "1m"
+# 
+# [environment_state_service.cache_ttl]
+# nanos = 0
+# secs = 300
 # 
 # [grpc]
 # port = 9093
@@ -508,14 +508,6 @@ without_time = false
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
-# [agent_deployments_service]
-# cache_capacity = 1000
-# cache_eviction_interval = "1m"
-# 
-# [agent_deployments_service.cache_ttl]
-# nanos = 0
-# secs = 300
-# 
 # [agent_types_service]
 # type = "Grpc"
 # 
@@ -544,6 +536,14 @@ without_time = false
 # 
 # [engine]
 # enable_fs_cache = false
+# 
+# [environment_state_service]
+# cache_capacity = 1000
+# cache_eviction_interval = "1m"
+# 
+# [environment_state_service.cache_ttl]
+# nanos = 0
+# secs = 300
 # 
 # [grpc]
 # port = 9093
