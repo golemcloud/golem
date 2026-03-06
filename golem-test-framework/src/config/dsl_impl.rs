@@ -51,8 +51,8 @@ use golem_common::model::environment::{
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
-    AgentCreationRequest, AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode,
-    RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry,
+    AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode, RevertWorkerTarget,
+    WorkerCreationLocalAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
@@ -376,11 +376,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let response = client
             .launch_new_worker(
                 &component_id.0,
-                &AgentCreationRequest {
+                &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    config_vars,
-                    local_agent_config,
+                    config_vars: Some(config_vars.into_iter().collect()),
+                    local_agent_config: Some(local_agent_config),
                 },
             )
             .await;

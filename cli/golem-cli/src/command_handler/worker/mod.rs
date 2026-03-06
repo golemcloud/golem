@@ -65,9 +65,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ParsedFunctionSite;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::worker::{
-    AgentCreationRequest, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
-};
+use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
 use golem_common::model::{IdempotencyKey, OplogIndex};
 
 use inquire::Confirm;
@@ -1282,12 +1280,12 @@ impl WorkerCommandHandler {
             .worker
             .launch_new_worker(
                 &component_id,
-                &AgentCreationRequest {
+                &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    config_vars,
+                    config_vars: Some(config_vars.into_iter().collect()),
                     // FIXME: agent-config
-                    local_agent_config: Vec::new(),
+                    local_agent_config: Some(Vec::new()),
                 },
             )
             .await
