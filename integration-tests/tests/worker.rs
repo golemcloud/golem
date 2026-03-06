@@ -790,19 +790,19 @@ async fn auto_update_on_idle_via_host_function(
         data_value!(
             Record(vec![
                 (
-                    "component-id",
+                    "component_id",
                     Record(vec![(
                         "uuid",
                         Record(vec![
-                            ("high-bits", high_bits.into_value_and_type()),
-                            ("low-bits", low_bits.into_value_and_type()),
+                            ("high_bits", high_bits.into_value_and_type()),
+                            ("low_bits", low_bits.into_value_and_type()),
                         ])
                         .into_value_and_type(),
                     )])
                     .into_value_and_type(),
                 ),
                 (
-                    "agent-id",
+                    "agent_id",
                     parsed_agent_id.to_string().into_value_and_type(),
                 ),
             ])
