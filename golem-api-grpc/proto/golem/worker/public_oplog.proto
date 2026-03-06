@@ -7,6 +7,7 @@ import "golem/common/empty.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
@@ -83,13 +84,14 @@ message CreateParameters {
   uint64 component_revision = 3;
   map<string, string> env = 5;
   map<string, string> config_vars = 6;
-  golem.common.AccountId created_by = 7;
-  optional WorkerId parent = 8;
-  uint64 component_size = 9;
-  uint64 initial_total_linear_memory_size = 10;
-  repeated PluginInstallationDescription initial_active_plugins = 11;
-  golem.common.EnvironmentId environment_id = 12;
-  optional golem.common.UUID original_phantom_id = 13;
+  repeated ParsedLocalAgentConfigEntry local_agent_config = 7;
+  golem.common.AccountId created_by = 8;
+  optional WorkerId parent = 9;
+  uint64 component_size = 10;
+  uint64 initial_total_linear_memory_size = 11;
+  repeated PluginInstallationDescription initial_active_plugins = 12;
+  golem.common.EnvironmentId environment_id = 13;
+  optional golem.common.UUID original_phantom_id = 14;
 }
 
 message HostCallParameters {

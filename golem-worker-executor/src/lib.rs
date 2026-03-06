@@ -602,6 +602,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         key_value_storage.clone(),
         shard_service.clone(),
         oplog_service.clone(),
+        component_service.clone(),
         golem_config.clone(),
     ));
     let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(

@@ -54,6 +54,7 @@ pub use crate::base_model::*;
 use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
+use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::base_model::agent::AgentId;
 use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
@@ -496,6 +497,7 @@ pub struct WorkerMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub config_vars: BTreeMap<String, String>,
+    pub local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
@@ -514,6 +516,7 @@ impl WorkerMetadata {
             environment_id,
             created_by,
             config_vars: BTreeMap::new(),
+            local_agent_config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),

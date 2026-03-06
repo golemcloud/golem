@@ -29,9 +29,9 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_service_base::model::Component;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::component::Component;
 use std::sync::Arc;
 use tracing::info;
 

@@ -39,7 +39,7 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
-use golem_service_base::model::{Component, LocalAgentConfigEntry};
+use golem_service_base::model::component::{Component, LocalAgentConfigEntry};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;

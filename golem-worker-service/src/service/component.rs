@@ -20,7 +20,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
