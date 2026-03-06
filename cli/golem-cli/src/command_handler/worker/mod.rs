@@ -96,27 +96,20 @@ impl WorkerCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: AgentSubcommand) -> anyhow::Result<()> {
-        match subcommand {
-            AgentSubcommand::New {
-                agent_id: worker_name,
-                env,
-                config_vars,
-            } => self.cmd_new(worker_name, env, config_vars).await,
-            AgentSubcommand::Invoke {
-                agent_id: worker_name,
-                function_name,
-                arguments,
-                trigger,
-                idempotency_key,
-                no_stream,
-                stream_args,
-                post_deploy_args,
-                schedule_at,
-            } => {
-                self.cmd_invoke(
-                    worker_name,
-                    &function_name,
+    pub fn handle_command(
+        &self,
+        subcommand: AgentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
+            match subcommand {
+                AgentSubcommand::New {
+                    agent_id: worker_name,
+                    env,
+                    config_vars,
+                } => self.cmd_new(worker_name, env, config_vars).await,
+                AgentSubcommand::Invoke {
+                    agent_id: worker_name,
+                    function_name,
                     arguments,
                     trigger,
                     idempotency_key,
@@ -124,105 +117,119 @@ impl WorkerCommandHandler {
                     stream_args,
                     post_deploy_args,
                     schedule_at,
-                )
-                .await
-            }
-            AgentSubcommand::Get {
-                agent_id: worker_name,
-            } => self.cmd_get(worker_name).await,
-            AgentSubcommand::Delete {
-                agent_id: worker_name,
-            } => self.cmd_delete(worker_name).await,
-            AgentSubcommand::List {
-                agent_type_name,
-                component_name,
-                filter: filters,
-                scan_cursor,
-                max_count,
-                precise,
-            } => {
-                self.cmd_list(
+                } => {
+                    self.cmd_invoke(
+                        worker_name,
+                        &function_name,
+                        arguments,
+                        trigger,
+                        idempotency_key,
+                        no_stream,
+                        stream_args,
+                        post_deploy_args,
+                        schedule_at,
+                    )
+                    .await
+                }
+                AgentSubcommand::Get {
+                    agent_id: worker_name,
+                } => self.cmd_get(worker_name).await,
+                AgentSubcommand::Delete {
+                    agent_id: worker_name,
+                } => self.cmd_delete(worker_name).await,
+                AgentSubcommand::List {
                     agent_type_name,
                     component_name,
-                    filters,
+                    filter: filters,
                     scan_cursor,
                     max_count,
                     precise,
-                )
-                .await
-            }
-            AgentSubcommand::Stream {
-                agent_id: worker_name,
-                stream_args,
-            } => self.cmd_stream(worker_name, stream_args).await,
-            AgentSubcommand::ReplStream {
-                agent_type_name,
-                parameters,
-                idempotency_key,
-                phantom_id,
-                stream_args,
-            } => {
-                self.cmd_repl_stream(
+                } => {
+                    self.cmd_list(
+                        agent_type_name,
+                        component_name,
+                        filters,
+                        scan_cursor,
+                        max_count,
+                        precise,
+                    )
+                    .await
+                }
+                AgentSubcommand::Stream {
+                    agent_id: worker_name,
+                    stream_args,
+                } => self.cmd_stream(worker_name, stream_args).await,
+                AgentSubcommand::ReplStream {
                     agent_type_name,
                     parameters,
                     idempotency_key,
                     phantom_id,
                     stream_args,
-                )
-                .await
-            }
-            AgentSubcommand::Interrupt {
-                agent_id: worker_name,
-            } => self.cmd_interrupt(worker_name).await,
-            AgentSubcommand::Update {
-                agent_id: worker_name,
-                mode,
-                target_revision,
-                r#await,
-                disable_wakeup,
-            } => {
-                self.cmd_update(
-                    worker_name,
-                    mode.unwrap_or(AgentUpdateMode::Automatic),
+                } => {
+                    self.cmd_repl_stream(
+                        agent_type_name,
+                        parameters,
+                        idempotency_key,
+                        phantom_id,
+                        stream_args,
+                    )
+                    .await
+                }
+                AgentSubcommand::Interrupt {
+                    agent_id: worker_name,
+                } => self.cmd_interrupt(worker_name).await,
+                AgentSubcommand::Update {
+                    agent_id: worker_name,
+                    mode,
                     target_revision,
                     r#await,
                     disable_wakeup,
-                )
-                .await
-            }
-            AgentSubcommand::Resume {
-                agent_id: worker_name,
-            } => self.cmd_resume(worker_name).await,
-            AgentSubcommand::SimulateCrash {
-                agent_id: worker_name,
-            } => self.cmd_simulate_crash(worker_name).await,
-            AgentSubcommand::Oplog {
-                agent_id: worker_name,
-                from,
-                query,
-            } => self.cmd_oplog(worker_name, from, query).await,
-            AgentSubcommand::Revert {
-                agent_id: worker_name,
-                last_oplog_index,
-                number_of_invocations,
-            } => {
-                self.cmd_revert(worker_name, last_oplog_index, number_of_invocations)
+                } => {
+                    self.cmd_update(
+                        worker_name,
+                        mode.unwrap_or(AgentUpdateMode::Automatic),
+                        target_revision,
+                        r#await,
+                        disable_wakeup,
+                    )
                     .await
+                }
+                AgentSubcommand::Resume {
+                    agent_id: worker_name,
+                } => self.cmd_resume(worker_name).await,
+                AgentSubcommand::SimulateCrash {
+                    agent_id: worker_name,
+                } => self.cmd_simulate_crash(worker_name).await,
+                AgentSubcommand::Oplog {
+                    agent_id: worker_name,
+                    from,
+                    query,
+                } => self.cmd_oplog(worker_name, from, query).await,
+                AgentSubcommand::Revert {
+                    agent_id: worker_name,
+                    last_oplog_index,
+                    number_of_invocations,
+                } => {
+                    self.cmd_revert(worker_name, last_oplog_index, number_of_invocations)
+                        .await
+                }
+                AgentSubcommand::CancelInvocation {
+                    agent_id: worker_name,
+                    idempotency_key,
+                } => {
+                    self.cmd_cancel_invocation(worker_name, idempotency_key)
+                        .await
+                }
+                AgentSubcommand::Files { worker_name, path } => {
+                    self.cmd_files(worker_name, path).await
+                }
+                AgentSubcommand::FileContents {
+                    worker_name,
+                    path,
+                    output,
+                } => self.cmd_file_contents(worker_name, path, output).await,
             }
-            AgentSubcommand::CancelInvocation {
-                agent_id: worker_name,
-                idempotency_key,
-            } => {
-                self.cmd_cancel_invocation(worker_name, idempotency_key)
-                    .await
-            }
-            AgentSubcommand::Files { worker_name, path } => self.cmd_files(worker_name, path).await,
-            AgentSubcommand::FileContents {
-                worker_name,
-                path,
-                output,
-            } => self.cmd_file_contents(worker_name, path, output).await,
-        }
+        })
     }
 
     async fn cmd_new(
