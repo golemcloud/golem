@@ -672,7 +672,7 @@ dependencies = [
  "itertools",
  "uuid",
  "wasi 0.14.1+wasi-0.2.3",
- "wit-bindgen-rt 0.40.0",
+ "wit-bindgen-rt 0.44.0",
  "wstd",
 ]
 
@@ -2317,6 +2317,15 @@ dependencies = [
  "bitflags",
  "futures",
  "once_cell",
+]
+
+[[package]]
+name = "wit-bindgen-rt"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "653c85dd7aee6fe6f4bded0d242406deadae9819029ce6f7d258c920c384358a"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]

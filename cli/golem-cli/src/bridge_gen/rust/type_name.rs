@@ -59,42 +59,31 @@ impl TypeName for RustTypeName {
     fn from_owner_and_name(
         owner: Option<impl AsRef<str>>,
         name: impl AsRef<str>,
-        same_language: bool,
+        _same_language: bool,
     ) -> Self {
-        if same_language {
-            Self::Derived(match owner {
-                Some(owner) => format!("{}{}", owner.as_ref(), name.as_ref()),
-                None => name.as_ref().to_string(),
-            })
-        } else {
-            Self::Derived(match owner {
-                Some(owner) => format!(
-                    "{}{}",
-                    owner.as_ref().to_upper_camel_case(),
-                    name.as_ref().to_upper_camel_case()
-                ),
-                None => name.as_ref().to_upper_camel_case(),
-            })
-        }
+        // WIT type names are always kebab-case regardless of source language,
+        // so we always need to convert to UpperCamelCase for Rust.
+        Self::Derived(match owner {
+            Some(owner) => format!(
+                "{}{}",
+                owner.as_ref().to_upper_camel_case(),
+                name.as_ref().to_upper_camel_case()
+            ),
+            None => name.as_ref().to_upper_camel_case(),
+        })
     }
 
     fn from_segments(
         segments: impl IntoIterator<Item = impl AsRef<str>>,
-        same_language: bool,
+        _same_language: bool,
     ) -> Self {
-        if same_language {
-            segments
-                .into_iter()
-                .map(|segment| segment.as_ref().to_string())
-                .join("")
-                .into()
-        } else {
-            segments
-                .into_iter()
-                .map(|segment| segment.as_ref().to_upper_camel_case())
-                .join("")
-                .into()
-        }
+        // WIT type names are always kebab-case regardless of source language,
+        // so we always need to convert to UpperCamelCase for Rust.
+        segments
+            .into_iter()
+            .map(|segment| segment.as_ref().to_upper_camel_case())
+            .join("")
+            .into()
     }
 
     fn requires_type_name(typ: &AnalysedType) -> bool {

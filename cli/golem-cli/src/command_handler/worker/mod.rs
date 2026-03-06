@@ -63,7 +63,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{
-    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
+    ParsedFunctionName, ParsedFunctionSite,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
@@ -2259,12 +2259,15 @@ impl WorkerCommandHandler {
 /// For example, `rust:agent/foo-agent.{fun-string}` → `fun-string`.
 /// Returns the input unchanged if it is already a simple name.
 fn extract_simple_method_name(function_name: &str) -> String {
-    if let Ok(parsed) = ParsedFunctionName::parse(function_name) {
-        if let ParsedFunctionReference::Function { function } = &parsed.function {
-            return function.clone();
-        }
+    if let Some(inner) = function_name
+        .strip_suffix('}')
+        .and_then(|s| s.rsplit_once('.'))
+        .and_then(|(_, rest)| rest.strip_prefix('{'))
+    {
+        inner.to_string()
+    } else {
+        function_name.to_string()
     }
-    function_name.to_string()
 }
 
 /// Fuzzy-matches a method name pattern against the original method names from agent metadata,
@@ -2387,5 +2390,32 @@ mod tests {
         assert_eq!(split_agent_name("a/b/c(\"/\")"), vec!["a", "b", "c(\"/\")"]);
         assert_eq!(split_agent_name("/"), vec!["", ""]);
         assert_eq!(split_agent_name("a(/"), vec!["a(/"]);
+    }
+
+    #[test]
+    fn test_extract_simple_method_name_simple() {
+        use super::extract_simple_method_name;
+
+        assert_eq!(extract_simple_method_name("fun_string"), "fun_string");
+    }
+
+    #[test]
+    fn test_extract_simple_method_name_qualified_kebab() {
+        use super::extract_simple_method_name;
+
+        assert_eq!(
+            extract_simple_method_name("rust:agent/FooAgent.{fun-string}"),
+            "fun-string"
+        );
+    }
+
+    #[test]
+    fn test_extract_simple_method_name_qualified_underscore() {
+        use super::extract_simple_method_name;
+
+        assert_eq!(
+            extract_simple_method_name("rust:agent/FooAgent.{fun_string}"),
+            "fun_string"
+        );
     }
 }
