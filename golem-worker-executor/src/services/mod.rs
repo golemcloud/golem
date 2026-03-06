@@ -13,11 +13,11 @@
 // limitations under the License.
 
 pub mod active_workers;
-pub mod agent_deployments;
 pub mod agent_types;
 pub mod agent_webhooks;
 pub mod blob_store;
 pub mod component;
+pub mod environment_state;
 pub mod events;
 pub mod file_loader;
 pub mod golem_config;
@@ -39,6 +39,7 @@ pub mod worker_fork;
 pub mod worker_proxy;
 
 use self::agent_webhooks::AgentWebhooksService;
+use self::environment_state::EnvironmentStateService;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::worker_activator::WorkerActivator;
@@ -193,6 +194,10 @@ pub trait HasLeakSentinel {
     fn leak_sentinel(&self) -> Arc<()>;
 }
 
+pub trait HasEnvironmentStateService {
+    fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -222,6 +227,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasResourceLimits
     + HasShutdownToken
     + HasHttpConnectionPool
+    + HasEnvironmentStateService
     + HasExtraDeps<Ctx>
     + HasLeakSentinel
     + Clone
@@ -258,6 +264,7 @@ impl<
             + HasResourceLimits
             + HasShutdownToken
             + HasHttpConnectionPool
+            + HasEnvironmentStateService
             + HasExtraDeps<Ctx>
             + HasLeakSentinel
             + Clone
@@ -299,6 +306,7 @@ pub struct All<Ctx: WorkerCtx> {
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
     shutdown_token: CancellationToken,
     http_connection_pool: Option<HttpConnectionPool>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
     extra_deps: Ctx::ExtraDeps,
     /// A no-op sentinel that participates in the `All` lifecycle.
     /// Tests can hold a `Weak<()>` to it and verify that `All` (and all
@@ -338,6 +346,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
+            environment_state_service: self.environment_state_service.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -378,6 +387,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
         shutdown_token: CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -411,6 +421,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            environment_state_service,
             extra_deps,
             leak_sentinel,
         }
@@ -454,6 +465,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.resource_limits(),
             this.shutdown_token(),
             this.http_connection_pool(),
+            this.environment_state_service(),
             this.extra_deps(),
             this.leak_sentinel(),
         )
@@ -643,6 +655,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasShutdownToken for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasHttpConnectionPool for T {
     fn http_connection_pool(&self) -> Option<HttpConnectionPool> {
         self.all().http_connection_pool.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEnvironmentStateService for T {
+    fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
+        self.all().environment_state_service.clone()
     }
 }
 

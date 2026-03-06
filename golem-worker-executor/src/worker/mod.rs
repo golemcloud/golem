@@ -17,6 +17,9 @@ pub mod invocation;
 mod invocation_loop;
 pub mod status;
 
+use self::agent_config::{
+    ensure_required_agent_secrets_are_configured, parse_worker_creation_local_agent_config,
+};
 use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
 };
@@ -28,12 +31,7 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
-    HasHttpConnectionPool, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService,
-    HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService,
-    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -64,8 +62,6 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::GetFileSystemNodeResult;
-
-use self::agent_config::parse_worker_creation_local_agent_config;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1500,7 +1496,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn get_or_create_worker_metadata<
-        T: HasWorkerService + HasComponentService + HasConfig + HasOplogService + Sync,
+        T: HasWorkerService
+            + HasComponentService
+            + HasConfig
+            + HasOplogService
+            + HasEnvironmentStateService
+            + Sync,
     >(
         this: &T,
         account_id: &AccountId,
@@ -1611,6 +1612,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let execution_status = ExecutionStatus::Suspended {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
+                };
+
+                {
+                    // The actual checks are performed in the DurableWorkerCtx on secret access.
+                    // This is just to fail early with a nicer error.
+                    let agent_secrets = this
+                        .environment_state_service()
+                        .get_agent_secrets(component.environment_id)
+                        .await?;
+                    ensure_required_agent_secrets_are_configured(
+                        &agent_secrets,
+                        agent_id.as_ref(),
+                        &component,
+                    )?
                 };
 
                 let initial_local_agent_config = parse_worker_creation_local_agent_config(
@@ -2222,6 +2237,7 @@ impl RunningWorker {
             parent.worker_fork_service(),
             parent.resource_limits(),
             parent.agent_types(),
+            parent.environment_state_service(),
             parent.agent_webhooks(),
             parent.shard_service(),
             parent.http_connection_pool(),

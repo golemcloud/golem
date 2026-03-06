@@ -56,7 +56,7 @@ pub struct GolemConfig {
     pub resource_limits: ResourceLimitsConfig,
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
-    pub agent_deployments_service: AgentDeploymentsServiceConfig,
+    pub environment_state_service: EnvironmentStateServiceConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
@@ -161,11 +161,11 @@ impl SafeDisplay for GolemConfig {
             self.agent_types_service.to_safe_string_indented()
         );
 
-        let _ = writeln!(&mut result, "agent deployments service:");
+        let _ = writeln!(&mut result, "environment state service:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.agent_deployments_service.to_safe_string_indented()
+            self.environment_state_service.to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "agent webhooks service:");
@@ -217,7 +217,7 @@ impl Default for GolemConfig {
             resource_limits: ResourceLimitsConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
-            agent_deployments_service: AgentDeploymentsServiceConfig::default(),
+            environment_state_service: EnvironmentStateServiceConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: GrpcRegistryServiceConfig {
                 client_config: GrpcClientConfig {
@@ -974,14 +974,14 @@ impl SafeDisplay for AgentTypesServiceGrpcConfig {
 pub struct AgentTypesServiceLocalConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AgentDeploymentsServiceConfig {
+pub struct EnvironmentStateServiceConfig {
     pub cache_capacity: usize,
     pub cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub cache_eviction_interval: Duration,
 }
 
-impl Default for AgentDeploymentsServiceConfig {
+impl Default for EnvironmentStateServiceConfig {
     fn default() -> Self {
         Self {
             cache_capacity: 1000,
@@ -991,7 +991,7 @@ impl Default for AgentDeploymentsServiceConfig {
     }
 }
 
-impl SafeDisplay for AgentDeploymentsServiceConfig {
+impl SafeDisplay for EnvironmentStateServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
