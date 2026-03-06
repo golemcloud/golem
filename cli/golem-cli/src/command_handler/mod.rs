@@ -243,8 +243,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         })
     }
 
-    async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
-        match command.subcommand {
+    fn handle_command(
+        &self,
+        command: GolemCliCommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move { match command.subcommand {
             // App scoped root commands
             GolemCliSubcommand::New {
                 application_name,
@@ -393,7 +396,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 self.ctx.cloud_handler().handle_command(subcommand).await
             }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
-        }
+        } })
     }
 
     fn cmd_completion(&self, shell: Shell) -> anyhow::Result<()> {

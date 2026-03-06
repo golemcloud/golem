@@ -96,7 +96,11 @@ impl WorkerCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: AgentSubcommand) -> anyhow::Result<()> {
+    pub fn handle_command(
+        &self,
+        subcommand: AgentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
         match subcommand {
             AgentSubcommand::New {
                 agent_id: worker_name,
@@ -223,6 +227,7 @@ impl WorkerCommandHandler {
                 output,
             } => self.cmd_file_contents(worker_name, path, output).await,
         }
+        })
     }
 
     async fn cmd_new(
