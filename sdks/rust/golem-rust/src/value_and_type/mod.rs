@@ -882,8 +882,7 @@ impl IntoValue for WitNode {
     fn add_to_type_builder<B: TypeNodeBuilder>(builder: B) -> B::Result {
         let builder = builder.variant(Some("WitNode".to_string()), None);
         let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("RecordValue"));
-        let builder =
-            <(u32, Option<NodeIndex>)>::add_to_type_builder(builder.case("VariantValue"));
+        let builder = <(u32, Option<NodeIndex>)>::add_to_type_builder(builder.case("VariantValue"));
         let builder = <u32>::add_to_type_builder(builder.case("EnumValue"));
         let builder = <Vec<bool>>::add_to_type_builder(builder.case("FlagsValue"));
         let builder = <Vec<NodeIndex>>::add_to_type_builder(builder.case("TupleValue"));
@@ -1168,8 +1167,7 @@ impl IntoValue for WitTypeNode {
         let builder = builder.unit_case("PrimCharType");
         let builder = builder.unit_case("PrimBoolType");
         let builder = builder.unit_case("PrimStringType");
-        let builder =
-            <(ResourceId, ResourceMode)>::add_to_type_builder(builder.case("HandleType"));
+        let builder = <(ResourceId, ResourceMode)>::add_to_type_builder(builder.case("HandleType"));
         builder.finish()
     }
 }
