@@ -13,14 +13,26 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::repo::Deps;
 use golem_common::config::DbPostgresConfig;
+use golem_registry_service::repo::account::DbAccountRepo;
+use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
+use golem_registry_service::repo::application::DbApplicationRepo;
+use golem_registry_service::repo::component::DbComponentRepo;
+use golem_registry_service::repo::deployment::DbDeploymentRepo;
+use golem_registry_service::repo::environment::DbEnvironmentRepo;
+use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
+use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
+use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use sqlx::ConnectOptions;
 use sqlx::postgres::PgConnectOptions;
 use std::time::{Duration, Instant};
-use test_r::{inherit_test_dep, sequential_suite};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
@@ -28,8 +40,7 @@ use tracing::{error, info};
 
 inherit_test_dep!(Tracing);
 
-sequential_suite!(plain);
-sequential_suite!(tls);
+define_matrix_dimension!(postgres_variant: Deps -> "postgres", "postgres_tls");
 
 const SERVER_CERT_PEM: &[u8] = include_bytes!("tls/server.crt");
 const SERVER_KEY_PEM: &[u8] = include_bytes!("tls/server.key");
@@ -52,6 +63,16 @@ PGCONF
 
 sed -i 's/^host /hostssl /g' "$PGDATA/pg_hba.conf"
 "#;
+
+pub struct PostgresDb {
+    _container: ContainerAsync<Postgres>,
+    pub pool: PostgresPool,
+}
+
+pub struct PostgresTlsDb {
+    _container: ContainerAsync<Postgres>,
+    pub pool: PostgresPool,
+}
 
 async fn start_plain_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
     let container = tryhard::retry_fn(|| Postgres::default().with_tag("14.7-alpine").start())
@@ -175,226 +196,155 @@ async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
     PostgresPool::configured(config).await.unwrap()
 }
 
-macro_rules! postgres_repo_tests {
-    ($dep:ident) => {
-        #[test]
-        async fn test_create_and_get_account($dep: &Deps) {
-            crate::repo::common::test_create_and_get_account($dep).await;
-        }
-
-        #[test]
-        async fn test_application_create($dep: &Deps) {
-            crate::repo::common::test_application_create($dep).await;
-        }
-
-        #[test]
-        async fn test_application_create_concurrent($dep: &Deps) {
-            crate::repo::common::test_application_create_concurrent($dep).await;
-        }
-
-        #[test]
-        async fn test_application_delete($dep: &Deps) {
-            crate::repo::common::test_application_delete($dep).await;
-        }
-
-        #[test]
-        async fn test_environment_create($dep: &Deps) {
-            crate::repo::common::test_environment_create($dep).await;
-        }
-
-        #[test]
-        async fn test_environment_create_concurrently($dep: &Deps) {
-            crate::repo::common::test_environment_create_concurrently($dep).await;
-        }
-
-        #[test]
-        async fn test_environment_update($dep: &Deps) {
-            crate::repo::common::test_environment_update($dep).await;
-        }
-
-        #[test]
-        async fn test_environment_update_concurrently($dep: &Deps) {
-            crate::repo::common::test_environment_update_concurrently($dep).await;
-        }
-
-        #[test]
-        async fn test_component_stage($dep: &Deps) {
-            crate::repo::common::test_component_stage($dep).await;
-        }
-
-        #[test]
-        async fn test_http_api_deployment_stage($dep: &Deps) {
-            crate::repo::common::test_http_api_deployment_stage($dep).await;
-        }
-
-        #[test]
-        async fn test_account_usage($dep: &Deps) {
-            crate::repo::common::test_account_usage($dep).await;
-        }
-
-        #[test]
-        async fn test_resolve_agent_type_owner_no_email($dep: &Deps) {
-            crate::repo::common::test_resolve_agent_type_owner_no_email($dep).await;
-        }
-
-        #[test]
-        async fn test_resolve_agent_type_shared_with_email($dep: &Deps) {
-            crate::repo::common::test_resolve_agent_type_shared_with_email($dep).await;
-        }
-
-        #[test]
-        async fn test_resolve_agent_type_no_share_returns_zero_roles($dep: &Deps) {
-            crate::repo::common::test_resolve_agent_type_no_share_returns_zero_roles($dep).await;
-        }
-
-        #[test]
-        async fn test_resolve_agent_type_no_deployment_returns_none($dep: &Deps) {
-            crate::repo::common::test_resolve_agent_type_no_deployment_returns_none($dep).await;
-        }
-
-        #[test]
-        async fn test_resolve_agent_type_nonexistent_revision_returns_none($dep: &Deps) {
-            crate::repo::common::test_resolve_agent_type_nonexistent_revision_returns_none($dep)
-                .await;
-        }
-
-        #[test]
-        async fn test_resolve_agent_type_unknown_email_returns_none($dep: &Deps) {
-            crate::repo::common::test_resolve_agent_type_unknown_email_returns_none($dep).await;
-        }
-
-        #[test]
-        async fn test_mcp_deployment_create_and_update($dep: &Deps) {
-            crate::repo::common::test_mcp_deployment_create_and_update($dep).await;
-        }
-
-        #[test]
-        async fn test_mcp_deployment_list_and_delete($dep: &Deps) {
-            crate::repo::common::test_mcp_deployment_list_and_delete($dep).await;
-        }
+async fn make_deps(pool: PostgresPool) -> Deps {
+    let deps = Deps {
+        account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
+        account_usage_repo: Box::new(DbAccountUsageRepo::logged(pool.clone())),
+        application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
+        environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
+        plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
+        component_repo: Box::new(DbComponentRepo::logged(pool.clone())),
+        http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
+        mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(pool.clone())),
+        deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(pool.clone())),
+        full_deployment_repo: Box::new(DbDeploymentRepo::logged(pool.clone())),
+        environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(pool.clone())),
+        plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
     };
+    deps.setup().await;
+    deps
 }
 
-pub mod plain {
-    use super::{make_pool, start_plain_postgres, wait_for_postgres};
-    use crate::Tracing;
-    use crate::repo::Deps;
-    use golem_registry_service::repo::account::DbAccountRepo;
-    use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
-    use golem_registry_service::repo::application::DbApplicationRepo;
-    use golem_registry_service::repo::component::DbComponentRepo;
-    use golem_registry_service::repo::deployment::DbDeploymentRepo;
-    use golem_registry_service::repo::environment::DbEnvironmentRepo;
-    use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
-    use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
-    use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
-    use golem_registry_service::repo::plan::DbPlanRepo;
-    use golem_registry_service::repo::plugin::DbPluginRepo;
-    use golem_service_base::db::postgres::PostgresPool;
-    use std::time::Duration;
-    use test_r::test;
-    use test_r::{inherit_test_dep, test_dep};
-    use testcontainers::ContainerAsync;
-    use testcontainers_modules::postgres::Postgres;
-
-    inherit_test_dep!(Tracing);
-
-    pub struct PostgresDb {
-        _container: ContainerAsync<Postgres>,
-        pub pool: PostgresPool,
+#[test_dep]
+async fn postgres_db(_tracing: &Tracing) -> PostgresDb {
+    let (config, container) = start_plain_postgres().await;
+    wait_for_postgres(&config, Duration::from_secs(30)).await;
+    let pool = make_pool(&config).await;
+    PostgresDb {
+        _container: container,
+        pool,
     }
-
-    #[test_dep]
-    async fn db_pool(_tracing: &Tracing) -> PostgresDb {
-        let (config, container) = start_plain_postgres().await;
-        wait_for_postgres(&config, Duration::from_secs(30)).await;
-        let pool = make_pool(&config).await;
-        PostgresDb {
-            _container: container,
-            pool,
-        }
-    }
-
-    #[test_dep]
-    async fn deps(db: &PostgresDb) -> Deps {
-        let deps = Deps {
-            account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
-            account_usage_repo: Box::new(DbAccountUsageRepo::logged(db.pool.clone())),
-            application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
-            environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
-            plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
-            component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
-            http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
-            mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(db.pool.clone())),
-            deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
-            full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
-            environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
-            plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
-        };
-        deps.setup().await;
-        deps
-    }
-
-    postgres_repo_tests!(deps);
 }
 
-pub mod tls {
-    use super::{make_pool, start_tls_postgres};
-    use crate::Tracing;
-    use crate::repo::Deps;
-    use golem_registry_service::repo::account::DbAccountRepo;
-    use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
-    use golem_registry_service::repo::application::DbApplicationRepo;
-    use golem_registry_service::repo::component::DbComponentRepo;
-    use golem_registry_service::repo::deployment::DbDeploymentRepo;
-    use golem_registry_service::repo::environment::DbEnvironmentRepo;
-    use golem_registry_service::repo::environment_share::DbEnvironmentShareRepo;
-    use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
-    use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
-    use golem_registry_service::repo::plan::DbPlanRepo;
-    use golem_registry_service::repo::plugin::DbPluginRepo;
-    use golem_service_base::db::postgres::PostgresPool;
-    use test_r::test;
-    use test_r::{inherit_test_dep, test_dep};
-    use testcontainers::ContainerAsync;
-    use testcontainers_modules::postgres::Postgres;
+#[test_dep(tagged_as = "postgres")]
+async fn postgres_deps(db: &PostgresDb) -> Deps {
+    make_deps(db.pool.clone()).await
+}
 
-    inherit_test_dep!(Tracing);
-
-    pub struct PostgresTlsDb {
-        _container: ContainerAsync<Postgres>,
-        pub pool: PostgresPool,
+#[test_dep]
+async fn postgres_tls_db(_tracing: &Tracing) -> PostgresTlsDb {
+    let (config, container) = start_tls_postgres().await;
+    let pool = make_pool(&config).await;
+    PostgresTlsDb {
+        _container: container,
+        pool,
     }
+}
 
-    #[test_dep]
-    async fn tls_db(_tracing: &Tracing) -> PostgresTlsDb {
-        let (config, container) = start_tls_postgres().await;
-        let pool = make_pool(&config).await;
-        PostgresTlsDb {
-            _container: container,
-            pool,
-        }
-    }
+#[test_dep(tagged_as = "postgres_tls")]
+async fn postgres_tls_deps(db: &PostgresTlsDb) -> Deps {
+    make_deps(db.pool.clone()).await
+}
 
-    #[test_dep]
-    async fn tls_deps(db: &PostgresTlsDb) -> Deps {
-        let deps = Deps {
-            account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
-            account_usage_repo: Box::new(DbAccountUsageRepo::logged(db.pool.clone())),
-            application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
-            environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
-            plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
-            component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
-            http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
-            mcp_deployment_repo: Box::new(DbMcpDeploymentRepo::logged(db.pool.clone())),
-            deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
-            full_deployment_repo: Box::new(DbDeploymentRepo::logged(db.pool.clone())),
-            environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
-            plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
-        };
-        deps.setup().await;
-        deps
-    }
+#[test]
+async fn test_create_and_get_account(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_create_and_get_account(deps).await;
+}
 
-    postgres_repo_tests!(tls_deps);
+#[test]
+async fn test_application_create(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_application_create(deps).await;
+}
+
+#[test]
+async fn test_application_create_concurrent(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_application_create_concurrent(deps).await;
+}
+
+#[test]
+async fn test_application_delete(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_application_delete(deps).await;
+}
+
+#[test]
+async fn test_environment_create(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_environment_create(deps).await;
+}
+
+#[test]
+async fn test_environment_create_concurrently(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_environment_create_concurrently(deps).await;
+}
+
+#[test]
+async fn test_environment_update(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_environment_update(deps).await;
+}
+
+#[test]
+async fn test_environment_update_concurrently(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_environment_update_concurrently(deps).await;
+}
+
+#[test]
+async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_component_stage(deps).await;
+}
+
+#[test]
+async fn test_http_api_deployment_stage(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_http_api_deployment_stage(deps).await;
+}
+
+#[test]
+async fn test_account_usage(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_owner_no_email(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_owner_no_email(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_shared_with_email(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_resolve_agent_type_shared_with_email(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_no_share_returns_zero_roles(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resolve_agent_type_no_share_returns_zero_roles(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_no_deployment_returns_none(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_nonexistent_revision_returns_none(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resolve_agent_type_nonexistent_revision_returns_none(deps).await;
+}
+
+#[test]
+async fn test_resolve_agent_type_unknown_email_returns_none(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_resolve_agent_type_unknown_email_returns_none(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_create_and_update(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_create_and_update(deps).await;
+}
+
+#[test]
+async fn test_mcp_deployment_list_and_delete(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_mcp_deployment_list_and_delete(deps).await;
 }
