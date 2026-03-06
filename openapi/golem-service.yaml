@@ -9327,6 +9327,19 @@ components:
       required:
       - start
       - end
+    ParsedWorkerCreationLocalAgentConfigEntry:
+      title: ParsedWorkerCreationLocalAgentConfigEntry
+      type: object
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ValueAndType'
+      required:
+      - key
+      - value
     PendingUpdate:
       title: PendingUpdate
       type: object
@@ -10954,6 +10967,18 @@ components:
       required:
       - comparator
       - value
+    WorkerCreationLocalAgentConfigEntry:
+      title: WorkerCreationLocalAgentConfigEntry
+      type: object
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value: {}
+      required:
+      - key
+      - value
     WorkerCreationRequest:
       title: WorkerCreationRequest
       type: object
@@ -10969,6 +10994,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
       required:
       - name
       - env
@@ -11532,6 +11562,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -11546,6 +11580,7 @@ components:
       - initialTotalLinearMemorySize
       - initialActivePlugins
       - configVars
+      - localAgentConfig
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object

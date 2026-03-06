@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -28,6 +28,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -62,6 +63,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         account_id: AccountId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -85,6 +87,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                             owned_worker_id,
                             worker_env,
                             worker_config_vars,
+                            worker_local_agent_config,
                             component_revision,
                             parent,
                             &invocation_context_stack,

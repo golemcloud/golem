@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,7 +16,7 @@ use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
     build_ifs_archive, rename_component_if_needed, EnvironmentOptions, TestDsl, TestDslExtended,
-    WorkerInvocationResult, WorkerLogEventStream,
+    WorkerLogEventStream,
 };
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
@@ -51,10 +51,10 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::worker::{
     FlatComponentFileSystemNode, WorkerCreationRequest, WorkerMetadataDto, WorkerUpdateMode,
 };
+use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
 use golem_common::model::{IdempotencyKey, WorkerEvent};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
@@ -172,6 +172,8 @@ impl<Deps: TestDependencies> TestUserContext<Deps> {
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
+    type WorkerError = golem_client::Error<golem_client::api::WorkerError>;
+
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis()
     }
@@ -364,7 +366,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         id: AgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> WorkerInvocationResult<WorkerId> {
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+    ) -> anyhow::Result<Result<WorkerId, Self::WorkerError>> {
         let client = self
             .deps
             .worker_service()
@@ -378,11 +381,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     name: id.to_string(),
                     env,
                     config_vars,
+                    local_agent_config,
                 },
             )
-            .await?;
+            .await;
 
-        Ok(Ok(response.worker_id))
+        Ok(response.map(|r| r.worker_id))
     }
 
     async fn invoke_agent_with_key(

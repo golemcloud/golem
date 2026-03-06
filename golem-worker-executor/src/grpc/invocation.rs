@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,6 +16,7 @@ use golem_common::base_model::agent::Principal;
 use golem_common::base_model::WorkerId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
@@ -26,6 +27,7 @@ pub trait CanStartWorker {
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
+    fn local_agent_config(&self) -> Vec<WorkerCreationLocalAgentConfigEntry>;
     fn parent(&self) -> Option<WorkerId>;
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
@@ -77,6 +79,10 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             Some(ctx) => Ok(Some(ctx.config_vars.clone().into_iter().collect())),
             None => Ok(None),
         }
+    }
+
+    fn local_agent_config(&self) -> Vec<WorkerCreationLocalAgentConfigEntry> {
+        Vec::new()
     }
 
     fn parent(&self) -> Option<WorkerId> {

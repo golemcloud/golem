@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent_config;
 pub mod invocation;
 mod invocation_loop;
 pub mod status;
@@ -46,7 +47,7 @@ use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
@@ -59,6 +60,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 
+use self::agent_config::parse_worker_creation_local_agent_config;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -137,6 +139,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -152,6 +155,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 account_id,
                 worker_env,
                 worker_config_vars,
+                worker_local_agent_config,
                 component_revision,
                 parent,
                 invocation_context_stack,
@@ -167,6 +171,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: &OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -181,6 +186,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owned_worker_id,
             worker_env,
             worker_config_vars,
+            worker_local_agent_config,
             component_revision,
             parent,
             invocation_context_stack,
@@ -225,6 +231,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_worker_id: OwnedWorkerId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
@@ -244,6 +251,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             worker_env,
             worker_config,
+            worker_local_agent_config,
             parent,
         )
         .await?;
@@ -1495,6 +1503,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
+        worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         parent: Option<WorkerId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_worker_id.component_id();
@@ -1600,7 +1609,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     timestamp: Timestamp::now_utc(),
                 };
 
+                let initial_local_agent_config = parse_worker_creation_local_agent_config(
+                    worker_local_agent_config,
+                    agent_id.as_ref(),
+                    &component,
+                )?;
+
                 let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
@@ -1624,8 +1640,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
+                    // TODO: these environment variables already contain the component level values,
+                    // but we should only have the worker-level overrides here as we can't compute
+                    // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
+                    local_agent_config: initial_local_agent_config,
                     environment_id: owned_worker_id.environment_id(),
                     created_by: *account_id,
                     created_at,
@@ -1653,6 +1673,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .active_plugins
                         .clone(),
                     initial_worker_metadata.config_vars.clone(),
+                    initial_worker_metadata
+                        .local_agent_config
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect(),
                     initial_worker_metadata.original_phantom_id,
                 );
 
@@ -2125,6 +2151,7 @@ impl RunningWorker {
                 component_version_for_replay,
                 worker_metadata.created_by,
                 worker_metadata.config_vars,
+                worker_metadata.local_agent_config,
                 if pending_update.is_none()
                     && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
                 {
@@ -2148,7 +2175,10 @@ impl RunningWorker {
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
 
-        store.set_epoch_deadline(parent.config().limits.epoch_ticks);
+        // Set initial epoch deadline to 0 so the callback fires immediately on the
+        // first epoch check point in WASM code, ensuring fuel is checked even for
+        // very fast invocations that complete within a single epoch tick interval.
+        store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
             let data_mut = store.data_mut();
@@ -2162,7 +2192,9 @@ impl RunningWorker {
                 None => Ok(UpdateDeadline::Yield(1)),
             }
         });
-        store.set_fuel(u64::MAX)?;
+        store
+            .set_fuel(u64::MAX)
+            .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
@@ -2296,12 +2328,8 @@ fn resolve_agent_properties<T: HasConfig>(
     agent_id: Option<&AgentId>,
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> ResolvedAgentProperties {
-    let resolved_agent_type = agent_id.and_then(|id| {
-        metadata
-            .find_agent_type_by_name(&id.agent_type)
-            .ok()
-            .flatten()
-    });
+    let resolved_agent_type =
+        agent_id.and_then(|id| metadata.find_agent_type_by_name(&id.agent_type));
 
     let agent_mode = resolved_agent_type
         .as_ref()

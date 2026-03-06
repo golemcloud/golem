@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -82,7 +82,6 @@ mod flag {
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
-    pub static TEMPLATE_GROUP: &str = "--template-group";
     pub static YES: &str = "--yes";
 }
 
@@ -185,20 +184,24 @@ impl Output {
     fn success_or_dump(&self) -> bool {
         let success = self.status.success();
         if !success {
-            let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
-            let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
-            for output in &self.output {
-                match output {
-                    CommandOutput::Stdout(line) => {
-                        println!("{} {}", std_out_prefix, line);
-                    }
-                    CommandOutput::Stderr(line) => {
-                        println!("{} {}", std_err_prefix, line);
-                    }
+            self.dump();
+        }
+        success
+    }
+
+    fn dump(&self) {
+        let std_out_prefix = "> golem-cli - stdout:".to_string().green().bold();
+        let std_err_prefix = "> golem-cli - stderr:".to_string().red().bold();
+        for output in &self.output {
+            match output {
+                CommandOutput::Stdout(line) => {
+                    println!("{} {}", std_out_prefix, line);
+                }
+                CommandOutput::Stderr(line) => {
+                    println!("{} {}", std_err_prefix, line);
                 }
             }
         }
-        success
     }
 
     #[must_use]
@@ -268,7 +271,6 @@ struct TestContext {
     working_dir: PathBuf,
     server_process: Option<Child>,
     env: HashMap<String, String>,
-    template_group: Option<String>,
 }
 
 impl Drop for TestContext {
@@ -300,6 +302,8 @@ impl TestContext {
             "GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(),
             "true".to_string(),
         );
+
+        env.insert("NO_COLOR".to_string(), "1".to_string());
 
         for key in [
             "GOLEM_RUST_PATH",
@@ -334,7 +338,6 @@ impl TestContext {
             working_dir,
             server_process: None,
             env,
-            template_group: None,
         };
 
         info!(ctx = ?ctx ,"Created test context");
@@ -355,20 +358,6 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
-    #[allow(dead_code)]
-    fn use_generic_template_group(&mut self) {
-        self.use_template_group("generic")
-    }
-
-    fn use_template_group(&mut self, template_group: impl Into<String>) {
-        self.template_group = Some(template_group.into());
-    }
-
-    #[allow(dead_code)]
-    fn use_default_template_group(&mut self) {
-        self.template_group = None;
-    }
-
     #[must_use]
     async fn cli<I, S>(&self, args: I) -> Output
     where
@@ -380,10 +369,6 @@ impl TestContext {
                 "--config-dir".to_string(),
                 self.config_dir.path().to_str().unwrap().to_string(),
             ];
-            if let Some(template_group) = &self.template_group {
-                all_args.push(flag::TEMPLATE_GROUP.to_string());
-                all_args.push(template_group.to_string());
-            }
             all_args.extend(
                 args.into_iter()
                     .map(|a| a.as_ref().to_str().unwrap().to_string()),
@@ -533,12 +518,16 @@ where
     let mut patterns = patterns.into_iter();
     let mut pattern = patterns.next();
     let mut pattern_str = pattern.as_ref().map(|s| s.as_ref());
+    let mut unmatched_lines = vec![];
     for line in lines {
         match pattern_str {
             Some(p) => {
-                if line.as_ref().contains(p) {
+                let line = line.as_ref();
+                if line.contains(p) {
                     pattern = patterns.next();
                     pattern_str = pattern.as_ref().map(|s| s.as_ref());
+                } else {
+                    unmatched_lines.push(line.to_string());
                 }
             }
             None => {
@@ -552,9 +541,13 @@ where
         .chain(patterns.map(|s| s.as_ref().to_string()))
         .collect::<Vec<_>>();
     if !remaining_patterns.is_empty() {
-        println!("{}", "Missing patterns:".red().underline());
+        println!("---\n{}", "### Missing patterns:".red().underline());
         for pattern in &remaining_patterns {
             println!("{pattern}");
+        }
+        println!("{}", "### Unmatched lines:".yellow().underline());
+        for line in unmatched_lines {
+            println!("{line}");
         }
     }
     remaining_patterns.is_empty()
