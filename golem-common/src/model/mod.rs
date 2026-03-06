@@ -987,14 +987,14 @@ impl AgentInvocation {
                 config,
                 metadata,
                 first_entry_index,
-                ..
+                entries,
             } => Self::ProcessOplogEntries {
                 idempotency_key,
                 account_id,
                 config,
                 metadata,
                 first_entry_index,
-                entries: Vec::new(), // Entries are pre-converted to PublicOplogEntry before enqueuing; replay does not reconstruct them
+                entries,
             },
         }
     }
@@ -1089,6 +1089,13 @@ impl AgentInvocation {
                 idempotency_key, ..
             } => Some(idempotency_key),
             Self::AgentInitialization {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::ProcessOplogEntries {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            Self::SaveSnapshot { idempotency_key } => Some(idempotency_key),
+            Self::LoadSnapshot {
                 idempotency_key, ..
             } => Some(idempotency_key),
             _ => None,

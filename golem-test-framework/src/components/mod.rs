@@ -381,6 +381,7 @@ impl EnvVarBuilder {
                 "{rust_log_level_str},\
                 cranelift_codegen=warn,\
                 wasmtime_cranelift=warn,\
+                wasmtime_internal_cranelift=warn,\
                 wasmtime_jit=warn,\
                 h2=warn,\
                 hyper=warn,\

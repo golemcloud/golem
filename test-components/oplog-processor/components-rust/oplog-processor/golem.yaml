@@ -1,0 +1,7 @@
+components:
+  oplog:processor:
+    templates: rust
+
+customCommands:
+  copy:
+    - command: cp ../../golem-temp/agents/oplog_processor_release.wasm ../../../oplog-processor.wasm

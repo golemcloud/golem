@@ -1,0 +1,14 @@
+[package]
+name = "oplog_processor"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+golem-rust = { workspace = true }
+serde_json = { workspace = true }
+uuid = { version = "1.10", features = ["v4"] }
+wstd = { workspace = true }
