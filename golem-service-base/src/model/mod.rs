@@ -15,6 +15,7 @@
 pub mod agent_secret;
 pub mod auth;
 pub mod component;
+pub mod environment;
 pub mod plugin_registration;
 
 use derive_more::Display;

@@ -39,6 +39,7 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
@@ -138,6 +139,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -192,6 +194,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
@@ -228,6 +231,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             shutdown_token.clone(),
+            environment_state_service.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             additional_deps.clone(),
@@ -263,6 +267,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits,
             shutdown_token,
+            environment_state_service,
             additional_deps,
             leak_sentinel,
         ))

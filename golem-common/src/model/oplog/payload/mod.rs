@@ -40,6 +40,7 @@ use desert_rust::{
     DeserializationContext, SerializationContext,
 };
 use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::HashMap;
@@ -110,6 +111,10 @@ oplog_payload! {
             agent_id: WorkerId,
             target_revision: ComponentRevision,
             mode: UpdateMode
+        },
+        GolemAgentGetConfigValue {
+            key: Vec<String>,
+            expected_type: AnalysedType
         },
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
@@ -213,6 +218,9 @@ oplog_payload! {
         },
         FileSystemStat {
             result: Result<SerializableFileTimes, FileSystemError>,
+        },
+        GolemAgentGetConfigValue {
+            result: golem_wasm::Value,
         },
         GolemAgentWebhookUrl {
             result: Result<String, String>
@@ -411,6 +419,7 @@ pub mod host_functions {
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
+        (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),

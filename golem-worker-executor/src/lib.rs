@@ -28,9 +28,9 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
-use self::services::agent_deployments::{AgentDeploymentsService, GrpcAgentDeploymentService};
 use self::services::agent_webhooks::AgentWebhooksService;
-use self::services::golem_config::AgentDeploymentsServiceConfig;
+use self::services::environment_state::{EnvironmentStateService, GrpcEnvironmentStateService};
+use self::services::golem_config::EnvironmentStateServiceConfig;
 use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -140,12 +140,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
 
-    fn create_agent_deployments_service(
+    fn create_environment_state_service(
         &self,
-        config: &AgentDeploymentsServiceConfig,
+        config: &EnvironmentStateServiceConfig,
         registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn AgentDeploymentsService> {
-        Arc::new(GrpcAgentDeploymentService::new(
+    ) -> Arc<dyn EnvironmentStateService> {
+        Arc::new(GrpcEnvironmentStateService::new(
             registry_service,
             config.cache_capacity,
             config.cache_ttl,
@@ -247,6 +247,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -476,13 +477,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         blob_storage.clone(),
     );
 
-    let agent_deployments_service = bootstrap.create_agent_deployments_service(
-        &golem_config.agent_deployments_service,
+    let environment_state_service = bootstrap.create_environment_state_service(
+        &golem_config.environment_state_service,
         registry_service.clone(),
     );
 
     let agent_webhooks_service = Arc::new(AgentWebhooksService::new(
-        agent_deployments_service.clone(),
+        environment_state_service.clone(),
         golem_config
             .agent_webhooks_service
             .use_https_for_webhook_url,
@@ -651,6 +652,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             oplog_processor_plugin,
             agent_type_service,
+            environment_state_service,
             agent_webhooks_service,
             registry_service,
             shutdown_token,

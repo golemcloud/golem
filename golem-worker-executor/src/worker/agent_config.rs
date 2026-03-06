@@ -19,11 +19,67 @@ use golem_common::model::worker::{
     ParsedWorkerCreationLocalAgentConfigEntry, WorkerCreationLocalAgentConfigEntry,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::{Component, LocalAgentConfigEntry};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::ValueAndType;
 use std::collections::HashMap;
+
+pub fn ensure_required_agent_secrets_are_configured(
+    agent_secrets: &HashMap<Vec<String>, AgentSecret>,
+    agent_id: Option<&AgentId>,
+    component: &Component,
+) -> Result<(), WorkerExecutorError> {
+    let Some(agent_id) = agent_id else {
+        return Ok(());
+    };
+
+    let agent_type = component
+        .metadata
+        .find_agent_type_by_name(&agent_id.agent_type)
+        .expect("Agent metadata for the parsed agent type was not part of component metadata");
+
+    for config_entry in agent_type.config {
+        let ConfigKeyValueType {
+            key,
+            value: ConfigValueType::Shared(shared_config_declaration),
+        } = config_entry
+        else {
+            continue;
+        };
+
+        match agent_secrets.get(&key) {
+            Some(agent_secret) => {
+                if agent_secret.secret_type != shared_config_declaration.value {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Required agent secret {} has invalid type. found: {:?}, expected: {:?}",
+                        key.join("."),
+                        agent_secret.secret_type,
+                        shared_config_declaration.value
+                    )));
+                }
+                if agent_secret.secret_value.is_none()
+                    && !matches!(agent_secret.secret_type, AnalysedType::Option(_))
+                {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "Required agent secret {} has no configured value",
+                        key.join(".")
+                    )));
+                }
+            }
+            None if matches!(shared_config_declaration.value, AnalysedType::Option(_)) => {}
+            None => {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Required agent secret {} does not exist",
+                    key.join(".")
+                )))
+            }
+        }
+    }
+
+    Ok(())
+}
 
 pub fn parse_worker_creation_local_agent_config(
     worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,

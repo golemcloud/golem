@@ -17,27 +17,28 @@ use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
 use crate::model::component::Component;
-use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
+use crate::model::environment::EnvironmentState;
+use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentDeploymentsRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
+    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
+    GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
-    GetDeployedComponentMetadataRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
+    GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
+    GetResourceLimitsRequest, ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest,
+    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_deployments_response, get_agent_type_response, get_all_agent_types_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
-    get_component_metadata_response, get_deployed_component_metadata_response,
-    get_resource_limits_response, resolve_agent_type_at_deployment_response,
-    resolve_agent_type_by_names_response, resolve_component_response,
-    resolve_latest_agent_type_by_names_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_component_metadata_response, get_current_environment_state_response,
+    get_deployed_component_metadata_response, get_resource_limits_response,
+    resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
+    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::WorkerId;
@@ -190,10 +191,10 @@ pub trait RegistryService: Send + Sync {
         domain: &Domain,
     ) -> Result<CompiledMcp, RegistryServiceError>;
 
-    async fn get_agent_deployments(
+    async fn get_current_environment_state(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, RegistryServiceError>;
+    ) -> Result<EnvironmentState, RegistryServiceError>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -836,32 +837,31 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn get_agent_deployments(
+    async fn get_current_environment_state(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<HashMap<AgentTypeName, AgentDeploymentDetails>, RegistryServiceError> {
+    ) -> Result<EnvironmentState, RegistryServiceError> {
         let response = self
             .client
-            .call("get_active_domains_for_agent_types", move |client| {
-                let request = GetAgentDeploymentsRequest {
+            .call("get_current_environment_state", move |client| {
+                let request = GetCurrentEnvironmentStateRequest {
                     environment_id: Some(environment_id.into()),
                 };
-                Box::pin(client.get_agent_deployments(request))
+                Box::pin(client.get_current_environment_state(request))
             })
             .await?
             .into_inner();
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(get_agent_deployments_response::Result::Success(payload)) => {
-                let mut result = HashMap::new();
-                for entry in payload.agent_deployment_details {
-                    let converted = AgentDeploymentDetails::from(entry);
-                    result.insert(converted.agent_type_name.clone(), converted);
-                }
-                Ok(result)
+            Some(get_current_environment_state_response::Result::Success(payload)) => {
+                let converted = payload
+                    .environment_state
+                    .ok_or("missing environment_state field")?
+                    .try_into()?;
+                Ok(converted)
             }
-            Some(get_agent_deployments_response::Result::Error(error)) => Err(error.into()),
+            Some(get_current_environment_state_response::Result::Error(error)) => Err(error.into()),
         }
     }
 }

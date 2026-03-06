@@ -17,7 +17,10 @@ use crate::base_model::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use golem_wasm::analysis::AnalysedType;
 
-newtype_uuid!(AgentSecretId);
+newtype_uuid!(
+    AgentSecretId,
+    golem_api_grpc::proto::golem::registry::AgentSecretId
+);
 
 declare_revision!(AgentSecretRevision);
 

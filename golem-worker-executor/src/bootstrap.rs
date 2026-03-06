@@ -19,6 +19,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
+use crate::services::environment_state::EnvironmentStateService;
 use crate::services::events::Events;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
@@ -102,6 +103,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -143,6 +145,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            environment_state_service.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
@@ -179,6 +182,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             shutdown_token.clone(),
+            environment_state_service.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             additional_deps.clone(),
@@ -214,6 +218,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             oplog_processor_plugin.clone(),
             resource_limits,
             shutdown_token,
+            environment_state_service.clone(),
             additional_deps,
             leak_sentinel,
         ))

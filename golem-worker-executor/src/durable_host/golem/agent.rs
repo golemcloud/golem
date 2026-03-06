@@ -20,18 +20,121 @@ use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentTypeName, ConfigValueType};
+use golem_common::model::agent::{
+    AgentId, AgentTypeName, ConfigValueType, ConfigValueTypeLocal, ConfigValueTypeShared,
+};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
+    GolemAgentGetConfigValue,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemApiPromiseId,
-    HostRequestNoInput, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetConfigValue,
+    HostRequestGolemApiPromiseId, HostRequestNoInput, HostResponseGolemAgentAgentType,
+    HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::PromiseId;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    fn resolve_local_config(
+        &self,
+        key: &[String],
+        key_str: &str,
+        expected_type: &AnalysedType,
+        local_decl: &ConfigValueTypeLocal,
+    ) -> anyhow::Result<WitValue> {
+        let config_value = self.state.local_agent_config.get(key);
+
+        if local_decl.value != *expected_type {
+            return Err(anyhow!(
+                "declared and expected type for config key {key_str} are not compatible"
+            ));
+        }
+
+        let result = match (expected_type, config_value) {
+            (AnalysedType::Option(_), None) => WitValue::builder().option_none(),
+            (_, Some(value)) => value.value.clone().into(),
+            (_, None) => return Err(anyhow!("required config key {key_str} is missing value")),
+        };
+
+        Ok(result)
+    }
+
+    async fn resolve_shared_config(
+        &mut self,
+        key: Vec<String>,
+        key_str: &str,
+        expected_type: AnalysedType,
+        shared_decl: ConfigValueTypeShared,
+    ) -> anyhow::Result<WitValue> {
+        let durability =
+            Durability::<GolemAgentGetConfigValue>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
+
+        if durability.is_live() {
+            let agent_secrets = self
+                .state
+                .environment_state_service
+                .get_agent_secrets(self.state.component_metadata.environment_id)
+                .await?;
+
+            let agent_secret = agent_secrets.get(&key);
+
+            let agent_secret_type = agent_secret.map(|sec| &sec.secret_type);
+            let agent_secret_value = agent_secret.and_then(|sec| sec.secret_value.as_ref());
+
+            if shared_decl.value != expected_type {
+                return Err(anyhow!(
+                    "declared and expected type for secret key {key_str} are not compatible"
+                ));
+            }
+
+            let result = match (&expected_type, agent_secret_type, agent_secret_value) {
+                (AnalysedType::Option(_), None, None) => golem_wasm::Value::Option(None),
+
+                (
+                    AnalysedType::Option(expected_type),
+                    Some(AnalysedType::Option(actual_type)),
+                    None,
+                ) if *expected_type == *actual_type => golem_wasm::Value::Option(None),
+
+                (expected_type, Some(actual_type), Some(value))
+                    if *expected_type == *actual_type =>
+                {
+                    value.clone()
+                }
+
+                (_, None, _) => {
+                    return Err(anyhow!("No secret for key {key_str} exists in environment"));
+                }
+
+                (_, Some(_), None) => {
+                    return Err(anyhow!("Secret key {key_str} is missing value"));
+                }
+
+                (_, _, _) => {
+                    return Err(anyhow!(
+                        "declared and expected type for config key {key_str} are not compatible"
+                    ));
+                }
+            };
+
+            let persisted = durability
+                .persist(
+                    self,
+                    HostRequestGolemAgentGetConfigValue { key, expected_type },
+                    HostResponseGolemAgentGetConfigValue { result },
+                )
+                .await?;
+
+            Ok(persisted.result.into())
+        } else {
+            Ok(durability.replay(self).await?.result.into())
+        }
+    }
+}
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
@@ -226,7 +329,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         expected_type: WitType,
     ) -> anyhow::Result<WitValue> {
         let key_str = key.join(".");
-        tracing::debug!("Agent getting config value for key {}", key_str);
+        tracing::debug!("Agent getting config value for key {key_str}");
 
         let agent_id = self
             .agent_id()
@@ -244,42 +347,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .find_map(|c| (c.key == key).then(|| c.value.clone()));
 
         let declaration = match declaration {
+            // Allow reading undeclared optional config keys so that
+            // newer agents can run against older component schemas.
             None if matches!(expected_type, AnalysedType::Option(_)) => {
-                // Allow optional undeclared config for schema evolution
                 return Ok(WitValue::builder().option_none());
             }
-            None => {
-                return Err(anyhow!("No config declared for key {}", key_str));
-            }
+            None => return Err(anyhow!("No config declared for key {key_str}")),
             Some(d) => d,
         };
 
         match declaration {
             ConfigValueType::Local(local_decl) => {
-                let config_value = self.state.local_agent_config.get(&key);
-
-                match (&local_decl.value, &expected_type, config_value) {
-                    // Declared optional, expected optional, value missing
-                    (AnalysedType::Option(declared), AnalysedType::Option(expected), None)
-                        if declared == expected =>
-                    {
-                        Ok(WitValue::builder().option_none())
-                    }
-
-                    // Types match and value exists
-                    (declared, expected, Some(value)) if declared == expected => {
-                        Ok(value.value.clone().into())
-                    }
-
-                    _ => Err(anyhow!(
-                        "declared and expected type for config key {} are not compatible",
-                        key_str
-                    )),
-                }
+                self.resolve_local_config(&key, &key_str, &expected_type, &local_decl)
             }
-
-            ConfigValueType::Shared(_) => {
-                unimplemented!()
+            ConfigValueType::Shared(shared_decl) => {
+                self.resolve_shared_config(key, &key_str, expected_type, shared_decl)
+                    .await
             }
         }
     }
