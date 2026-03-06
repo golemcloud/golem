@@ -87,9 +87,9 @@ cargo-component-core = "0.21.1"
 cargo_metadata = "0.21.0"
 cargo_toml = "0.22.1"
 chrono = { version = "0.4.40", features = ["serde"] }
-clap = { version = "4.5.32", features = ["derive", "suggestions", "color", "help", ] }
-clap-verbosity-flag = { version = "3.0.2", features = ["tracing"] }
-clap_complete = "4.5.45"
+clap = { version = "4.5.60", features = ["derive", "suggestions", "color", "help", ] }
+clap-verbosity-flag = { version = "3.0.4", features = ["tracing"] }
+clap_complete = "4.5.66"
 cli-table = "0.4.9"
 colored = "3.0.0"
 colored-diff = "0.2.3"
@@ -213,7 +213,7 @@ rustc-hash = "2.1.1"
 rustls = { version = "0.23.23", features = ["ring"] }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
-scc = "3.3.2"
+scc = "3.6.9"
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.219"

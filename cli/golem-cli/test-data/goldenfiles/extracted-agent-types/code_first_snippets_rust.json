@@ -302,7 +302,7 @@
                 "elementType": {
                   "fields": [
                     {
-                      "name": "list-u8",
+                      "name": "list_u8",
                       "typ": {
                         "inner": {
                           "type": "U8"
@@ -311,7 +311,7 @@
                       }
                     },
                     {
-                      "name": "list-str",
+                      "name": "list_str",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -320,7 +320,7 @@
                       }
                     },
                     {
-                      "name": "map-num",
+                      "name": "map_num",
                       "typ": {
                         "inner": {
                           "items": [
@@ -337,7 +337,7 @@
                       }
                     },
                     {
-                      "name": "map-text",
+                      "name": "map_text",
                       "typ": {
                         "inner": {
                           "items": [
@@ -372,7 +372,7 @@
                 "elementType": {
                   "fields": [
                     {
-                      "name": "list-u8",
+                      "name": "list_u8",
                       "typ": {
                         "inner": {
                           "type": "U8"
@@ -381,7 +381,7 @@
                       }
                     },
                     {
-                      "name": "list-str",
+                      "name": "list_str",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -390,7 +390,7 @@
                       }
                     },
                     {
-                      "name": "map-num",
+                      "name": "map_num",
                       "typ": {
                         "inner": {
                           "items": [
@@ -407,7 +407,7 @@
                       }
                     },
                     {
-                      "name": "map-text",
+                      "name": "map_text",
                       "typ": {
                         "inner": {
                           "items": [
@@ -446,53 +446,53 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "primitive",
+                      "name": "Primitive",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -525,7 +525,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -534,7 +534,7 @@
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -656,7 +656,7 @@
                       }
                     },
                     {
-                      "name": "list-of-structs",
+                      "name": "ListOfStructs",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -692,7 +692,7 @@
                       }
                     },
                     {
-                      "name": "option",
+                      "name": "Option",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -701,7 +701,7 @@
                       }
                     },
                     {
-                      "name": "result",
+                      "name": "Result",
                       "typ": {
                         "err": {
                           "type": "Str"
@@ -713,7 +713,7 @@
                       }
                     },
                     {
-                      "name": "map",
+                      "name": "Map",
                       "typ": {
                         "inner": {
                           "items": [
@@ -730,7 +730,7 @@
                       }
                     },
                     {
-                      "name": "bound",
+                      "name": "Bound",
                       "typ": {
                         "cases": [
                           {
@@ -755,7 +755,7 @@
                       }
                     },
                     {
-                      "name": "tuple",
+                      "name": "Tuple",
                       "typ": {
                         "items": [
                           {
@@ -772,11 +772,11 @@
                       }
                     },
                     {
-                      "name": "unit-a",
+                      "name": "UnitA",
                       "typ": null
                     },
                     {
-                      "name": "unit-b",
+                      "name": "UnitB",
                       "typ": null
                     }
                   ],
@@ -798,53 +798,53 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "primitive",
+                      "name": "Primitive",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -877,7 +877,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -886,7 +886,7 @@
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -1008,7 +1008,7 @@
                       }
                     },
                     {
-                      "name": "list-of-structs",
+                      "name": "ListOfStructs",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -1044,7 +1044,7 @@
                       }
                     },
                     {
-                      "name": "option",
+                      "name": "Option",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -1053,7 +1053,7 @@
                       }
                     },
                     {
-                      "name": "result",
+                      "name": "Result",
                       "typ": {
                         "err": {
                           "type": "Str"
@@ -1065,7 +1065,7 @@
                       }
                     },
                     {
-                      "name": "map",
+                      "name": "Map",
                       "typ": {
                         "inner": {
                           "items": [
@@ -1082,7 +1082,7 @@
                       }
                     },
                     {
-                      "name": "bound",
+                      "name": "Bound",
                       "typ": {
                         "cases": [
                           {
@@ -1107,7 +1107,7 @@
                       }
                     },
                     {
-                      "name": "tuple",
+                      "name": "Tuple",
                       "typ": {
                         "items": [
                           {
@@ -1124,11 +1124,11 @@
                       }
                     },
                     {
-                      "name": "unit-a",
+                      "name": "UnitA",
                       "typ": null
                     },
                     {
-                      "name": "unit-b",
+                      "name": "UnitB",
                       "typ": null
                     }
                   ],
@@ -1153,9 +1153,9 @@
               "schema": {
                 "elementType": {
                   "cases": [
-                    "a",
-                    "b",
-                    "c"
+                    "A",
+                    "B",
+                    "C"
                   ],
                   "name": "EnumWithOnlyLiterals",
                   "type": "Enum"
@@ -1174,9 +1174,9 @@
               "schema": {
                 "elementType": {
                   "cases": [
-                    "a",
-                    "b",
-                    "c"
+                    "A",
+                    "B",
+                    "C"
                   ],
                   "name": "EnumWithOnlyLiterals",
                   "type": "Enum"
@@ -1969,53 +1969,53 @@
                   "err": {
                     "cases": [
                       {
-                        "name": "primitive",
+                        "name": "Primitive",
                         "typ": {
                           "cases": [
                             {
-                              "name": "u8",
+                              "name": "U8",
                               "typ": {
                                 "type": "U8"
                               }
                             },
                             {
-                              "name": "i64",
+                              "name": "I64",
                               "typ": {
                                 "type": "S64"
                               }
                             },
                             {
-                              "name": "f32",
+                              "name": "F32",
                               "typ": {
                                 "type": "F32"
                               }
                             },
                             {
-                              "name": "f64",
+                              "name": "F64",
                               "typ": {
                                 "type": "F64"
                               }
                             },
                             {
-                              "name": "bool",
+                              "name": "Bool",
                               "typ": {
                                 "type": "Bool"
                               }
                             },
                             {
-                              "name": "char",
+                              "name": "Char",
                               "typ": {
                                 "type": "Chr"
                               }
                             },
                             {
-                              "name": "string",
+                              "name": "String",
                               "typ": {
                                 "type": "Str"
                               }
                             },
                             {
-                              "name": "struct",
+                              "name": "Struct",
                               "typ": {
                                 "fields": [
                                   {
@@ -2048,7 +2048,7 @@
                               }
                             },
                             {
-                              "name": "unit",
+                              "name": "Unit",
                               "typ": null
                             }
                           ],
@@ -2057,7 +2057,7 @@
                         }
                       },
                       {
-                        "name": "struct",
+                        "name": "Struct",
                         "typ": {
                           "fields": [
                             {
@@ -2179,7 +2179,7 @@
                         }
                       },
                       {
-                        "name": "list-of-structs",
+                        "name": "ListOfStructs",
                         "typ": {
                           "inner": {
                             "fields": [
@@ -2215,7 +2215,7 @@
                         }
                       },
                       {
-                        "name": "option",
+                        "name": "Option",
                         "typ": {
                           "inner": {
                             "type": "Str"
@@ -2224,7 +2224,7 @@
                         }
                       },
                       {
-                        "name": "result",
+                        "name": "Result",
                         "typ": {
                           "err": {
                             "type": "Str"
@@ -2236,7 +2236,7 @@
                         }
                       },
                       {
-                        "name": "map",
+                        "name": "Map",
                         "typ": {
                           "inner": {
                             "items": [
@@ -2253,7 +2253,7 @@
                         }
                       },
                       {
-                        "name": "bound",
+                        "name": "Bound",
                         "typ": {
                           "cases": [
                             {
@@ -2278,7 +2278,7 @@
                         }
                       },
                       {
-                        "name": "tuple",
+                        "name": "Tuple",
                         "typ": {
                           "items": [
                             {
@@ -2295,11 +2295,11 @@
                         }
                       },
                       {
-                        "name": "unit-a",
+                        "name": "UnitA",
                         "typ": null
                       },
                       {
-                        "name": "unit-b",
+                        "name": "UnitB",
                         "typ": null
                       }
                     ],
@@ -2443,53 +2443,53 @@
                   "err": {
                     "cases": [
                       {
-                        "name": "primitive",
+                        "name": "Primitive",
                         "typ": {
                           "cases": [
                             {
-                              "name": "u8",
+                              "name": "U8",
                               "typ": {
                                 "type": "U8"
                               }
                             },
                             {
-                              "name": "i64",
+                              "name": "I64",
                               "typ": {
                                 "type": "S64"
                               }
                             },
                             {
-                              "name": "f32",
+                              "name": "F32",
                               "typ": {
                                 "type": "F32"
                               }
                             },
                             {
-                              "name": "f64",
+                              "name": "F64",
                               "typ": {
                                 "type": "F64"
                               }
                             },
                             {
-                              "name": "bool",
+                              "name": "Bool",
                               "typ": {
                                 "type": "Bool"
                               }
                             },
                             {
-                              "name": "char",
+                              "name": "Char",
                               "typ": {
                                 "type": "Chr"
                               }
                             },
                             {
-                              "name": "string",
+                              "name": "String",
                               "typ": {
                                 "type": "Str"
                               }
                             },
                             {
-                              "name": "struct",
+                              "name": "Struct",
                               "typ": {
                                 "fields": [
                                   {
@@ -2522,7 +2522,7 @@
                               }
                             },
                             {
-                              "name": "unit",
+                              "name": "Unit",
                               "typ": null
                             }
                           ],
@@ -2531,7 +2531,7 @@
                         }
                       },
                       {
-                        "name": "struct",
+                        "name": "Struct",
                         "typ": {
                           "fields": [
                             {
@@ -2653,7 +2653,7 @@
                         }
                       },
                       {
-                        "name": "list-of-structs",
+                        "name": "ListOfStructs",
                         "typ": {
                           "inner": {
                             "fields": [
@@ -2689,7 +2689,7 @@
                         }
                       },
                       {
-                        "name": "option",
+                        "name": "Option",
                         "typ": {
                           "inner": {
                             "type": "Str"
@@ -2698,7 +2698,7 @@
                         }
                       },
                       {
-                        "name": "result",
+                        "name": "Result",
                         "typ": {
                           "err": {
                             "type": "Str"
@@ -2710,7 +2710,7 @@
                         }
                       },
                       {
-                        "name": "map",
+                        "name": "Map",
                         "typ": {
                           "inner": {
                             "items": [
@@ -2727,7 +2727,7 @@
                         }
                       },
                       {
-                        "name": "bound",
+                        "name": "Bound",
                         "typ": {
                           "cases": [
                             {
@@ -2752,7 +2752,7 @@
                         }
                       },
                       {
-                        "name": "tuple",
+                        "name": "Tuple",
                         "typ": {
                           "items": [
                             {
@@ -2769,11 +2769,11 @@
                         }
                       },
                       {
-                        "name": "unit-a",
+                        "name": "UnitA",
                         "typ": null
                       },
                       {
-                        "name": "unit-b",
+                        "name": "UnitB",
                         "typ": null
                       }
                     ],
@@ -3042,49 +3042,49 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "u8",
+                      "name": "U8",
                       "typ": {
                         "type": "U8"
                       }
                     },
                     {
-                      "name": "i64",
+                      "name": "I64",
                       "typ": {
                         "type": "S64"
                       }
                     },
                     {
-                      "name": "f32",
+                      "name": "F32",
                       "typ": {
                         "type": "F32"
                       }
                     },
                     {
-                      "name": "f64",
+                      "name": "F64",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "bool",
+                      "name": "Bool",
                       "typ": {
                         "type": "Bool"
                       }
                     },
                     {
-                      "name": "char",
+                      "name": "Char",
                       "typ": {
                         "type": "Chr"
                       }
                     },
                     {
-                      "name": "string",
+                      "name": "String",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -3117,7 +3117,7 @@
                       }
                     },
                     {
-                      "name": "unit",
+                      "name": "Unit",
                       "typ": null
                     }
                   ],
@@ -3139,49 +3139,49 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "u8",
+                      "name": "U8",
                       "typ": {
                         "type": "U8"
                       }
                     },
                     {
-                      "name": "i64",
+                      "name": "I64",
                       "typ": {
                         "type": "S64"
                       }
                     },
                     {
-                      "name": "f32",
+                      "name": "F32",
                       "typ": {
                         "type": "F32"
                       }
                     },
                     {
-                      "name": "f64",
+                      "name": "F64",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "bool",
+                      "name": "Bool",
                       "typ": {
                         "type": "Bool"
                       }
                     },
                     {
-                      "name": "char",
+                      "name": "Char",
                       "typ": {
                         "type": "Chr"
                       }
                     },
                     {
-                      "name": "string",
+                      "name": "String",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -3214,7 +3214,7 @@
                       }
                     },
                     {
-                      "name": "unit",
+                      "name": "Unit",
                       "typ": null
                     }
                   ],
@@ -3361,11 +3361,11 @@
                       }
                     },
                     {
-                      "name": "options-results-bounds",
+                      "name": "options_results_bounds",
                       "typ": {
                         "fields": [
                           {
-                            "name": "option-u8",
+                            "name": "option_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -3374,7 +3374,7 @@
                             }
                           },
                           {
-                            "name": "option-str",
+                            "name": "option_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -3383,7 +3383,7 @@
                             }
                           },
                           {
-                            "name": "res-ok",
+                            "name": "res_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -3395,7 +3395,7 @@
                             }
                           },
                           {
-                            "name": "res-num-err",
+                            "name": "res_num_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -3407,7 +3407,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-ok",
+                            "name": "res_unit_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -3419,7 +3419,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-err",
+                            "name": "res_unit_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -3431,7 +3431,7 @@
                             }
                           },
                           {
-                            "name": "bound-u8",
+                            "name": "bound_u8",
                             "typ": {
                               "cases": [
                                 {
@@ -3456,7 +3456,7 @@
                             }
                           },
                           {
-                            "name": "bound-str",
+                            "name": "bound_str",
                             "typ": {
                               "cases": [
                                 {
@@ -3547,7 +3547,7 @@
                       "typ": {
                         "fields": [
                           {
-                            "name": "list-u8",
+                            "name": "list_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -3556,7 +3556,7 @@
                             }
                           },
                           {
-                            "name": "list-str",
+                            "name": "list_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -3565,7 +3565,7 @@
                             }
                           },
                           {
-                            "name": "map-num",
+                            "name": "map_num",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -3582,7 +3582,7 @@
                             }
                           },
                           {
-                            "name": "map-text",
+                            "name": "map_text",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -3604,7 +3604,7 @@
                       }
                     },
                     {
-                      "name": "simple-struct",
+                      "name": "simple_struct",
                       "typ": {
                         "fields": [
                           {
@@ -3637,7 +3637,7 @@
                       }
                     },
                     {
-                      "name": "nested-struct",
+                      "name": "nested_struct",
                       "typ": {
                         "fields": [
                           {
@@ -3759,53 +3759,53 @@
                       }
                     },
                     {
-                      "name": "enum-simple",
+                      "name": "enum_simple",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -3838,7 +3838,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -3847,11 +3847,11 @@
                       }
                     },
                     {
-                      "name": "enum-collections",
+                      "name": "enum_collections",
                       "typ": {
                         "cases": [
                           {
-                            "name": "vec",
+                            "name": "Vec",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -3860,7 +3860,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -3877,7 +3877,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -3891,7 +3891,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -3921,57 +3921,57 @@
                       }
                     },
                     {
-                      "name": "enum-complex",
+                      "name": "enum_complex",
                       "typ": {
                         "cases": [
                           {
-                            "name": "primitive",
+                            "name": "Primitive",
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "u8",
+                                  "name": "U8",
                                   "typ": {
                                     "type": "U8"
                                   }
                                 },
                                 {
-                                  "name": "i64",
+                                  "name": "I64",
                                   "typ": {
                                     "type": "S64"
                                   }
                                 },
                                 {
-                                  "name": "f32",
+                                  "name": "F32",
                                   "typ": {
                                     "type": "F32"
                                   }
                                 },
                                 {
-                                  "name": "f64",
+                                  "name": "F64",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "bool",
+                                  "name": "Bool",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 },
                                 {
-                                  "name": "char",
+                                  "name": "Char",
                                   "typ": {
                                     "type": "Chr"
                                   }
                                 },
                                 {
-                                  "name": "string",
+                                  "name": "String",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "struct",
+                                  "name": "Struct",
                                   "typ": {
                                     "fields": [
                                       {
@@ -4004,7 +4004,7 @@
                                   }
                                 },
                                 {
-                                  "name": "unit",
+                                  "name": "Unit",
                                   "typ": null
                                 }
                               ],
@@ -4013,7 +4013,7 @@
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -4135,7 +4135,7 @@
                             }
                           },
                           {
-                            "name": "list-of-structs",
+                            "name": "ListOfStructs",
                             "typ": {
                               "inner": {
                                 "fields": [
@@ -4171,7 +4171,7 @@
                             }
                           },
                           {
-                            "name": "option",
+                            "name": "Option",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -4180,7 +4180,7 @@
                             }
                           },
                           {
-                            "name": "result",
+                            "name": "Result",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -4192,7 +4192,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -4209,7 +4209,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -4234,7 +4234,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -4251,11 +4251,11 @@
                             }
                           },
                           {
-                            "name": "unit-a",
+                            "name": "UnitA",
                             "typ": null
                           },
                           {
-                            "name": "unit-b",
+                            "name": "UnitB",
                             "typ": null
                           }
                         ],
@@ -4369,11 +4369,11 @@
                       }
                     },
                     {
-                      "name": "options-results-bounds",
+                      "name": "options_results_bounds",
                       "typ": {
                         "fields": [
                           {
-                            "name": "option-u8",
+                            "name": "option_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -4382,7 +4382,7 @@
                             }
                           },
                           {
-                            "name": "option-str",
+                            "name": "option_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -4391,7 +4391,7 @@
                             }
                           },
                           {
-                            "name": "res-ok",
+                            "name": "res_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -4403,7 +4403,7 @@
                             }
                           },
                           {
-                            "name": "res-num-err",
+                            "name": "res_num_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -4415,7 +4415,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-ok",
+                            "name": "res_unit_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -4427,7 +4427,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-err",
+                            "name": "res_unit_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -4439,7 +4439,7 @@
                             }
                           },
                           {
-                            "name": "bound-u8",
+                            "name": "bound_u8",
                             "typ": {
                               "cases": [
                                 {
@@ -4464,7 +4464,7 @@
                             }
                           },
                           {
-                            "name": "bound-str",
+                            "name": "bound_str",
                             "typ": {
                               "cases": [
                                 {
@@ -4555,7 +4555,7 @@
                       "typ": {
                         "fields": [
                           {
-                            "name": "list-u8",
+                            "name": "list_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -4564,7 +4564,7 @@
                             }
                           },
                           {
-                            "name": "list-str",
+                            "name": "list_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -4573,7 +4573,7 @@
                             }
                           },
                           {
-                            "name": "map-num",
+                            "name": "map_num",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -4590,7 +4590,7 @@
                             }
                           },
                           {
-                            "name": "map-text",
+                            "name": "map_text",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -4612,7 +4612,7 @@
                       }
                     },
                     {
-                      "name": "simple-struct",
+                      "name": "simple_struct",
                       "typ": {
                         "fields": [
                           {
@@ -4645,7 +4645,7 @@
                       }
                     },
                     {
-                      "name": "nested-struct",
+                      "name": "nested_struct",
                       "typ": {
                         "fields": [
                           {
@@ -4767,53 +4767,53 @@
                       }
                     },
                     {
-                      "name": "enum-simple",
+                      "name": "enum_simple",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -4846,7 +4846,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -4855,11 +4855,11 @@
                       }
                     },
                     {
-                      "name": "enum-collections",
+                      "name": "enum_collections",
                       "typ": {
                         "cases": [
                           {
-                            "name": "vec",
+                            "name": "Vec",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -4868,7 +4868,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -4885,7 +4885,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -4899,7 +4899,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -4929,57 +4929,57 @@
                       }
                     },
                     {
-                      "name": "enum-complex",
+                      "name": "enum_complex",
                       "typ": {
                         "cases": [
                           {
-                            "name": "primitive",
+                            "name": "Primitive",
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "u8",
+                                  "name": "U8",
                                   "typ": {
                                     "type": "U8"
                                   }
                                 },
                                 {
-                                  "name": "i64",
+                                  "name": "I64",
                                   "typ": {
                                     "type": "S64"
                                   }
                                 },
                                 {
-                                  "name": "f32",
+                                  "name": "F32",
                                   "typ": {
                                     "type": "F32"
                                   }
                                 },
                                 {
-                                  "name": "f64",
+                                  "name": "F64",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "bool",
+                                  "name": "Bool",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 },
                                 {
-                                  "name": "char",
+                                  "name": "Char",
                                   "typ": {
                                     "type": "Chr"
                                   }
                                 },
                                 {
-                                  "name": "string",
+                                  "name": "String",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "struct",
+                                  "name": "Struct",
                                   "typ": {
                                     "fields": [
                                       {
@@ -5012,7 +5012,7 @@
                                   }
                                 },
                                 {
-                                  "name": "unit",
+                                  "name": "Unit",
                                   "typ": null
                                 }
                               ],
@@ -5021,7 +5021,7 @@
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -5143,7 +5143,7 @@
                             }
                           },
                           {
-                            "name": "list-of-structs",
+                            "name": "ListOfStructs",
                             "typ": {
                               "inner": {
                                 "fields": [
@@ -5179,7 +5179,7 @@
                             }
                           },
                           {
-                            "name": "option",
+                            "name": "Option",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -5188,7 +5188,7 @@
                             }
                           },
                           {
-                            "name": "result",
+                            "name": "Result",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -5200,7 +5200,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -5217,7 +5217,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -5242,7 +5242,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -5259,11 +5259,11 @@
                             }
                           },
                           {
-                            "name": "unit-a",
+                            "name": "UnitA",
                             "typ": null
                           },
                           {
-                            "name": "unit-b",
+                            "name": "UnitB",
                             "typ": null
                           }
                         ],
@@ -6200,6 +6200,7 @@
     "snapshotting": {
       "type": "Disabled"
     },
+    "sourceLanguage": "rust",
     "typeName": "BarAgent"
   },
   {
@@ -6505,7 +6506,7 @@
                 "elementType": {
                   "fields": [
                     {
-                      "name": "list-u8",
+                      "name": "list_u8",
                       "typ": {
                         "inner": {
                           "type": "U8"
@@ -6514,7 +6515,7 @@
                       }
                     },
                     {
-                      "name": "list-str",
+                      "name": "list_str",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -6523,7 +6524,7 @@
                       }
                     },
                     {
-                      "name": "map-num",
+                      "name": "map_num",
                       "typ": {
                         "inner": {
                           "items": [
@@ -6540,7 +6541,7 @@
                       }
                     },
                     {
-                      "name": "map-text",
+                      "name": "map_text",
                       "typ": {
                         "inner": {
                           "items": [
@@ -6575,7 +6576,7 @@
                 "elementType": {
                   "fields": [
                     {
-                      "name": "list-u8",
+                      "name": "list_u8",
                       "typ": {
                         "inner": {
                           "type": "U8"
@@ -6584,7 +6585,7 @@
                       }
                     },
                     {
-                      "name": "list-str",
+                      "name": "list_str",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -6593,7 +6594,7 @@
                       }
                     },
                     {
-                      "name": "map-num",
+                      "name": "map_num",
                       "typ": {
                         "inner": {
                           "items": [
@@ -6610,7 +6611,7 @@
                       }
                     },
                     {
-                      "name": "map-text",
+                      "name": "map_text",
                       "typ": {
                         "inner": {
                           "items": [
@@ -6649,53 +6650,53 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "primitive",
+                      "name": "Primitive",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -6728,7 +6729,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -6737,7 +6738,7 @@
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -6859,7 +6860,7 @@
                       }
                     },
                     {
-                      "name": "list-of-structs",
+                      "name": "ListOfStructs",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -6895,7 +6896,7 @@
                       }
                     },
                     {
-                      "name": "option",
+                      "name": "Option",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -6904,7 +6905,7 @@
                       }
                     },
                     {
-                      "name": "result",
+                      "name": "Result",
                       "typ": {
                         "err": {
                           "type": "Str"
@@ -6916,7 +6917,7 @@
                       }
                     },
                     {
-                      "name": "map",
+                      "name": "Map",
                       "typ": {
                         "inner": {
                           "items": [
@@ -6933,7 +6934,7 @@
                       }
                     },
                     {
-                      "name": "bound",
+                      "name": "Bound",
                       "typ": {
                         "cases": [
                           {
@@ -6958,7 +6959,7 @@
                       }
                     },
                     {
-                      "name": "tuple",
+                      "name": "Tuple",
                       "typ": {
                         "items": [
                           {
@@ -6975,11 +6976,11 @@
                       }
                     },
                     {
-                      "name": "unit-a",
+                      "name": "UnitA",
                       "typ": null
                     },
                     {
-                      "name": "unit-b",
+                      "name": "UnitB",
                       "typ": null
                     }
                   ],
@@ -7001,53 +7002,53 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "primitive",
+                      "name": "Primitive",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -7080,7 +7081,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -7089,7 +7090,7 @@
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -7211,7 +7212,7 @@
                       }
                     },
                     {
-                      "name": "list-of-structs",
+                      "name": "ListOfStructs",
                       "typ": {
                         "inner": {
                           "fields": [
@@ -7247,7 +7248,7 @@
                       }
                     },
                     {
-                      "name": "option",
+                      "name": "Option",
                       "typ": {
                         "inner": {
                           "type": "Str"
@@ -7256,7 +7257,7 @@
                       }
                     },
                     {
-                      "name": "result",
+                      "name": "Result",
                       "typ": {
                         "err": {
                           "type": "Str"
@@ -7268,7 +7269,7 @@
                       }
                     },
                     {
-                      "name": "map",
+                      "name": "Map",
                       "typ": {
                         "inner": {
                           "items": [
@@ -7285,7 +7286,7 @@
                       }
                     },
                     {
-                      "name": "bound",
+                      "name": "Bound",
                       "typ": {
                         "cases": [
                           {
@@ -7310,7 +7311,7 @@
                       }
                     },
                     {
-                      "name": "tuple",
+                      "name": "Tuple",
                       "typ": {
                         "items": [
                           {
@@ -7327,11 +7328,11 @@
                       }
                     },
                     {
-                      "name": "unit-a",
+                      "name": "UnitA",
                       "typ": null
                     },
                     {
-                      "name": "unit-b",
+                      "name": "UnitB",
                       "typ": null
                     }
                   ],
@@ -7356,9 +7357,9 @@
               "schema": {
                 "elementType": {
                   "cases": [
-                    "a",
-                    "b",
-                    "c"
+                    "A",
+                    "B",
+                    "C"
                   ],
                   "name": "EnumWithOnlyLiterals",
                   "type": "Enum"
@@ -7377,9 +7378,9 @@
               "schema": {
                 "elementType": {
                   "cases": [
-                    "a",
-                    "b",
-                    "c"
+                    "A",
+                    "B",
+                    "C"
                   ],
                   "name": "EnumWithOnlyLiterals",
                   "type": "Enum"
@@ -8172,53 +8173,53 @@
                   "err": {
                     "cases": [
                       {
-                        "name": "primitive",
+                        "name": "Primitive",
                         "typ": {
                           "cases": [
                             {
-                              "name": "u8",
+                              "name": "U8",
                               "typ": {
                                 "type": "U8"
                               }
                             },
                             {
-                              "name": "i64",
+                              "name": "I64",
                               "typ": {
                                 "type": "S64"
                               }
                             },
                             {
-                              "name": "f32",
+                              "name": "F32",
                               "typ": {
                                 "type": "F32"
                               }
                             },
                             {
-                              "name": "f64",
+                              "name": "F64",
                               "typ": {
                                 "type": "F64"
                               }
                             },
                             {
-                              "name": "bool",
+                              "name": "Bool",
                               "typ": {
                                 "type": "Bool"
                               }
                             },
                             {
-                              "name": "char",
+                              "name": "Char",
                               "typ": {
                                 "type": "Chr"
                               }
                             },
                             {
-                              "name": "string",
+                              "name": "String",
                               "typ": {
                                 "type": "Str"
                               }
                             },
                             {
-                              "name": "struct",
+                              "name": "Struct",
                               "typ": {
                                 "fields": [
                                   {
@@ -8251,7 +8252,7 @@
                               }
                             },
                             {
-                              "name": "unit",
+                              "name": "Unit",
                               "typ": null
                             }
                           ],
@@ -8260,7 +8261,7 @@
                         }
                       },
                       {
-                        "name": "struct",
+                        "name": "Struct",
                         "typ": {
                           "fields": [
                             {
@@ -8382,7 +8383,7 @@
                         }
                       },
                       {
-                        "name": "list-of-structs",
+                        "name": "ListOfStructs",
                         "typ": {
                           "inner": {
                             "fields": [
@@ -8418,7 +8419,7 @@
                         }
                       },
                       {
-                        "name": "option",
+                        "name": "Option",
                         "typ": {
                           "inner": {
                             "type": "Str"
@@ -8427,7 +8428,7 @@
                         }
                       },
                       {
-                        "name": "result",
+                        "name": "Result",
                         "typ": {
                           "err": {
                             "type": "Str"
@@ -8439,7 +8440,7 @@
                         }
                       },
                       {
-                        "name": "map",
+                        "name": "Map",
                         "typ": {
                           "inner": {
                             "items": [
@@ -8456,7 +8457,7 @@
                         }
                       },
                       {
-                        "name": "bound",
+                        "name": "Bound",
                         "typ": {
                           "cases": [
                             {
@@ -8481,7 +8482,7 @@
                         }
                       },
                       {
-                        "name": "tuple",
+                        "name": "Tuple",
                         "typ": {
                           "items": [
                             {
@@ -8498,11 +8499,11 @@
                         }
                       },
                       {
-                        "name": "unit-a",
+                        "name": "UnitA",
                         "typ": null
                       },
                       {
-                        "name": "unit-b",
+                        "name": "UnitB",
                         "typ": null
                       }
                     ],
@@ -8646,53 +8647,53 @@
                   "err": {
                     "cases": [
                       {
-                        "name": "primitive",
+                        "name": "Primitive",
                         "typ": {
                           "cases": [
                             {
-                              "name": "u8",
+                              "name": "U8",
                               "typ": {
                                 "type": "U8"
                               }
                             },
                             {
-                              "name": "i64",
+                              "name": "I64",
                               "typ": {
                                 "type": "S64"
                               }
                             },
                             {
-                              "name": "f32",
+                              "name": "F32",
                               "typ": {
                                 "type": "F32"
                               }
                             },
                             {
-                              "name": "f64",
+                              "name": "F64",
                               "typ": {
                                 "type": "F64"
                               }
                             },
                             {
-                              "name": "bool",
+                              "name": "Bool",
                               "typ": {
                                 "type": "Bool"
                               }
                             },
                             {
-                              "name": "char",
+                              "name": "Char",
                               "typ": {
                                 "type": "Chr"
                               }
                             },
                             {
-                              "name": "string",
+                              "name": "String",
                               "typ": {
                                 "type": "Str"
                               }
                             },
                             {
-                              "name": "struct",
+                              "name": "Struct",
                               "typ": {
                                 "fields": [
                                   {
@@ -8725,7 +8726,7 @@
                               }
                             },
                             {
-                              "name": "unit",
+                              "name": "Unit",
                               "typ": null
                             }
                           ],
@@ -8734,7 +8735,7 @@
                         }
                       },
                       {
-                        "name": "struct",
+                        "name": "Struct",
                         "typ": {
                           "fields": [
                             {
@@ -8856,7 +8857,7 @@
                         }
                       },
                       {
-                        "name": "list-of-structs",
+                        "name": "ListOfStructs",
                         "typ": {
                           "inner": {
                             "fields": [
@@ -8892,7 +8893,7 @@
                         }
                       },
                       {
-                        "name": "option",
+                        "name": "Option",
                         "typ": {
                           "inner": {
                             "type": "Str"
@@ -8901,7 +8902,7 @@
                         }
                       },
                       {
-                        "name": "result",
+                        "name": "Result",
                         "typ": {
                           "err": {
                             "type": "Str"
@@ -8913,7 +8914,7 @@
                         }
                       },
                       {
-                        "name": "map",
+                        "name": "Map",
                         "typ": {
                           "inner": {
                             "items": [
@@ -8930,7 +8931,7 @@
                         }
                       },
                       {
-                        "name": "bound",
+                        "name": "Bound",
                         "typ": {
                           "cases": [
                             {
@@ -8955,7 +8956,7 @@
                         }
                       },
                       {
-                        "name": "tuple",
+                        "name": "Tuple",
                         "typ": {
                           "items": [
                             {
@@ -8972,11 +8973,11 @@
                         }
                       },
                       {
-                        "name": "unit-a",
+                        "name": "UnitA",
                         "typ": null
                       },
                       {
-                        "name": "unit-b",
+                        "name": "UnitB",
                         "typ": null
                       }
                     ],
@@ -9245,49 +9246,49 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "u8",
+                      "name": "U8",
                       "typ": {
                         "type": "U8"
                       }
                     },
                     {
-                      "name": "i64",
+                      "name": "I64",
                       "typ": {
                         "type": "S64"
                       }
                     },
                     {
-                      "name": "f32",
+                      "name": "F32",
                       "typ": {
                         "type": "F32"
                       }
                     },
                     {
-                      "name": "f64",
+                      "name": "F64",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "bool",
+                      "name": "Bool",
                       "typ": {
                         "type": "Bool"
                       }
                     },
                     {
-                      "name": "char",
+                      "name": "Char",
                       "typ": {
                         "type": "Chr"
                       }
                     },
                     {
-                      "name": "string",
+                      "name": "String",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -9320,7 +9321,7 @@
                       }
                     },
                     {
-                      "name": "unit",
+                      "name": "Unit",
                       "typ": null
                     }
                   ],
@@ -9342,49 +9343,49 @@
                 "elementType": {
                   "cases": [
                     {
-                      "name": "u8",
+                      "name": "U8",
                       "typ": {
                         "type": "U8"
                       }
                     },
                     {
-                      "name": "i64",
+                      "name": "I64",
                       "typ": {
                         "type": "S64"
                       }
                     },
                     {
-                      "name": "f32",
+                      "name": "F32",
                       "typ": {
                         "type": "F32"
                       }
                     },
                     {
-                      "name": "f64",
+                      "name": "F64",
                       "typ": {
                         "type": "F64"
                       }
                     },
                     {
-                      "name": "bool",
+                      "name": "Bool",
                       "typ": {
                         "type": "Bool"
                       }
                     },
                     {
-                      "name": "char",
+                      "name": "Char",
                       "typ": {
                         "type": "Chr"
                       }
                     },
                     {
-                      "name": "string",
+                      "name": "String",
                       "typ": {
                         "type": "Str"
                       }
                     },
                     {
-                      "name": "struct",
+                      "name": "Struct",
                       "typ": {
                         "fields": [
                           {
@@ -9417,7 +9418,7 @@
                       }
                     },
                     {
-                      "name": "unit",
+                      "name": "Unit",
                       "typ": null
                     }
                   ],
@@ -9612,11 +9613,11 @@
                       }
                     },
                     {
-                      "name": "options-results-bounds",
+                      "name": "options_results_bounds",
                       "typ": {
                         "fields": [
                           {
-                            "name": "option-u8",
+                            "name": "option_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -9625,7 +9626,7 @@
                             }
                           },
                           {
-                            "name": "option-str",
+                            "name": "option_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -9634,7 +9635,7 @@
                             }
                           },
                           {
-                            "name": "res-ok",
+                            "name": "res_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -9646,7 +9647,7 @@
                             }
                           },
                           {
-                            "name": "res-num-err",
+                            "name": "res_num_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -9658,7 +9659,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-ok",
+                            "name": "res_unit_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -9670,7 +9671,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-err",
+                            "name": "res_unit_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -9682,7 +9683,7 @@
                             }
                           },
                           {
-                            "name": "bound-u8",
+                            "name": "bound_u8",
                             "typ": {
                               "cases": [
                                 {
@@ -9707,7 +9708,7 @@
                             }
                           },
                           {
-                            "name": "bound-str",
+                            "name": "bound_str",
                             "typ": {
                               "cases": [
                                 {
@@ -9798,7 +9799,7 @@
                       "typ": {
                         "fields": [
                           {
-                            "name": "list-u8",
+                            "name": "list_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -9807,7 +9808,7 @@
                             }
                           },
                           {
-                            "name": "list-str",
+                            "name": "list_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -9816,7 +9817,7 @@
                             }
                           },
                           {
-                            "name": "map-num",
+                            "name": "map_num",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -9833,7 +9834,7 @@
                             }
                           },
                           {
-                            "name": "map-text",
+                            "name": "map_text",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -9855,7 +9856,7 @@
                       }
                     },
                     {
-                      "name": "simple-struct",
+                      "name": "simple_struct",
                       "typ": {
                         "fields": [
                           {
@@ -9888,7 +9889,7 @@
                       }
                     },
                     {
-                      "name": "nested-struct",
+                      "name": "nested_struct",
                       "typ": {
                         "fields": [
                           {
@@ -10010,53 +10011,53 @@
                       }
                     },
                     {
-                      "name": "enum-simple",
+                      "name": "enum_simple",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -10089,7 +10090,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -10098,11 +10099,11 @@
                       }
                     },
                     {
-                      "name": "enum-collections",
+                      "name": "enum_collections",
                       "typ": {
                         "cases": [
                           {
-                            "name": "vec",
+                            "name": "Vec",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -10111,7 +10112,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -10128,7 +10129,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -10142,7 +10143,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -10172,57 +10173,57 @@
                       }
                     },
                     {
-                      "name": "enum-complex",
+                      "name": "enum_complex",
                       "typ": {
                         "cases": [
                           {
-                            "name": "primitive",
+                            "name": "Primitive",
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "u8",
+                                  "name": "U8",
                                   "typ": {
                                     "type": "U8"
                                   }
                                 },
                                 {
-                                  "name": "i64",
+                                  "name": "I64",
                                   "typ": {
                                     "type": "S64"
                                   }
                                 },
                                 {
-                                  "name": "f32",
+                                  "name": "F32",
                                   "typ": {
                                     "type": "F32"
                                   }
                                 },
                                 {
-                                  "name": "f64",
+                                  "name": "F64",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "bool",
+                                  "name": "Bool",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 },
                                 {
-                                  "name": "char",
+                                  "name": "Char",
                                   "typ": {
                                     "type": "Chr"
                                   }
                                 },
                                 {
-                                  "name": "string",
+                                  "name": "String",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "struct",
+                                  "name": "Struct",
                                   "typ": {
                                     "fields": [
                                       {
@@ -10255,7 +10256,7 @@
                                   }
                                 },
                                 {
-                                  "name": "unit",
+                                  "name": "Unit",
                                   "typ": null
                                 }
                               ],
@@ -10264,7 +10265,7 @@
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -10386,7 +10387,7 @@
                             }
                           },
                           {
-                            "name": "list-of-structs",
+                            "name": "ListOfStructs",
                             "typ": {
                               "inner": {
                                 "fields": [
@@ -10422,7 +10423,7 @@
                             }
                           },
                           {
-                            "name": "option",
+                            "name": "Option",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -10431,7 +10432,7 @@
                             }
                           },
                           {
-                            "name": "result",
+                            "name": "Result",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -10443,7 +10444,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -10460,7 +10461,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -10485,7 +10486,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -10502,11 +10503,11 @@
                             }
                           },
                           {
-                            "name": "unit-a",
+                            "name": "UnitA",
                             "typ": null
                           },
                           {
-                            "name": "unit-b",
+                            "name": "UnitB",
                             "typ": null
                           }
                         ],
@@ -10620,11 +10621,11 @@
                       }
                     },
                     {
-                      "name": "options-results-bounds",
+                      "name": "options_results_bounds",
                       "typ": {
                         "fields": [
                           {
-                            "name": "option-u8",
+                            "name": "option_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -10633,7 +10634,7 @@
                             }
                           },
                           {
-                            "name": "option-str",
+                            "name": "option_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -10642,7 +10643,7 @@
                             }
                           },
                           {
-                            "name": "res-ok",
+                            "name": "res_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -10654,7 +10655,7 @@
                             }
                           },
                           {
-                            "name": "res-num-err",
+                            "name": "res_num_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -10666,7 +10667,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-ok",
+                            "name": "res_unit_ok",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -10678,7 +10679,7 @@
                             }
                           },
                           {
-                            "name": "res-unit-err",
+                            "name": "res_unit_err",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -10690,7 +10691,7 @@
                             }
                           },
                           {
-                            "name": "bound-u8",
+                            "name": "bound_u8",
                             "typ": {
                               "cases": [
                                 {
@@ -10715,7 +10716,7 @@
                             }
                           },
                           {
-                            "name": "bound-str",
+                            "name": "bound_str",
                             "typ": {
                               "cases": [
                                 {
@@ -10806,7 +10807,7 @@
                       "typ": {
                         "fields": [
                           {
-                            "name": "list-u8",
+                            "name": "list_u8",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -10815,7 +10816,7 @@
                             }
                           },
                           {
-                            "name": "list-str",
+                            "name": "list_str",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -10824,7 +10825,7 @@
                             }
                           },
                           {
-                            "name": "map-num",
+                            "name": "map_num",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -10841,7 +10842,7 @@
                             }
                           },
                           {
-                            "name": "map-text",
+                            "name": "map_text",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -10863,7 +10864,7 @@
                       }
                     },
                     {
-                      "name": "simple-struct",
+                      "name": "simple_struct",
                       "typ": {
                         "fields": [
                           {
@@ -10896,7 +10897,7 @@
                       }
                     },
                     {
-                      "name": "nested-struct",
+                      "name": "nested_struct",
                       "typ": {
                         "fields": [
                           {
@@ -11018,53 +11019,53 @@
                       }
                     },
                     {
-                      "name": "enum-simple",
+                      "name": "enum_simple",
                       "typ": {
                         "cases": [
                           {
-                            "name": "u8",
+                            "name": "U8",
                             "typ": {
                               "type": "U8"
                             }
                           },
                           {
-                            "name": "i64",
+                            "name": "I64",
                             "typ": {
                               "type": "S64"
                             }
                           },
                           {
-                            "name": "f32",
+                            "name": "F32",
                             "typ": {
                               "type": "F32"
                             }
                           },
                           {
-                            "name": "f64",
+                            "name": "F64",
                             "typ": {
                               "type": "F64"
                             }
                           },
                           {
-                            "name": "bool",
+                            "name": "Bool",
                             "typ": {
                               "type": "Bool"
                             }
                           },
                           {
-                            "name": "char",
+                            "name": "Char",
                             "typ": {
                               "type": "Chr"
                             }
                           },
                           {
-                            "name": "string",
+                            "name": "String",
                             "typ": {
                               "type": "Str"
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -11097,7 +11098,7 @@
                             }
                           },
                           {
-                            "name": "unit",
+                            "name": "Unit",
                             "typ": null
                           }
                         ],
@@ -11106,11 +11107,11 @@
                       }
                     },
                     {
-                      "name": "enum-collections",
+                      "name": "enum_collections",
                       "typ": {
                         "cases": [
                           {
-                            "name": "vec",
+                            "name": "Vec",
                             "typ": {
                               "inner": {
                                 "type": "U8"
@@ -11119,7 +11120,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -11136,7 +11137,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -11150,7 +11151,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -11180,57 +11181,57 @@
                       }
                     },
                     {
-                      "name": "enum-complex",
+                      "name": "enum_complex",
                       "typ": {
                         "cases": [
                           {
-                            "name": "primitive",
+                            "name": "Primitive",
                             "typ": {
                               "cases": [
                                 {
-                                  "name": "u8",
+                                  "name": "U8",
                                   "typ": {
                                     "type": "U8"
                                   }
                                 },
                                 {
-                                  "name": "i64",
+                                  "name": "I64",
                                   "typ": {
                                     "type": "S64"
                                   }
                                 },
                                 {
-                                  "name": "f32",
+                                  "name": "F32",
                                   "typ": {
                                     "type": "F32"
                                   }
                                 },
                                 {
-                                  "name": "f64",
+                                  "name": "F64",
                                   "typ": {
                                     "type": "F64"
                                   }
                                 },
                                 {
-                                  "name": "bool",
+                                  "name": "Bool",
                                   "typ": {
                                     "type": "Bool"
                                   }
                                 },
                                 {
-                                  "name": "char",
+                                  "name": "Char",
                                   "typ": {
                                     "type": "Chr"
                                   }
                                 },
                                 {
-                                  "name": "string",
+                                  "name": "String",
                                   "typ": {
                                     "type": "Str"
                                   }
                                 },
                                 {
-                                  "name": "struct",
+                                  "name": "Struct",
                                   "typ": {
                                     "fields": [
                                       {
@@ -11263,7 +11264,7 @@
                                   }
                                 },
                                 {
-                                  "name": "unit",
+                                  "name": "Unit",
                                   "typ": null
                                 }
                               ],
@@ -11272,7 +11273,7 @@
                             }
                           },
                           {
-                            "name": "struct",
+                            "name": "Struct",
                             "typ": {
                               "fields": [
                                 {
@@ -11394,7 +11395,7 @@
                             }
                           },
                           {
-                            "name": "list-of-structs",
+                            "name": "ListOfStructs",
                             "typ": {
                               "inner": {
                                 "fields": [
@@ -11430,7 +11431,7 @@
                             }
                           },
                           {
-                            "name": "option",
+                            "name": "Option",
                             "typ": {
                               "inner": {
                                 "type": "Str"
@@ -11439,7 +11440,7 @@
                             }
                           },
                           {
-                            "name": "result",
+                            "name": "Result",
                             "typ": {
                               "err": {
                                 "type": "Str"
@@ -11451,7 +11452,7 @@
                             }
                           },
                           {
-                            "name": "map",
+                            "name": "Map",
                             "typ": {
                               "inner": {
                                 "items": [
@@ -11468,7 +11469,7 @@
                             }
                           },
                           {
-                            "name": "bound",
+                            "name": "Bound",
                             "typ": {
                               "cases": [
                                 {
@@ -11493,7 +11494,7 @@
                             }
                           },
                           {
-                            "name": "tuple",
+                            "name": "Tuple",
                             "typ": {
                               "items": [
                                 {
@@ -11510,11 +11511,11 @@
                             }
                           },
                           {
-                            "name": "unit-a",
+                            "name": "UnitA",
                             "typ": null
                           },
                           {
-                            "name": "unit-b",
+                            "name": "UnitB",
                             "typ": null
                           }
                         ],
@@ -12451,6 +12452,7 @@
     "snapshotting": {
       "type": "Disabled"
     },
+    "sourceLanguage": "rust",
     "typeName": "FooAgent"
   },
   {
@@ -12497,6 +12499,7 @@
     "snapshotting": {
       "type": "Disabled"
     },
+    "sourceLanguage": "rust",
     "typeName": "SingletonAgent"
   }
 ]

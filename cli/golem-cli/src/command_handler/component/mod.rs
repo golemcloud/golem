@@ -72,7 +72,11 @@ impl ComponentCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: ComponentSubcommand) -> anyhow::Result<()> {
+    pub fn handle_command(
+        &self,
+        subcommand: ComponentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
         match subcommand {
             ComponentSubcommand::New {
                 component_template,
@@ -110,6 +114,7 @@ impl ComponentCommandHandler {
                 self.cmd_manifest_trace(component_name).await
             }
         }
+        })
     }
 
     async fn cmd_new(
