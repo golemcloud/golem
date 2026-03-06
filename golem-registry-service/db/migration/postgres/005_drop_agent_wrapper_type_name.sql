@@ -1,2 +1,0 @@
-DROP INDEX IF EXISTS deployment_registered_agent_types_agent_type_wrapper_idx;
-ALTER TABLE deployment_registered_agent_types DROP COLUMN agent_wrapper_type_name;
