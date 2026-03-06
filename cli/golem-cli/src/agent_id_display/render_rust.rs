@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use golem_common::model::agent::{
-    BinaryReference, BinarySource, ComponentModelElementValue, DataValue, ElementValue,
-    NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
-    UnstructuredTextElementValue,
+    text_utils::write_json_escaped, BinaryReference, BinarySource, ComponentModelElementValue,
+    DataValue, ElementValue, NamedElementValues, TextReference, TextSource,
+    UnstructuredBinaryElementValue, UnstructuredTextElementValue,
 };
 use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use golem_wasm::Value;
@@ -69,28 +69,25 @@ fn render_element_value(buf: &mut String, elem: &ElementValue) {
 fn render_unstructured_text(buf: &mut String, value: &TextReference) {
     match value {
         TextReference::Url(url) => {
-            let _ = write!(buf, "UnstructuredText::Url(\"{}\")", escape_str(&url.value));
+            buf.push_str("UnstructuredText::Url(\"");
+            write_json_escaped(buf, &url.value);
+            buf.push_str("\")");
         }
         TextReference::Inline(TextSource {
             data,
             text_type: None,
         }) => {
-            let _ = write!(
-                buf,
-                "UnstructuredText::from_inline_any(\"{}\")",
-                escape_str(data)
-            );
+            buf.push_str("UnstructuredText::from_inline_any(\"");
+            write_json_escaped(buf, data);
+            buf.push_str("\")");
         }
         TextReference::Inline(TextSource {
             data,
             text_type: Some(tt),
         }) => {
-            let _ = write!(
-                buf,
-                "UnstructuredText::from_inline(\"{}\", Languages::{})",
-                escape_str(data),
-                tt.language_code
-            );
+            buf.push_str("UnstructuredText::from_inline(\"");
+            write_json_escaped(buf, data);
+            let _ = write!(buf, "\", Languages::{})", tt.language_code);
         }
     }
 }
@@ -98,11 +95,9 @@ fn render_unstructured_text(buf: &mut String, value: &TextReference) {
 fn render_unstructured_binary(buf: &mut String, value: &BinaryReference) {
     match value {
         BinaryReference::Url(url) => {
-            let _ = write!(
-                buf,
-                "UnstructuredBinary::from_url(\"{}\")",
-                escape_str(&url.value)
-            );
+            buf.push_str("UnstructuredBinary::from_url(\"");
+            write_json_escaped(buf, &url.value);
+            buf.push_str("\")");
         }
         BinaryReference::Inline(BinarySource {
             data,
@@ -137,7 +132,9 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
         (Value::F64(v), _) => render_f64(buf, *v),
         (Value::Char(c), _) => render_char(buf, *c),
         (Value::String(s), _) => {
-            let _ = write!(buf, "\"{}\"", escape_str(s));
+            buf.push('"');
+            write_json_escaped(buf, s);
+            buf.push('"');
         }
         (Value::List(items), AnalysedType::List(tl)) => {
             buf.push('[');
@@ -421,20 +418,3 @@ fn render_char(buf: &mut String, c: char) {
     buf.push('\'');
 }
 
-fn escape_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{{{:X}}}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod lexer;
+mod parse_common;
 mod parse_rust;
 mod parse_ts;
 mod render_rust;
@@ -24,6 +25,8 @@ mod tests;
 use golem_common::model::agent::structural_format::parse_structural;
 use golem_common::model::agent::{DataSchema, DataValue, ParsedAgentId};
 use golem_wasm::ValueAndType;
+
+pub use parse_common::ParseError;
 
 /// Represents the source language of an agent component, used to select
 /// language-specific rendering and parsing of agent IDs and data values.
@@ -75,32 +78,6 @@ impl std::fmt::Display for SourceLanguage {
             SourceLanguage::TypeScript => write!(f, "typescript"),
             SourceLanguage::Other(s) => write!(f, "{s}"),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParseError {
-    pub position: usize,
-    pub message: String,
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Parse error at position {}: {}", self.position, self.message)
-    }
-}
-
-impl std::error::Error for ParseError {}
-
-impl From<parse_rust::ParseError> for ParseError {
-    fn from(e: parse_rust::ParseError) -> Self {
-        Self { position: e.position, message: e.message }
-    }
-}
-
-impl From<parse_ts::ParseError> for ParseError {
-    fn from(e: parse_ts::ParseError) -> Self {
-        Self { position: e.position, message: e.message }
     }
 }
 

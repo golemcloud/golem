@@ -23,6 +23,9 @@
 //! - [`parse_structural`] — parse a canonical string + schema → `DataValue`
 //! - [`normalize_structural`] — strip whitespace outside string literals (no schema needed)
 
+use crate::model::agent::text_utils::{
+    write_json_escaped, write_json_escaped_char, write_with_decimal_point,
+};
 use crate::model::agent::{
     BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
@@ -413,22 +416,6 @@ fn format_float_f64(buf: &mut String, v: f64) -> Result<(), StructuralFormatErro
     Ok(())
 }
 
-/// Writes a formatted float string to `buf`, ensuring it contains a decimal point.
-/// If it has an exponent but no dot (e.g., "1e20"), inserts ".0" before the exponent.
-/// If it has neither dot nor exponent, appends ".0".
-fn write_with_decimal_point(buf: &mut String, s: &str) {
-    if s.contains('.') {
-        buf.push_str(s);
-    } else if let Some(e_pos) = s.find('e').or_else(|| s.find('E')) {
-        buf.push_str(&s[..e_pos]);
-        buf.push_str(".0");
-        buf.push_str(&s[e_pos..]);
-    } else {
-        buf.push_str(s);
-        buf.push_str(".0");
-    }
-}
-
 fn format_text_element(buf: &mut String, text_ref: &TextReference) {
     match text_ref {
         TextReference::Url(url) => {
@@ -467,34 +454,6 @@ fn format_binary_element(buf: &mut String, bin_ref: &BinaryReference) {
             base64::engine::general_purpose::STANDARD.encode_string(data, buf);
             buf.push('"');
         }
-    }
-}
-
-// ── String escaping ─────────────────────────────────────────────────────────
-
-fn write_json_escaped(buf: &mut String, s: &str) {
-    for ch in s.chars() {
-        write_json_escaped_char(buf, ch);
-    }
-}
-
-fn write_json_escaped_char(buf: &mut String, ch: char) {
-    match ch {
-        '"' => buf.push_str("\\\""),
-        '\\' => buf.push_str("\\\\"),
-        '\n' => buf.push_str("\\n"),
-        '\r' => buf.push_str("\\r"),
-        '\t' => buf.push_str("\\t"),
-        '\u{08}' => buf.push_str("\\b"),
-        '\u{0C}' => buf.push_str("\\f"),
-        c if c.is_control() => {
-            let mut code_units = [0u16; 2];
-            let encoded = c.encode_utf16(&mut code_units);
-            for unit in encoded {
-                write!(buf, "\\u{:04x}", unit).unwrap();
-            }
-        }
-        c => buf.push(c),
     }
 }
 

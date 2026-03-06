@@ -22,6 +22,7 @@ mod tests;
 
 pub mod schema_evolution;
 pub mod structural_format;
+pub mod text_utils;
 
 pub mod bindings {
     wasmtime::component::bindgen!({
