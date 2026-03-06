@@ -470,7 +470,7 @@ function deserializeRpcResult(resultDataValue: DataValue, typeInfoInternal: Type
       resultDataValue,
       [
         {
-          name: 'return-value',
+          name: 'returnValue',
           type: typeInfoInternal,
         },
       ],

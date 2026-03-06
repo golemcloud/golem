@@ -326,13 +326,13 @@ fn get_agent_type_with_remote_client(
                             let schema = <#ty as golem_rust::agentic::Schema>::get_type();
                             match schema {
                                 golem_rust::agentic::StructuredSchema::Default(element_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
+                                    default_outputs.push(("return_value".to_string(), golem_rust::agentic::EnrichedElementSchema::ElementSchema(element_schema)));
                                 },
                                 golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                     multi_modal_outputs.extend(name_and_types)
                                 },
                                 golem_rust::agentic::StructuredSchema::AutoInject(auto_injected_schema) => {
-                                    default_outputs.push(("return-value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema)));
+                                    default_outputs.push(("return_value".to_string(), golem_rust::agentic::EnrichedElementSchema::AutoInject(auto_injected_schema)));
                                 }
                             }
                         });

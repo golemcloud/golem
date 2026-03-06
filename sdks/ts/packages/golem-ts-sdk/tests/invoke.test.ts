@@ -982,7 +982,7 @@ function deserializeReturnValue(
     returnValue,
     [
       {
-        name: 'return-value',
+        name: 'returnValue',
         type: returnTypeAnalysedType,
       },
     ],

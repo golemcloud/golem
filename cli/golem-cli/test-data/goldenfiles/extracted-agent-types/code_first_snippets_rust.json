@@ -129,7 +129,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -244,7 +244,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Bool"
@@ -278,7 +278,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Chr"
@@ -367,7 +367,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -793,7 +793,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -1170,7 +1170,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -1210,7 +1210,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "F32"
@@ -1244,7 +1244,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "F64"
@@ -1278,7 +1278,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S16"
@@ -1312,7 +1312,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S32"
@@ -1346,7 +1346,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S64"
@@ -1380,7 +1380,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S8"
@@ -1425,7 +1425,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -1623,7 +1623,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -1779,7 +1779,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -1938,7 +1938,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": {
@@ -2437,7 +2437,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": {
@@ -2932,7 +2932,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": null,
@@ -2972,7 +2972,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": null,
@@ -3014,7 +3014,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": {
@@ -3134,7 +3134,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -3250,7 +3250,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -4277,7 +4277,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -5420,7 +5420,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -5597,7 +5597,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -5753,7 +5753,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "items": [
@@ -5893,7 +5893,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "items": [
@@ -5938,7 +5938,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U16"
@@ -5972,7 +5972,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U32"
@@ -6006,7 +6006,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U64"
@@ -6040,7 +6040,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U8"
@@ -6079,7 +6079,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "restrictions": [
                   {
@@ -6116,7 +6116,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "restrictions": null,
                 "type": "UnstructuredText"
@@ -6153,7 +6153,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "restrictions": [
                   {
@@ -6182,7 +6182,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -6333,7 +6333,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -6448,7 +6448,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Bool"
@@ -6482,7 +6482,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Chr"
@@ -6571,7 +6571,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -6997,7 +6997,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -7374,7 +7374,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -7414,7 +7414,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "F32"
@@ -7448,7 +7448,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "F64"
@@ -7482,7 +7482,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S16"
@@ -7516,7 +7516,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S32"
@@ -7550,7 +7550,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S64"
@@ -7584,7 +7584,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "S8"
@@ -7629,7 +7629,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -7827,7 +7827,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -7983,7 +7983,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "inner": {
@@ -8142,7 +8142,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": {
@@ -8641,7 +8641,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": {
@@ -9136,7 +9136,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": null,
@@ -9176,7 +9176,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": null,
@@ -9218,7 +9218,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "err": {
@@ -9338,7 +9338,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "cases": [
@@ -9454,7 +9454,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -10529,7 +10529,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -11672,7 +11672,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -11849,7 +11849,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "fields": [
@@ -12005,7 +12005,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "items": [
@@ -12145,7 +12145,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "items": [
@@ -12190,7 +12190,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U16"
@@ -12224,7 +12224,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U32"
@@ -12258,7 +12258,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U64"
@@ -12292,7 +12292,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U8"
@@ -12331,7 +12331,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "restrictions": [
                   {
@@ -12368,7 +12368,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "restrictions": null,
                 "type": "UnstructuredText"
@@ -12405,7 +12405,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "restrictions": [
                   {
@@ -12434,7 +12434,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "Str"
@@ -12481,7 +12481,7 @@
         "outputSchema": {
           "elements": [
             {
-              "name": "return-value",
+              "name": "return_value",
               "schema": {
                 "elementType": {
                   "type": "U32"
