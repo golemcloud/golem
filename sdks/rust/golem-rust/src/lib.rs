@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 test_r::enable!();
 
 pub use uuid::Uuid;
+pub use wasip2;
 pub use wstd;
 
 pub mod bindings {
@@ -29,8 +30,8 @@ pub mod bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wasip2::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
         }
     });
 }
@@ -47,8 +48,8 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wasip2::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
@@ -83,8 +84,8 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wasip2::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
@@ -120,8 +121,8 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wasip2::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
@@ -168,8 +169,8 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@1.5.0": golem_wasm::golem_core_1_5_x::types,
-            "wasi:io/poll@0.2.3": wstd::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": wstd::wasi::clocks::wall_clock,
+            "wasi:io/poll@0.2.3": wasip2::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,

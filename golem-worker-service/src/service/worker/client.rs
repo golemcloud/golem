@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -39,6 +39,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentUpdateMode;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
@@ -63,6 +64,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -402,6 +404,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -416,17 +419,24 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             "create_worker",
             move |worker_executor_client| {
                 let agent_id = agent_id_clone.clone();
-                Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
-                    agent_id: Some(agent_id.into()),
-                    env: environment_variables.clone(),
-                    config_vars: config_vars.clone().into_iter().collect(),
-                    component_owner_account_id: Some(account_id_clone.into()),
-                    environment_id: Some(environment_id.into()),
-                    ignore_already_existing,
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: principal.clone(),
-                    invocation_context: invocation_context.clone(),
-                }))
+                Box::pin(
+                    worker_executor_client.create_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id.into()),
+                        env: environment_variables.clone(),
+                        config_vars: config_vars.clone().into_iter().collect(),
+                        local_agent_config: local_agent_config
+                            .clone()
+                            .into_iter()
+                            .map(golem_api_grpc::proto::golem::worker::LocalAgentConfigEntry::from)
+                            .collect(),
+                        component_owner_account_id: Some(account_id_clone.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }),
+                )
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::CreateWorkerResponse {

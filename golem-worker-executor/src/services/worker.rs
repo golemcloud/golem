@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasConfig, HasOplogService};
 use crate::metrics::workers::record_worker_call;
@@ -22,7 +23,7 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use async_trait::async_trait;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
@@ -62,6 +63,7 @@ pub struct DefaultWorkerService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     shard_service: Arc<dyn ShardService>,
     oplog_service: Arc<dyn OplogService>,
+    component_service: Arc<dyn ComponentService>,
     config: Arc<GolemConfig>,
 }
 
@@ -70,12 +72,14 @@ impl DefaultWorkerService {
         key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         shard_service: Arc<dyn ShardService>,
         oplog_service: Arc<dyn OplogService>,
+        component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
     ) -> Self {
         Self {
             key_value_storage,
             shard_service,
             oplog_service,
+            component_service,
             config,
         }
     }
@@ -142,13 +146,34 @@ impl WorkerService for DefaultWorkerService {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     config_vars,
+                    local_agent_config,
                     original_phantom_id,
                 },
             )) => {
+                let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
+                let component_metadata = self
+                    .component_service
+                    .get_metadata(agent_id.component_id, Some(component_revision))
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!("failed to get component metadata for {owned_agent_id}: {err}")
+                    });
+
+                let local_agent_config = local_agent_config
+                    .into_iter()
+                    .map(|lac| {
+                        lac.enrich_with_type(&component_metadata.metadata, agent_type_name.as_ref())
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap_or_else(|err| {
+                        panic!("failed enriching local agent config for {owned_agent_id}: {err}")
+                    });
+
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
                     config_vars,
+                    local_agent_config,
                     environment_id,
                     created_by,
                     created_at: timestamp,

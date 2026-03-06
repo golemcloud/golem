@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -215,6 +215,7 @@ fn worker_filter_matches() {
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
         config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
+        local_agent_config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord {

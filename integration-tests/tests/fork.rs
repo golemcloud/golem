@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -58,7 +58,13 @@ async fn fork_interrupted_worker(
 
     let source_agent_id = agent_id!("http-client2");
     let agent_id = user
-        .start_agent_with(&component.id, source_agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            source_agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
@@ -207,6 +213,7 @@ async fn fork_running_worker_2(
             parsed_source_agent_id.clone(),
             env,
             HashMap::new(),
+            Vec::new(),
         )
         .await?;
 
@@ -720,6 +727,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
             parsed_source_agent_id.clone(),
             env,
             HashMap::new(),
+            Vec::new(),
         )
         .await?;
 

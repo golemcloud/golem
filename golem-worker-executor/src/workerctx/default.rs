@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{HasConfigVars, LogEventEmitBehaviour};
+use super::LogEventEmitBehaviour;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
@@ -45,7 +45,7 @@ use crate::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
     InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
@@ -62,17 +62,18 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm::Uri;
-use std::collections::{BTreeMap, HashSet};
+use golem_wasm::{Uri, WitType};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct Context {
@@ -233,7 +234,7 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         let limit = self.get_max_memory();
         debug!(
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
@@ -241,7 +242,7 @@ impl ResourceLimiterAsync for Context {
         );
 
         if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
-            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededMemoryLimit))?;
+            Err(GolemSpecificWasmTrap::WorkerExceededMemoryLimit)?;
         };
 
         let current_known = self.durable_ctx.total_linear_memory_size();
@@ -249,7 +250,10 @@ impl ResourceLimiterAsync for Context {
 
         if delta > 0 {
             // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             record_allocated_memory(desired);
         }
 
@@ -261,7 +265,7 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "table_growing: current={}, desired={}, maximum={:?}",
             current, desired, maximum
@@ -538,23 +542,27 @@ impl AgentHost for Context {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
 
-    async fn get_config_value(&mut self, key: Vec<String>) -> anyhow::Result<golem_wasm::WitValue> {
-        AgentHost::get_config_value(&mut self.durable_ctx, key).await
+    async fn get_config_value(
+        &mut self,
+        key: Vec<String>,
+        expected_type: WitType,
+    ) -> anyhow::Result<golem_wasm::WitValue> {
+        AgentHost::get_config_value(&mut self.durable_ctx, key, expected_type).await
     }
 }
 
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
@@ -608,12 +616,6 @@ impl InvocationContextManagement for Context {
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.durable_ctx.clone_as_inherited_stack(current_span_id)
-    }
-}
-
-impl HasConfigVars for Context {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
     }
 }
 

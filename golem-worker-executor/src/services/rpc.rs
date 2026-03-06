@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -24,11 +24,12 @@ use crate::services::{
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
-    HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
-    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasLeakSentinel,
+    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
+    HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -389,9 +390,11 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     file_loader: Arc<FileLoader>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
+    shutdown_token: tokio_util::sync::CancellationToken,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     extra_deps: Ctx::ExtraDeps,
+    leak_sentinel: Arc<()>,
 }
 
 impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
@@ -421,9 +424,11 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             file_loader: self.file_loader.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            shutdown_token: self.shutdown_token.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
             extra_deps: self.extra_deps.clone(),
+            leak_sentinel: self.leak_sentinel.clone(),
         }
     }
 }
@@ -540,6 +545,12 @@ impl<Ctx: WorkerCtx> HasRpc for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasLeakSentinel for DirectWorkerInvocationRpc<Ctx> {
+    fn leak_sentinel(&self) -> Arc<()> {
+        self.leak_sentinel.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     fn extra_deps(&self) -> Ctx::ExtraDeps {
         self.extra_deps.clone()
@@ -594,6 +605,12 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasShutdownToken for DirectWorkerInvocationRpc<Ctx> {
+    fn shutdown_token(&self) -> tokio_util::sync::CancellationToken {
+        self.shutdown_token.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -624,9 +641,11 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
+        shutdown_token: tokio_util::sync::CancellationToken,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         extra_deps: Ctx::ExtraDeps,
+        leak_sentinel: Arc<()>,
     ) -> Self {
         Self {
             remote_rpc,
@@ -653,9 +672,11 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             file_loader,
             oplog_processor_plugin,
             resource_limits,
+            shutdown_token,
             agent_types_service,
             agent_webhooks_service,
             extra_deps,
+            leak_sentinel,
         }
     }
 }
@@ -684,6 +705,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
+                Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
                 &self_stack,
@@ -735,6 +757,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
+                Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
                 &self_stack,
@@ -803,6 +826,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
+                Vec::new(),
                 None,
                 Some(self_agent_id.clone()),
                 &self_stack,

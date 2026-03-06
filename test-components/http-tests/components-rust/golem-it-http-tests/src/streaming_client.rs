@@ -1,7 +1,6 @@
 use futures_concurrency::prelude::*;
 use golem_rust::{agent_definition, agent_implementation};
 use wstd::http::{Client, Request};
-use wstd::io::empty;
 
 #[agent_definition]
 pub trait StreamingClient {
@@ -128,7 +127,7 @@ impl StreamingClient for StreamingClientImpl {
 async fn send_streaming_request() -> Result<String, String> {
     let port = std::env::var("PORT").expect("Requires a PORT env var set");
     let request = Request::get(format!("http://localhost:{port}/streaming-chunks"))
-        .body(empty())
+        .body(())
         .map_err(|e| e.to_string())?;
 
     let mut response = Client::new()
@@ -136,8 +135,8 @@ async fn send_streaming_request() -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?;
     let body = response.body_mut();
-    let bytes = body.bytes().await.map_err(|e| e.to_string())?;
-    Ok(String::from_utf8(bytes.to_vec()).map_err(|e| e.to_string())?)
+    let contents = body.str_contents().await.map_err(|e| e.to_string())?;
+    Ok(contents.to_string())
 }
 
 /// Mimics the wasm-rquickjs/golem-wasi-http streaming read pattern:

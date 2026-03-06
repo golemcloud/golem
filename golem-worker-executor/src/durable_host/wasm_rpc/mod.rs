@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,9 +21,7 @@ use crate::preview2::golem::agent::host::{
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError as InternalRpcError};
 use crate::services::HasWorker;
-use crate::workerctx::{
-    HasConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
-};
+use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
 use futures::future::Either;
@@ -74,7 +72,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.config_vars();
+        let config_vars = self.state.config_vars.clone();
 
         let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
             self,
@@ -115,7 +113,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.config_vars();
+        let config_vars = self.state.config_vars.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -233,7 +231,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.config_vars();
+        let config_vars = self.state.config_vars.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -323,7 +321,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.config_vars();
+        let config_vars = self.state.config_vars.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let begin_index = self
@@ -548,7 +546,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
-        wasmtime_wasi::dynamic_subscribe(self.table(), this, None)
+        Ok(wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?)
     }
 
     async fn get(

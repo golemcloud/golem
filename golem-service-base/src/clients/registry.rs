@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,7 +16,8 @@ use crate::custom_api::CompiledRoutes;
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
 use crate::mcp::CompiledMcp;
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
-use crate::model::{AccountResourceLimits, AgentDeploymentDetails, Component, ResourceLimits};
+use crate::model::component::Component;
+use crate::model::{AccountResourceLimits, AgentDeploymentDetails, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;

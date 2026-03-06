@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -54,6 +54,7 @@ pub use crate::base_model::*;
 use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
+use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
@@ -488,6 +489,7 @@ pub struct AgentMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub config_vars: BTreeMap<String, String>,
+    pub local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
@@ -506,6 +508,7 @@ impl AgentMetadata {
             environment_id,
             created_by,
             config_vars: BTreeMap::new(),
+            local_agent_config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),

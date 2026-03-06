@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,13 +20,21 @@ use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{FromValue, UuidRecord, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -34,17 +42,14 @@ inherit_test_dep!(Tracing);
 async fn rust_rpc_with_payload(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -98,17 +103,14 @@ async fn rust_rpc_with_payload(
 async fn rust_rpc_missing_target(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -142,17 +144,14 @@ async fn rust_rpc_missing_target(
 async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -197,17 +196,14 @@ async fn counter_resource_test_1(
 async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -244,17 +240,14 @@ async fn counter_resource_test_2(
 async fn counter_resource_test_2_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -294,17 +287,14 @@ async fn counter_resource_test_2_with_restart(
 async fn counter_resource_test_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -341,17 +331,14 @@ async fn counter_resource_test_3(
 async fn counter_resource_test_3_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -391,17 +378,14 @@ async fn counter_resource_test_3_with_restart(
 async fn context_inheritance(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -476,17 +460,14 @@ async fn context_inheritance(
 async fn counter_resource_test_5(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -518,17 +499,14 @@ async fn counter_resource_test_5(
 async fn wasm_rpc_bug_32_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -571,17 +549,14 @@ async fn wasm_rpc_bug_32_test(
 async fn golem_bug_1265_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -610,14 +585,14 @@ async fn golem_bug_1265_test(
 async fn ephemeral_worker_invocation_via_rpc1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("counter", "ephemeral_worker_invocation_via_rpc1");
@@ -658,14 +633,14 @@ async fn ephemeral_worker_invocation_via_rpc1(
 async fn ephemeral_worker_invocation_via_rpc2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("counter", "ephemeral_worker_invocation_via_rpc2");

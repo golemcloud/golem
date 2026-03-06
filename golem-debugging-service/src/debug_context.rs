@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -29,7 +29,8 @@ use golem_common::model::{
     OwnedAgentId, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
 use golem_worker_executor::durable_host::{
@@ -64,17 +65,17 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 pub struct DebugContext {
@@ -305,11 +306,14 @@ impl ResourceLimiterAsync for DebugContext {
         _current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
             Ok(true)
@@ -321,7 +325,7 @@ impl ResourceLimiterAsync for DebugContext {
         _current: usize,
         _desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         Ok(true)
     }
 }
@@ -437,15 +441,15 @@ impl HostCancellationToken for DebugContext {
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for DebugContext {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
@@ -499,12 +503,6 @@ impl InvocationContextManagement for DebugContext {
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.durable_ctx.clone_as_inherited_stack(current_span_id)
-    }
-}
-
-impl HasConfigVars for DebugContext {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
     }
 }
 

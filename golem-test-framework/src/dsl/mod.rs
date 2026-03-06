@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -45,6 +45,7 @@ use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareC
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
     AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord,
+    WorkerCreationLocalAgentConfigEntry,
 };
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -60,27 +61,38 @@ use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
 
+/// Represents a test component whose analysis cache has been pre-warmed
+/// during test-r dependency initialization. Tests that depend on a
+/// `PrecompiledComponent` are guaranteed that the expensive `extract_agent_types`
+/// and metadata analysis have already been performed.
+#[derive(Clone, Debug)]
+pub struct PrecompiledComponent {
+    /// The WASM file name (without .wasm extension) in the test-components directory
+    pub wasm_name: String,
+    /// The WIT package name used as the component name (passed to `.name()`)
+    pub package_name: String,
+}
+
+impl PrecompiledComponent {
+    pub fn new(wasm_name: &str, package_name: &str) -> Self {
+        Self {
+            wasm_name: wasm_name.to_string(),
+            package_name: package_name.to_string(),
+        }
+    }
+}
+
 pub struct EnvironmentOptions {
     pub compatibility_check: bool,
     pub version_check: bool,
     pub security_overrides: bool,
 }
 
-pub type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
-
-pub trait WorkerInvocationResultOps<T> {
-    fn collapse(self) -> anyhow::Result<T>;
-}
-
-impl<T> WorkerInvocationResultOps<T> for WorkerInvocationResult<T> {
-    fn collapse(self) -> anyhow::Result<T> {
-        self?.map_err(|err| err.into())
-    }
-}
-
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
+    type WorkerError: std::error::Error + Sync + Send + 'static;
+
     fn redis(&self) -> Arc<dyn Redis>;
 
     fn component(
@@ -89,6 +101,17 @@ pub trait TestDsl {
         name: &str,
     ) -> StoreComponentBuilder<'_, Self> {
         StoreComponentBuilder::new(self, *environment_id, name.to_string())
+    }
+
+    /// Creates a `StoreComponentBuilder` from a `PrecompiledComponent`, automatically
+    /// setting both the WASM file name and the package name.
+    fn component_dep(
+        &self,
+        environment_id: &EnvironmentId,
+        precompiled: &PrecompiledComponent,
+    ) -> StoreComponentBuilder<'_, Self> {
+        StoreComponentBuilder::new(self, *environment_id, precompiled.wasm_name.clone())
+            .name(&precompiled.package_name)
     }
 
     async fn store_component_with(
@@ -191,8 +214,8 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         id: ParsedAgentId,
-    ) -> WorkerInvocationResult<AgentId> {
-        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new())
+    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
+        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::new())
             .await
     }
 
@@ -202,14 +225,15 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> WorkerInvocationResult<AgentId>;
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
 
     async fn start_agent(
         &self,
         component_id: &ComponentId,
         id: ParsedAgentId,
     ) -> anyhow::Result<AgentId> {
-        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new())
+        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::new())
             .await
     }
 
@@ -219,9 +243,10 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
     ) -> anyhow::Result<AgentId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, config_vars)
+            .try_start_agent_with(component_id, id, env, config_vars, local_agent_config)
             .await?;
         Ok(result?)
     }
@@ -495,6 +520,7 @@ pub trait TestDsl {
         self.wait_for_statuses(agent_id, &[status], timeout).await
     }
 
+    #[tracing::instrument(level = "info", skip(self, statuses, timeout), fields(%agent_id))]
     async fn wait_for_statuses(
         &self,
         agent_id: &AgentId,
@@ -521,6 +547,29 @@ pub trait TestDsl {
                 .map(|s| format!("{s:?}"))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ))
+    }
+
+    #[tracing::instrument(level = "info", skip(self, timeout), fields(%agent_id))]
+    async fn wait_for_component_revision(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        timeout: Duration,
+    ) -> anyhow::Result<AgentMetadataDto> {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            let metadata = self.get_worker_metadata(agent_id).await?;
+
+            if metadata.component_revision >= target_revision {
+                return Ok(metadata);
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(anyhow!(
+            "Timeout waiting for worker {agent_id} to reach component revision {target_revision}"
         ))
     }
 

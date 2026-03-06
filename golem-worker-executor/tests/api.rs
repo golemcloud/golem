@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -35,7 +35,7 @@ use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, Type
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    start, start_customized, LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
@@ -61,6 +61,64 @@ inherit_test_dep!(
     #[tagged_as("golem_host")]
     SharedAnalysedTypeResolve
 );
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust_as_resolve_target")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn dropping_executor_releases_services(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let leak_detector = executor.leak_detector();
+
+    // Verify the sentinel is alive while the executor is running
+    assert!(
+        leak_detector.upgrade().is_some(),
+        "Leak sentinel should be alive while executor is running"
+    );
+
+    drop(executor);
+
+    // Give background tasks a moment to be aborted and cleaned up
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // After dropping the executor, the service graph should be fully deallocated.
+    // If this assertion fails, there is a circular Arc reference preventing cleanup.
+    assert!(
+        leak_detector.upgrade().is_none(),
+        "Service graph leaked! The All struct was not deallocated after dropping the executor. \
+         This indicates a circular Arc reference in the service dependency graph."
+    );
+
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]
@@ -69,16 +127,13 @@ async fn interruption(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clocks", "interruption-1");
@@ -131,13 +186,13 @@ async fn delete_interrupts_long_rpc_call(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "golem_it_agent_rpc")
-        .name("golem-it:agent-rpc")
+        .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
     let unique_id = context.redis_prefix();
@@ -171,16 +226,13 @@ async fn simulated_crash(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clocks", "simulated-crash-1");
@@ -235,13 +287,13 @@ async fn shopping_cart_example(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -324,16 +376,13 @@ async fn shopping_cart_example(
 async fn dynamic_worker_creation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("environment", "dynamic-worker-creation-1");
@@ -413,13 +462,13 @@ fn get_env_result_from_value(env: Value) -> HashMap<String, String> {
 async fn ephemeral_worker_creation_with_name_is_not_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("ephemeral-counter", "test");
@@ -449,16 +498,13 @@ async fn promise(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -574,16 +620,13 @@ async fn get_workers_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("golem_host")] type_resolve: &SharedAnalysedTypeResolve,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -708,16 +751,13 @@ async fn get_workers_from_worker(
 async fn get_metadata_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -837,13 +877,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -899,13 +939,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -963,16 +1003,13 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
 async fn component_env_variables(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
@@ -1025,16 +1062,13 @@ async fn component_env_variables(
 async fn component_env_variables_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
@@ -1065,6 +1099,14 @@ async fn component_env_variables_update(
         .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
 
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
     let env = executor
         .invoke_and_await_agent(&component, &agent_id, "get_environment", data_value!())
         .await?
@@ -1087,16 +1129,13 @@ async fn component_env_variables_update(
 async fn component_env_and_worker_env_priority(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
@@ -1105,7 +1144,13 @@ async fn component_env_and_worker_env_priority(
     let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), worker_env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            worker_env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
@@ -1125,13 +1170,13 @@ async fn delete_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -1177,6 +1222,7 @@ async fn get_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     async fn get_check(
         component_id: &ComponentId,
@@ -1198,8 +1244,7 @@ async fn get_workers(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -1318,13 +1363,13 @@ async fn get_workers(
 async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -1349,13 +1394,13 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
 async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -1387,16 +1432,13 @@ async fn get_worker_metadata(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1466,13 +1508,13 @@ async fn create_invoke_delete_create_invoke(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -1509,18 +1551,18 @@ async fn create_invoke_delete_create_invoke(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn recovering_an_old_worker_after_updating_a_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .unique()
         .store()
         .await?;
@@ -1576,13 +1618,13 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .unique()
         .store()
         .await?;
@@ -1631,16 +1673,13 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed, but wasmtime does not support it
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1686,15 +1725,12 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -1758,10 +1794,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_works_as_expected(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1789,11 +1826,7 @@ async fn long_running_poll_loop_works_as_expected(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -1802,7 +1835,13 @@ async fn long_running_poll_loop_works_as_expected(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -1862,10 +1901,11 @@ async fn start_http_poll_server(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_http_failures_are_retried(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(
@@ -1890,11 +1930,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
         start_http_poll_server(response.clone(), poll_count.clone(), None).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -1903,7 +1939,13 @@ async fn long_running_poll_loop_http_failures_are_retried(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -1975,10 +2017,11 @@ async fn long_running_poll_loop_http_failures_are_retried(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_works_as_expected_async_http(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2005,11 +2048,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client3");
@@ -2018,7 +2057,13 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2052,6 +2097,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
 async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2079,18 +2125,20 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2188,10 +2236,11 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn long_running_poll_loop_connection_breaks_on_interrupt(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2219,18 +2268,20 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2278,6 +2329,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
 async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2305,11 +2357,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -2317,7 +2365,13 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2359,6 +2413,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
 async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2386,11 +2441,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -2398,7 +2449,13 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2495,6 +2552,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
 async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2522,11 +2580,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -2534,7 +2588,13 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2568,16 +2628,13 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
 async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -2610,16 +2667,13 @@ async fn counter_resource_test_1(
 async fn reconstruct_interrupted_state(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("clocks", "interruption-2");
@@ -2683,10 +2737,11 @@ async fn reconstruct_interrupted_state(
 
 #[test]
 #[tracing::instrument]
-#[timeout("4m")]
+#[timeout("6m")]
 async fn invocation_queue_is_persistent(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2714,11 +2769,7 @@ async fn invocation_queue_is_persistent(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_http_tests_release",
-        )
-        .name("golem-it:http-tests")
+        .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
     let agent_id = agent_id!("http-client2");
@@ -2726,7 +2777,13 @@ async fn invocation_queue_is_persistent(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2794,13 +2851,13 @@ async fn invocation_queue_is_persistent(
 async fn invoke_with_non_existing_function(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -2833,13 +2890,13 @@ async fn invoke_with_non_existing_function(
 async fn invoke_with_wrong_parameters(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -2876,13 +2933,13 @@ async fn invoke_with_wrong_parameters(
 async fn stderr_returned_for_failed_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("failing-counter", "failing-worker-1");
@@ -2968,16 +3025,13 @@ async fn stderr_returned_for_failed_component(
 async fn cancelling_pending_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -3076,26 +3130,24 @@ async fn resolve_components_from_name(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust_as_resolve_target")]
+    agent_rpc_rust_as_resolve_target: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     // Make sure the name is unique
     let counter_component = executor
-        .component(
+        .component_dep(
             &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
+            agent_rpc_rust_as_resolve_target,
         )
-        .name("component-resolve-target")
         .store()
         .await?;
 
     let resolver_component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -3140,16 +3192,13 @@ async fn scheduled_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
 
@@ -3257,13 +3306,13 @@ async fn scheduled_invocation(
 async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
@@ -3295,16 +3344,13 @@ async fn delete_worker_during_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -3350,16 +3396,13 @@ async fn delete_worker_during_invocation(
 async fn invoking_worker_while_its_getting_deleted_works(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_agent_rpc_rust_release",
-        )
-        .name("golem-it:agent-rpc-rust")
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
         .unique()
         .store()
         .await?;
