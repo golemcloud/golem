@@ -774,3 +774,473 @@ fn oplog_processor_idempotency_key(
     buf.extend_from_slice(&batch_last_index.as_u64().to_be_bytes());
     IdempotencyKey::from_uuid(Uuid::new_v5(&OPLOG_PROC_NS, &buf))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::{
+        ComponentId, ComponentName, ComponentRevision, InstalledPlugin, PluginPriority,
+    };
+    use golem_common::model::diff;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::model::oplog::PersistenceLevel;
+    use golem_common::model::plugin_registration::PluginRegistrationId;
+    use golem_common::model::{Timestamp, WorkerMetadata, WorkerStatusRecord};
+    use golem_common::read_only_lock;
+    use golem_service_base::model::component::Component;
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use test_r::test;
+
+    // --------------------------------------------------------------------------
+    // U1: Deterministic idempotency key stability
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn deterministic_idempotency_key_same_inputs_produce_same_key() {
+        let worker_id = WorkerId {
+            component_id: ComponentId::new(),
+            worker_name: "test-worker".to_string(),
+        };
+        let plugin_id = EnvironmentPluginGrantId::new();
+        let first = OplogIndex::from_u64(10);
+        let last = OplogIndex::from_u64(20);
+
+        let key1 = oplog_processor_idempotency_key(&worker_id, &plugin_id, first, last);
+        let key2 = oplog_processor_idempotency_key(&worker_id, &plugin_id, first, last);
+
+        assert_eq!(key1, key2, "Same inputs must produce the same idempotency key");
+    }
+
+    #[test]
+    fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
+        let worker_id = WorkerId {
+            component_id: ComponentId::new(),
+            worker_name: "test-worker".to_string(),
+        };
+        let plugin_id = EnvironmentPluginGrantId::new();
+
+        let key1 = oplog_processor_idempotency_key(
+            &worker_id,
+            &plugin_id,
+            OplogIndex::from_u64(10),
+            OplogIndex::from_u64(20),
+        );
+        let key2 = oplog_processor_idempotency_key(
+            &worker_id,
+            &plugin_id,
+            OplogIndex::from_u64(21),
+            OplogIndex::from_u64(30),
+        );
+
+        assert_ne!(key1, key2, "Different batch ranges must produce different keys");
+    }
+
+    #[test]
+    fn deterministic_idempotency_key_different_worker_produces_different_key() {
+        let component_id = ComponentId::new();
+        let worker_id1 = WorkerId {
+            component_id,
+            worker_name: "worker-a".to_string(),
+        };
+        let worker_id2 = WorkerId {
+            component_id,
+            worker_name: "worker-b".to_string(),
+        };
+        let plugin_id = EnvironmentPluginGrantId::new();
+        let first = OplogIndex::from_u64(1);
+        let last = OplogIndex::from_u64(5);
+
+        let key1 = oplog_processor_idempotency_key(&worker_id1, &plugin_id, first, last);
+        let key2 = oplog_processor_idempotency_key(&worker_id2, &plugin_id, first, last);
+
+        assert_ne!(key1, key2, "Different workers must produce different keys");
+    }
+
+    #[test]
+    fn deterministic_idempotency_key_different_plugin_produces_different_key() {
+        let worker_id = WorkerId {
+            component_id: ComponentId::new(),
+            worker_name: "test-worker".to_string(),
+        };
+        let plugin_id1 = EnvironmentPluginGrantId::new();
+        let plugin_id2 = EnvironmentPluginGrantId::new();
+        let first = OplogIndex::from_u64(1);
+        let last = OplogIndex::from_u64(5);
+
+        let key1 = oplog_processor_idempotency_key(&worker_id, &plugin_id1, first, last);
+        let key2 = oplog_processor_idempotency_key(&worker_id, &plugin_id2, first, last);
+
+        assert_ne!(key1, key2, "Different plugins must produce different keys");
+    }
+
+    // --------------------------------------------------------------------------
+    // Helpers: recording mock for OplogProcessorPlugin and fake ComponentService
+    // --------------------------------------------------------------------------
+
+    /// Records all `send()` calls for verification
+    struct RecordingOplogProcessorPlugin {
+        sends: async_lock::Mutex<Vec<RecordedSend>>,
+    }
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct RecordedSend {
+        initial_oplog_index: OplogIndex,
+        entry_count: usize,
+    }
+
+    impl RecordingOplogProcessorPlugin {
+        fn new() -> Self {
+            Self {
+                sends: async_lock::Mutex::new(Vec::new()),
+            }
+        }
+
+        async fn send_count(&self) -> usize {
+            self.sends.lock().await.len()
+        }
+
+        async fn sends(&self) -> Vec<RecordedSend> {
+            self.sends.lock().await.clone()
+        }
+    }
+
+    #[async_trait]
+    impl OplogProcessorPlugin for RecordingOplogProcessorPlugin {
+        async fn send(
+            &self,
+            _worker_metadata: WorkerMetadata,
+            _plugin: &InstalledPlugin,
+            initial_oplog_index: OplogIndex,
+            entries: Vec<OplogEntry>,
+        ) -> Result<(), WorkerExecutorError> {
+            self.sends.lock().await.push(RecordedSend {
+                initial_oplog_index,
+                entry_count: entries.len(),
+            });
+            Ok(())
+        }
+
+        async fn on_shard_assignment_changed(&self) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
+    }
+
+    /// A fake ComponentService that returns a component with one installed oplog processor plugin
+    struct FakeComponentService {
+        installed_plugins: Vec<InstalledPlugin>,
+    }
+
+    impl FakeComponentService {
+        fn with_one_oplog_processor_plugin(priority: PluginPriority) -> Self {
+            Self {
+                installed_plugins: vec![InstalledPlugin {
+                    environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
+                    priority,
+                    parameters: BTreeMap::new(),
+                    plugin_registration_id: PluginRegistrationId::new(),
+                    plugin_name: "test-oplog-plugin".to_string(),
+                    plugin_version: "1.0.0".to_string(),
+                    oplog_processor_component_id: Some(ComponentId::new()),
+                    oplog_processor_component_revision: Some(ComponentRevision::INITIAL),
+                }],
+            }
+        }
+
+        fn empty() -> Self {
+            Self {
+                installed_plugins: Vec::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ComponentService for FakeComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unimplemented!("not needed for forwarding oplog tests")
+        }
+
+        async fn get_metadata(
+            &self,
+            component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            Ok(Component {
+                id: component_id,
+                revision: ComponentRevision::INITIAL,
+                environment_id: EnvironmentId::new(),
+                component_name: ComponentName("test-component".to_string()),
+                hash: diff::Hash::empty(),
+                application_id: ApplicationId::new(),
+                account_id: AccountId::new(),
+                component_size: 100,
+                metadata: ComponentMetadata::default(),
+                created_at: chrono::Utc::now(),
+                files: Vec::new(),
+                installed_plugins: self.installed_plugins.clone(),
+                env: BTreeMap::new(),
+                config_vars: BTreeMap::new(),
+                local_agent_config: Vec::new(),
+                wasm_hash: diff::Hash::empty(),
+                object_store_key: String::new(),
+            })
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            Ok(None)
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+    }
+
+    /// A minimal in-memory oplog for testing ForwardingOplog behavior
+    #[allow(dead_code)]
+    struct InMemoryOplog {
+        entries: async_lock::Mutex<Vec<OplogEntry>>,
+        current_idx: async_lock::Mutex<OplogIndex>,
+    }
+
+    #[allow(dead_code)]
+    impl InMemoryOplog {
+        fn new() -> Self {
+            Self {
+                entries: async_lock::Mutex::new(Vec::new()),
+                current_idx: async_lock::Mutex::new(OplogIndex::INITIAL),
+            }
+        }
+    }
+
+    impl Debug for InMemoryOplog {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("InMemoryOplog").finish()
+        }
+    }
+
+    #[async_trait]
+    impl Oplog for InMemoryOplog {
+        async fn add(&self, entry: OplogEntry) -> OplogIndex {
+            let mut entries = self.entries.lock().await;
+            let mut idx = self.current_idx.lock().await;
+            *idx = idx.next();
+            entries.push(entry);
+            *idx
+        }
+
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+            0
+        }
+
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+            BTreeMap::new()
+        }
+
+        async fn current_oplog_index(&self) -> OplogIndex {
+            *self.current_idx.lock().await
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            None
+        }
+
+        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+            true
+        }
+
+        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+            let entries = self.entries.lock().await;
+            let idx: u64 = oplog_index.into();
+            entries[(idx - 1) as usize].clone()
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let entries = self.entries.lock().await;
+            let start: u64 = oplog_index.into();
+            let mut result = BTreeMap::new();
+            for i in start..(start + n) {
+                if let Some(entry) = entries.get((i - 1) as usize) {
+                    result.insert(OplogIndex::from_u64(i), entry.clone());
+                }
+            }
+            result
+        }
+
+        async fn length(&self) -> u64 {
+            self.entries.lock().await.len() as u64
+        }
+
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
+            unimplemented!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unimplemented!()
+        }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
+    }
+
+    fn test_worker_metadata(
+        active_plugins: HashSet<PluginPriority>,
+    ) -> (WorkerMetadata, read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>) {
+        let worker_id = WorkerId {
+            component_id: ComponentId::new(),
+            worker_name: "test-worker".to_string(),
+        };
+        let environment_id = EnvironmentId::new();
+        let account_id = AccountId::new();
+        let status = WorkerStatusRecord {
+            active_plugins,
+            ..Default::default()
+        };
+
+        let metadata = WorkerMetadata {
+            worker_id,
+            env: vec![],
+            environment_id,
+            created_by: account_id,
+            config_vars: BTreeMap::new(),
+            local_agent_config: Vec::new(),
+            created_at: Timestamp::now_utc(),
+            parent: None,
+            last_known_status: status.clone(),
+            original_phantom_id: None,
+        };
+
+        let status_lock =
+            read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(status)));
+
+        (metadata, status_lock)
+    }
+
+    // --------------------------------------------------------------------------
+    // U6: Empty buffer → no checkpoint written, no invoke called
+    // --------------------------------------------------------------------------
+
+    #[test]
+    async fn empty_buffer_no_send() {
+        let plugin_priority = PluginPriority(0);
+        let (metadata, status_lock) =
+            test_worker_metadata(HashSet::from([plugin_priority]));
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> =
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(plugin_priority));
+
+        let mut state = ForwardingOplogState {
+            buffer: VecDeque::new(),
+            commit_count: 0,
+            last_send: Instant::now(),
+            oplog_plugins: recording_plugin.clone(),
+            initial_worker_metadata: metadata,
+            last_known_status: status_lock,
+            last_oplog_idx: OplogIndex::INITIAL,
+            components,
+        };
+
+        // Buffer is empty — send_buffer should be a no-op
+        state.send_buffer().await;
+
+        assert_eq!(
+            recording_plugin.send_count().await,
+            0,
+            "Empty buffer should not trigger any plugin sends"
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // U5 (partial): No active plugins → no send even with entries in buffer
+    // --------------------------------------------------------------------------
+
+    #[test]
+    async fn no_active_plugins_no_send() {
+        let (metadata, status_lock) = test_worker_metadata(HashSet::new());
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> =
+            Arc::new(FakeComponentService::empty());
+
+        let mut state = ForwardingOplogState {
+            buffer: VecDeque::from([OplogEntry::GrowMemory {
+                timestamp: Timestamp::now_utc(),
+                delta: 100,
+            }]),
+            commit_count: 0,
+            last_send: Instant::now(),
+            oplog_plugins: recording_plugin.clone(),
+            initial_worker_metadata: metadata,
+            last_known_status: status_lock,
+            last_oplog_idx: OplogIndex::from_u64(1),
+            components,
+        };
+
+        state.send_buffer().await;
+
+        assert_eq!(
+            recording_plugin.send_count().await,
+            0,
+            "No active plugins should not trigger any plugin sends"
+        );
+    }
+
+    // --------------------------------------------------------------------------
+    // Basic send verification: active plugin + entries → plugin receives them
+    // --------------------------------------------------------------------------
+
+    #[test]
+    async fn active_plugin_receives_buffered_entries() {
+        let plugin_priority = PluginPriority(0);
+        let (metadata, status_lock) =
+            test_worker_metadata(HashSet::from([plugin_priority]));
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> =
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(plugin_priority));
+
+        let mut state = ForwardingOplogState {
+            buffer: VecDeque::from([
+                OplogEntry::GrowMemory {
+                    timestamp: Timestamp::now_utc(),
+                    delta: 100,
+                },
+                OplogEntry::GrowMemory {
+                    timestamp: Timestamp::now_utc(),
+                    delta: 200,
+                },
+            ]),
+            commit_count: 0,
+            last_send: Instant::now(),
+            oplog_plugins: recording_plugin.clone(),
+            initial_worker_metadata: metadata,
+            last_known_status: status_lock,
+            last_oplog_idx: OplogIndex::from_u64(2),
+            components,
+        };
+
+        state.send_buffer().await;
+
+        let sends = recording_plugin.sends().await;
+        assert_eq!(sends.len(), 1, "Should have sent exactly one batch");
+        assert_eq!(sends[0].entry_count, 2, "Batch should contain 2 entries");
+    }
+}
