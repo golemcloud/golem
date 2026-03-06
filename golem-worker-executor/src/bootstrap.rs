@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -48,6 +48,7 @@ use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
+use wasmtime::component::HasSelf;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
@@ -103,9 +104,14 @@ impl Bootstrap<Context> for ServerBootstrap {
         agent_type_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Context>> {
-        let resource_limits =
-            resource_limits::configured(&golem_config.resource_limits, registry_service.clone());
+        let resource_limits = resource_limits::configured(
+            &golem_config.resource_limits,
+            registry_service.clone(),
+            shutdown_token.clone(),
+        );
 
         let additional_deps = NoAdditionalDeps {};
 
@@ -139,7 +145,9 @@ impl Bootstrap<Context> for ServerBootstrap {
             resource_limits.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
+            shutdown_token.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -170,9 +178,11 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            shutdown_token.clone(),
             agent_type_service.clone(),
             agent_webhooks_service.clone(),
             additional_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         Ok(All::new(
@@ -203,18 +213,38 @@ impl Bootstrap<Context> for ServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            shutdown_token,
             additional_deps,
+            leak_sentinel,
         ))
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Context>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        crate::preview2::golem::agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        crate::preview2::golem::agent::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
         Ok(linker)
     }
 }

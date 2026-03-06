@@ -10,7 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_RQUICKJS_VERSION: "0.0.23"
+  WASM_RQUICKJS_VERSION: "0.0.24"
 
 jobs:
   publish:

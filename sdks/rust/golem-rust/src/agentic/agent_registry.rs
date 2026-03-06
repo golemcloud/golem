@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -160,7 +160,7 @@ where
 
 pub fn get_agent_id() -> AgentId {
     let env_vars: HashMap<String, String> =
-        HashMap::from_iter(wasi::cli::environment::get_environment());
+        HashMap::from_iter(wasip2::cli::environment::get_environment());
     let raw_agent_id = env_vars
         .get("GOLEM_AGENT_ID")
         .expect("Missing GOLEM_AGENT_ID environment variable"); // This is always provided by the Golem runtime

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -25,7 +25,8 @@ use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    start, start_with_snapshot_policy, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, start_with_snapshot_policy, LastUniqueId, PrecompiledComponent, TestContext,
+    WorkerExecutorTestDependencies,
 };
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -40,6 +41,18 @@ use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("constructor_parameter_echo")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -47,6 +60,7 @@ inherit_test_dep!(Tracing);
 async fn custom_durability_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -85,11 +99,7 @@ async fn custom_durability_1(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("custom-durability", "custom-durability-1");
@@ -97,7 +107,13 @@ async fn custom_durability_1(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result1 = executor
@@ -134,6 +150,7 @@ async fn custom_durability_1(
 async fn lazy_pollable(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -184,11 +201,7 @@ async fn lazy_pollable(
     );
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
     let agent_id = agent_id!("custom-durability", "lazy-pollable-1");
@@ -196,7 +209,13 @@ async fn lazy_pollable(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     signal_tx.send(()).unwrap();
@@ -281,14 +300,14 @@ const SNAPSHOT_TEST_INVOCATIONS: usize = 10;
 async fn automatic_snapshot_disabled(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_with_snapshot_policy(deps, &context, SnapshotPolicy::Disabled).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter", "disabled");
@@ -322,6 +341,7 @@ async fn automatic_snapshot_disabled(
 async fn automatic_snapshot_every_2nd_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -333,8 +353,7 @@ async fn automatic_snapshot_every_2nd_invocation(
     .await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter", "every-2nd");
@@ -369,6 +388,7 @@ async fn automatic_snapshot_every_2nd_invocation(
 async fn automatic_snapshot_periodic(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -382,8 +402,7 @@ async fn automatic_snapshot_periodic(
     .await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter", "periodic");
@@ -424,6 +443,7 @@ async fn automatic_snapshot_periodic(
 async fn snapshot_based_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -435,8 +455,7 @@ async fn snapshot_based_recovery(
     .await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter", "recovery");
@@ -515,6 +534,7 @@ async fn snapshot_based_recovery(
 async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -527,8 +547,7 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
     .await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter", "multi-restart");
@@ -598,17 +617,14 @@ async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
 async fn ts_default_json_snapshot_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_constructor_parameter_echo",
-        )
-        .name("golem-it:constructor-parameter-echo")
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter-agent", "ts-recovery");
@@ -706,6 +722,7 @@ async fn ts_default_json_snapshot_recovery(
 async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -713,11 +730,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_constructor_parameter_echo",
-        )
-        .name("golem-it:constructor-parameter-echo")
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
     let agent_id = agent_id!("snapshot-counter-agent", "ts-multi-restart");
@@ -816,6 +829,7 @@ async fn ts_default_json_snapshot_recovery_across_multiple_restarts(
 async fn rust_default_json_snapshot_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -827,8 +841,7 @@ async fn rust_default_json_snapshot_recovery(
     .await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("json-snapshot-counter", "rust-recovery");
@@ -931,6 +944,7 @@ async fn rust_default_json_snapshot_recovery(
 async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -943,8 +957,7 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     .await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent_id = agent_id!("json-snapshot-counter", "rust-multi-restart");

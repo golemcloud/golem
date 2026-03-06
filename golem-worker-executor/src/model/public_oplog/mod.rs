@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -65,6 +65,7 @@ pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
+    agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -94,6 +95,7 @@ pub async fn get_public_oplog_chunk(
             oplog_service.clone(),
             components.clone(),
             owned_agent_id,
+            agent_type_name,
             current_component_revision,
         )
         .await?;
@@ -121,6 +123,7 @@ pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
+    agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
@@ -138,6 +141,7 @@ pub async fn search_public_oplog(
             component_service.clone(),
             oplog_service.clone(),
             owned_agent_id,
+            agent_type_name,
             current_component_revision,
             current_index,
             count,
@@ -205,6 +209,7 @@ pub trait PublicOplogEntryOps: Sized {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_agent_id: &OwnedAgentId,
+        agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String>;
 }
@@ -217,6 +222,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_agent_id: &OwnedAgentId,
+        agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
         match value {
@@ -232,6 +238,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id,
             } => {
                 let metadata = components
@@ -249,6 +256,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .map(make_plugin_installation_description)
                     .collect();
 
+                let local_agent_config = local_agent_config
+                    .into_iter()
+                    .map(|lac| lac.enrich_with_type(&metadata.metadata, agent_type_name))
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
@@ -261,6 +273,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     config_vars,
+                    local_agent_config,
                     original_phantom_id,
                 }))
             }

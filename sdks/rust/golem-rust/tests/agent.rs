@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ mod tests {
     use golem_rust_macro::{description, endpoint, prompt};
     use std::fmt::Debug;
     use test_r::test;
-    use wstd::wasi::clocks::wall_clock::Datetime;
+    use wasip2::clocks::wall_clock::Datetime;
 
     #[derive(Clone, Debug, Schema)]
     struct Config {

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -54,8 +54,8 @@ use crate::model::worker::{
 use golem_client::api::{AgentClient, ComponentClient, EnvironmentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
-    AgentCreationRequest, AgentInvocationMode, AgentInvocationRequest, ComponentDto,
-    RevertWorkerTarget, UpdateWorkerRequest,
+    AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
+    UpdateWorkerRequest,
 };
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
@@ -70,7 +70,9 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, UpdateRecord};
+use golem_common::model::worker::{
+    AgentCreationRequest, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
+};
 use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{parse_value_and_type, ValueAndType};
@@ -96,27 +98,20 @@ impl WorkerCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: AgentSubcommand) -> anyhow::Result<()> {
-        match subcommand {
-            AgentSubcommand::New {
-                agent_id: agent_name,
-                env,
-                config_vars,
-            } => self.cmd_new(agent_name, env, config_vars).await,
-            AgentSubcommand::Invoke {
-                agent_id: agent_name,
-                function_name,
-                arguments,
-                trigger,
-                idempotency_key,
-                no_stream,
-                stream_args,
-                post_deploy_args,
-                schedule_at,
-            } => {
-                self.cmd_invoke(
-                    agent_name,
-                    &function_name,
+    pub fn handle_command(
+        &self,
+        subcommand: AgentSubcommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
+        Box::pin(async move {
+            match subcommand {
+                AgentSubcommand::New {
+                    agent_id: agent_name,
+                    env,
+                    config_vars,
+                } => self.cmd_new(agent_name, env, config_vars).await,
+                AgentSubcommand::Invoke {
+                    agent_id: agent_name,
+                    function_name,
                     arguments,
                     trigger,
                     idempotency_key,
@@ -124,105 +119,119 @@ impl WorkerCommandHandler {
                     stream_args,
                     post_deploy_args,
                     schedule_at,
-                )
-                .await
-            }
-            AgentSubcommand::Get {
-                agent_id: agent_name,
-            } => self.cmd_get(agent_name).await,
-            AgentSubcommand::Delete {
-                agent_id: agent_name,
-            } => self.cmd_delete(agent_name).await,
-            AgentSubcommand::List {
-                agent_type_name,
-                component_name,
-                filter: filters,
-                scan_cursor,
-                max_count,
-                precise,
-            } => {
-                self.cmd_list(
+                } => {
+                    self.cmd_invoke(
+                        agent_name,
+                        &function_name,
+                        arguments,
+                        trigger,
+                        idempotency_key,
+                        no_stream,
+                        stream_args,
+                        post_deploy_args,
+                        schedule_at,
+                    )
+                    .await
+                }
+                AgentSubcommand::Get {
+                    agent_id: agent_name,
+                } => self.cmd_get(agent_name).await,
+                AgentSubcommand::Delete {
+                    agent_id: agent_name,
+                } => self.cmd_delete(agent_name).await,
+                AgentSubcommand::List {
                     agent_type_name,
                     component_name,
-                    filters,
+                    filter: filters,
                     scan_cursor,
                     max_count,
                     precise,
-                )
-                .await
-            }
-            AgentSubcommand::Stream {
-                agent_id: agent_name,
-                stream_args,
-            } => self.cmd_stream(agent_name, stream_args).await,
-            AgentSubcommand::ReplStream {
-                agent_type_name,
-                parameters,
-                idempotency_key,
-                phantom_id,
-                stream_args,
-            } => {
-                self.cmd_repl_stream(
+                } => {
+                    self.cmd_list(
+                        agent_type_name,
+                        component_name,
+                        filters,
+                        scan_cursor,
+                        max_count,
+                        precise,
+                    )
+                    .await
+                }
+                AgentSubcommand::Stream {
+                    agent_id: agent_name,
+                    stream_args,
+                } => self.cmd_stream(agent_name, stream_args).await,
+                AgentSubcommand::ReplStream {
                     agent_type_name,
                     parameters,
                     idempotency_key,
                     phantom_id,
                     stream_args,
-                )
-                .await
-            }
-            AgentSubcommand::Interrupt {
-                agent_id: agent_name,
-            } => self.cmd_interrupt(agent_name).await,
-            AgentSubcommand::Update {
-                agent_id: agent_name,
-                mode,
-                target_revision,
-                r#await,
-                disable_wakeup,
-            } => {
-                self.cmd_update(
-                    agent_name,
-                    mode.unwrap_or(AgentUpdateMode::Automatic),
+                } => {
+                    self.cmd_repl_stream(
+                        agent_type_name,
+                        parameters,
+                        idempotency_key,
+                        phantom_id,
+                        stream_args,
+                    )
+                    .await
+                }
+                AgentSubcommand::Interrupt {
+                    agent_id: agent_name,
+                } => self.cmd_interrupt(agent_name).await,
+                AgentSubcommand::Update {
+                    agent_id: agent_name,
+                    mode,
                     target_revision,
                     r#await,
                     disable_wakeup,
-                )
-                .await
-            }
-            AgentSubcommand::Resume {
-                agent_id: agent_name,
-            } => self.cmd_resume(agent_name).await,
-            AgentSubcommand::SimulateCrash {
-                agent_id: agent_name,
-            } => self.cmd_simulate_crash(agent_name).await,
-            AgentSubcommand::Oplog {
-                agent_id: agent_name,
-                from,
-                query,
-            } => self.cmd_oplog(agent_name, from, query).await,
-            AgentSubcommand::Revert {
-                agent_id: agent_name,
-                last_oplog_index,
-                number_of_invocations,
-            } => {
-                self.cmd_revert(agent_name, last_oplog_index, number_of_invocations)
+                } => {
+                    self.cmd_update(
+                        agent_name,
+                        mode.unwrap_or(AgentUpdateMode::Automatic),
+                        target_revision,
+                        r#await,
+                        disable_wakeup,
+                    )
                     .await
+                }
+                AgentSubcommand::Resume {
+                    agent_id: agent_name,
+                } => self.cmd_resume(agent_name).await,
+                AgentSubcommand::SimulateCrash {
+                    agent_id: agent_name,
+                } => self.cmd_simulate_crash(agent_name).await,
+                AgentSubcommand::Oplog {
+                    agent_id: agent_name,
+                    from,
+                    query,
+                } => self.cmd_oplog(agent_name, from, query).await,
+                AgentSubcommand::Revert {
+                    agent_id: agent_name,
+                    last_oplog_index,
+                    number_of_invocations,
+                } => {
+                    self.cmd_revert(agent_name, last_oplog_index, number_of_invocations)
+                        .await
+                }
+                AgentSubcommand::CancelInvocation {
+                    agent_id: agent_name,
+                    idempotency_key,
+                } => {
+                    self.cmd_cancel_invocation(agent_name, idempotency_key)
+                        .await
+                }
+                AgentSubcommand::Files { agent_name, path } => {
+                    self.cmd_files(agent_name, path).await
+                }
+                AgentSubcommand::FileContents {
+                    agent_name,
+                    path,
+                    output,
+                } => self.cmd_file_contents(agent_name, path, output).await,
             }
-            AgentSubcommand::CancelInvocation {
-                agent_id: agent_name,
-                idempotency_key,
-            } => {
-                self.cmd_cancel_invocation(agent_name, idempotency_key)
-                    .await
-            }
-            AgentSubcommand::Files { agent_name, path } => self.cmd_files(agent_name, path).await,
-            AgentSubcommand::FileContents {
-                agent_name,
-                path,
-                output,
-            } => self.cmd_file_contents(agent_name, path, output).await,
-        }
+        })
     }
 
     async fn cmd_new(
@@ -554,7 +563,10 @@ impl WorkerCommandHandler {
             .list_agent_types(&environment)
             .await?
             .into_iter()
-            .find(|t| t.agent_type.type_name.0 == agent_type_name)
+            .find(|t| {
+                t.agent_type.type_name.0 == agent_type_name
+                    || t.agent_type.wrapper_type_name() == agent_type_name
+            })
         else {
             bail!("Agent type not found: {}", agent_type_name);
         };
@@ -571,14 +583,14 @@ impl WorkerCommandHandler {
         let agent_name = RawAgentId(agent_id.to_string());
 
         let agent_name_match = self.match_agent_name(agent_name).await?;
-        let (component, agent_name) = self
+        let (_component, agent_name) = self
             .component_by_agent_name_match(&agent_name_match)
             .await?;
 
         let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
-            &component.id,
+            &agent_type.implemented_by.component_id,
             agent_name.0.clone(),
             stream_args.into(),
             self.ctx.allow_insecure(),
@@ -1245,6 +1257,8 @@ impl WorkerCommandHandler {
                     name: agent_name,
                     env,
                     config_vars,
+                    // FIXME: agent-config
+                    local_agent_config: Vec::new(),
                 },
             )
             .await

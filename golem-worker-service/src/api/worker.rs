@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -32,6 +32,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{
     AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema,
 };
+use golem_service_base::model::component::Component;
 use golem_service_base::model::*;
 use poem::Body;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
@@ -113,6 +114,7 @@ impl WorkerApi {
             name,
             env,
             config_vars,
+            ..
         } = request;
 
         let (agent_id, component) = self
@@ -126,6 +128,7 @@ impl WorkerApi {
                 component,
                 env,
                 config_vars,
+                request.local_agent_config,
                 false,
                 auth,
                 None,

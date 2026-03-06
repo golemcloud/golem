@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -225,6 +225,7 @@ impl DebugServiceDefault {
             &owned_agent_id,
             None,
             None,
+            Vec::new(),
             None,
             None,
             &InvocationContextStack::fresh(),
@@ -412,15 +413,11 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_agent_id,
-            Some(session_data.worker_metadata.env.clone()),
-            Some(session_data.worker_metadata.config_vars.clone()),
-            Some(
-                session_data
-                    .worker_metadata
-                    .last_known_status
-                    .component_revision,
-            ),
-            session_data.worker_metadata.parent.clone(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
             &InvocationContextStack::fresh(),
             Principal::anonymous(),
         )
@@ -536,15 +533,11 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_agent_id,
-            Some(debug_session_data.worker_metadata.env.clone()),
-            Some(debug_session_data.worker_metadata.config_vars.clone()),
-            Some(
-                debug_session_data
-                    .worker_metadata
-                    .last_known_status
-                    .component_revision,
-            ),
-            debug_session_data.worker_metadata.parent.clone(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
             &InvocationContextStack::fresh(),
             Principal::anonymous(),
         )

@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -76,6 +76,7 @@ impl Benchmark for ThroughputEcho {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
+            "echo",
             "echo",
             Box::new(|_| data_value!("benchmark")),
             Box::new(|port, idx, _length| {
@@ -172,7 +173,8 @@ impl Benchmark for ThroughputLargeInput {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "large-input",
+            "large_input",
+            "largeInput",
             Box::new(|length| {
                 let bytes = vec![0u8; length];
                 data_value!(bytes)
@@ -277,7 +279,8 @@ impl Benchmark for ThroughputCpuIntensive {
         otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
-            "cpu-intensive",
+            "cpu_intensive",
+            "cpuIntensive",
             Box::new(|length| data_value!(length as f64)),
             Box::new(|port, idx, length| {
                 let url = Url::parse(&format!(
@@ -429,7 +432,8 @@ pub struct IterationContext {
 }
 
 pub struct ThroughputBenchmark {
-    method_name: String,
+    rust_method_name: String,
+    ts_method_name: String,
     agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
     http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
     rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
@@ -445,7 +449,8 @@ fn agent_ids_to_agent_ids(component_id: ComponentId, ids: &[ParsedAgentId]) -> V
 
 impl ThroughputBenchmark {
     pub async fn new(
-        method_name: &str,
+        rust_method_name: &str,
+        ts_method_name: &str,
         agent_params: Box<dyn Fn(usize) -> DataValue + Send + Sync + 'static>,
         http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
         rust_http_request: Box<dyn Fn(u16, usize, usize) -> Request + Send + Sync + 'static>,
@@ -457,7 +462,8 @@ impl ThroughputBenchmark {
         otlp: bool,
     ) -> Self {
         Self {
-            method_name: method_name.to_string(),
+            rust_method_name: rust_method_name.to_string(),
+            ts_method_name: ts_method_name.to_string(),
             agent_params,
             http_request,
             rust_http_request,
@@ -623,7 +629,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.rust_agent_component,
             &iteration.rust_agent_ids,
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -634,7 +640,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.ts_agent_component,
             &iteration.ts_agent_ids,
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -645,7 +651,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.rust_agent_component,
             &iteration.rust_agent_ids_for_http,
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -656,7 +662,7 @@ impl ThroughputBenchmark {
             &iteration.user,
             &iteration.ts_agent_component,
             &iteration.ts_agent_ids_for_http,
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -671,7 +677,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(|pair| pair.parent.clone())
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -686,7 +692,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(|pair| pair.parent.clone())
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             iteration.length,
         )
@@ -756,7 +762,7 @@ impl ThroughputBenchmark {
                     agent_id: id,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             "rust-agent-",
         )
@@ -778,7 +784,7 @@ impl ThroughputBenchmark {
                     agent_id: id,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             "ts-agent-",
         )
@@ -872,7 +878,7 @@ impl ThroughputBenchmark {
                     pair,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.ts_method_name,
             &self.agent_params,
             "ts-agent-rpc-",
         )
@@ -894,7 +900,7 @@ impl ThroughputBenchmark {
                     pair,
                 })
                 .collect::<Vec<_>>(),
-            &self.method_name,
+            &self.rust_method_name,
             &self.agent_params,
             "rust-agent-rpc-",
         )

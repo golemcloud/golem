@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,21 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
 use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::p2::bindings::sockets::tcp_create_socket::{Host, IpAddressFamily, TcpSocket};
 use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::sockets::WasiSocketsView as _;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn create_tcp_socket(
         &mut self,
         address_family: IpAddressFamily,
     ) -> Result<Resource<TcpSocket>, SocketError> {
         self.observe_function_call("sockets::tcp_create_socket", "create_tcp_socket");
-        Host::create_tcp_socket(&mut self.as_wasi_view(), address_family)
+        Host::create_tcp_socket(&mut self.as_wasi_view().sockets(), address_family)
     }
 }

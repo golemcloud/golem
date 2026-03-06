@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -51,7 +51,8 @@ use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageCo
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
@@ -116,9 +117,9 @@ use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
@@ -134,15 +135,54 @@ use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tower::ServiceBuilder;
 use tracing::{debug, info, Level};
 use uuid::Uuid;
-use wasmtime::component::{Instance, Linker, Resource, ResourceAny};
+use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use wasmtime_wasi::p2::WasiView;
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 #[cfg(test)]
 test_r::enable!();
+
+pub use golem_test_framework::dsl::PrecompiledComponent;
+
+/// Defines a `#[test_dep]` function that pre-warms the analysis cache for a
+/// test component during test-r dependency initialization.
+///
+/// Usage: `test_component!(function_name, "tag_name", "wasm_file_name", "package:name");`
+///
+/// Each invocation must use a unique `tag_name` because test-r identifies deps
+/// of the same type by their tag. The tag is also used in test function parameters
+/// via `#[tagged_as("tag_name")] param: &PrecompiledComponent`.
+#[macro_export]
+macro_rules! test_component {
+    ($fn_name:ident, $tag:expr, $wasm_name:expr, $package_name:expr) => {
+        #[test_dep(tagged_as = $tag)]
+        pub async fn $fn_name(deps: &WorkerExecutorTestDependencies) -> PrecompiledComponent {
+            tracing::info!(
+                "Pre-compiling test component '{}' (package: '{}')",
+                $wasm_name,
+                $package_name
+            );
+            let wasm_path = deps
+                .component_directory
+                .join(format!("{}.wasm", $wasm_name));
+            deps.component_writer
+                .warm_cache(&wasm_path)
+                .await
+                .expect(concat!("Failed to warm cache for component ", $wasm_name));
+            tracing::info!(
+                "Pre-compiled test component '{}' (package: '{}') successfully",
+                $wasm_name,
+                $package_name
+            );
+            PrecompiledComponent::new($wasm_name, $package_name)
+        }
+    };
+}
 
 #[derive(Clone)]
 pub struct WorkerExecutorTestDependencies {
@@ -214,12 +254,24 @@ impl WorkerExecutorTestDependencies {
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
+    /// Holds the `RunDetails` to keep the shutdown token (and epoch thread)
+    /// alive for the duration of the test. Dropping this triggers the
+    /// graph-wide shutdown signal.
+    _run_details: Arc<RunDetails>,
     pub deps: WorkerExecutorTestDependencies,
-    pub client: WorkerExecutorClient<Channel>,
+    pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
+    leak_detector: std::sync::Weak<()>,
 }
 
 impl TestWorkerExecutor {
+    /// Returns a weak reference that can be used to verify that the
+    /// service graph (`All`) was properly deallocated after the executor
+    /// is dropped. If `upgrade()` returns `Some`, services have leaked.
+    pub fn leak_detector(&self) -> std::sync::Weak<()> {
+        self.leak_detector.clone()
+    }
+
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
@@ -415,18 +467,29 @@ pub async fn start_customized(
     )
     .await?;
     let grpc_port = details.grpc_port;
+    let leak_detector = details.leak_detector.clone();
+    let details = Arc::new(details);
 
     let start = std::time::Instant::now();
     loop {
         info!("Waiting for worker-executor to be reachable on port {grpc_port}");
-        let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
+        let channel = Channel::from_shared(format!("http://127.0.0.1:{grpc_port}"))
+            .expect("Valid URI")
+            .connect()
+            .await;
 
-        if let Ok(client) = client {
+        if let Ok(channel) = channel {
+            let otel_channel = ServiceBuilder::new()
+                .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
+                .service(channel);
+            let client = WorkerExecutorClient::new(otel_channel);
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
+                _run_details: details,
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                leak_detector,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -464,24 +527,18 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
-impl HasConfigVars for TestWorkerCtx {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
-    }
-}
-
 impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
     fn get_environment(
         &mut self,
-    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+    ) -> impl Future<Output = wasmtime::Result<Vec<(String, String)>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
     }
 
-    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+    fn get_arguments(&mut self) -> impl Future<Output = wasmtime::Result<Vec<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
     }
 
-    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+    fn initial_cwd(&mut self) -> impl Future<Output = wasmtime::Result<Option<String>>> + Send {
         wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
     }
 }
@@ -821,7 +878,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "Memory growing for {}: current: {}, desired: {}",
             self.agent_id(),
@@ -831,7 +888,10 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            self.durable_ctx.increase_memory(delta).await?;
+            self.durable_ctx
+                .increase_memory(delta)
+                .await
+                .map_err(wasmtime::Error::from_anyhow)?;
             Ok(true)
         } else {
             Ok(true)
@@ -843,7 +903,7 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         current: usize,
         desired: usize,
         _maximum: Option<usize>,
-    ) -> anyhow::Result<bool> {
+    ) -> wasmtime::Result<bool> {
         debug!(
             "Table growing for {}: current: {}, desired: {}",
             self.agent_id(),
@@ -1073,9 +1133,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+        leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let resource_limits =
-            resource_limits::configured(&golem_config.resource_limits, registry_service);
+        let resource_limits = resource_limits::configured(
+            &golem_config.resource_limits,
+            registry_service,
+            shutdown_token.clone(),
+        );
         let extra_deps = AdditionalTestDeps::new();
         let rdbms_service: Arc<dyn rdbms::RdbmsService> = Arc::new(TestRdmsService::new(
             rdbms_service.clone(),
@@ -1111,7 +1176,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             resource_limits.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            shutdown_token.clone(),
             extra_deps.clone(),
+            leak_sentinel.clone(),
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -1142,9 +1209,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             file_loader.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             extra_deps.clone(),
+            leak_sentinel.clone(),
         ));
         Ok(All::new(
             active_workers,
@@ -1174,21 +1243,38 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             file_loader,
             oplog_processor_plugin,
             resource_limits,
+            shutdown_token,
             extra_deps.clone(),
+            leak_sentinel,
         ))
     }
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        golem_api_1_x::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_worker_executor::preview2::golem::agent::host::add_to_linker_get_host(
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
             &mut linker,
             get_durable_ctx,
         )?;
-        golem_wasm::golem_core_1_5_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<TestWorkerCtx>>>(
+            &mut linker,
+            get_durable_ctx,
+        )?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<TestWorkerCtx>>,
+        >(&mut linker, get_durable_ctx)?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<TestWorkerCtx>>,
+        >(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
 }

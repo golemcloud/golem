@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -1000,6 +1000,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![],
         config_vars: BTreeMap::new(),
+        local_agent_config: Vec::new(),
         environment_id,
         created_by: account_id,
         parent: None,
@@ -1676,6 +1677,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             100,
             HashSet::new(),
             BTreeMap::new(),
+            Vec::new(),
             None,
         );
 

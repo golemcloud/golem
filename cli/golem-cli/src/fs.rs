@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -510,7 +510,7 @@ fn normalize_pattern(pattern: &str) -> String {
     pattern.replace('\\', "/")
 }
 
-pub fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
+pub fn delete_logged(context: &str, path: &Path) -> anyhow::Result<()> {
     if path.exists() {
         log_warn_action(
             "Deleting",

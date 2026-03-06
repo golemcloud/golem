@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -27,8 +27,12 @@ pub mod bindings {
     wasmtime::component::bindgen!({
           path: "wit",
           world: "golem-common",
-          async: true,
-          trappable_imports: true,
+          imports: {
+            default: async | trappable,
+          },
+          exports: { default: async },
+          require_store_data_send: true,
+          anyhow: true,
           with: {
             "golem:core/types": golem_wasm::golem_core_1_5_x::types,
           },

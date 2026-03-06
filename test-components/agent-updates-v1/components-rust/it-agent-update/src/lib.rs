@@ -1,5 +1,4 @@
 use golem_rust::{agent_definition, agent_implementation, description};
-use wstd::http::body::IntoBody;
 use wstd::http::{Client, Request};
 
 #[agent_definition]
@@ -129,9 +128,8 @@ async fn report_f1(current: u64) {
 
     println!("Sending POST {url}");
 
-    let body = current.to_string().into_body();
     let request = Request::post(&url)
-        .body(body)
+        .body(current.to_string())
         .expect("Failed to build request");
 
     let response = Client::new()
