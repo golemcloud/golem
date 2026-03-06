@@ -33,6 +33,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
     AgentInvocation, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
@@ -48,7 +49,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -218,7 +219,17 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             )
             .await?;
 
-        let idempotency_key = IdempotencyKey::fresh();
+        let batch_last_index = if entries.is_empty() {
+            initial_oplog_index
+        } else {
+            initial_oplog_index.range_end(entries.len() as u64)
+        };
+        let idempotency_key = oplog_processor_idempotency_key(
+            &worker_metadata.owned_worker_id().worker_id,
+            &plugin.environment_plugin_grant_id,
+            initial_oplog_index,
+            batch_last_index,
+        );
 
         let account_id = worker_metadata.created_by;
         worker
@@ -742,4 +753,24 @@ impl ForwardingOplogState {
 
         Ok(())
     }
+}
+
+const OPLOG_PROC_NS: Uuid = uuid!("A7E3F1B2-8C4D-5E6F-9A0B-1C2D3E4F5A6B");
+
+fn oplog_processor_idempotency_key(
+    source_worker_id: &WorkerId,
+    plugin_installation_id: &EnvironmentPluginGrantId,
+    batch_first_index: OplogIndex,
+    batch_last_index: OplogIndex,
+) -> IdempotencyKey {
+    let mut buf = Vec::with_capacity(128);
+    buf.extend_from_slice(b"oplog-proc-v1\0");
+    buf.extend_from_slice(source_worker_id.component_id.0.as_bytes());
+    let worker_name = source_worker_id.worker_name.as_bytes();
+    buf.extend_from_slice(&(worker_name.len() as u32).to_be_bytes());
+    buf.extend_from_slice(worker_name);
+    buf.extend_from_slice(plugin_installation_id.0.as_bytes());
+    buf.extend_from_slice(&batch_first_index.as_u64().to_be_bytes());
+    buf.extend_from_slice(&batch_last_index.as_u64().to_be_bytes());
+    IdempotencyKey::from_uuid(Uuid::new_v5(&OPLOG_PROC_NS, &buf))
 }
