@@ -99,10 +99,7 @@ fn render_unstructured_binary(buf: &mut String, value: &BinaryReference) {
             write_json_escaped(buf, &url.value);
             buf.push_str("\")");
         }
-        BinaryReference::Inline(BinarySource {
-            data,
-            binary_type,
-        }) => {
+        BinaryReference::Inline(BinarySource { data, binary_type }) => {
             buf.push_str("UnstructuredBinary::from_inline(vec![");
             for (i, b) in data.iter().enumerate() {
                 if i > 0 {
@@ -120,14 +117,30 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
         (Value::Bool(b), _) => {
             let _ = write!(buf, "{b}");
         }
-        (Value::U8(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::U16(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::U32(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::U64(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::S8(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::S16(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::S32(v), _) => { let _ = write!(buf, "{v}"); }
-        (Value::S64(v), _) => { let _ = write!(buf, "{v}"); }
+        (Value::U8(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::U16(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::U32(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::U64(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::S8(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::S16(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::S32(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
+        (Value::S64(v), _) => {
+            let _ = write!(buf, "{v}");
+        }
         (Value::F32(v), _) => render_f64(buf, *v as f64),
         (Value::F64(v), _) => render_f64(buf, *v),
         (Value::Char(c), _) => render_char(buf, *c),
@@ -170,7 +183,13 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
             }
             buf.push_str(" }");
         }
-        (Value::Variant { case_idx, case_value }, AnalysedType::Variant(tv)) => {
+        (
+            Value::Variant {
+                case_idx,
+                case_value,
+            },
+            AnalysedType::Variant(tv),
+        ) => {
             let case = &tv.cases[*case_idx as usize];
             let case_name = case.name.to_upper_camel_case();
             if let Some(name) = &tv.name {
@@ -417,4 +436,3 @@ fn render_char(buf: &mut String, c: char) {
     }
     buf.push('\'');
 }
-

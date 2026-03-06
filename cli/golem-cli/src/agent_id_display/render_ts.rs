@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::agent::text_utils::{
+    write_json_escaped, write_json_escaped_char, write_with_decimal_point,
+};
 use golem_common::model::agent::{
     BinaryReference, BinarySource, ComponentModelElementValue, DataValue, ElementValue,
     NamedElementValues, TextReference, TextSource, UnstructuredBinaryElementValue,
@@ -20,9 +23,6 @@ use golem_common::model::agent::{
 use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant};
 use golem_wasm::Value;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use golem_common::model::agent::text_utils::{
-    write_json_escaped, write_json_escaped_char, write_with_decimal_point,
-};
 use std::fmt::Write;
 
 pub(super) fn render_value_and_type_ts(vat: &golem_wasm::ValueAndType) -> String {
@@ -157,8 +157,7 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
         }
         (Value::Tuple(items), AnalysedType::Tuple(type_tuple)) => {
             buf.push('[');
-            for (i, (item_val, item_type)) in
-                items.iter().zip(type_tuple.items.iter()).enumerate()
+            for (i, (item_val, item_type)) in items.iter().zip(type_tuple.items.iter()).enumerate()
             {
                 if i > 0 {
                     buf.push_str(", ");
@@ -177,7 +176,13 @@ fn render_cm_value(buf: &mut String, value: &Value, typ: &AnalysedType) {
             }
             buf.push(']');
         }
-        (Value::Variant { case_idx, case_value }, AnalysedType::Variant(type_variant)) => {
+        (
+            Value::Variant {
+                case_idx,
+                case_value,
+            },
+            AnalysedType::Variant(type_variant),
+        ) => {
             let idx = *case_idx as usize;
             let case_name = &type_variant.cases[idx].name;
             match (&type_variant.cases[idx].typ, case_value) {
@@ -327,7 +332,7 @@ fn render_type_record_ts(tr: &TypeRecord, prefer_name: bool) -> String {
     let mut buf = String::from("{ ");
     for (i, field) in tr.fields.iter().enumerate() {
         if i > 0 {
-            buf.push_str(" ");
+            buf.push(' ');
         }
         let key = field.name.to_lower_camel_case();
         if let AnalysedType::Option(to) = &field.typ {
@@ -395,7 +400,7 @@ fn render_type_flags_ts(tf: &TypeFlags, prefer_name: bool) -> String {
     let mut buf = String::from("{ ");
     for (i, flag) in tf.names.iter().enumerate() {
         if i > 0 {
-            buf.push_str(" ");
+            buf.push(' ');
         }
         let _ = write!(buf, "{}?: true;", flag.to_lower_camel_case());
     }
@@ -432,5 +437,3 @@ fn render_f64(buf: &mut String, v: f64) {
         write_with_decimal_point(buf, &s);
     }
 }
-
-

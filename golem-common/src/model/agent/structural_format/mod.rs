@@ -61,9 +61,7 @@ pub enum StructuralFormatError {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /// Format a `DataValue` into canonical structural form.
-pub fn format_structural(
-    data_value: &DataValue,
-) -> Result<String, StructuralFormatError> {
+pub fn format_structural(data_value: &DataValue) -> Result<String, StructuralFormatError> {
     let mut buf = String::new();
     match data_value {
         DataValue::Tuple(elems) => {
@@ -270,8 +268,7 @@ fn format_cm_value(
         }
         (Value::Tuple(items), AnalysedType::Tuple(type_tuple)) => {
             buf.push('(');
-            for (i, (item_val, item_type)) in
-                items.iter().zip(type_tuple.items.iter()).enumerate()
+            for (i, (item_val, item_type)) in items.iter().zip(type_tuple.items.iter()).enumerate()
             {
                 if i > 0 {
                     buf.push(',');
@@ -495,11 +492,7 @@ impl<'a> Parser<'a> {
         if self.eat(expected) {
             Ok(())
         } else {
-            Err(self.error(&format!(
-                "Expected '{}', got {:?}",
-                expected,
-                self.peek()
-            )))
+            Err(self.error(&format!("Expected '{}', got {:?}", expected, self.peek())))
         }
     }
 
@@ -553,7 +546,10 @@ impl<'a> Parser<'a> {
                 if self.at_end() || self.peek() != Some(',') {
                     // Check if all remaining schemas (i..len) are optional CM types
                     let remaining = &schemas.elements[i..];
-                    if remaining.iter().all(|s| is_option_element_schema(&s.schema)) {
+                    if remaining
+                        .iter()
+                        .all(|s| is_option_element_schema(&s.schema))
+                    {
                         for s in remaining {
                             elements.push(default_option_element(&s.schema)?);
                         }
@@ -580,10 +576,8 @@ impl<'a> Parser<'a> {
         let mut elements = Vec::new();
         let mut first = true;
         loop {
-            if !first {
-                if !self.eat(',') {
-                    break;
-                }
+            if !first && !self.eat(',') {
+                break;
             }
             first = false;
 
@@ -833,10 +827,7 @@ impl<'a> Parser<'a> {
                         type_enum.cases.len()
                     )));
                 }
-                Ok(ValueAndType::new(
-                    Value::Enum(case_idx as u32),
-                    typ.clone(),
-                ))
+                Ok(ValueAndType::new(Value::Enum(case_idx as u32), typ.clone()))
             }
             AnalysedType::Option(type_opt) => {
                 if self.eat_str("s(") {
@@ -868,10 +859,7 @@ impl<'a> Parser<'a> {
                     } else if type_res.ok.is_some() {
                         Err(self.error("Result ok type requires payload but got bare 'ok'"))
                     } else {
-                        Ok(ValueAndType::new(
-                            Value::Result(Ok(None)),
-                            typ.clone(),
-                        ))
+                        Ok(ValueAndType::new(Value::Result(Ok(None)), typ.clone()))
                     }
                 } else if self.eat_str("err") {
                     if self.eat('(') {
@@ -888,10 +876,7 @@ impl<'a> Parser<'a> {
                     } else if type_res.err.is_some() {
                         Err(self.error("Result err type requires payload but got bare 'err'"))
                     } else {
-                        Ok(ValueAndType::new(
-                            Value::Result(Err(None)),
-                            typ.clone(),
-                        ))
+                        Ok(ValueAndType::new(Value::Result(Err(None)), typ.clone()))
                     }
                 } else {
                     Err(self.error("Expected 'ok' or 'err' for result"))
@@ -992,9 +977,7 @@ impl<'a> Parser<'a> {
                 .map_err(|e| self.error(&format!("Invalid base64: {e}")))?;
             Ok(BinaryReference::Inline(BinarySource {
                 data,
-                binary_type: BinaryType {
-                    mime_type: mime,
-                },
+                binary_type: BinaryType { mime_type: mime },
             }))
         } else {
             Err(self.error("Expected 'u' or '[' after @b"))
@@ -1302,13 +1285,11 @@ impl<'a> Parser<'a> {
             if !(0xDC00..=0xDFFF).contains(&low) {
                 return Err(self.error("Expected low surrogate (DC00-DFFF)"));
             }
-            let code_point =
-                0x10000 + ((code_unit as u32 - 0xD800) << 10) + (low as u32 - 0xDC00);
+            let code_point = 0x10000 + ((code_unit as u32 - 0xD800) << 10) + (low as u32 - 0xDC00);
             char::from_u32(code_point)
                 .ok_or_else(|| self.error("Invalid surrogate pair code point"))
         } else {
-            char::from_u32(code_unit as u32)
-                .ok_or_else(|| self.error("Invalid unicode code point"))
+            char::from_u32(code_unit as u32).ok_or_else(|| self.error("Invalid unicode code point"))
         }
     }
 
@@ -1358,9 +1339,7 @@ fn is_option_element_schema(schema: &ElementSchema) -> bool {
     )
 }
 
-fn default_option_element(
-    schema: &ElementSchema,
-) -> Result<ElementValue, StructuralFormatError> {
+fn default_option_element(schema: &ElementSchema) -> Result<ElementValue, StructuralFormatError> {
     match schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema {
             element_type: opt_type @ AnalysedType::Option(_),

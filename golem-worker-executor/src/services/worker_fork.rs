@@ -462,6 +462,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             &owned_source_agent_id,
             None,
             None,
+            Vec::new(),
             None,
             None,
             &InvocationContextStack::fresh(),
@@ -475,8 +476,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             agent_id: target_agent_id.clone(),
             created_by: fork_account_id,
             environment_id,
-            env: initial_source_worker_metadata.env.clone(),
-            config_vars: initial_source_worker_metadata.config_vars.clone(),
+            env: initial_source_worker_metadata.env,
+            config_vars: initial_source_worker_metadata.config_vars,
+            local_agent_config: initial_source_worker_metadata.local_agent_config,
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
@@ -501,7 +503,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
-                    initial_source_worker_metadata.last_known_status.clone(),
+                    initial_source_worker_metadata.last_known_status,
                 ))),
                 read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
                     ExecutionStatus::Suspended {
@@ -535,6 +537,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 agent_id: _,
                 original_phantom_id,
             } => Some(OplogEntry::Create {
@@ -549,6 +552,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id,
             }),
             _ => None,

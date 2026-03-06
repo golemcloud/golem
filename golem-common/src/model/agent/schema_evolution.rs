@@ -121,14 +121,15 @@ fn validate_element_schemas(
         return;
     }
 
-    for (i, (old_elem, new_elem)) in old
-        .elements
-        .iter()
-        .zip(new.elements.iter())
-        .enumerate()
-    {
+    for (i, (old_elem, new_elem)) in old.elements.iter().zip(new.elements.iter()).enumerate() {
         let elem_path = format!("{}.elements[{}]", path, i);
-        validate_element_schema(name, &elem_path, &old_elem.schema, &new_elem.schema, warnings);
+        validate_element_schema(
+            name,
+            &elem_path,
+            &old_elem.schema,
+            &new_elem.schema,
+            warnings,
+        );
     }
 }
 
@@ -224,11 +225,7 @@ fn validate_analysed_type(
                 });
                 return;
             }
-            for (i, (old_f, new_f)) in old_rec
-                .fields
-                .iter()
-                .zip(new_rec.fields.iter())
-                .enumerate()
+            for (i, (old_f, new_f)) in old_rec.fields.iter().zip(new_rec.fields.iter()).enumerate()
             {
                 let field_path = format!("{}.fields[{}]", path, i);
                 validate_analysed_type(name, &field_path, &old_f.typ, &new_f.typ, warnings);
@@ -355,13 +352,7 @@ fn validate_analysed_type(
                     });
                 }
                 (Some(old_ok), Some(new_ok)) => {
-                    validate_analysed_type(
-                        name,
-                        &format!("{}.ok", path),
-                        old_ok,
-                        new_ok,
-                        warnings,
-                    );
+                    validate_analysed_type(name, &format!("{}.ok", path), old_ok, new_ok, warnings);
                 }
                 (None, None) => {}
             }
@@ -399,8 +390,8 @@ mod tests {
     };
     use crate::model::Empty;
     use golem_wasm::analysis::analysed_type::{
-        bool, case, field, flags, list, option, r#enum, record, result, result_ok,
-        str, tuple, u32, u8, unit_case, variant,
+        bool, case, field, flags, list, option, r#enum, record, result, result_ok, str, tuple, u32,
+        u8, unit_case, variant,
     };
     use test_r::test;
 
@@ -468,12 +459,8 @@ mod tests {
 
     #[test]
     fn data_schema_kind_changed() {
-        let old_schema = DataSchema::Tuple(NamedElementSchemas {
-            elements: vec![],
-        });
-        let new_schema = DataSchema::Multimodal(NamedElementSchemas {
-            elements: vec![],
-        });
+        let old_schema = DataSchema::Tuple(NamedElementSchemas { elements: vec![] });
+        let new_schema = DataSchema::Multimodal(NamedElementSchemas { elements: vec![] });
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -498,9 +485,7 @@ mod tests {
         let old_schema = tuple_data_schema(vec![("x", cm_schema(u32()))]);
         let new_schema = tuple_data_schema(vec![(
             "x",
-            ElementSchema::UnstructuredText(TextDescriptor {
-                restrictions: None,
-            }),
+            ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
         )]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
@@ -515,10 +500,7 @@ mod tests {
             "x",
             cm_schema(record(vec![field("a", u32()), field("b", str())])),
         )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32())])),
-        )]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -528,14 +510,8 @@ mod tests {
 
     #[test]
     fn record_field_type_changed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32())])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", str())])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", str())])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -545,10 +521,7 @@ mod tests {
 
     #[test]
     fn record_append_option_field_compatible() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32())])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
         let new_schema = tuple_data_schema(vec![(
             "x",
             cm_schema(record(vec![field("a", u32()), field("b", option(str()))])),
@@ -560,10 +533,7 @@ mod tests {
 
     #[test]
     fn record_append_non_option_field_warns() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(record(vec![field("a", u32())])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(record(vec![field("a", u32())])))]);
         let new_schema = tuple_data_schema(vec![(
             "x",
             cm_schema(record(vec![field("a", u32()), field("b", str())])),
@@ -581,10 +551,7 @@ mod tests {
             "x",
             cm_schema(variant(vec![unit_case("A"), unit_case("B")])),
         )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![unit_case("A")])),
-        )]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -594,14 +561,8 @@ mod tests {
 
     #[test]
     fn variant_payload_added() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![unit_case("A")])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![case("A", u32())])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", u32())])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -611,14 +572,8 @@ mod tests {
 
     #[test]
     fn variant_payload_removed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![case("A", u32())])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![unit_case("A")])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", u32())])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -628,14 +583,8 @@ mod tests {
 
     #[test]
     fn variant_payload_type_changed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![case("A", u32())])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![case("A", str())])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", u32())])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![case("A", str())])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -645,10 +594,7 @@ mod tests {
 
     #[test]
     fn variant_case_appended_compatible() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(variant(vec![unit_case("A")])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(variant(vec![unit_case("A")])))]);
         let new_schema = tuple_data_schema(vec![(
             "x",
             cm_schema(variant(vec![unit_case("A"), unit_case("B")])),
@@ -660,14 +606,8 @@ mod tests {
 
     #[test]
     fn enum_cases_removed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(r#enum(&["A", "B", "C"])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(r#enum(&["A", "B"])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B", "C"])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B"])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -677,14 +617,8 @@ mod tests {
 
     #[test]
     fn enum_cases_appended_compatible() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(r#enum(&["A", "B"])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(r#enum(&["A", "B", "C"])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B"])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(r#enum(&["A", "B", "C"])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         assert!(validate_schema_evolution(&old, &new).is_empty());
@@ -692,14 +626,8 @@ mod tests {
 
     #[test]
     fn flags_removed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(flags(&["a", "b", "c"])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(flags(&["a", "b"])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b", "c"])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b"])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -709,14 +637,8 @@ mod tests {
 
     #[test]
     fn flags_appended_compatible() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(flags(&["a", "b"])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(flags(&["a", "b", "c"])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b"])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(flags(&["a", "b", "c"])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         assert!(validate_schema_evolution(&old, &new).is_empty());
@@ -724,14 +646,8 @@ mod tests {
 
     #[test]
     fn tuple_item_removed() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(tuple(vec![u32(), str()])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(tuple(vec![u32()])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32(), str()])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32()])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -741,14 +657,9 @@ mod tests {
 
     #[test]
     fn tuple_append_option_compatible() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(tuple(vec![u32()])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(tuple(vec![u32(), option(str())])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32()])))]);
+        let new_schema =
+            tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32(), option(str())])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         assert!(validate_schema_evolution(&old, &new).is_empty());
@@ -756,14 +667,8 @@ mod tests {
 
     #[test]
     fn tuple_append_non_option_warns() {
-        let old_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(tuple(vec![u32()])),
-        )]);
-        let new_schema = tuple_data_schema(vec![(
-            "x",
-            cm_schema(tuple(vec![u32(), str()])),
-        )]);
+        let old_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32()])))]);
+        let new_schema = tuple_data_schema(vec![("x", cm_schema(tuple(vec![u32(), str()])))]);
         let old = vec![make_agent_type("A", old_schema)];
         let new = vec![make_agent_type("A", new_schema)];
         let w = validate_schema_evolution(&old, &new);
@@ -830,7 +735,10 @@ mod tests {
     fn multiple_warnings() {
         let old_schema = tuple_data_schema(vec![
             ("x", cm_schema(u32())),
-            ("y", cm_schema(record(vec![field("a", str()), field("b", bool())]))),
+            (
+                "y",
+                cm_schema(record(vec![field("a", str()), field("b", bool())])),
+            ),
         ]);
         let new_schema = tuple_data_schema(vec![
             ("x", cm_schema(str())),

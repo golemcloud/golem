@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::{logln, LogColorize};
 use crate::agent_id_display::{render_type_for_language, SourceLanguage};
+use crate::log::{logln, LogColorize};
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
@@ -218,11 +218,7 @@ impl AvailableFunctionNamesHelp {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
             agent_name: Some(agent_id.agent_type.0.clone()),
-            function_names: agent_type
-                .methods
-                .iter()
-                .map(|m| m.name.clone())
-                .collect(),
+            function_names: agent_type.methods.iter().map(|m| m.name.clone()).collect(),
         }
     }
 }
@@ -340,7 +336,11 @@ impl From<&ArgumentError> for ParameterErrorTable {
     fn from(value: &ArgumentError) -> Self {
         Self {
             parameter_type_: textwrap::wrap(
-                &value.type_.as_ref().map(|t| render_type_for_language(&value.source_language, t, true)).unwrap_or_default(),
+                &value
+                    .type_
+                    .as_ref()
+                    .map(|t| render_type_for_language(&value.source_language, t, true))
+                    .unwrap_or_default(),
                 textwrap::Options::new(30).word_splitter(WordSplitter::NoHyphenation),
             )
             .join("\n"),

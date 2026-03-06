@@ -79,7 +79,13 @@ async fn http_client(
 
     let agent_id = agent_id!("HttpClient");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
@@ -148,7 +154,13 @@ async fn http_client_using_reqwest(
 
     let agent_id = agent_id!("HttpClient2");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -226,7 +238,13 @@ async fn http_client_using_reqwest_async(
 
     let agent_id = agent_id!("HttpClient3");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -303,7 +321,13 @@ async fn http_client_using_reqwest_async_parallel(
 
     let agent_id = agent_id!("HttpClient3");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -408,7 +432,13 @@ async fn outgoing_http_contains_idempotency_key(
 
     let agent_id = agent_id!("HttpClient2");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());

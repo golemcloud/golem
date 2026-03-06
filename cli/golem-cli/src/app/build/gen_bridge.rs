@@ -149,9 +149,7 @@ async fn collect_custom_targets(
             let mut agent_types = extract_and_store_agent_types(ctx, component_name).await?;
 
             if should_filter_by_agent_type_name {
-                agent_types.retain(|agent_type| {
-                    agent_type_names.remove(&agent_type.type_name)
-                });
+                agent_types.retain(|agent_type| agent_type_names.remove(&agent_type.type_name));
             }
 
             agent_types

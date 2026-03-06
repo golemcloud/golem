@@ -140,7 +140,13 @@ impl SpawnedWorkerExecutor {
             &mut child,
         );
 
-        wait_for_startup("localhost", grpc_port, Duration::from_secs(90), Some(&mut child)).await;
+        wait_for_startup(
+            "localhost",
+            grpc_port,
+            Duration::from_secs(90),
+            Some(&mut child),
+        )
+        .await;
 
         (child, logger)
     }

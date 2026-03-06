@@ -55,9 +55,7 @@ impl From<&str> for SourceLanguage {
         let trimmed = s.trim();
         if trimmed.eq_ignore_ascii_case("rust") {
             SourceLanguage::Rust
-        } else if trimmed.eq_ignore_ascii_case("typescript")
-            || trimmed.eq_ignore_ascii_case("ts")
-        {
+        } else if trimmed.eq_ignore_ascii_case("typescript") || trimmed.eq_ignore_ascii_case("ts") {
             SourceLanguage::TypeScript
         } else {
             SourceLanguage::Other(trimmed.to_string())
@@ -89,7 +87,9 @@ impl std::fmt::Display for SourceLanguage {
 pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_data_value_rust(data_value),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => render_ts::render_data_value_ts(data_value),
+        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
+            render_ts::render_data_value_ts(data_value)
+        }
     }
 }
 
@@ -97,23 +97,19 @@ pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguag
 ///
 /// This is useful for displaying individual component model values (a subtree of [`DataValue`])
 /// in the source language's native format.
-pub fn render_value_and_type(
-    vat: &ValueAndType,
-    source_language: &SourceLanguage,
-) -> String {
+pub fn render_value_and_type(vat: &ValueAndType, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_value_and_type_rust(vat),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => render_ts::render_value_and_type_ts(vat),
+        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
+            render_ts::render_value_and_type_ts(vat)
+        }
     }
 }
 
 /// Renders a full agent ID string in the form `TypeName(params)[phantom]`.
 ///
 /// The parameters are rendered using [`render_data_value`] with the given source language.
-pub fn render_agent_id(
-    parsed: &ParsedAgentId,
-    source_language: &SourceLanguage,
-) -> String {
+pub fn render_agent_id(parsed: &ParsedAgentId, source_language: &SourceLanguage) -> String {
     let rendered = render_data_value(&parsed.parameters, source_language);
     let mut result = format!("{}({rendered})", parsed.agent_type);
     if let Some(uuid) = &parsed.phantom_id {
@@ -152,34 +148,26 @@ pub fn parse_agent_id_params(
     source_language: &SourceLanguage,
 ) -> Result<DataValue, ParseError> {
     match source_language {
-        SourceLanguage::Rust => {
-            match parse_rust::parse_data_value_rust(input, schema) {
-                Ok(value) => Ok(value),
-                Err(lang_err) => {
-                    parse_structural(input, schema).map_err(|structural_err| ParseError {
-                        position: 0,
-                        message: format!(
-                            "Rust parser: {}; Structural parser: {}",
-                            lang_err, structural_err
-                        ),
-                    })
-                }
-            }
-        }
-        SourceLanguage::TypeScript => {
-            match parse_ts::parse_data_value_ts(input, schema) {
-                Ok(value) => Ok(value),
-                Err(lang_err) => {
-                    parse_structural(input, schema).map_err(|structural_err| ParseError {
-                        position: 0,
-                        message: format!(
-                            "TypeScript parser: {}; Structural parser: {}",
-                            lang_err, structural_err
-                        ),
-                    })
-                }
-            }
-        }
+        SourceLanguage::Rust => match parse_rust::parse_data_value_rust(input, schema) {
+            Ok(value) => Ok(value),
+            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
+                position: 0,
+                message: format!(
+                    "Rust parser: {}; Structural parser: {}",
+                    lang_err, structural_err
+                ),
+            }),
+        },
+        SourceLanguage::TypeScript => match parse_ts::parse_data_value_ts(input, schema) {
+            Ok(value) => Ok(value),
+            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
+                position: 0,
+                message: format!(
+                    "TypeScript parser: {}; Structural parser: {}",
+                    lang_err, structural_err
+                ),
+            }),
+        },
         _ => parse_structural(input, schema).map_err(|e| ParseError {
             position: 0,
             message: e.to_string(),

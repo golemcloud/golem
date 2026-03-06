@@ -215,6 +215,7 @@ fn worker_filter_matches() {
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
         config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
+        local_agent_config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord {

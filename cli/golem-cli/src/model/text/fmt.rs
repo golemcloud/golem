@@ -268,8 +268,8 @@ pub fn format_export(export: &str) -> String {
         return export.to_string();
     }
 
-    let separator =
-        Regex::new(r#"[\s:/.{}()\[\]<>,;|?"]"#).expect("Failed to compile export separator pattern");
+    let separator = Regex::new(r#"[\s:/.{}()\[\]<>,;|?"]"#)
+        .expect("Failed to compile export separator pattern");
     let mut formatted = String::with_capacity(export.len());
 
     fn format_token(target: &mut String, token: &str) {

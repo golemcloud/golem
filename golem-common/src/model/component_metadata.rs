@@ -134,16 +134,12 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub fn find_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
         self.cache
             .lock()
             .unwrap()
             .find_agent_type_by_name(&self.data, agent_type)
     }
-
 }
 
 impl poem_openapi::types::Type for ComponentMetadata {
@@ -317,15 +313,11 @@ impl ComponentMetadataInnerData {
             }))
     }
 
-    pub fn find_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        Ok(self
-            .agent_types
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
+        self.agent_types
             .iter()
             .find(|t| &t.type_name == agent_type)
-            .cloned())
+            .cloned()
     }
 
     /// Finds a function ignoring the function site's version. Returns None if it was not found.
@@ -398,7 +390,6 @@ impl ComponentMetadataInnerData {
             },
         }
     }
-
 }
 
 #[derive(Default)]
@@ -410,7 +401,7 @@ pub(crate) struct ComponentMetadataInnerCache {
     oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
+    agent_types_by_type_name: HashMap<AgentTypeName, Option<AgentType>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -513,7 +504,7 @@ impl ComponentMetadataInnerCache {
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
+    ) -> Option<AgentType> {
         if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {
@@ -523,7 +514,6 @@ impl ComponentMetadataInnerCache {
             result
         }
     }
-
 }
 
 impl From<wasmparser::MemoryType> for LinearMemory {

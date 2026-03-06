@@ -45,6 +45,7 @@ use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareC
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::worker::{
     AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord,
+    WorkerCreationLocalAgentConfigEntry,
 };
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -87,21 +88,11 @@ pub struct EnvironmentOptions {
     pub security_overrides: bool,
 }
 
-pub type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
-
-pub trait WorkerInvocationResultOps<T> {
-    fn collapse(self) -> anyhow::Result<T>;
-}
-
-impl<T> WorkerInvocationResultOps<T> for WorkerInvocationResult<T> {
-    fn collapse(self) -> anyhow::Result<T> {
-        self?.map_err(|err| err.into())
-    }
-}
-
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
+    type WorkerError: std::error::Error + Sync + Send + 'static;
+
     fn redis(&self) -> Arc<dyn Redis>;
 
     fn component(
@@ -223,8 +214,8 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         id: ParsedAgentId,
-    ) -> WorkerInvocationResult<AgentId> {
-        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new())
+    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
+        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::new())
             .await
     }
 
@@ -234,14 +225,15 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> WorkerInvocationResult<AgentId>;
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
 
     async fn start_agent(
         &self,
         component_id: &ComponentId,
         id: ParsedAgentId,
     ) -> anyhow::Result<AgentId> {
-        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new())
+        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::new())
             .await
     }
 
@@ -251,9 +243,10 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
     ) -> anyhow::Result<AgentId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, config_vars)
+            .try_start_agent_with(component_id, id, env, config_vars, local_agent_config)
             .await?;
         Ok(result?)
     }

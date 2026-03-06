@@ -142,7 +142,7 @@ fn complex_data_and_schema() -> (DataValue, DataSchema) {
                         Value::Record(vec![Value::U32(2), Value::String("second".into())]),
                         Value::Record(vec![Value::U32(3), Value::String("third".into())]),
                     ]),
-                    Value::Option(Some(Box::new(Value::F64(3.14159265)))),
+                    Value::Option(Some(Box::new(Value::F64(1.23456789)))),
                 ]),
                 typ,
             ),

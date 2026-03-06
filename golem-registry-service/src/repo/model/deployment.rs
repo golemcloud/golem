@@ -36,7 +36,7 @@ use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;

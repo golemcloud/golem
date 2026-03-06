@@ -127,7 +127,6 @@ impl Display for AgentError {
     }
 }
 
-
 impl Display for BinaryReference {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -323,7 +322,11 @@ pub struct AgentTypes {
 }
 
 impl ParsedAgentId {
-    pub fn new(agent_type: AgentTypeName, parameters: DataValue, phantom_id: Option<Uuid>) -> Result<Self, String> {
+    pub fn new(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, String> {
         use crate::model::agent::structural_format::format_structural;
 
         let formatted = format_structural(&parameters).map_err(|e| e.to_string())?;
@@ -365,8 +368,8 @@ impl ParsedAgentId {
             .transpose()
             .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
 
-        let agent_type = resolver
-            .resolve_agent_type_by_name(&AgentTypeName(agent_type_name.to_string()))?;
+        let agent_type =
+            resolver.resolve_agent_type_by_name(&AgentTypeName(agent_type_name.to_string()))?;
         let normalized_param_list = normalize_structural(param_list);
         let value = parse_structural(&normalized_param_list, &agent_type.constructor.input_schema)
             .map_err(|e| e.to_string())?;
@@ -419,11 +422,8 @@ impl Display for ParsedAgentId {
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    fn resolve_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String> {
-        let result = self.find_agent_type_by_name(agent_type)?;
-        result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
+        self.find_agent_type_by_name(agent_type)
+            .ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

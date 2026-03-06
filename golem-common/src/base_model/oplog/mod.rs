@@ -21,6 +21,9 @@ use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
+use crate::model::worker::{
+    ParsedWorkerCreationLocalAgentConfigEntry, UntypedParsedWorkerCreationLocalAgentConfigEntry,
+};
 use crate::oplog_entry;
 use golem_wasm::ValueAndType;
 pub use public_types::*;
@@ -76,6 +79,7 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginPriority>,
             config_vars: BTreeMap<String, String>,
+            local_agent_config: Vec<UntypedParsedWorkerCreationLocalAgentConfigEntry>,
             original_phantom_id: Option<Uuid>
         }
         public {
@@ -89,6 +93,7 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             config_vars: BTreeMap<String, String>,
+            local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
             original_phantom_id: Option<Uuid>
         }
     },

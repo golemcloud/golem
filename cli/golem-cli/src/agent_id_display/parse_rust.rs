@@ -302,10 +302,7 @@ impl Dialect for RustDialect {
                 lexer.expect(&Token::Comma)?;
                 let (lang_ns, lp, _) = lexer.expect_ident()?;
                 if lang_ns != "Languages" {
-                    return Err(perr(
-                        lp,
-                        &format!("expected 'Languages', got '{lang_ns}'"),
-                    ));
+                    return Err(perr(lp, &format!("expected 'Languages', got '{lang_ns}'")));
                 }
                 lexer.expect(&Token::DoubleColon)?;
                 let (lang, _, _) = lexer.expect_ident()?;
@@ -368,10 +365,7 @@ impl Dialect for RustDialect {
                 lexer.expect(&Token::Comma)?;
                 let (mime_ns, mnp, _) = lexer.expect_ident()?;
                 if mime_ns != "MimeTypes" {
-                    return Err(perr(
-                        mnp,
-                        &format!("expected 'MimeTypes', got '{mime_ns}'"),
-                    ));
+                    return Err(perr(mnp, &format!("expected 'MimeTypes', got '{mime_ns}'")));
                 }
                 lexer.expect(&Token::DoubleColon)?;
                 let (mime, _, _) = lexer.expect_ident()?;

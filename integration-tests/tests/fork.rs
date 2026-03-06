@@ -58,7 +58,13 @@ async fn fork_interrupted_worker(
 
     let source_agent_id = agent_id!("HttpClient2");
     let agent_id = user
-        .start_agent_with(&component.id, source_agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            source_agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let target_agent_id = phantom_agent_id!("HttpClient2", Uuid::new_v4());
@@ -207,6 +213,7 @@ async fn fork_running_worker_2(
             parsed_source_agent_id.clone(),
             env,
             HashMap::new(),
+            Vec::new(),
         )
         .await?;
 
@@ -720,6 +727,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
             parsed_source_agent_id.clone(),
             env,
             HashMap::new(),
+            Vec::new(),
         )
         .await?;
 

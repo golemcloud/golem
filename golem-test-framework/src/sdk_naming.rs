@@ -49,10 +49,7 @@ pub fn to_ts_data_value(dv: DataValue) -> DataValue {
 
 /// Transforms all `ComponentModel` element values in a `DataValue` by applying
 /// the given naming transformation to their types.
-pub fn transform_data_value(
-    dv: DataValue,
-    f: &dyn Fn(&AnalysedType) -> AnalysedType,
-) -> DataValue {
+pub fn transform_data_value(dv: DataValue, f: &dyn Fn(&AnalysedType) -> AnalysedType) -> DataValue {
     match dv {
         DataValue::Tuple(ElementValues { elements }) => DataValue::Tuple(ElementValues {
             elements: elements

@@ -898,6 +898,11 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<Vec<golem_api_1_x::oplog::PublicOplogEntry>>> {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
+        let agent_type = self
+            .state
+            .agent_id
+            .as_ref()
+            .map(|aid| aid.agent_type.clone());
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -907,6 +912,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             &entry.owned_agent_id,
+            agent_type.as_ref(),
             entry.current_component_revision,
             entry.next_oplog_index,
             entry.page_size,
@@ -1095,6 +1101,11 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     > {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
+        let agent_type = self
+            .state
+            .agent_id
+            .as_ref()
+            .map(|aid| aid.agent_type.clone());
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1104,6 +1115,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             &entry.owned_agent_id,
+            agent_type.as_ref(),
             entry.current_component_revision,
             entry.next_oplog_index,
             entry.page_size,
@@ -1224,6 +1236,11 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
 
+        let agent_type = self
+            .state
+            .agent_id
+            .as_ref()
+            .map(|aid| aid.agent_type.clone());
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let environment_id = golem_common::model::environment::EnvironmentId::from(
@@ -1255,6 +1272,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 oplog_service.clone(),
                 component_service.clone(),
                 &owned_agent_id,
+                agent_type.as_ref(),
                 current_revision,
             )
             .await

@@ -77,43 +77,43 @@ impl ComponentCommandHandler {
         subcommand: ComponentSubcommand,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + '_>> {
         Box::pin(async move {
-        match subcommand {
-            ComponentSubcommand::New {
-                component_template,
-                component_name,
-            } => self.cmd_new(component_template, component_name).await,
-            ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
-            ComponentSubcommand::List => self.cmd_list().await,
-            ComponentSubcommand::Get {
-                component_name,
-                revision,
-            } => self.cmd_get(component_name.component_name, revision).await,
+            match subcommand {
+                ComponentSubcommand::New {
+                    component_template,
+                    component_name,
+                } => self.cmd_new(component_template, component_name).await,
+                ComponentSubcommand::Templates { filter } => self.cmd_templates(filter),
+                ComponentSubcommand::List => self.cmd_list().await,
+                ComponentSubcommand::Get {
+                    component_name,
+                    revision,
+                } => self.cmd_get(component_name.component_name, revision).await,
 
-            ComponentSubcommand::UpdateAgents {
-                component_name,
-                update_mode,
-                r#await,
-                disable_wakeup,
-            } => {
-                self.cmd_update_workers(
-                    component_name.component_name,
+                ComponentSubcommand::UpdateAgents {
+                    component_name,
                     update_mode,
                     r#await,
                     disable_wakeup,
-                )
-                .await
-            }
-            ComponentSubcommand::RedeployAgents { component_name } => {
-                self.cmd_redeploy_workers(component_name.component_name)
+                } => {
+                    self.cmd_update_workers(
+                        component_name.component_name,
+                        update_mode,
+                        r#await,
+                        disable_wakeup,
+                    )
                     .await
+                }
+                ComponentSubcommand::RedeployAgents { component_name } => {
+                    self.cmd_redeploy_workers(component_name.component_name)
+                        .await
+                }
+                ComponentSubcommand::Diagnose { component_name } => {
+                    self.cmd_diagnose(component_name).await
+                }
+                ComponentSubcommand::ManifestTrace { component_name } => {
+                    self.cmd_manifest_trace(component_name).await
+                }
             }
-            ComponentSubcommand::Diagnose { component_name } => {
-                self.cmd_diagnose(component_name).await
-            }
-            ComponentSubcommand::ManifestTrace { component_name } => {
-                self.cmd_manifest_trace(component_name).await
-            }
-        }
         })
     }
 
@@ -1141,7 +1141,7 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
-                    // FIXME: local-agent-config
+                    // FIXME: agent-config
                     local_agent_config: None,
                     env: component_stager.env_if_changed(),
                     agent_types,

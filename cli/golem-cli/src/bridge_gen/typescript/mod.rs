@@ -82,7 +82,9 @@ impl TypeScriptBridgeGenerator {
         target_path: &Utf8Path,
         testing: bool,
     ) -> anyhow::Result<Self> {
-        let same_language = agent_type.source_language.eq_ignore_ascii_case("typescript")
+        let same_language = agent_type
+            .source_language
+            .eq_ignore_ascii_case("typescript")
             || agent_type.source_language.eq_ignore_ascii_case("ts");
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -2108,7 +2110,7 @@ impl TypeScriptBridgeGenerator {
     /// Converts a name to a JS/TS identifier (camelCase for cross-language, as-is for same language).
     fn to_js_ident(&self, name: &str) -> String {
         if self.same_language {
-            escape_js_ident(name.to_string())
+            escape_js_ident(name)
         } else {
             escape_js_ident(name.to_lower_camel_case())
         }

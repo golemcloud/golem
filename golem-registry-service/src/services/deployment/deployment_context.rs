@@ -25,13 +25,13 @@ use crate::services::deployment::write::DeployValidationError;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::{AgentType, AgentTypeName, RegisteredAgentTypeImplementer};
-use heck::ToKebabCase;
 use golem_common::model::component::ComponentName;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
+use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug)]

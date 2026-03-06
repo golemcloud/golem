@@ -284,7 +284,7 @@ checksum = "8034a681df4aed8b8edbd7fbe472401ecf009251c8b40556b304567052e294c5"
 dependencies = [
  "async-lock",
  "blocking",
- "futures-lite",
+ "futures-lite 2.6.1",
 ]
 
 [[package]]
@@ -386,7 +386,7 @@ checksum = "00b9f7252833d5ed4b00aa9604b563529dd5e11de9c23615de2dcdf91eb87b52"
 dependencies = [
  "async-compression",
  "crc32fast",
- "futures-lite",
+ "futures-lite 2.6.1",
  "pin-project 1.1.10",
  "thiserror 1.0.69",
  "tokio",
@@ -454,7 +454,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.0",
- "fastrand",
+ "fastrand 2.3.0",
  "hex",
  "http 1.3.1",
  "ring",
@@ -516,7 +516,7 @@ dependencies = [
  "aws-types",
  "bytes 1.11.0",
  "bytes-utils",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
@@ -543,7 +543,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.0",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "regex-lite",
  "tracing",
@@ -566,7 +566,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "regex-lite",
  "tracing",
@@ -588,7 +588,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "regex-lite",
  "tracing",
@@ -615,7 +615,7 @@ dependencies = [
  "aws-smithy-xml",
  "aws-types",
  "bytes 1.11.0",
- "fastrand",
+ "fastrand 2.3.0",
  "hex",
  "hmac",
  "http 0.2.12",
@@ -646,7 +646,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.0",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "http 1.3.1",
  "regex-lite",
@@ -670,7 +670,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-types",
  "bytes 1.11.0",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "http 1.3.1",
  "regex-lite",
@@ -695,7 +695,7 @@ dependencies = [
  "aws-smithy-types",
  "aws-smithy-xml",
  "aws-types",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "http 1.3.1",
  "regex-lite",
@@ -896,7 +896,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes 1.11.0",
- "fastrand",
+ "fastrand 2.3.0",
  "http 0.2.12",
  "http 1.3.1",
  "http-body 0.4.6",
@@ -1259,7 +1259,7 @@ dependencies = [
  "async-channel",
  "async-task",
  "futures-io",
- "futures-lite",
+ "futures-lite 2.6.1",
  "piper",
 ]
 
@@ -3239,6 +3239,15 @@ dependencies = [
 
 [[package]]
 name = "fastrand"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
+dependencies = [
+ "instant",
+]
+
+[[package]]
+name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
@@ -3563,7 +3572,7 @@ dependencies = [
  "fixedbitset 0.5.7",
  "futures-buffered",
  "futures-core",
- "futures-lite",
+ "futures-lite 2.6.1",
  "pin-project 1.1.10",
  "slab",
  "smallvec",
@@ -3605,11 +3614,26 @@ checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
 
 [[package]]
 name = "futures-lite"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49a9d51ce47660b1e808d3c990b4709f2f415d928835a17dfd16991515c46bce"
+dependencies = [
+ "fastrand 1.9.0",
+ "futures-core",
+ "futures-io",
+ "memchr",
+ "parking",
+ "pin-project-lite",
+ "waker-fn",
+]
+
+[[package]]
+name = "futures-lite"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f78e10609fe0e0b3f4157ffab1876319b5b0db102a2c60dc4626306dc46b44ad"
 dependencies = [
- "fastrand",
+ "fastrand 2.3.0",
  "futures-core",
  "futures-io",
  "parking",
@@ -3771,7 +3795,7 @@ dependencies = [
  "cfg-if",
  "js-sys",
  "libc",
- "wasi 0.11.1+wasi-snapshot-preview1",
+ "wasi",
  "wasm-bindgen",
 ]
 
@@ -4452,13 +4476,13 @@ dependencies = [
  "test-r",
  "url",
  "uuid",
- "wasi 0.14.1+wasi-0.2.3",
+ "wasip2",
  "wasm-metadata 0.244.0",
  "wasm-wave",
  "wasmparser 0.244.0",
  "wasmtime",
  "wasmtime-wasi",
- "wit-bindgen-rt 0.44.0",
+ "wit-bindgen-rt",
  "wit-component 0.244.0",
  "wit-parser 0.244.0",
  "wstd",
@@ -4614,7 +4638,7 @@ dependencies = [
  "dashmap 7.0.0-rc2",
  "derive_more",
  "desert_rust",
- "fastrand",
+ "fastrand 2.3.0",
  "figment",
  "fred",
  "futures",
@@ -5468,6 +5492,7 @@ name = "integration-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert2",
  "async-trait",
  "axum",
  "backtrace-on-stack-overflow",
@@ -5480,6 +5505,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-client",
  "golem-common",
+ "golem-service-base",
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",
@@ -6359,7 +6385,7 @@ checksum = "a4a650543ca06a924e8b371db273b2756685faae30f8487da1b56505a8f78b0c"
 dependencies = [
  "libc",
  "log",
- "wasi 0.11.1+wasi-snapshot-preview1",
+ "wasi",
  "windows-sys 0.48.0",
 ]
 
@@ -6371,7 +6397,7 @@ checksum = "69d83b0086dc8ecf3ce9ae2874b2d1290252e2a30720bea58a5c6639b0092873"
 dependencies = [
  "libc",
  "log",
- "wasi 0.11.1+wasi-snapshot-preview1",
+ "wasi",
  "windows-sys 0.61.2",
 ]
 
@@ -7369,7 +7395,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96c8c490f422ef9a4efd2cb5b42b76c8613d7e7dfc1caf667b8a3350a5acc066"
 dependencies = [
  "atomic-waker",
- "fastrand",
+ "fastrand 2.3.0",
  "futures-io",
 ]
 
@@ -10635,7 +10661,7 @@ version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
 dependencies = [
- "fastrand",
+ "fastrand 2.3.0",
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
@@ -11877,6 +11903,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "waker-fn"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "317211a0dc0ceedd78fb2ca9a44aed3d7b9b26f81870d485c07122b4350673b7"
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11902,21 +11934,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
-name = "wasi"
-version = "0.14.1+wasi-0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad7df608df60a1c33e247881838b0f809512086e3e3bb1c18323b77eeb1f844e"
-dependencies = [
- "wit-bindgen-rt 0.39.0",
-]
-
-[[package]]
 name = "wasip2"
-version = "1.0.1+wasi-0.2.4"
+version = "1.0.2+wasi-0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0562428422c63773dad2c345a1882263bbf4d65cf3f42e90921f787ef5ad58e7"
+checksum = "9517f9239f02c069db75e65f174b3da828fe5f5b945c4dd26bd25d89c03ebcf5"
 dependencies = [
- "wit-bindgen 0.46.0",
+ "wit-bindgen",
 ]
 
 [[package]]
@@ -11925,7 +11948,7 @@ version = "0.4.0+wasi-0.3.0-rc-2026-01-06"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5428f8bf88ea5ddc08faddef2ac4a67e390b88186c703ce6dbd955e1c145aca5"
 dependencies = [
- "wit-bindgen 0.51.0",
+ "wit-bindgen",
 ]
 
 [[package]]
@@ -12095,9 +12118,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.0.23"
+version = "0.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4058638812761b0c8d7fda6bf815ecde43ef2572e45f36e9a69258b1f9fc6c0"
+checksum = "ca09f72439f06de42d88101598fbb28e30142fa8c3b25818bc32024e4e9aa4ed"
 dependencies = [
  "anyhow",
  "camino",
@@ -13198,16 +13221,11 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen"
-version = "0.46.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
-
-[[package]]
-name = "wit-bindgen"
 version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
 dependencies = [
+ "bitflags 2.10.0",
  "wit-bindgen-rust-macro",
 ]
 
@@ -13253,15 +13271,6 @@ dependencies = [
  "anyhow",
  "heck",
  "wit-bindgen-core 0.47.0",
-]
-
-[[package]]
-name = "wit-bindgen-rt"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
-dependencies = [
- "bitflags 2.10.0",
 ]
 
 [[package]]
@@ -13429,26 +13438,31 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "wstd"
-version = "0.5.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5f51495e1ae93476d1629b5810bd6068fdf22545a8ada7ea5929e2faed7b793"
+checksum = "f743611ee524c2416bc1513157eb3235ca24f4270d1b3ab19f93676fcff21398"
 dependencies = [
- "futures-core",
+ "anyhow",
+ "async-task",
+ "bytes 1.11.0",
+ "futures-lite 1.13.0",
  "http 1.3.1",
+ "http-body 1.0.1",
+ "http-body-util",
  "itoa",
  "pin-project-lite",
  "serde",
  "serde_json",
  "slab",
- "wasi 0.14.1+wasi-0.2.3",
+ "wasip2",
  "wstd-macro",
 ]
 
 [[package]]
 name = "wstd-macro"
-version = "0.5.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "225ac858e4405bdf164d92d070422c0b3b9b81f9b0b68836841f4d1bafc446b3"
+checksum = "b5db5d13d6e3f2b180b04be8ff8d5c35b37d5621d3e2d0aa85ab99adf817a780"
 dependencies = [
  "quote",
  "syn 2.0.110",

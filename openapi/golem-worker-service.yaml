@@ -98,7 +98,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/AgentCreationRequest'
+              $ref: '#/components/schemas/WorkerCreationRequest'
         required: true
       responses:
         '200':
@@ -1718,24 +1718,6 @@ components:
         value:
           type: string
           format: date-time
-    AgentCreationRequest:
-      type: object
-      title: AgentCreationRequest
-      required:
-      - name
-      - env
-      properties:
-        name:
-          type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          type: object
-          default: {}
-          additionalProperties:
-            type: string
     AgentEnvFilter:
       type: object
       title: AgentEnvFilter
@@ -2965,6 +2947,19 @@ components:
         end:
           type: integer
           format: uint64
+    ParsedWorkerCreationLocalAgentConfigEntry:
+      type: object
+      title: ParsedWorkerCreationLocalAgentConfigEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ValueAndType'
     PendingUpdate:
       type: object
       title: PendingUpdate
@@ -4556,6 +4551,41 @@ components:
       properties:
         version:
           type: string
+    WorkerCreationLocalAgentConfigEntry:
+      type: object
+      title: WorkerCreationLocalAgentConfigEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: array
+          items:
+            type: string
+        value: {}
+    WorkerCreationRequest:
+      type: object
+      title: WorkerCreationRequest
+      required:
+      - name
+      - env
+      properties:
+        name:
+          type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+        localAgentConfig:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -4758,6 +4788,7 @@ components:
       - initialTotalLinearMemorySize
       - initialActivePlugins
       - configVars
+      - localAgentConfig
       properties:
         timestamp:
           type: string
@@ -4793,6 +4824,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        localAgentConfig:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParsedWorkerCreationLocalAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid

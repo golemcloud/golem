@@ -140,12 +140,7 @@ impl ComponentView {
 
     pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: ComponentDto) -> Self {
         let exports = {
-            let agent_types = value
-                .metadata
-                .agent_types()
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let agent_types = value.metadata.agent_types().to_vec();
 
             show_exported_agents(&agent_types, true, true)
         };
@@ -291,7 +286,11 @@ fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
     }
 }
 
-fn render_data_schema(schema: &DataSchema, lang: &SourceLanguage, show_param_names: bool) -> String {
+fn render_data_schema(
+    schema: &DataSchema,
+    lang: &SourceLanguage,
+    show_param_names: bool,
+) -> String {
     match schema {
         DataSchema::Tuple(elements) => elements
             .elements

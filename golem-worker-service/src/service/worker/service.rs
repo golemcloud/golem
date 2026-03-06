@@ -32,11 +32,13 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
-use golem_service_base::model::{Component, ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
@@ -71,6 +73,7 @@ impl WorkerService {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -86,6 +89,7 @@ impl WorkerService {
             component,
             environment_variables,
             config_vars,
+            local_agent_config,
             ignore_already_existing,
             auth_ctx,
             invocation_context,
@@ -101,6 +105,7 @@ impl WorkerService {
         component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -122,6 +127,7 @@ impl WorkerService {
                 agent_id,
                 environment_variables,
                 config_vars,
+                local_agent_config,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,
@@ -783,12 +789,6 @@ impl WorkerService {
         let agent_type = component_metadata
             .metadata
             .find_agent_type_by_name(&request.agent_type_name)
-            .map_err(|err| {
-                WorkerServiceError::Internal(format!(
-                    "Cannot get agent type {} from component metadata: {err}",
-                    request.agent_type_name
-                ))
-            })?
             .ok_or_else(|| {
                 WorkerServiceError::Internal(format!(
                     "Agent type {} not found in component metadata",
@@ -894,11 +894,6 @@ impl WorkerService {
                 let decode_agent_type = component_metadata_for_decode
                     .metadata
                     .find_agent_type_by_name(&agent_type_name)
-                    .map_err(|err| {
-                        WorkerServiceError::Internal(format!(
-                            "Cannot get agent type {agent_type_name} from component metadata at revision {decode_revision}: {err}",
-                        ))
-                    })?
                     .ok_or_else(|| {
                         WorkerServiceError::Internal(format!(
                             "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",

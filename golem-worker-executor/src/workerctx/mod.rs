@@ -49,9 +49,10 @@ use golem_common::model::{
     OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
 use wasmtime::component::Instance;
@@ -73,7 +74,6 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
-    + HasConfigVars
     + Send
     + Sync
     + Sized
@@ -415,10 +415,6 @@ pub trait InvocationContextManagement {
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
-}
-
-pub trait HasConfigVars {
-    fn config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

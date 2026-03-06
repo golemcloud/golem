@@ -478,6 +478,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                     &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),

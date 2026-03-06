@@ -440,10 +440,8 @@ impl RustBridgeGenerator {
                 let mut case_names_lit = Vec::new();
 
                 for (idx, case) in variant.cases.iter().enumerate() {
-                    let case_ident = Ident::new(
-                        &self.to_rust_case_name(&case.name),
-                        Span::call_site(),
-                    );
+                    let case_ident =
+                        Ident::new(&self.to_rust_case_name(&case.name), Span::call_site());
                     let idx_u32 = idx as u32;
                     case_names_lit.push(case.name.clone());
 
@@ -555,10 +553,7 @@ impl RustBridgeGenerator {
                 let mut case_names_lit = Vec::new();
 
                 for (idx, case) in r#enum.cases.iter().enumerate() {
-                    let case_ident = Ident::new(
-                        &self.to_rust_case_name(case),
-                        Span::call_site(),
-                    );
+                    let case_ident = Ident::new(&self.to_rust_case_name(case), Span::call_site());
                     cases.push(quote! { #case_ident });
                     case_names_lit.push(case.clone());
 
@@ -623,7 +618,8 @@ impl RustBridgeGenerator {
                 let mut from_value_fields = Vec::new();
 
                 for field in &record.fields {
-                    let field_ident = Ident::new(&self.to_rust_ident(&field.name), Span::call_site());
+                    let field_ident =
+                        Ident::new(&self.to_rust_ident(&field.name), Span::call_site());
                     let field_type = self.wit_type_to_typeref(&field.typ)?;
 
                     fields.push(quote! { pub #field_ident: #field_type });

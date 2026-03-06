@@ -167,10 +167,7 @@ impl ErrorHandler {
                     let canonical_agent_name = self
                         .ctx
                         .worker_handler()
-                        .try_recanonicalize_agent_name(
-                            &agent_name_match.agent_name,
-                            &component,
-                        );
+                        .try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
                     let agent_id = self
                         .ctx
                         .worker_handler()

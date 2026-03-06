@@ -58,6 +58,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor,
@@ -243,6 +244,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let config_vars = request.config_vars.into_iter().collect();
 
+        let local_agent_config = request
+            .local_agent_config
+            .into_iter()
+            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                WorkerExecutorError::invalid_request(format!(
+                    "Failed parsing local agent config: {err}"
+                ))
+            })?;
+
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
 
         let worker = Worker::get_or_create_suspended(
@@ -251,6 +263,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             Some(env),
             Some(config_vars),
+            local_agent_config,
             None,
             None,
             &invocation_context,
@@ -357,6 +370,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -478,6 +492,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -537,6 +552,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -599,6 +615,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -622,6 +639,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -644,6 +662,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &owned_agent_id,
                         None,
                         None,
+                        Vec::new(),
                         None,
                         None,
                         &InvocationContextStack::fresh(),
@@ -710,6 +729,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -729,6 +749,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -781,6 +802,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             request.env(),
             request.config_vars()?,
+            request.local_agent_config(),
             None,
             request.parent(),
             &invocation_context,
@@ -986,7 +1008,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id.agent_id.agent_id,
             &component_metadata.metadata,
         ) {
-            if let Ok(Some(agent_type)) = component_metadata
+            if let Some(agent_type) = component_metadata
                 .metadata
                 .find_agent_type_by_name(&agent_id.agent_type)
             {
@@ -1032,6 +1054,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_agent_id,
                             None,
                             None,
+                            Vec::new(),
                             Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
@@ -1059,6 +1082,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_agent_id,
                             None,
                             None,
+                            Vec::new(),
                             None,
                             None,
                             &InvocationContextStack::fresh(),
@@ -1096,6 +1120,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),
@@ -1149,6 +1174,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_agent_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -1180,6 +1206,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
+        let agent_type_name =
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1193,6 +1222,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
                     min(
@@ -1213,6 +1243,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
                     min(
@@ -1262,6 +1293,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
+        let agent_type_name =
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1275,6 +1309,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
                     min(
@@ -1295,6 +1330,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
                     min(
@@ -1514,6 +1550,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_agent_id,
                             None,
                             None,
+                            Vec::new(),
                             None,
                             None,
                             &InvocationContextStack::fresh(),
@@ -1589,6 +1626,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &owned_agent_id,
                     None,
                     None,
+                    Vec::new(),
                     None,
                     None,
                     &InvocationContextStack::fresh(),

@@ -47,7 +47,11 @@ pub struct LexError {
 
 impl fmt::Display for LexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Lex error at position {}: {}", self.position, self.message)
+        write!(
+            f,
+            "Lex error at position {}: {}",
+            self.position, self.message
+        )
     }
 }
 
@@ -140,7 +144,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while self.pos < self.input.len() && matches!(self.bytes()[self.pos], b' ' | b'\t' | b'\n' | b'\r') {
+        while self.pos < self.input.len()
+            && matches!(self.bytes()[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+        {
             self.pos += 1;
         }
     }
@@ -156,13 +162,34 @@ impl<'a> Lexer<'a> {
 
         let ch = bytes[start];
         match ch {
-            b'{' => { self.pos += 1; Ok((Token::LBrace, start, self.pos)) }
-            b'}' => { self.pos += 1; Ok((Token::RBrace, start, self.pos)) }
-            b'[' => { self.pos += 1; Ok((Token::LBrack, start, self.pos)) }
-            b']' => { self.pos += 1; Ok((Token::RBrack, start, self.pos)) }
-            b'(' => { self.pos += 1; Ok((Token::LParen, start, self.pos)) }
-            b')' => { self.pos += 1; Ok((Token::RParen, start, self.pos)) }
-            b',' => { self.pos += 1; Ok((Token::Comma, start, self.pos)) }
+            b'{' => {
+                self.pos += 1;
+                Ok((Token::LBrace, start, self.pos))
+            }
+            b'}' => {
+                self.pos += 1;
+                Ok((Token::RBrace, start, self.pos))
+            }
+            b'[' => {
+                self.pos += 1;
+                Ok((Token::LBrack, start, self.pos))
+            }
+            b']' => {
+                self.pos += 1;
+                Ok((Token::RBrack, start, self.pos))
+            }
+            b'(' => {
+                self.pos += 1;
+                Ok((Token::LParen, start, self.pos))
+            }
+            b')' => {
+                self.pos += 1;
+                Ok((Token::RParen, start, self.pos))
+            }
+            b',' => {
+                self.pos += 1;
+                Ok((Token::Comma, start, self.pos))
+            }
             b':' => {
                 if self.pos + 1 < bytes.len() && bytes[self.pos + 1] == b':' {
                     self.pos += 2;
@@ -180,7 +207,10 @@ impl<'a> Lexer<'a> {
                     self.pos += 2;
                     Ok((Token::AtB, start, self.pos))
                 } else {
-                    Err(LexError { position: start, message: "unexpected character after '@'".into() })
+                    Err(LexError {
+                        position: start,
+                        message: "unexpected character after '@'".into(),
+                    })
                 }
             }
             b'"' => self.read_string(start),
@@ -188,12 +218,17 @@ impl<'a> Lexer<'a> {
             b'-' => self.read_negative(start),
             b'0'..=b'9' => self.read_number(start, false),
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.read_ident(start),
-            _ => Err(LexError { position: start, message: format!("unexpected character '{}'", ch as char) }),
+            _ => Err(LexError {
+                position: start,
+                message: format!("unexpected character '{}'", ch as char),
+            }),
         }
     }
 
     fn read_ident(&mut self, start: usize) -> Result<(Token, usize, usize), LexError> {
-        while self.pos < self.input.len() && matches!(self.bytes()[self.pos], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') {
+        while self.pos < self.input.len()
+            && matches!(self.bytes()[self.pos], b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+        {
             self.pos += 1;
         }
         let word = &self.input[start..self.pos];
@@ -220,18 +255,31 @@ impl<'a> Lexer<'a> {
                         return Ok((Token::FloatLit(f64::NEG_INFINITY), start, end));
                     }
                 }
-                Err(LexError { position: start, message: "expected number after '-'".into() })
+                Err(LexError {
+                    position: start,
+                    message: "expected number after '-'".into(),
+                })
             } else if self.bytes()[self.pos].is_ascii_digit() {
                 self.read_number(start, true)
             } else {
-                Err(LexError { position: start, message: "expected number after '-'".into() })
+                Err(LexError {
+                    position: start,
+                    message: "expected number after '-'".into(),
+                })
             }
         } else {
-            Err(LexError { position: start, message: "unexpected end of input after '-'".into() })
+            Err(LexError {
+                position: start,
+                message: "unexpected end of input after '-'".into(),
+            })
         }
     }
 
-    fn read_number(&mut self, start: usize, negative: bool) -> Result<(Token, usize, usize), LexError> {
+    fn read_number(
+        &mut self,
+        start: usize,
+        negative: bool,
+    ) -> Result<(Token, usize, usize), LexError> {
         let digit_start = self.pos;
         while self.pos < self.input.len() && self.bytes()[self.pos].is_ascii_digit() {
             self.pos += 1;
@@ -251,7 +299,10 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
             }
             if self.pos >= self.input.len() || !self.bytes()[self.pos].is_ascii_digit() {
-                return Err(LexError { position: digit_start, message: "invalid float exponent".into() });
+                return Err(LexError {
+                    position: digit_start,
+                    message: "invalid float exponent".into(),
+                });
             }
             while self.pos < self.input.len() && self.bytes()[self.pos].is_ascii_digit() {
                 self.pos += 1;
@@ -259,13 +310,22 @@ impl<'a> Lexer<'a> {
         }
         let text = &self.input[start..self.pos];
         if is_float {
-            let v: f64 = text.parse().map_err(|e| LexError { position: start, message: format!("invalid float: {e}") })?;
+            let v: f64 = text.parse().map_err(|e| LexError {
+                position: start,
+                message: format!("invalid float: {e}"),
+            })?;
             Ok((Token::FloatLit(v), start, self.pos))
         } else if negative {
-            let v: i64 = text.parse().map_err(|e| LexError { position: start, message: format!("invalid integer: {e}") })?;
+            let v: i64 = text.parse().map_err(|e| LexError {
+                position: start,
+                message: format!("invalid integer: {e}"),
+            })?;
             Ok((Token::IntLit(v), start, self.pos))
         } else {
-            let v: u64 = text.parse().map_err(|e| LexError { position: start, message: format!("invalid integer: {e}") })?;
+            let v: u64 = text.parse().map_err(|e| LexError {
+                position: start,
+                message: format!("invalid integer: {e}"),
+            })?;
             Ok((Token::UintLit(v), start, self.pos))
         }
     }
@@ -275,11 +335,19 @@ impl<'a> Lexer<'a> {
         let mut buf = String::new();
         loop {
             if self.pos >= self.input.len() {
-                return Err(LexError { position: start, message: "unterminated string".into() });
+                return Err(LexError {
+                    position: start,
+                    message: "unterminated string".into(),
+                });
             }
             match self.bytes()[self.pos] {
-                b'"' => { self.pos += 1; return Ok((Token::StringLit(buf), start, self.pos)); }
-                b'\\' => { buf.push(self.read_escape()?); }
+                b'"' => {
+                    self.pos += 1;
+                    return Ok((Token::StringLit(buf), start, self.pos));
+                }
+                b'\\' => {
+                    buf.push(self.read_escape()?);
+                }
                 _ => {
                     let ch = self.current_char();
                     self.pos += ch.len_utf8();
@@ -292,7 +360,10 @@ impl<'a> Lexer<'a> {
     fn read_char(&mut self, start: usize) -> Result<(Token, usize, usize), LexError> {
         self.pos += 1; // skip opening '\''
         if self.pos >= self.input.len() {
-            return Err(LexError { position: start, message: "unterminated char literal".into() });
+            return Err(LexError {
+                position: start,
+                message: "unterminated char literal".into(),
+            });
         }
         let ch = if self.bytes()[self.pos] == b'\\' {
             self.read_escape()?
@@ -302,7 +373,10 @@ impl<'a> Lexer<'a> {
             c
         };
         if self.pos >= self.input.len() || self.bytes()[self.pos] != b'\'' {
-            return Err(LexError { position: start, message: "unterminated char literal".into() });
+            return Err(LexError {
+                position: start,
+                message: "unterminated char literal".into(),
+            });
         }
         self.pos += 1;
         Ok((Token::CharLit(ch), start, self.pos))
@@ -316,7 +390,10 @@ impl<'a> Lexer<'a> {
         let esc_pos = self.pos;
         self.pos += 1; // skip '\\'
         if self.pos >= self.input.len() {
-            return Err(LexError { position: esc_pos, message: "unterminated escape".into() });
+            return Err(LexError {
+                position: esc_pos,
+                message: "unterminated escape".into(),
+            });
         }
         let ch = self.bytes()[self.pos];
         self.pos += 1;
@@ -331,7 +408,10 @@ impl<'a> Lexer<'a> {
             b'f' => Ok('\u{0C}'),
             b'\'' => Ok('\''),
             b'u' => self.read_unicode_escape(esc_pos),
-            _ => Err(LexError { position: esc_pos, message: format!("invalid escape '\\{}'", ch as char) }),
+            _ => Err(LexError {
+                position: esc_pos,
+                message: format!("invalid escape '\\{}'", ch as char),
+            }),
         }
     }
 
@@ -339,28 +419,49 @@ impl<'a> Lexer<'a> {
         let code = self.read_hex4(esc_pos)?;
         if (0xD800..=0xDBFF).contains(&code) {
             // high surrogate — expect \uXXXX low surrogate
-            if self.pos + 1 < self.input.len() && self.bytes()[self.pos] == b'\\' && self.bytes()[self.pos + 1] == b'u' {
+            if self.pos + 1 < self.input.len()
+                && self.bytes()[self.pos] == b'\\'
+                && self.bytes()[self.pos + 1] == b'u'
+            {
                 self.pos += 2;
                 let low = self.read_hex4(esc_pos)?;
                 if !(0xDC00..=0xDFFF).contains(&low) {
-                    return Err(LexError { position: esc_pos, message: "invalid surrogate pair".into() });
+                    return Err(LexError {
+                        position: esc_pos,
+                        message: "invalid surrogate pair".into(),
+                    });
                 }
                 let cp = 0x10000 + ((code as u32 - 0xD800) << 10) + (low as u32 - 0xDC00);
-                char::from_u32(cp).ok_or_else(|| LexError { position: esc_pos, message: "invalid codepoint".into() })
+                char::from_u32(cp).ok_or_else(|| LexError {
+                    position: esc_pos,
+                    message: "invalid codepoint".into(),
+                })
             } else {
-                Err(LexError { position: esc_pos, message: "expected low surrogate".into() })
+                Err(LexError {
+                    position: esc_pos,
+                    message: "expected low surrogate".into(),
+                })
             }
         } else {
-            char::from_u32(code as u32).ok_or_else(|| LexError { position: esc_pos, message: "invalid codepoint".into() })
+            char::from_u32(code as u32).ok_or_else(|| LexError {
+                position: esc_pos,
+                message: "invalid codepoint".into(),
+            })
         }
     }
 
     fn read_hex4(&mut self, esc_pos: usize) -> Result<u16, LexError> {
         if self.pos + 4 > self.input.len() {
-            return Err(LexError { position: esc_pos, message: "incomplete \\uXXXX escape".into() });
+            return Err(LexError {
+                position: esc_pos,
+                message: "incomplete \\uXXXX escape".into(),
+            });
         }
         let hex = &self.input[self.pos..self.pos + 4];
         self.pos += 4;
-        u16::from_str_radix(hex, 16).map_err(|_| LexError { position: esc_pos, message: format!("invalid hex in \\u{hex}") })
+        u16::from_str_radix(hex, 16).map_err(|_| LexError {
+            position: esc_pos,
+            message: format!("invalid hex in \\u{hex}"),
+        })
     }
 }

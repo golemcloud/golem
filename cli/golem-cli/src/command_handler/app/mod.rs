@@ -897,13 +897,8 @@ impl AppCommandHandler {
 
         // Emit schema evolution warnings
         for (component_name, new_props) in &deploy_diff.deployable_components {
-            if let Some(old_agent_types) =
-                deploy_diff.current_agent_types.get(&component_name.0)
-            {
-                let warnings = validate_schema_evolution(
-                    old_agent_types,
-                    &new_props.agent_types,
-                );
+            if let Some(old_agent_types) = deploy_diff.current_agent_types.get(&component_name.0) {
+                let warnings = validate_schema_evolution(old_agent_types, &new_props.agent_types);
                 for w in &warnings {
                     log_warn_action(
                         "Schema evolution",

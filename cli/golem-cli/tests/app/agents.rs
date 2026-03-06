@@ -397,11 +397,26 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     )
     .await;
 
-    run_and_assert(&ctx, "rust:agent/FooAgent.{fun_result_unit_ok}", &["Ok(())"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/FooAgent.{fun_result_unit_ok}",
+        &["Ok(())"],
+    )
+    .await;
 
-    run_and_assert(&ctx, "rust:agent/FooAgent.{fun_result_unit_err}", &["Err(())"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/FooAgent.{fun_result_unit_err}",
+        &["Err(())"],
+    )
+    .await;
 
-    run_and_assert(&ctx, "rust:agent/FooAgent.{fun_result_unit_both}", &["Ok(())"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/FooAgent.{fun_result_unit_both}",
+        &["Ok(())"],
+    )
+    .await;
 
     let result_complex_arg = r#"
     Ok({
@@ -705,7 +720,12 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funObjectComplexType", &[argument]).await;
 
     // union type that has anonymous terms
-    run_and_assert(&ctx, "funUnionType", &[r#"{tag: "UnionType1", value: "foo"}"#]).await;
+    run_and_assert(
+        &ctx,
+        "funUnionType",
+        &[r#"{tag: "UnionType1", value: "foo"}"#],
+    )
+    .await;
 
     // A complex union type
     run_and_assert(
@@ -804,12 +824,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funResultExact", &[r#"{ok: "foo"}"#]).await;
 
     // A function with (untagged) result-like type - but not result
-    run_and_assert(
-        &ctx,
-        "funEitherOptional",
-        &[r#"{ok: "foo", err: null}"#],
-    )
-    .await;
+    run_and_assert(&ctx, "funEitherOptional", &[r#"{ok: "foo", err: null}"#]).await;
 
     // Functions using the builtin result type
     run_and_assert(&ctx, "funBuiltinResultVS", &[r#"{ok: null}"#]).await;

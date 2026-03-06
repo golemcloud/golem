@@ -839,10 +839,7 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    fn resolve_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
             .cloned()

@@ -29,7 +29,8 @@ use golem_common::model::{
     OwnedAgentId, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::{Component, GetFileSystemNodeResult};
+use golem_service_base::model::component::Component;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::Uri;
 use golem_worker_executor::durable_host::{
@@ -64,11 +65,11 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, HasConfigVars,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
@@ -502,12 +503,6 @@ impl InvocationContextManagement for DebugContext {
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.durable_ctx.clone_as_inherited_stack(current_span_id)
-    }
-}
-
-impl HasConfigVars for DebugContext {
-    fn config_vars(&self) -> BTreeMap<String, String> {
-        self.durable_ctx.config_vars()
     }
 }
 

@@ -26,7 +26,6 @@ use golem_common::model::agent::{
     SystemVariable,
 };
 use golem_common::model::domain_registration::Domain;
-use heck::ToKebabCase;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity,
@@ -36,6 +35,7 @@ use golem_service_base::custom_api::{
     OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
     SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
+use heck::ToKebabCase;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use url::Url;

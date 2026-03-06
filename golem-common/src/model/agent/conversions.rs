@@ -300,8 +300,13 @@ impl DataValue {
                     .zip(schema)
                     .enumerate()
                     .map(|(idx, ((name, value), schema))| {
-                        ElementValue::try_from_bindings(value, schema.1)
-                            .map(|v| NamedElementValue { name, value: v, schema_index: idx as u32 })
+                        ElementValue::try_from_bindings(value, schema.1).map(|v| {
+                            NamedElementValue {
+                                name,
+                                value: v,
+                                schema_index: idx as u32,
+                            }
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             })),

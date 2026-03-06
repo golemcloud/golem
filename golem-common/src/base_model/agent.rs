@@ -420,10 +420,7 @@ impl AgentType {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String>;
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String>;
 }
 
 #[derive(

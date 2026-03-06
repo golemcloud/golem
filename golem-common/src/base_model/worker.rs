@@ -23,17 +23,6 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-pub struct AgentCreationRequest {
-    pub name: String,
-    pub env: HashMap<String, String>,
-    #[cfg_attr(feature = "full", oai(default))]
-    pub config_vars: BTreeMap<String, String>,
-}
-
 declare_enums! {
     pub enum FlatComponentFileSystemNodeKind {
         Directory,
@@ -66,7 +55,44 @@ declare_unions! {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(
+    feature = "full",
+    derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct UntypedParsedWorkerCreationLocalAgentConfigEntry {
+    pub key: Vec<String>,
+    pub value: golem_wasm::Value,
+}
+
 declare_structs! {
+    pub struct WorkerCreationLocalAgentConfigEntry {
+        pub key: Vec<String>,
+        pub value: serde_json::Value
+    }
+
+    #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct ParsedWorkerCreationLocalAgentConfigEntry {
+        pub key: Vec<String>,
+        pub value: golem_wasm::ValueAndType
+    }
+
+    pub struct AgentCreationRequest {
+        pub name: String,
+        pub env: HashMap<String, String>,
+        #[cfg_attr(feature = "full", oai(default))]
+        pub config_vars: BTreeMap<String, String>,
+        #[cfg_attr(feature = "full", oai(default))]
+        pub local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>
+    }
+
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
@@ -127,6 +153,7 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
+    // TODO: Rename to AgentFileSystemNode
     pub struct FlatComponentFileSystemNode {
         pub name: String,
         pub last_modified: u64,
@@ -140,5 +167,16 @@ declare_enums! {
     pub enum AgentUpdateMode {
         Automatic,
         Manual,
+    }
+}
+
+impl From<ParsedWorkerCreationLocalAgentConfigEntry>
+    for UntypedParsedWorkerCreationLocalAgentConfigEntry
+{
+    fn from(value: ParsedWorkerCreationLocalAgentConfigEntry) -> Self {
+        Self {
+            key: value.key,
+            value: value.value.value,
+        }
     }
 }

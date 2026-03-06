@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
-use std::process::Child;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::process::Child;
 use std::time::Duration;
 use tracing::Level;
 

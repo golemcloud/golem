@@ -36,8 +36,10 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::worker::{AgentMetadataDto, FlatComponentFileSystemNode};
+use golem_common::model::worker::{
+    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget,
+    WorkerCreationLocalAgentConfigEntry,
+};
 use golem_common::model::PromiseId;
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
@@ -56,6 +58,8 @@ use uuid::Uuid;
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
+    type WorkerError = WorkerExecutorError;
+
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis.clone()
     }
@@ -287,6 +291,7 @@ impl TestDsl for TestWorkerExecutor {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -304,6 +309,10 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
                 config_vars,
+                local_agent_config: local_agent_config
+                    .into_iter()
+                    .map(|lac| lac.into())
+                    .collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
@@ -423,7 +432,6 @@ impl TestDsl for TestWorkerExecutor {
                         let agent_type = component_at_rev
                             .metadata
                             .find_agent_type_by_name(&agent_id.agent_type)
-                            .map_err(|err| anyhow!("Agent type not found: {err}"))?
                             .ok_or_else(|| {
                                 anyhow!("Agent type not found: {}", agent_id.agent_type)
                             })?;

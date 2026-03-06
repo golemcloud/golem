@@ -30,6 +30,7 @@ use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
+use golem_common::model::worker::WorkerCreationLocalAgentConfigEntry;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{proto_agent_id_string, proto_component_id_string};
 use golem_service_base::model::auth::AuthCtx;
@@ -266,12 +267,20 @@ impl WorkerGrpcApi {
             agent_id: request.name,
         };
 
+        let local_agent_config = request
+            .local_agent_config
+            .into_iter()
+            .map(WorkerCreationLocalAgentConfigEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad_request_error(format!("failed converting local_agent_config: {e}")))?;
+
         let latest_component_revision = self
             .worker_service
             .create(
                 &agent_id,
                 request.env,
                 request.config_vars.into_iter().collect(),
+                local_agent_config,
                 request.ignore_already_existing,
                 auth,
                 request.context,

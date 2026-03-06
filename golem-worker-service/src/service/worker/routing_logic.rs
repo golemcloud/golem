@@ -33,7 +33,7 @@ use tokio::time::{Instant, sleep};
 use tonic::Status;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{Instrument, debug, info, trace, warn};
 
 #[async_trait]
 pub trait RoutingLogic {

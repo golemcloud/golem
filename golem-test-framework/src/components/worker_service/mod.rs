@@ -21,12 +21,12 @@ use super::shard_manager::ShardManager;
 use super::{
     wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response, EnvVarBuilder,
 };
-use std::process::Child;
 use async_trait::async_trait;
 use golem_client::api::{AgentClientLive, WorkerClientLive};
 use golem_client::{Context, Security};
 use golem_common::model::auth::TokenSecret;
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Level;

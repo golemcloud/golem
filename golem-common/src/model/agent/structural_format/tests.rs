@@ -16,8 +16,8 @@ use super::*;
 use crate::model::agent::{
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
     ComponentModelElementValue, DataSchema, DataValue, ElementSchema, ElementValue, ElementValues,
-    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues,
-    TextDescriptor, TextReference, TextSource, TextType, UnstructuredBinaryElementValue,
+    NamedElementSchema, NamedElementSchemas, NamedElementValue, NamedElementValues, TextDescriptor,
+    TextReference, TextSource, TextType, UnstructuredBinaryElementValue,
     UnstructuredTextElementValue, Url,
 };
 use golem_wasm::analysis::analysed_type::{
@@ -61,15 +61,11 @@ fn cm(typ: AnalysedType) -> ElementSchema {
 }
 
 fn text_elem_schema() -> ElementSchema {
-    ElementSchema::UnstructuredText(TextDescriptor {
-        restrictions: None,
-    })
+    ElementSchema::UnstructuredText(TextDescriptor { restrictions: None })
 }
 
 fn binary_elem_schema() -> ElementSchema {
-    ElementSchema::UnstructuredBinary(BinaryDescriptor {
-        restrictions: None,
-    })
+    ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions: None })
 }
 
 fn roundtrip(data: &DataValue, schema: &DataSchema) {
@@ -88,9 +84,7 @@ fn format_and_check(data: &DataValue, expected: &str) {
 #[test]
 fn empty_tuple() {
     let schema = tuple_schema(vec![]);
-    let data = DataValue::Tuple(ElementValues {
-        elements: vec![],
-    });
+    let data = DataValue::Tuple(ElementValues { elements: vec![] });
     format_and_check(&data, "");
     roundtrip(&data, &schema);
 }
@@ -179,7 +173,7 @@ fn float_basic() {
     let schema = tuple_schema(vec![("x", cm(f64()))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(Value::F64(3.14), f64()),
+            value: ValueAndType::new(Value::F64(2.71), f64()),
         })],
     });
     let formatted = format_structural(&data).unwrap();
@@ -289,10 +283,7 @@ fn string_with_escapes() {
     let schema = tuple_schema(vec![("x", cm(str()))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(
-                Value::String("hello\n\"world\"\t\\".into()),
-                str(),
-            ),
+            value: ValueAndType::new(Value::String("hello\n\"world\"\t\\".into()), str()),
         })],
     });
     format_and_check(&data, r#""hello\n\"world\"\t\\""#);
@@ -527,16 +518,10 @@ fn variant_with_payload() {
 
 #[test]
 fn enum_value() {
-    let schema = tuple_schema(vec![(
-        "e",
-        cm(r#enum(&["red", "green", "blue"])),
-    )]);
+    let schema = tuple_schema(vec![("e", cm(r#enum(&["red", "green", "blue"])))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(
-                Value::Enum(2),
-                r#enum(&["red", "green", "blue"]),
-            ),
+            value: ValueAndType::new(Value::Enum(2), r#enum(&["red", "green", "blue"])),
         })],
     });
     format_and_check(&data, "v2");
@@ -550,10 +535,7 @@ fn option_some() {
     let schema = tuple_schema(vec![("x", cm(option(u32())))]);
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
-            value: ValueAndType::new(
-                Value::Option(Some(Box::new(Value::U32(42)))),
-                option(u32()),
-            ),
+            value: ValueAndType::new(Value::Option(Some(Box::new(Value::U32(42)))), option(u32())),
         })],
     });
     format_and_check(&data, "s(42)");
@@ -701,9 +683,7 @@ fn text_inline_no_lang() {
                     data: "hello, world!".to_string(),
                     text_type: None,
                 }),
-                descriptor: TextDescriptor {
-                    restrictions: None,
-                },
+                descriptor: TextDescriptor { restrictions: None },
             },
         )],
     });
@@ -723,9 +703,7 @@ fn text_inline_with_lang() {
                         language_code: "de".to_string(),
                     }),
                 }),
-                descriptor: TextDescriptor {
-                    restrictions: None,
-                },
+                descriptor: TextDescriptor { restrictions: None },
             },
         )],
     });
@@ -742,9 +720,7 @@ fn text_url() {
                 value: TextReference::Url(Url {
                     value: "https://example.com/".to_string(),
                 }),
-                descriptor: TextDescriptor {
-                    restrictions: None,
-                },
+                descriptor: TextDescriptor { restrictions: None },
             },
         )],
     });
@@ -766,17 +742,12 @@ fn binary_inline() {
                         mime_type: "application/json".to_string(),
                     },
                 }),
-                descriptor: BinaryDescriptor {
-                    restrictions: None,
-                },
+                descriptor: BinaryDescriptor { restrictions: None },
             },
         )],
     });
     let expected_b64 = base64::engine::general_purpose::STANDARD.encode(b"Hello world!");
-    format_and_check(
-        &data,
-        &format!(r#"@b[application/json]"{expected_b64}""#),
-    );
+    format_and_check(&data, &format!(r#"@b[application/json]"{expected_b64}""#));
     roundtrip(&data, &schema);
 }
 
@@ -789,16 +760,11 @@ fn binary_url() {
                 value: BinaryReference::Url(Url {
                     value: "https://example.com/image.png".to_string(),
                 }),
-                descriptor: BinaryDescriptor {
-                    restrictions: None,
-                },
+                descriptor: BinaryDescriptor { restrictions: None },
             },
         )],
     });
-    format_and_check(
-        &data,
-        r#"@bu"https://example.com/image.png""#,
-    );
+    format_and_check(&data, r#"@bu"https://example.com/image.png""#);
     roundtrip(&data, &schema);
 }
 
@@ -827,9 +793,7 @@ fn multimodal_basic() {
                         data: "hello".to_string(),
                         text_type: None,
                     }),
-                    descriptor: TextDescriptor {
-                        restrictions: None,
-                    },
+                    descriptor: TextDescriptor { restrictions: None },
                 }),
                 schema_index: 1,
             },
@@ -851,9 +815,7 @@ fn multimodal_repeated_element() {
                         data: "first".to_string(),
                         text_type: None,
                     }),
-                    descriptor: TextDescriptor {
-                        restrictions: None,
-                    },
+                    descriptor: TextDescriptor { restrictions: None },
                 }),
                 schema_index: 1,
             },
@@ -864,9 +826,7 @@ fn multimodal_repeated_element() {
                         data: "second".to_string(),
                         text_type: None,
                     }),
-                    descriptor: TextDescriptor {
-                        restrictions: None,
-                    },
+                    descriptor: TextDescriptor { restrictions: None },
                 }),
                 schema_index: 1,
             },
@@ -879,9 +839,7 @@ fn multimodal_repeated_element() {
 #[test]
 fn multimodal_empty() {
     let schema = multimodal_schema(vec![("x", cm(u32()))]);
-    let data = DataValue::Multimodal(NamedElementValues {
-        elements: vec![],
-    });
+    let data = DataValue::Multimodal(NamedElementValues { elements: vec![] });
     format_and_check(&data, "");
     roundtrip(&data, &schema);
 }
@@ -1002,9 +960,9 @@ fn deeply_nested_record() {
     let data = DataValue::Tuple(ElementValues {
         elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
             value: ValueAndType::new(
-                Value::Record(vec![Value::Record(vec![Value::Record(vec![
-                    Value::U32(99),
-                ])])]),
+                Value::Record(vec![Value::Record(vec![Value::Record(vec![Value::U32(
+                    99,
+                )])])]),
                 outer,
             ),
         })],
@@ -1095,20 +1053,14 @@ fn float_f32_exponent_roundtrip() {
 
 #[test]
 fn parse_variant_missing_required_payload() {
-    let schema = tuple_schema(vec![(
-        "v",
-        cm(variant(vec![case("x", u32())])),
-    )]);
+    let schema = tuple_schema(vec![("v", cm(variant(vec![case("x", u32())])))]);
     // v0 without payload but case "x" requires u32
     assert!(parse_structural("v0", &schema).is_err());
 }
 
 #[test]
 fn parse_variant_unexpected_payload() {
-    let schema = tuple_schema(vec![(
-        "v",
-        cm(variant(vec![unit_case("x")])),
-    )]);
+    let schema = tuple_schema(vec![("v", cm(variant(vec![unit_case("x")])))]);
     // v0(42) but case "x" has no payload
     assert!(parse_structural("v0(42)", &schema).is_err());
 }
@@ -1148,22 +1100,12 @@ fn parse_float_leading_zeros_rejected() {
 
 /// Generate a finite f32 value (no NaN/Infinity).
 fn finite_f32() -> BoxedStrategy<f32> {
-    prop_oneof![
-        proptest::num::f32::NORMAL,
-        Just(0.0f32),
-        Just(-0.0f32),
-    ]
-    .boxed()
+    prop_oneof![proptest::num::f32::NORMAL, Just(0.0f32), Just(-0.0f32),].boxed()
 }
 
 /// Generate a finite f64 value (no NaN/Infinity).
 fn finite_f64() -> BoxedStrategy<f64> {
-    prop_oneof![
-        proptest::num::f64::NORMAL,
-        Just(0.0f64),
-        Just(-0.0f64),
-    ]
-    .boxed()
+    prop_oneof![proptest::num::f64::NORMAL, Just(0.0f64), Just(-0.0f64),].boxed()
 }
 
 /// Generate a valid char (proptest's default char strategy).
@@ -1232,12 +1174,12 @@ fn arb_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
                     .clone()
                     .prop_map(|(t, _)| (option(t), Value::Option(None))),
                 // List (all items same type — use leaf for uniformity)
-                (0..5usize, leaf_type_and_value()).prop_flat_map(|(len, (item_type, _))| {
-                    let gen = arb_leaf_value_for_type(item_type.clone());
-                    (Just(item_type), prop::collection::vec(gen, len..=len))
-                }).prop_map(|(item_type, values)| {
-                    (list(item_type), Value::List(values))
-                }),
+                (0..5usize, leaf_type_and_value())
+                    .prop_flat_map(|(len, (item_type, _))| {
+                        let gen = arb_leaf_value_for_type(item_type.clone());
+                        (Just(item_type), prop::collection::vec(gen, len..=len))
+                    })
+                    .prop_map(|(item_type, values)| { (list(item_type), Value::List(values)) }),
                 // Record (1-4 fields)
                 prop::collection::vec(inner.clone(), 1..5).prop_map(|fields| {
                     let field_types: Vec<_> = fields
@@ -1255,28 +1197,34 @@ fn arb_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
                     (tuple(item_types), Value::Tuple(item_values))
                 }),
                 // Variant with payload (2-4 cases, pick one)
-                (1..4usize, inner.clone()).prop_flat_map(|(num_cases, (payload_type, payload_val))| {
-                    (0..num_cases, Just(num_cases), Just(payload_type), Just(payload_val)).prop_map(
-                        |(chosen, num_cases, pt, pv)| {
-                            let cases: Vec<_> = (0..num_cases)
-                                .map(|i| {
-                                    if i == chosen {
-                                        case(&format!("c{i}"), pt.clone())
-                                    } else {
-                                        unit_case(&format!("c{i}"))
-                                    }
-                                })
-                                .collect();
-                            (
-                                variant(cases),
-                                Value::Variant {
-                                    case_idx: chosen as u32,
-                                    case_value: Some(Box::new(pv.clone())),
-                                },
-                            )
-                        },
-                    )
-                }),
+                (1..4usize, inner.clone()).prop_flat_map(
+                    |(num_cases, (payload_type, payload_val))| {
+                        (
+                            0..num_cases,
+                            Just(num_cases),
+                            Just(payload_type),
+                            Just(payload_val),
+                        )
+                            .prop_map(|(chosen, num_cases, pt, pv)| {
+                                let cases: Vec<_> = (0..num_cases)
+                                    .map(|i| {
+                                        if i == chosen {
+                                            case(&format!("c{i}"), pt.clone())
+                                        } else {
+                                            unit_case(&format!("c{i}"))
+                                        }
+                                    })
+                                    .collect();
+                                (
+                                    variant(cases),
+                                    Value::Variant {
+                                        case_idx: chosen as u32,
+                                        case_value: Some(Box::new(pv.clone())),
+                                    },
+                                )
+                            })
+                    }
+                ),
                 // Variant without payload
                 (2..5usize).prop_flat_map(|num_cases| {
                     (0..num_cases, Just(num_cases)).prop_map(|(chosen, num_cases)| {
@@ -1315,10 +1263,7 @@ fn arb_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
                 }),
                 // Result ok with payload
                 (inner.clone(), inner.clone()).prop_map(|((ok_t, ok_v), (err_t, _))| {
-                    (
-                        result(ok_t, err_t),
-                        Value::Result(Ok(Some(Box::new(ok_v)))),
-                    )
+                    (result(ok_t, err_t), Value::Result(Ok(Some(Box::new(ok_v)))))
                 }),
                 // Result err with payload
                 (inner.clone(), inner.clone()).prop_map(|((ok_t, _), (err_t, err_v))| {
@@ -1346,11 +1291,19 @@ fn arb_type_and_value() -> impl Strategy<Value = (AnalysedType, Value)> {
 fn arb_text_reference() -> impl Strategy<Value = TextReference> {
     prop_oneof![
         arb_string().prop_map(|s| TextReference::Url(Url { value: s })),
-        (arb_string(), prop_oneof![
-            Just(None),
-            Just(Some(TextType { language_code: "en".to_string() })),
-            Just(Some(TextType { language_code: "de".to_string() })),
-        ]).prop_map(|(data, text_type)| TextReference::Inline(TextSource { data, text_type })),
+        (
+            arb_string(),
+            prop_oneof![
+                Just(None),
+                Just(Some(TextType {
+                    language_code: "en".to_string()
+                })),
+                Just(Some(TextType {
+                    language_code: "de".to_string()
+                })),
+            ]
+        )
+            .prop_map(|(data, text_type)| TextReference::Inline(TextSource { data, text_type })),
     ]
 }
 
@@ -1358,14 +1311,18 @@ fn arb_text_reference() -> impl Strategy<Value = TextReference> {
 fn arb_binary_reference() -> impl Strategy<Value = BinaryReference> {
     prop_oneof![
         arb_string().prop_map(|s| BinaryReference::Url(Url { value: s })),
-        (prop::collection::vec(any::<u8>(), 0..64), prop_oneof![
-            Just("application/json".to_string()),
-            Just("image/png".to_string()),
-            Just("text/plain".to_string()),
-        ]).prop_map(|(data, mime)| BinaryReference::Inline(BinarySource {
-            data,
-            binary_type: BinaryType { mime_type: mime },
-        })),
+        (
+            prop::collection::vec(any::<u8>(), 0..64),
+            prop_oneof![
+                Just("application/json".to_string()),
+                Just("image/png".to_string()),
+                Just("text/plain".to_string()),
+            ]
+        )
+            .prop_map(|(data, mime)| BinaryReference::Inline(BinarySource {
+                data,
+                binary_type: BinaryType { mime_type: mime },
+            })),
     ]
 }
 
@@ -1421,79 +1378,88 @@ fn arb_tuple_data() -> impl Strategy<Value = (DataSchema, DataValue)> {
 /// Generate a complete DataSchema::Multimodal + matching DataValue::Multimodal.
 fn arb_multimodal_data() -> impl Strategy<Value = (DataSchema, DataValue)> {
     // Generate 1-4 schema elements, then 0-6 named value elements referencing them.
-    prop::collection::vec(arb_element_schema_and_value(), 1..5).prop_flat_map(|schema_elems| {
-        let schemas = NamedElementSchemas {
-            elements: schema_elems
+    prop::collection::vec(arb_element_schema_and_value(), 1..5)
+        .prop_flat_map(|schema_elems| {
+            let schemas = NamedElementSchemas {
+                elements: schema_elems
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (s, _))| NamedElementSchema {
+                        name: format!("m{i}"),
+                        schema: s.clone(),
+                    })
+                    .collect(),
+            };
+            let num_schemas = schema_elems.len();
+            // Generate 0-6 instances, each picking a random schema index
+            let schema_and_generators: Vec<(ElementSchema, ElementValue)> = schema_elems;
+            (
+                Just(schemas),
+                Just(schema_and_generators),
+                prop::collection::vec(0..num_schemas, 0..7),
+            )
+        })
+        .prop_flat_map(|(schemas, schema_elems, indices)| {
+            // For each chosen index, regenerate a value matching that schema
+            let schema_types: Vec<ElementSchema> =
+                schema_elems.iter().map(|(s, _)| s.clone()).collect();
+            let strats: Vec<_> = indices
                 .iter()
-                .enumerate()
-                .map(|(i, (s, _))| NamedElementSchema {
-                    name: format!("m{i}"),
-                    schema: s.clone(),
+                .map(|&idx| {
+                    let s = schema_types[idx].clone();
+                    let name = format!("m{idx}");
+                    let schema_index = idx as u32;
+                    match s {
+                        ElementSchema::ComponentModel(ref cms) => {
+                            let typ = cms.element_type.clone();
+                            arb_vat_for_type(typ)
+                                .prop_map(move |val| NamedElementValue {
+                                    name: name.clone(),
+                                    value: ElementValue::ComponentModel(
+                                        ComponentModelElementValue { value: val },
+                                    ),
+                                    schema_index,
+                                })
+                                .boxed()
+                        }
+                        ElementSchema::UnstructuredText(_) => arb_text_reference()
+                            .prop_map(move |text_ref| NamedElementValue {
+                                name: name.clone(),
+                                value: ElementValue::UnstructuredText(
+                                    UnstructuredTextElementValue {
+                                        value: text_ref,
+                                        descriptor: TextDescriptor { restrictions: None },
+                                    },
+                                ),
+                                schema_index,
+                            })
+                            .boxed(),
+                        ElementSchema::UnstructuredBinary(_) => arb_binary_reference()
+                            .prop_map(move |bin_ref| NamedElementValue {
+                                name: name.clone(),
+                                value: ElementValue::UnstructuredBinary(
+                                    UnstructuredBinaryElementValue {
+                                        value: bin_ref,
+                                        descriptor: BinaryDescriptor { restrictions: None },
+                                    },
+                                ),
+                                schema_index,
+                            })
+                            .boxed(),
+                    }
                 })
-                .collect(),
-        };
-        let num_schemas = schema_elems.len();
-        // Generate 0-6 instances, each picking a random schema index
-        let schema_and_generators: Vec<(ElementSchema, ElementValue)> = schema_elems;
-        (
-            Just(schemas),
-            Just(schema_and_generators),
-            prop::collection::vec(0..num_schemas, 0..7),
-        )
-    }).prop_flat_map(|(schemas, schema_elems, indices)| {
-        // For each chosen index, regenerate a value matching that schema
-        let schema_types: Vec<ElementSchema> = schema_elems.iter().map(|(s, _)| s.clone()).collect();
-        let strats: Vec<_> = indices.iter().map(|&idx| {
-            let s = schema_types[idx].clone();
-            let name = format!("m{idx}");
-            let schema_index = idx as u32;
-            match s {
-                ElementSchema::ComponentModel(ref cms) => {
-                    let typ = cms.element_type.clone();
-                    arb_vat_for_type(typ).prop_map(move |val| {
-                        NamedElementValue {
-                            name: name.clone(),
-                            value: ElementValue::ComponentModel(ComponentModelElementValue {
-                                value: val,
-                            }),
-                            schema_index,
-                        }
-                    }).boxed()
-                }
-                ElementSchema::UnstructuredText(_) => {
-                    arb_text_reference().prop_map(move |text_ref| {
-                        NamedElementValue {
-                            name: name.clone(),
-                            value: ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                                value: text_ref,
-                                descriptor: TextDescriptor { restrictions: None },
-                            }),
-                            schema_index,
-                        }
-                    }).boxed()
-                }
-                ElementSchema::UnstructuredBinary(_) => {
-                    arb_binary_reference().prop_map(move |bin_ref| {
-                        NamedElementValue {
-                            name: name.clone(),
-                            value: ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
-                                value: bin_ref,
-                                descriptor: BinaryDescriptor { restrictions: None },
-                            }),
-                            schema_index,
-                        }
-                    }).boxed()
-                }
-            }
-        }).collect();
+                .collect();
 
-        (Just(schemas), strats)
-    }).prop_map(|(schemas, named_values)| {
-        (
-            DataSchema::Multimodal(schemas),
-            DataValue::Multimodal(NamedElementValues { elements: named_values }),
-        )
-    })
+            (Just(schemas), strats)
+        })
+        .prop_map(|(schemas, named_values)| {
+            (
+                DataSchema::Multimodal(schemas),
+                DataValue::Multimodal(NamedElementValues {
+                    elements: named_values,
+                }),
+            )
+        })
 }
 
 /// Generate a Value matching a specific AnalysedType (recursive).
@@ -1532,9 +1498,7 @@ fn arb_value_for_type(typ: AnalysedType) -> BoxedStrategy<Value> {
                 .iter()
                 .map(|f| arb_value_for_type(f.typ.clone()))
                 .collect();
-            field_strats
-                .prop_map(Value::Record)
-                .boxed()
+            field_strats.prop_map(Value::Record).boxed()
         }
         AnalysedType::Tuple(type_tuple) => {
             let item_strats: Vec<_> = type_tuple
@@ -1542,9 +1506,7 @@ fn arb_value_for_type(typ: AnalysedType) -> BoxedStrategy<Value> {
                 .iter()
                 .map(|t| arb_value_for_type(t.clone()))
                 .collect();
-            item_strats
-                .prop_map(Value::Tuple)
-                .boxed()
+            item_strats.prop_map(Value::Tuple).boxed()
         }
         AnalysedType::Variant(type_variant) => {
             let num_cases = type_variant.cases.len();
@@ -1606,10 +1568,7 @@ fn arb_vat_for_type(typ: AnalysedType) -> BoxedStrategy<ValueAndType> {
 
 /// Generate either a Tuple or Multimodal DataSchema+DataValue pair.
 fn arb_data() -> impl Strategy<Value = (DataSchema, DataValue)> {
-    prop_oneof![
-        arb_tuple_data(),
-        arb_multimodal_data(),
-    ]
+    prop_oneof![arb_tuple_data(), arb_multimodal_data(),]
 }
 
 // ── Proptest roundtrips ─────────────────────────────────────────────────────
@@ -2018,11 +1977,7 @@ fn depth_at_boundary_succeeds() {
     });
     let formatted = format_structural(&data).expect("format should succeed at boundary");
     let parsed = parse_structural(&formatted, &schema).expect("parse should succeed at boundary");
-    assert_eq!(
-        parsed,
-        data,
-        "Roundtrip should succeed at depth boundary"
-    );
+    assert_eq!(parsed, data, "Roundtrip should succeed at depth boundary");
 }
 
 #[test]

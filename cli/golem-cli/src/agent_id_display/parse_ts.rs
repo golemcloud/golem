@@ -36,7 +36,9 @@ impl Dialect for TsDialect {
     fn parse_char(lexer: &mut Lexer) -> Result<char, ParseError> {
         let (s, pos, _) = lexer.expect_string()?;
         let mut chars = s.chars();
-        let ch = chars.next().ok_or_else(|| perr(pos, "empty string for char"))?;
+        let ch = chars
+            .next()
+            .ok_or_else(|| perr(pos, "empty string for char"))?;
         if chars.next().is_some() {
             return Err(perr(pos, "expected single character"));
         }
@@ -224,12 +226,7 @@ impl Dialect for TsDialect {
                 };
                 Value::Result(Err(val))
             }
-            _ => {
-                return Err(perr(
-                    pos,
-                    &format!("expected 'ok' or 'error', got '{key}'"),
-                ))
-            }
+            _ => return Err(perr(pos, &format!("expected 'ok' or 'error', got '{key}'"))),
         };
         if *lexer.peek()? == Token::Comma {
             lexer.next_token()?;
@@ -338,10 +335,7 @@ impl Dialect for TsDialect {
                 expect_ident_key(lexer, "val")?;
                 let (ident, ipos, _) = lexer.expect_ident()?;
                 if ident != "Uint8Array" {
-                    return Err(perr(
-                        ipos,
-                        &format!("expected 'Uint8Array', got '{ident}'"),
-                    ));
+                    return Err(perr(ipos, &format!("expected 'Uint8Array', got '{ident}'")));
                 }
                 lexer.expect(&Token::LParen)?;
                 lexer.expect(&Token::LBrack)?;
@@ -381,10 +375,7 @@ impl Dialect for TsDialect {
 fn expect_ident_key(lexer: &mut Lexer, expected: &str) -> Result<(), ParseError> {
     let (name, pos, _) = lexer.expect_ident()?;
     if name != expected {
-        return Err(perr(
-            pos,
-            &format!("expected '{expected}', got '{name}'"),
-        ));
+        return Err(perr(pos, &format!("expected '{expected}', got '{name}'")));
     }
     lexer.expect(&Token::Colon)?;
     Ok(())

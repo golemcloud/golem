@@ -521,8 +521,7 @@ impl ThroughputBenchmark {
         for n in 0..config.size {
             rust_agent_ids.push(agent_id!("RustBenchmarkAgent", format!("test-{n}")));
             ts_agent_ids.push(agent_id!("BenchmarkAgent", format!("test-{n}")));
-            rust_agent_ids_for_http
-                .push(agent_id!("RustBenchmarkAgent", format!("test-{n}-http")));
+            rust_agent_ids_for_http.push(agent_id!("RustBenchmarkAgent", format!("test-{n}-http")));
             ts_agent_ids_for_http.push(agent_id!("BenchmarkAgent", format!("test-{n}-http")));
 
             ts_rpc_agent_id_pairs.push(AgentIdPair {

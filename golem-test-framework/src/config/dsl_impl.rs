@@ -16,7 +16,7 @@ use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
     build_ifs_archive, rename_component_if_needed, EnvironmentOptions, TestDsl, TestDslExtended,
-    WorkerInvocationResult, WorkerLogEventStream,
+    WorkerLogEventStream,
 };
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
@@ -50,13 +50,13 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::worker::{
     AgentCreationRequest, AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode,
+    RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry,
 };
-use golem_common::model::{AgentEvent, IdempotencyKey};
-use golem_common::model::{AgentFilter, PromiseId, ScanCursor};
-use golem_common::model::{AgentId, OplogIndex};
+use golem_common::model::{
+    AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
+};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -171,6 +171,8 @@ impl<Deps: TestDependencies> TestUserContext<Deps> {
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
+    type WorkerError = golem_client::Error<golem_client::api::WorkerError>;
+
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis()
     }
@@ -363,7 +365,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-    ) -> WorkerInvocationResult<AgentId> {
+        local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
+    ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
             .deps
             .worker_service()
@@ -377,11 +380,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     name: id.to_string(),
                     env,
                     config_vars,
+                    local_agent_config,
                 },
             )
-            .await?;
+            .await;
 
-        Ok(Ok(response.agent_id))
+        Ok(response.map(|r| r.agent_id))
     }
 
     async fn invoke_agent_with_key(
@@ -490,7 +494,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 let agent_type = component_at_rev
                     .metadata
                     .find_agent_type_by_name(&agent_id.agent_type)
-                    .map_err(|err| anyhow!("Agent type not found: {err}"))?
                     .ok_or_else(|| anyhow!("Agent type not found: {}", agent_id.agent_type))?;
                 let agent_method = agent_type
                     .methods
