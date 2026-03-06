@@ -36,6 +36,7 @@ use crate::model::oplog::{
     WorkerResourceId,
 };
 use crate::model::regions::OplogRegion;
+use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::model::{
     AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp,
     TransactionId, WorkerId,
@@ -45,7 +46,7 @@ use golem_wasm::analysis::analysed_type::{
     tuple, u64, variant,
 };
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
@@ -71,6 +72,10 @@ fn create_serialization_poem_serde_equivalence() {
             .collect(),
         created_by: AccountId::new(),
         config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]),
+        local_agent_config: vec![ParsedWorkerCreationLocalAgentConfigEntry {
+            key: vec!["foo".to_string(), "bar".to_string()],
+            value: 1.into_value_and_type(),
+        }],
         environment_id: EnvironmentId::new(),
         parent: Some(WorkerId {
             component_id: ComponentId(

@@ -1827,7 +1827,13 @@ async fn start_workers<T: RdbmsType>(
         );
         let agent_id = agent_id!("relational-databases", worker_name);
         let worker_id = executor
-            .start_agent_with(&component.id, agent_id.clone(), env.clone(), HashMap::new())
+            .start_agent_with(
+                &component.id,
+                agent_id.clone(),
+                env.clone(),
+                HashMap::new(),
+                Vec::new(),
+            )
             .await?;
         workers.push((worker_id, agent_id.clone()));
         let _result = executor

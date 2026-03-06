@@ -22,7 +22,7 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_worker_executor::services::component::ComponentService;
 use std::collections::{HashMap, HashSet};

@@ -614,7 +614,6 @@ pub fn lower_invocation(
             if let Some(agent_id) = agent_id {
                 let agent_type = component_metadata
                     .find_agent_type_by_name(&agent_id.agent_type)
-                    .map_err(WorkerExecutorError::runtime)?
                     .ok_or_else(|| {
                         WorkerExecutorError::invalid_request(format!(
                             "Agent type '{}' not found in component",
