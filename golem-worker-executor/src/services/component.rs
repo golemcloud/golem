@@ -24,7 +24,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::Component;
+use golem_service_base::model::component::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_service_base::storage::blob::BlobStorage;

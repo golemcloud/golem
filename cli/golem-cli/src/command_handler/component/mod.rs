@@ -1136,7 +1136,7 @@ impl ComponentCommandHandler {
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
                     config_vars: component_stager.config_vars_if_changed(),
-                    // FIXME: local-agent-config
+                    // FIXME: agent-config
                     local_agent_config: None,
                     env: component_stager.env_if_changed(),
                     agent_types,
