@@ -86,7 +86,10 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
+    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    OplogConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;

@@ -19,8 +19,8 @@ use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
-use golem_common::model::agent::{ConfigValueType, ConfigValueTypeLocal, ConfigValueTypeShared};
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{ConfigValueType, ConfigValueTypeLocal, ConfigValueTypeShared};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
     GolemAgentGetConfigValue,

@@ -157,10 +157,12 @@ async fn agent_reads_updated_environment_secret(
         .store()
         .await?;
 
+    let secret_path = vec!["secret".to_string()];
+
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: vec!["secret".into()],
+            path: secret_path.clone(),
             secret_value: json!("foo"),
         }],
     )
@@ -181,8 +183,12 @@ async fn agent_reads_updated_environment_secret(
 
     assert_eq!(parsed, json!({"secret": "foo"}));
 
-    let mut secrets = client.get_environment_agent_secrets(&env.id.0).await?;
-    let secret = secrets.values.swap_remove(0);
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path == secret_path)
+        .unwrap();
 
     client
         .update_agent_secret(
@@ -255,10 +261,12 @@ async fn agent_fails_on_deleted_environment_secret(
         .store()
         .await?;
 
+    let secret_path = vec!["secret".to_string()];
+
     user.deploy_environment_with(
         env.id,
         vec![DeploymentAgentSecretDefault {
-            path: vec!["secret".into()],
+            path: secret_path.clone(),
             secret_value: json!("foo"),
         }],
     )
@@ -278,8 +286,12 @@ async fn agent_fails_on_deleted_environment_secret(
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
     assert_eq!(parsed, json!({"secret": "foo"}));
 
-    let mut secrets = client.get_environment_agent_secrets(&env.id.0).await?;
-    let secret = secrets.values.swap_remove(0);
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path == secret_path)
+        .unwrap();
 
     client
         .delete_agent_secret(&secret.id.0, secret.revision.into())
@@ -319,7 +331,7 @@ async fn agent_reads_recreated_environment_secret(
         .store()
         .await?;
 
-    let secret_path = vec!["secret".into()];
+    let secret_path = vec!["secret".to_string()];
 
     user.deploy_environment_with(
         env.id,
@@ -334,8 +346,12 @@ async fn agent_reads_recreated_environment_secret(
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
-    let mut secrets = client.get_environment_agent_secrets(&env.id.0).await?;
-    let secret = secrets.values.swap_remove(0);
+    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secret = secrets
+        .values
+        .iter()
+        .find(|sec| sec.path == secret_path)
+        .unwrap();
 
     client
         .delete_agent_secret(&secret.id.0, secret.revision.into())
