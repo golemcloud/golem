@@ -68,5 +68,22 @@ mod hooks {
 }
 
 fn main() -> ExitCode {
+    // Check for --serve flag before normal clap parsing
+    #[cfg(feature = "mcp")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.iter().any(|a| a == "--serve") {
+            return main_wrapper(|| async {
+                match golem_cli::mcp::serve::run_mcp_from_args(&args).await {
+                    Ok(code) => code,
+                    Err(e) => {
+                        eprintln!("MCP server error: {}", e);
+                        ExitCode::FAILURE
+                    }
+                }
+            });
+        }
+    }
+
     main_wrapper(|| CommandHandler::handle_args(std::env::args_os(), Arc::new(NoHooks {})))
 }

@@ -3988,6 +3988,7 @@ dependencies = [
  "quote",
  "regex",
  "reqwest",
+ "rmcp",
  "rustyline",
  "serde",
  "serde_derive",

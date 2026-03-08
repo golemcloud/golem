@@ -13,6 +13,7 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
+mcp = ["dep:rmcp", "dep:axum"]
 
 [lib]
 harness = false
@@ -110,6 +111,8 @@ wasm-rquickjs = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
+rmcp = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
 
 [target.'cfg(not(any(target_os = "windows", target_vendor = "apple")))'.dependencies]
 openssl = { workspace = true }

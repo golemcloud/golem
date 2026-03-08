@@ -45,6 +45,9 @@ pub mod model;
 pub mod process;
 pub mod validation;
 
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 #[cfg(test)]
 test_r::enable!();
 
