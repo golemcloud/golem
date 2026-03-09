@@ -6,7 +6,7 @@ import "google/protobuf/timestamp.proto";
 import "golem/worker/worker_id.proto";
 
 message InvocationContext {
-  golem.worker.WorkerId parent = 1;
+  golem.worker.AgentId parent = 1;
   map<string, string> env = 2;
   map<string, string> config_vars = 3;
   optional TracingInvocationContext tracing = 4;

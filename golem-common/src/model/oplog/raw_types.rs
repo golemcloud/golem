@@ -346,17 +346,17 @@ pub enum DurableFunctionType {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 #[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
-pub enum WorkerError {
+pub enum AgentError {
     Unknown(String),
     InvalidRequest(String),
     StackOverflow,
     OutOfMemory,
     // The worker tried to grow its memory beyond the limits of the plan
     ExceededMemoryLimit,
-    AgentError(String),
+    InternalError(String),
 }
 
-impl WorkerError {
+impl AgentError {
     pub fn message(&self) -> &str {
         match self {
             Self::Unknown(message) => message,
@@ -364,7 +364,7 @@ impl WorkerError {
             Self::StackOverflow => "Stack overflow",
             Self::OutOfMemory => "Out of memory",
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
-            Self::AgentError(message) => message,
+            Self::InternalError(message) => message,
         }
     }
 

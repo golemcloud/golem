@@ -27,21 +27,22 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
-use golem_common::model::oplog::{OplogEntry, WorkerError};
+use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
     OplogIndex,
 };
 use golem_common::model::{
-    AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedWorkerId, TimestampedAgentInvocation, WorkerId,
+    AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
+    IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 
+use golem_common::model::agent::structural_format::format_structural;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,7 +57,7 @@ use wasmtime::Store;
 pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub receiver: UnboundedReceiver<WorkerCommand>,
     pub active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    pub owned_worker_id: OwnedWorkerId,
+    pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
     pub interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
@@ -93,7 +94,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 let mut inner_loop = InnerInvocationLoop {
                     receiver: &mut self.receiver,
                     active: self.active.clone(),
-                    owned_worker_id: self.owned_worker_id.clone(),
+                    owned_agent_id: self.owned_agent_id.clone(),
                     parent: self.parent.clone(),
                     waiting_for_command: self.waiting_for_command.clone(),
                     interrupt_signal: self.interrupt_signal.clone(),
@@ -158,7 +159,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         match RunningWorker::create_instance(self.parent.clone()).await {
             Ok((instance, store)) => {
                 self.parent.events().publish(Event::WorkerLoaded {
-                    worker_id: self.owned_worker_id.worker_id(),
+                    agent_id: self.owned_agent_id.agent_id(),
                     result: Ok(()),
                 });
                 Some((instance, store))
@@ -166,7 +167,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             Err(err) => {
                 warn!("Failed to start the worker: {err}");
                 self.parent.events().publish(Event::WorkerLoaded {
-                    worker_id: self.owned_worker_id.worker_id(),
+                    agent_id: self.owned_agent_id.agent_id(),
                     result: Err(err.clone()),
                 });
                 self.parent.stop_internal(true, Some(err)).await;
@@ -190,15 +191,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let span = span!(
             Level::INFO,
             "invocation",
-            worker_id = %self.owned_worker_id.worker_id,
+            agent_id = %self.owned_agent_id.agent_id,
             agent_type = self.parent
-                .agent_id
+                .parsed_agent_id
                 .as_ref()
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
         );
         let prepare_result =
-            Ctx::prepare_instance(&self.owned_worker_id.worker_id, instance, &mut *store)
+            Ctx::prepare_instance(&self.owned_agent_id.agent_id, instance, &mut *store)
                 .instrument(span)
                 .await;
 
@@ -238,7 +239,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     receiver: &'a mut UnboundedReceiver<WorkerCommand>,
     active: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
@@ -333,7 +334,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 let target_revision = *update.description.target_revision();
                 let mut store = self.store.lock().await;
                 let mut invocation = Invocation {
-                    owned_worker_id: self.owned_worker_id.clone(),
+                    owned_agent_id: self.owned_agent_id.clone(),
                     parent: self.parent.clone(),
                     instance: self.instance,
                     store: store.deref_mut(),
@@ -358,7 +359,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                 let mut store = self.store.lock().await;
                 let mut invocation = Invocation {
-                    owned_worker_id: self.owned_worker_id.clone(),
+                    owned_agent_id: self.owned_agent_id.clone(),
                     parent: self.parent.clone(),
                     instance: self.instance,
                     store: store.deref_mut(),
@@ -423,7 +424,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         let store = store.deref_mut();
 
         let mut invocation = Invocation {
-            owned_worker_id: self.owned_worker_id.clone(),
+            owned_agent_id: self.owned_agent_id.clone(),
             parent: self.parent.clone(),
             instance: self.instance,
             store,
@@ -448,7 +449,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 /// mutable reference to the instance `Store`. The instance mutex is held for the whole duration
 /// of performing an invocation.
 struct Invocation<'a, Ctx: WorkerCtx> {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     instance: &'a Instance,
     store: &'a mut Store<Ctx>,
@@ -524,9 +525,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             parent: invocation_span,
             Level::INFO,
             "invocation",
-            worker_id = %self.owned_worker_id.worker_id,
+            agent_id = %self.owned_agent_id.agent_id,
             agent_type = self.parent
-                .agent_id
+                .parsed_agent_id
                 .as_ref()
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -585,8 +586,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &mut invocation_context,
             &idempotency_key,
             &invocation,
-            &self.owned_worker_id.worker_id(),
-            &self.parent.agent_id,
+            &self.owned_agent_id.agent_id(),
+            &self.parent.parsed_agent_id,
         );
 
         let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
@@ -608,7 +609,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let lowered = lower_invocation(
             invocation_for_lowering,
             &component_metadata,
-            self.parent.agent_id.as_ref(),
+            self.parent.parsed_agent_id.as_ref(),
         )?;
 
         let result = invoke_observed_and_traced(
@@ -677,7 +678,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .on_invocation_failure(
                         &full_function_name,
                         &TrapType::Error {
-                            error: WorkerError::Unknown(error.to_string()),
+                            error: AgentError::Unknown(error.to_string()),
                             retry_from: OplogIndex::INITIAL,
                         },
                     )
@@ -718,10 +719,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let span = span!(
             Level::INFO,
             "manual_update",
-            worker_id = %self.owned_worker_id.worker_id,
+            agent_id = %self.owned_agent_id.agent_id,
             target_revision = %target_revision,
             agent_type = self.parent
-                .agent_id
+                .parsed_agent_id
                 .as_ref()
                 .map(|id| id.agent_type.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -747,7 +748,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
-            self.parent.agent_id.as_ref(),
+            self.parent.parsed_agent_id.as_ref(),
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -913,8 +914,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         invocation_context: &mut InvocationContextStack,
         idempotency_key: &IdempotencyKey,
         invocation: &AgentInvocation,
-        worker_id: &WorkerId,
-        agent_id: &Option<AgentId>,
+        agent_id: &AgentId,
+        parsed_agent_id: &Option<ParsedAgentId>,
     ) {
         let invocation_span = invocation_context.spans.first().start_span(None);
         invocation_span.set_attribute(
@@ -934,17 +935,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             AttributeValue::String(format!("{:?}", invocation.kind())),
         );
         invocation_span.set_attribute(
-            "worker_id".to_string(),
-            AttributeValue::String(worker_id.to_string()),
+            "agent_id".to_string(),
+            AttributeValue::String(agent_id.to_string()),
         );
-        if let Some(agent_id) = agent_id {
+        if let Some(parsed_agent_id) = parsed_agent_id {
             invocation_span.set_attribute(
                 "agent_type".to_string(),
-                AttributeValue::String(agent_id.agent_type.to_string()),
+                AttributeValue::String(parsed_agent_id.agent_type.to_string()),
             );
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),
-                AttributeValue::String(agent_id.parameters.to_string()),
+                AttributeValue::String(
+                    format_structural(&parsed_agent_id.parameters)
+                        .unwrap_or_else(|err| format!("Cannot render: {}", err)),
+                ),
             )
         }
         invocation_context.push(invocation_span);
@@ -959,7 +963,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
-            self.parent.agent_id.as_ref(),
+            self.parent.parsed_agent_id.as_ref(),
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

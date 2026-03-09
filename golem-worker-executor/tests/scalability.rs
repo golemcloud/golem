@@ -15,7 +15,7 @@
 use crate::Tracing;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
@@ -56,8 +56,8 @@ async fn spawning_many_workers_that_sleep(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn agent_id(n: i32) -> AgentId {
-        agent_id!("clocks", format!("sleeping-agent-{n}"))
+    fn agent_id(n: i32) -> ParsedAgentId {
+        agent_id!("Clocks", format!("sleeping-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -111,7 +111,7 @@ async fn spawning_many_workers_that_sleep(
             {
                 spawn(async move {
                     let agent_id = agent_id(n);
-                    let _worker_id = executor_clone
+                    let _agent_id = executor_clone
                         .start_agent(&component_clone.id, agent_id.clone())
                         .await?;
 
@@ -173,8 +173,8 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    fn agent_id(n: i32) -> AgentId {
-        agent_id!("clocks", format!("sleeping-suspending-agent-{n}"))
+    fn agent_id(n: i32) -> ParsedAgentId {
+        agent_id!("Clocks", format!("sleeping-suspending-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -320,7 +320,7 @@ async fn initial_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("large-initial-memory-agent", format!("mem-{i}"));
+        let agent_id = agent_id!("LargeInitialMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
@@ -372,7 +372,7 @@ async fn dynamic_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("large-dynamic-memory-agent", format!("mem-{i}"));
+        let agent_id = agent_id!("LargeDynamicMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone

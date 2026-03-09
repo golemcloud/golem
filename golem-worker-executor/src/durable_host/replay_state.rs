@@ -22,7 +22,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedWorkerId,
+    AgentInvocationPayload, AgentInvocationResult, ForkResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
@@ -50,7 +50,7 @@ pub struct AgentInvocationStartedEntry {
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
-    owned_worker_id: OwnedWorkerId,
+    owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
     replay_target: AtomicOplogIndex,
     /// The oplog index of the last replayed entry
@@ -73,14 +73,14 @@ struct InternalReplayState {
 
 impl ReplayState {
     pub async fn new(
-        owned_worker_id: OwnedWorkerId,
+        owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
     ) -> Self {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
         let mut result = Self {
-            owned_worker_id,
+            owned_agent_id,
             oplog,
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -342,7 +342,7 @@ impl ReplayState {
         } else {
             panic!(
                 "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
-                self.owned_worker_id,
+                self.owned_agent_id,
                 read_idx,
                 self.replay_target.get(),
                 self.last_replayed_non_hint_index.get()

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
-use crate::model::worker::WorkerName;
+use crate::model::worker::RawAgentId;
 use crate::model::GuestLanguage;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ impl TryUpdateAllWorkersResult {
 pub struct WorkerUpdateAttempt {
     pub component_name: ComponentName,
     pub target_revision: ComponentRevision,
-    pub worker_name: WorkerName,
+    pub agent_name: RawAgentId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

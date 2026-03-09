@@ -19,8 +19,8 @@ use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, AgentTypeName, ConfigValueType};
+use golem_common::model::agent::ConfigValueType;
+use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::oplog::host_functions::{
     GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
@@ -42,8 +42,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .agent_types_service()
                 .get_all(
-                    self.owned_worker_id.environment_id,
-                    self.owned_worker_id.worker_id.component_id,
+                    self.owned_agent_id.environment_id,
+                    self.owned_agent_id.agent_id.component_id,
                     self.state.component_metadata.revision,
                 )
                 .await
@@ -79,8 +79,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .agent_types_service()
                 .get(
-                    self.owned_worker_id.environment_id,
-                    self.owned_worker_id.worker_id.component_id,
+                    self.owned_agent_id.environment_id,
+                    self.owned_agent_id.agent_id.component_id,
                     component_revision,
                     &agent_type_name,
                 )
@@ -118,11 +118,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = AgentId::new(
-                        AgentTypeName(agent_type_name).to_wit_naming(),
+                    let agent_id = ParsedAgentId::new(
+                        AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),
-                    );
+                    )
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                     Ok(Ok(agent_id.to_string()))
                 }
                 Err(err) => Ok(Err(AgentError::InvalidInput(err))),
@@ -139,7 +140,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
-        match AgentId::parse(agent_id, component_metadata) {
+        match ParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => Ok(Ok((
                 agent_id.agent_type.to_string(),
                 agent_id.parameters.into(),
@@ -159,7 +160,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             let promise_id: PromiseId = promise_id.clone().into();
-            if promise_id.worker_id.component_id != self.state.component_metadata.id {
+            if promise_id.agent_id.component_id != self.state.component_metadata.id {
                 let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
                 let persisted = durability
                     .persist(
@@ -229,7 +230,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         tracing::debug!("Agent getting config value for key {}", key_str);
 
         let agent_id = self
-            .agent_id()
+            .parsed_agent_id()
             .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
 
         let expected_type = AnalysedType::from(expected_type);

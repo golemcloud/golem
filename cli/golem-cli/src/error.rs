@@ -80,7 +80,7 @@ pub mod service {
         LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, TokenError,
         WorkerError,
     };
-    use golem_common::model::{PromiseId, WorkerId};
+    use golem_common::model::{AgentId, PromiseId};
     use itertools::Itertools;
     use reqwest::StatusCode;
     use std::error::Error;
@@ -1093,14 +1093,14 @@ pub mod service {
         }
     }
 
-    pub fn display_worker_id(worker_id: WorkerId) -> String {
-        format!("{}/{}", worker_id.component_id, worker_id.worker_name)
+    pub fn display_agent_id(agent_id: AgentId) -> String {
+        format!("{}/{}", agent_id.component_id, agent_id.agent_id)
     }
 
     pub fn display_promise_id(promise_id: PromiseId) -> String {
         format!(
             "{}/{}",
-            display_worker_id(promise_id.worker_id),
+            display_agent_id(promise_id.agent_id),
             promise_id.oplog_idx
         )
     }

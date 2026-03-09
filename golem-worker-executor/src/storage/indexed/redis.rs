@@ -36,11 +36,8 @@ impl RedisIndexedStorage {
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { worker_id: _ } => format!("worker:oplog:{key}"),
-            IndexedStorageNamespace::CompressedOpLog {
-                worker_id: _,
-                level,
-            } => {
+            IndexedStorageNamespace::OpLog { agent_id: _ } => format!("worker:oplog:{key}"),
+            IndexedStorageNamespace::CompressedOpLog { agent_id: _, level } => {
                 format!("worker:c{level}-oplog:{key}")
             }
         }

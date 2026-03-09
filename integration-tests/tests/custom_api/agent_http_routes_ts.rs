@@ -30,15 +30,15 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
         deps,
         vec![
             (
-                AgentTypeName("http-agent".to_string()),
+                AgentTypeName("HttpAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("cors-agent".to_string()),
+                AgentTypeName("CorsAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
             (
-                AgentTypeName("webhook-agent".to_string()),
+                AgentTypeName("WebhookAgent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             ),
         ],
@@ -857,7 +857,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
                 .base_url
                 .join("/webhook-agents/test-agent/set-test-server-url")?,
         )
-        .json(&serde_json::json!({ "test-server-url": test_server_url }))
+        .json(&serde_json::json!({ "testServerUrl": test_server_url }))
         .send()
         .await?
         .error_for_status()?;

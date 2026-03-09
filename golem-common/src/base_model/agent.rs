@@ -14,7 +14,7 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
-use crate::base_model::WorkerId;
+use crate::base_model::AgentId;
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
@@ -370,12 +370,14 @@ impl AgentDependency {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object, IntoValue, FromValue)
 )]
-#[cfg_attr(feature = "full", desert(evolution(FieldAdded("http_mount", None))))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
     pub type_name: AgentTypeName,
     pub description: String,
+    #[serde(default)]
+    pub source_language: String,
     pub constructor: AgentConstructor,
     pub methods: Vec<AgentMethod>,
     pub dependencies: Vec<AgentDependency>,
@@ -395,6 +397,7 @@ impl AgentType {
         Self {
             type_name: self.type_name,
             description: self.description,
+            source_language: self.source_language,
             constructor: self.constructor,
             methods: self.methods,
             dependencies: self
@@ -417,10 +420,7 @@ impl AgentType {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    fn resolve_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String>;
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String>;
 }
 
 #[derive(
@@ -494,11 +494,13 @@ impl DataValue {
                         .elements
                         .into_iter()
                         .zip(schema.elements)
-                        .map(|(value, schema)| {
+                        .enumerate()
+                        .map(|(idx, (value, schema))| {
                             ElementValue::try_from_untyped_json(value.value, schema.schema).map(
                                 |v| NamedElementValue {
                                     name: value.name,
                                     value: v,
+                                    schema_index: idx as u32,
                                 },
                             )
                         })
@@ -697,13 +699,12 @@ pub struct NamedElementValues {
 
 /// Identifies a deployed, instantiated agent.
 ///
-/// AgentId is convertible to and from string, and is used as _worker names_.
+/// ParsedAgentId is convertible to and from string, and is used as _agent ids_.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AgentId {
+pub struct ParsedAgentId {
     pub agent_type: AgentTypeName,
     pub parameters: DataValue,
     pub phantom_id: Option<Uuid>,
-    pub(crate) wrapper_agent_type: String,
     pub(crate) as_string: String,
 }
 
@@ -718,6 +719,8 @@ pub struct AgentId {
 pub struct NamedElementValue {
     pub name: String,
     pub value: ElementValue,
+    #[serde(default)]
+    pub schema_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1205,7 +1208,7 @@ pub struct OidcPrincipal {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPrincipal {
-    pub agent_id: WorkerId,
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoValue, FromValue)]
