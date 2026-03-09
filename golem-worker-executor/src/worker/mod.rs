@@ -40,8 +40,10 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use chrono::Utc;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig};
+use golem_common::model::WorkerStatus;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -51,7 +53,8 @@ use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentCo
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
-    Timestamp, TimestampedAgentInvocation, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    ScheduledAction, Timestamp, TimestampedAgentInvocation, WorkerId, WorkerMetadata,
+    WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -1777,6 +1780,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await;
 
+                    self.schedule_oplog_archive_if_needed(
+                        &old_status,
+                        &updated_status,
+                    )
+                    .await;
+
                     true
                 } else {
                     false
@@ -1791,6 +1800,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         } else {
             false
+        }
+    }
+
+    async fn schedule_oplog_archive_if_needed(
+        &self,
+        old_status: &WorkerStatusRecord,
+        new_status: &WorkerStatusRecord,
+    ) {
+        if old_status.status != new_status.status
+            && matches!(
+                new_status.status,
+                WorkerStatus::Idle | WorkerStatus::Failed | WorkerStatus::Exited
+            )
+        {
+            let archive_interval = self.config().oplog.archive_interval;
+            let last_oplog_index = new_status.oplog_idx;
+            let account_id = self.initial_worker_metadata.created_by.clone();
+
+            debug!(
+                worker_id = %self.owned_worker_id,
+                new_status = ?new_status.status,
+                "Scheduling ArchiveOplog after status transition"
+            );
+
+            self.scheduler_service()
+                .schedule(
+                    Utc::now() + archive_interval,
+                    ScheduledAction::ArchiveOplog {
+                        account_id,
+                        owned_worker_id: self.owned_worker_id.clone(),
+                        last_oplog_index,
+                        next_after: archive_interval,
+                    },
+                )
+                .await;
         }
     }
 

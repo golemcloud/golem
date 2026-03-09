@@ -16,12 +16,14 @@ use crate::Tracing;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_common::model::agent::AgentId;
+use golem_common::model::WorkerStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
+use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor_test_utils::{
-    start, start_customized, LastUniqueId, PrecompiledComponent, TestContext,
-    WorkerExecutorTestDependencies,
+    start, start_customized, start_with_oplog_config, LastUniqueId, PrecompiledComponent,
+    TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
 use std::future::Future;
@@ -307,7 +309,8 @@ async fn initial_large_memory_allocation(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None, None).await?;
+    let executor =
+        start_customized(deps, &context, Some(768 * 1024 * 1024), None, None, None).await?;
     let component = executor
         .component_dep(&context.default_environment_id, large_initial_memory)
         .store()
@@ -359,7 +362,8 @@ async fn dynamic_large_memory_allocation(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None, None).await?;
+    let executor =
+        start_customized(deps, &context, Some(768 * 1024 * 1024), None, None, None).await?;
     let component = executor
         .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
@@ -396,6 +400,170 @@ async fn dynamic_large_memory_allocation(
     for i in 0..N {
         assert_eq!(results[i], data_value!(0u64));
     }
+
+    Ok(())
+}
+
+/// Helper that checks whether any `ArchiveOplog` action has been scheduled for the
+/// given redis key prefix. It scans Redis for sorted-set keys matching
+/// `{prefix}worker:schedule:*` and returns the total number of entries across all
+/// matching keys. `ScheduledAction::ArchiveOplog` entries are stored in these sets.
+async fn count_scheduled_actions(
+    redis: &dyn golem_test_framework::components::redis::Redis,
+    redis_prefix: &str,
+) -> usize {
+    let mut conn = redis.get_async_connection(0).await;
+    let pattern = format!("{redis_prefix}worker:schedule:*");
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(&pattern)
+        .query_async(&mut conn)
+        .await
+        .unwrap_or_default();
+    let mut total = 0usize;
+    for key in &keys {
+        let count: usize = redis::cmd("ZCARD")
+            .arg(key)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(0);
+        total += count;
+    }
+    total
+}
+
+/// Wait until at least one scheduled action appears in Redis, or timeout.
+async fn wait_for_scheduled_archive(
+    redis: &dyn golem_test_framework::components::redis::Redis,
+    redis_prefix: &str,
+    initial_count: usize,
+    timeout: Duration,
+) -> bool {
+    let start = tokio::time::Instant::now();
+    while start.elapsed() < timeout {
+        let count = count_scheduled_actions(redis, redis_prefix).await;
+        if count > initial_count {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    false
+}
+
+#[test]
+#[tracing::instrument]
+async fn oplog_archive_scheduled_when_worker_becomes_idle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let oplog_config = OplogConfig {
+        archive_interval: Duration::from_secs(1),
+        entry_count_limit: 5,
+        ..Default::default()
+    };
+    let executor = start_with_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("environment", "archive-idle-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Record the number of scheduled actions before the invocation
+    let redis_prefix = context.redis_prefix();
+    let before_count = count_scheduled_actions(deps.redis.as_ref(), &redis_prefix).await;
+
+    // Invoke a simple function; after it completes the worker becomes Idle
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
+        .await?;
+
+    // Verify the worker is idle
+    let metadata = executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
+        .await?;
+    assert_eq!(metadata.status, WorkerStatus::Idle);
+
+    // Wait for ArchiveOplog to be scheduled
+    let found = wait_for_scheduled_archive(
+        deps.redis.as_ref(),
+        &redis_prefix,
+        before_count,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    assert!(
+        found,
+        "Expected ArchiveOplog to be scheduled after worker became Idle"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn oplog_archive_scheduled_when_worker_fails(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let oplog_config = OplogConfig {
+        archive_interval: Duration::from_secs(1),
+        entry_count_limit: 5,
+        ..Default::default()
+    };
+    let executor = start_with_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("golem-host-api", "archive-failed-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    // Record the number of scheduled actions before triggering failure
+    let redis_prefix = context.redis_prefix();
+    let before_count = count_scheduled_actions(deps.redis.as_ref(), &redis_prefix).await;
+
+    // Invoke with 0 retries to cause immediate failure
+    let _result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "fail_with_custom_max_retries",
+            data_value!(0u64),
+        )
+        .await;
+
+    // Verify the worker is failed
+    let metadata = executor
+        .wait_for_status(&worker_id, WorkerStatus::Failed, Duration::from_secs(15))
+        .await?;
+    assert_eq!(metadata.status, WorkerStatus::Failed);
+
+    // Wait for ArchiveOplog to be scheduled
+    let found = wait_for_scheduled_archive(
+        deps.redis.as_ref(),
+        &redis_prefix,
+        before_count,
+        Duration::from_secs(10),
+    )
+    .await;
+
+    assert!(
+        found,
+        "Expected ArchiveOplog to be scheduled after worker Failed"
+    );
 
     Ok(())
 }
