@@ -1173,6 +1173,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
             OplogEntry::Snapshot {
                 data, mime_type, ..
             } => (data, mime_type),
+            OplogEntry::PendingUpdate {
+                description:
+                    UpdateDescription::SnapshotBased {
+                        payload, mime_type, ..
+                    },
+                ..
+            } => (payload, mime_type),
             _ => {
                 warn!(
                     "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
@@ -2325,11 +2332,25 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         UpdateDescription::Automatic {
                             target_revision, ..
                         } => {
-                            // snapshot update will be succeeded as part of the replay.
-                            let result = Self::resume_replay(store, instance, false).await;
-                            record_resume_worker(start.elapsed());
+                            let replay_result = async {
+                                if let SnapshotRecoveryResult::Failed =
+                                    Self::try_load_snapshot(store, instance).await
+                                {
+                                    return Err(WorkerExecutorError::failed_to_resume_worker(
+                                        agent_id.clone(),
+                                        WorkerExecutorError::runtime("loading snapshot failed"),
+                                    ));
+                                };
+                                // automatic update will be succeeded as part of the replay.
+                                let result = Self::resume_replay(store, instance, false).await?;
 
-                            match result {
+                                record_resume_worker(start.elapsed());
+
+                                Ok(result)
+                            }
+                            .await;
+
+                            match replay_result {
                                 Err(error) => {
                                     // replay failed. There are two cases here:
                                     // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
@@ -2367,18 +2388,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         _ => Err(error),
                                     }
                                 }
-                                _ => result,
+                                _ => replay_result,
                             }
                         }
                     }
                 }
                 None => match Self::try_load_snapshot(store, instance).await {
-                    SnapshotRecoveryResult::Success => {
-                        let result = Self::resume_replay(store, instance, false).await;
-                        record_resume_worker(start.elapsed());
-                        result
-                    }
-                    SnapshotRecoveryResult::NotAttempted => {
+                    SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                         let result = Self::resume_replay(store, instance, false).await;
                         record_resume_worker(start.elapsed());
                         result
