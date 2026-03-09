@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -34,8 +34,6 @@ pub mod login;
 pub mod lucene;
 pub mod mcp_deployment;
 pub mod oplog;
-pub mod optional_field_update;
-#[cfg(feature = "full")]
 pub mod parsed_function_name;
 pub mod plan;
 pub mod plugin_registration;
@@ -54,6 +52,7 @@ pub use crate::base_model::*;
 use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
+use self::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::base_model::agent::AgentId;
 use crate::base_model::agent::Principal;
 use crate::model::account::AccountId;
@@ -496,6 +495,7 @@ pub struct WorkerMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub config_vars: BTreeMap<String, String>,
+    pub local_agent_config: Vec<ParsedWorkerCreationLocalAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
@@ -514,6 +514,7 @@ impl WorkerMetadata {
             environment_id,
             created_by,
             config_vars: BTreeMap::new(),
+            local_agent_config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),

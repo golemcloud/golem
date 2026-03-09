@@ -15,6 +15,7 @@ autotests = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
+golem-service-base = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
@@ -45,6 +46,7 @@ serde_yaml = { workspace = true }
 goldenfile = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
+assert2 = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 backtrace-on-stack-overflow = { workspace = true }

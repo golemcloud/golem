@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -52,6 +52,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
@@ -69,6 +70,13 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     .map(|pr| pr.into())
                     .collect(),
                 config_vars: config_vars.into_iter().collect(),
+                local_agent_config: local_agent_config
+                    .into_iter()
+                    .map(|lac| oplog::LocalAgentConfigEntry {
+                        key: lac.key,
+                        value: lac.value.into(),
+                    })
+                    .collect(),
             }),
             PublicOplogEntry::HostCall(HostCallParams {
                 timestamp,
@@ -756,6 +764,8 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .map(golem_common::model::component::PluginPriority)
                     .collect(),
                 config_vars: params.config_vars.into_iter().collect(),
+                // FIXME: agent-config
+                local_agent_config: Vec::new(),
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),

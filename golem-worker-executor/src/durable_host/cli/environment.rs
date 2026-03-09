@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -18,10 +18,11 @@ use crate::services::HasWorker;
 use crate::worker::merge_worker_env_with_component_env;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::WorkerId;
+use wasmtime_wasi::cli::WasiCliView as _;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
+    async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
         let component_env = self.state.component_metadata.env.clone();
 
         let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
@@ -47,15 +48,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(env)
     }
 
-    async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {
+    async fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {
         // NOTE: No need to persist the results of this function as the result values are persisted as part of the initial Create oplog entry
         self.observe_function_call("cli::environment", "get_arguments");
-        Host::get_arguments(&mut self.as_wasi_view()).await
+        let mut view = self.as_wasi_view();
+        Host::get_arguments(&mut view.cli()).await
     }
 
-    async fn initial_cwd(&mut self) -> anyhow::Result<Option<String>> {
+    async fn initial_cwd(&mut self) -> wasmtime::Result<Option<String>> {
         // NOTE: No need to persist the results of this function as the result values are persisted as part of the initial Create oplog entry
         self.observe_function_call("cli::environment", "initial_cwd");
-        Host::initial_cwd(&mut self.as_wasi_view()).await
+        let mut view = self.as_wasi_view();
+        Host::initial_cwd(&mut view.cli()).await
     }
 }

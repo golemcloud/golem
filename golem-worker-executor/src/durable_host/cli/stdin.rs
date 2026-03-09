@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -16,11 +16,12 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use wasmtime_wasi::cli::WasiCliView as _;
 use wasmtime_wasi::p2::bindings::cli::stdin::{Host, InputStream};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    fn get_stdin(&mut self) -> anyhow::Result<Resource<InputStream>> {
+    fn get_stdin(&mut self) -> wasmtime::Result<Resource<InputStream>> {
         self.observe_function_call("cli::stdin", "get_stdin");
-        self.as_wasi_view().get_stdin()
+        self.as_wasi_view().cli().get_stdin()
     }
 }

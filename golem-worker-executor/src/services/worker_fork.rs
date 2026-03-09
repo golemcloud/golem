@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -28,10 +28,11 @@ use crate::services::{
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService,
-    HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
-    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
+    HasExtraDeps, HasFileLoader, HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin,
+    HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
+    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
@@ -104,7 +105,9 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub file_loader: Arc<FileLoader>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
+    pub shutdown_token: tokio_util::sync::CancellationToken,
     pub extra_deps: Ctx::ExtraDeps,
+    pub leak_sentinel: Arc<()>,
 }
 
 impl<Ctx: WorkerCtx> HasEvents for DefaultWorkerFork<Ctx> {
@@ -273,6 +276,18 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasShutdownToken for DefaultWorkerFork<Ctx> {
+    fn shutdown_token(&self) -> tokio_util::sync::CancellationToken {
+        self.shutdown_token.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasLeakSentinel for DefaultWorkerFork<Ctx> {
+    fn leak_sentinel(&self) -> Arc<()> {
+        self.leak_sentinel.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -302,7 +317,9 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             file_loader: self.file_loader.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            shutdown_token: self.shutdown_token.clone(),
             extra_deps: self.extra_deps.clone(),
+            leak_sentinel: self.leak_sentinel.clone(),
         }
     }
 }
@@ -338,7 +355,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
         extra_deps: Ctx::ExtraDeps,
+        leak_sentinel: Arc<()>,
     ) -> Self {
         Self {
             rpc,
@@ -367,7 +386,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             file_loader,
             oplog_processor_plugin,
             resource_limits,
+            shutdown_token,
             extra_deps,
+            leak_sentinel,
         }
     }
 
@@ -441,6 +462,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             &owned_source_worker_id,
             None,
             None,
+            Vec::new(),
             None,
             None,
             &InvocationContextStack::fresh(),
@@ -454,8 +476,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             worker_id: target_worker_id.clone(),
             created_by: fork_account_id,
             environment_id,
-            env: initial_source_worker_metadata.env.clone(),
-            config_vars: initial_source_worker_metadata.config_vars.clone(),
+            env: initial_source_worker_metadata.env,
+            config_vars: initial_source_worker_metadata.config_vars,
+            local_agent_config: initial_source_worker_metadata.local_agent_config,
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
@@ -480,7 +503,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 target_initial_oplog_entry,
                 target_worker_metadata,
                 read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
-                    initial_source_worker_metadata.last_known_status.clone(),
+                    initial_source_worker_metadata.last_known_status,
                 ))),
                 read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
                     ExecutionStatus::Suspended {
@@ -514,6 +537,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 worker_id: _,
                 original_phantom_id,
             } => Some(OplogEntry::Create {
@@ -528,6 +552,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 config_vars,
+                local_agent_config,
                 original_phantom_id,
             }),
             _ => None,

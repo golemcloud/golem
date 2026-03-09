@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -136,10 +136,7 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub fn find_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
         self.cache
             .lock()
             .unwrap()
@@ -348,15 +345,11 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type_by_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
-        Ok(self
-            .agent_types
+    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
+        self.agent_types
             .iter()
             .find(|t| &t.type_name == agent_type)
-            .cloned())
+            .cloned()
     }
 
     pub fn find_agent_type_by_wrapper_name(
@@ -375,7 +368,7 @@ impl ComponentMetadataInnerData {
         agent_type: &AgentTypeName,
     ) -> Result<Option<InvokableFunction>, String> {
         let agent_type = self
-            .find_agent_type_by_name(agent_type)?
+            .find_agent_type_by_name(agent_type)
             .ok_or_else(|| format!("Agent type {} not found", agent_type))?;
 
         let root_package_name = self
@@ -561,7 +554,7 @@ pub(crate) struct ComponentMetadataInnerCache {
     oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types_by_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
+    agent_types_by_type_name: HashMap<AgentTypeName, Option<AgentType>>,
     agent_types_by_wrapper_type_name: HashMap<AgentTypeName, Result<Option<AgentType>, String>>,
     functions_by_agent_constructor:
         HashMap<AgentTypeName, Result<Option<InvokableFunction>, String>>,
@@ -667,7 +660,7 @@ impl ComponentMetadataInnerCache {
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &AgentTypeName,
-    ) -> Result<Option<AgentType>, String> {
+    ) -> Option<AgentType> {
         if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {

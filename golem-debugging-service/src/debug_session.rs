@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -240,6 +240,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             environment_id,
             created_by,
             config_vars,
+            local_agent_config,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -253,6 +254,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             environment_id,
             created_by,
             config_vars,
+            local_agent_config: local_agent_config.into_iter().map(Into::into).collect(),
             parent,
             component_size,
             initial_total_linear_memory_size,

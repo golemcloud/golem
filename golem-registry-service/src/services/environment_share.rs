@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -144,9 +144,7 @@ impl EnvironmentShareService {
             return Err(EnvironmentShareError::ConcurrentModification);
         };
 
-        let current_revision = environment_share.revision;
-
-        environment_share.revision = current_revision.next()?;
+        environment_share.revision = environment_share.revision.next()?;
         environment_share.roles = update.roles;
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);

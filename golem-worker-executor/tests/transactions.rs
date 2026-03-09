@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -25,7 +25,7 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
@@ -38,6 +38,14 @@ use tracing::{debug, instrument, Instrument};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 struct TestHttpServer {
@@ -138,6 +146,7 @@ impl TestHttpServer {
 async fn golem_rust_jump(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -146,11 +155,7 @@ async fn golem_rust_jump(
     let http_server = TestHttpServer::start(1).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -159,7 +164,13 @@ async fn golem_rust_jump(
 
     let agent_id = agent_id!("golem-host-api", "jump");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -212,17 +223,14 @@ async fn golem_rust_jump(
 async fn golem_rust_explicit_oplog_commit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -249,17 +257,14 @@ async fn golem_rust_explicit_oplog_commit(
 async fn golem_rust_set_retry_policy(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -317,6 +322,7 @@ async fn golem_rust_set_retry_policy(
 async fn golem_rust_atomic_region(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -324,11 +330,7 @@ async fn golem_rust_atomic_region(
 
     let http_server = TestHttpServer::start(2).await;
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -337,7 +339,13 @@ async fn golem_rust_atomic_region(
 
     let agent_id = agent_id!("golem-host-api", "atomic-region");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor
@@ -366,6 +374,7 @@ async fn golem_rust_atomic_region(
 async fn golem_rust_idempotence_on(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -374,11 +383,7 @@ async fn golem_rust_idempotence_on(
     let http_server = TestHttpServer::start(1).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -387,7 +392,13 @@ async fn golem_rust_idempotence_on(
 
     let agent_id = agent_id!("golem-host-api", "idempotence-flag-on");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor
@@ -413,6 +424,7 @@ async fn golem_rust_idempotence_on(
 async fn golem_rust_idempotence_off(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -421,11 +433,7 @@ async fn golem_rust_idempotence_off(
     let http_server = TestHttpServer::start(1).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -434,7 +442,13 @@ async fn golem_rust_idempotence_off(
 
     let agent_id = agent_id!("golem-host-api", "idempotence-flag-off");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -467,6 +481,7 @@ async fn golem_rust_idempotence_off(
 async fn golem_rust_persist_nothing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -475,11 +490,7 @@ async fn golem_rust_persist_nothing(
     let http_server = TestHttpServer::start(2).await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -488,7 +499,13 @@ async fn golem_rust_persist_nothing(
 
     let agent_id = agent_id!("golem-host-api", "persist-nothing");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     let result = executor
@@ -516,6 +533,7 @@ async fn golem_rust_persist_nothing(
 async fn golem_rust_fallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -531,11 +549,7 @@ async fn golem_rust_fallible_transaction(
     .await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -544,7 +558,13 @@ async fn golem_rust_fallible_transaction(
 
     let agent_id = agent_id!("golem-host-api", "fallible-transaction");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -587,6 +607,7 @@ async fn golem_rust_fallible_transaction(
 async fn golem_rust_infallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -602,11 +623,7 @@ async fn golem_rust_infallible_transaction(
     .await;
 
     let component = executor
-        .component(
-            &context.default_environment_id,
-            "golem_it_host_api_tests_release",
-        )
-        .name("golem-it:host-api-tests")
+        .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
 
@@ -615,7 +632,13 @@ async fn golem_rust_infallible_transaction(
 
     let agent_id = agent_id!("golem-host-api", "infallible-transaction");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, HashMap::new())
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -661,14 +684,14 @@ async fn golem_rust_infallible_transaction(
 async fn idempotency_keys_in_ephemeral_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "it_agent_counters_release")
-        .name("it:agent-counters")
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
 
