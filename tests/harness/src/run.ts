@@ -1,11 +1,22 @@
 import { parseArgs } from 'node:util';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { ScenarioLoader, ScenarioExecutor } from './executor.js';
+import { ScenarioLoader, ScenarioExecutor, type ScenarioRunResult } from './executor.js';
 import { ClaudeAgentDriver } from './driver/claude.js';
 import { GeminiAgentDriver } from './driver/gemini.js';
+import { OpenCodeAgentDriver } from './driver/opencode.js';
 import { SkillWatcher } from './watcher.js';
 import chalk from 'chalk';
+
+interface ScenarioReport {
+  scenario: string;
+  matrix: { agent: string; language: string };
+  run_id: string;
+  status: 'pass' | 'fail';
+  durationSeconds: number;
+  results: ScenarioRunResult['stepResults'];
+  artifactPaths: string[];
+}
 
 async function main() {
   const { values } = parseArgs({
@@ -44,6 +55,8 @@ async function main() {
     driver = new ClaudeAgentDriver();
   } else if (agent === 'gemini') {
     driver = new GeminiAgentDriver();
+  } else if (agent === 'opencode') {
+    driver = new OpenCodeAgentDriver();
   } else {
     console.error(chalk.red(`Unsupported agent: ${agent}`));
     process.exit(1);
@@ -53,6 +66,7 @@ async function main() {
   const scenarioFiles = (await fs.readdir(scenariosDir)).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
   console.log(chalk.gray(`Config: agent=${agent}, language=${language}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? 'default'}`));
 
+  const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
 
   for (const file of scenarioFiles) {
@@ -75,16 +89,15 @@ async function main() {
       console.log(chalk.red(`Scenario ${spec.name} FAILED`));
       for (const res of results) {
         if (!res.success) {
-          console.log(chalk.red(`  Step failed: ${res.step.prompt || 'unnamed'}`));
+          console.log(chalk.red(`  Step failed: ${res.step.prompt || res.step.id || 'unnamed'}`));
           console.log(chalk.red(`  Error: ${res.error}`));
         }
       }
     }
 
-    // Write report
-    const reportPath = path.join(resultsDir, `${spec.name}.json`);
+    // Write individual report
     const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await fs.writeFile(reportPath, JSON.stringify({
+    const report: ScenarioReport = {
       scenario: spec.name,
       matrix: { agent, language },
       run_id: runId,
@@ -92,8 +105,68 @@ async function main() {
       durationSeconds: scenarioResult.durationSeconds,
       results,
       artifactPaths: scenarioResult.artifactPaths,
-    }, null, 2));
+    };
+
+    const reportPath = path.join(resultsDir, `${spec.name}.json`);
+    await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+    scenarioReports.push(report);
+
     console.log(`${allPassed ? 'PASS' : 'FAIL'} ${spec.name} steps=${results.length}/${spec.steps.length}`);
+  }
+
+  // Aggregated summary report (#2912)
+  if (scenarioReports.length > 0) {
+    const totalScenarios = scenarioReports.length;
+    const passed = scenarioReports.filter(r => r.status === 'pass').length;
+    const failed = scenarioReports.filter(r => r.status === 'fail').length;
+    const totalDuration = scenarioReports.reduce((sum, r) => sum + r.durationSeconds, 0);
+
+    const worstFailures = scenarioReports
+      .filter(r => r.status === 'fail')
+      .map(r => {
+        const failedStep = r.results.find(s => !s.success);
+        return {
+          scenario: r.scenario,
+          error: failedStep?.error ?? 'unknown',
+        };
+      });
+
+    const summary = {
+      total: totalScenarios,
+      passed,
+      failed,
+      skipped: 0,
+      durationSeconds: totalDuration,
+      worstFailures,
+      scenarios: scenarioReports.map(r => ({
+        name: r.scenario,
+        status: r.status,
+        durationSeconds: r.durationSeconds,
+      })),
+    };
+
+    const summaryPath = path.join(resultsDir, 'summary.json');
+    await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
+
+    // Print summary
+    console.log('');
+    console.log(chalk.bold('=== Test Summary ==='));
+    console.log(`Total:    ${totalScenarios}`);
+    console.log(chalk.green(`Passed:   ${passed}`));
+    if (failed > 0) {
+      console.log(chalk.red(`Failed:   ${failed}`));
+    } else {
+      console.log(`Failed:   ${failed}`);
+    }
+    console.log(`Duration: ${totalDuration.toFixed(1)}s`);
+
+    if (worstFailures.length > 0) {
+      console.log('');
+      console.log(chalk.red('Failures:'));
+      for (const f of worstFailures) {
+        console.log(chalk.red(`  ${f.scenario}: ${f.error}`));
+      }
+    }
   }
 
   if (hasFailures) {
