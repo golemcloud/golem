@@ -238,15 +238,27 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
     async fn switch_persistence_level(&self, mode: PersistenceLevel);
+
+    /// Returns the inner oplog wrapped by this implementation, if any.
+    /// Wrapper oplogs should override this to enable generic traversal of the
+    /// oplog composition chain (used by `downcast_oplog`).
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        None
+    }
 }
 
 pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>> {
-    if oplog.deref().type_id() == TypeId::of::<T>() {
-        let raw: *const dyn Oplog = Arc::into_raw(oplog.clone());
-        let raw: *const T = raw.cast();
-        Some(unsafe { Arc::from_raw(raw) })
-    } else {
-        None
+    let mut current = oplog.clone();
+    loop {
+        if current.deref().type_id() == TypeId::of::<T>() {
+            let raw: *const dyn Oplog = Arc::into_raw(current);
+            let raw: *const T = raw.cast();
+            return Some(unsafe { Arc::from_raw(raw) });
+        }
+        match current.inner() {
+            Some(inner) => current = inner,
+            None => return None,
+        }
     }
 }
 

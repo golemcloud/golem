@@ -88,7 +88,7 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentDeploymentsServiceConfig, AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
     EngineConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
@@ -390,7 +390,7 @@ pub async fn start(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, None).await
+    start_customized(deps, context, None, None, None, None).await
 }
 
 pub async fn start_with_snapshot_policy(
@@ -398,7 +398,15 @@ pub async fn start_with_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_customized(deps, context, None, None, Some(snapshot_policy)).await
+    start_customized(deps, context, None, None, Some(snapshot_policy), None).await
+}
+
+pub async fn start_with_oplog_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    oplog_config_override: Option<OplogConfig>,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_customized(deps, context, None, None, None, oplog_config_override).await
 }
 
 pub async fn start_customized(
@@ -407,6 +415,7 @@ pub async fn start_customized(
     system_memory_override: Option<u64>,
     retry_override: Option<RetryConfig>,
     snapshot_policy_override: Option<SnapshotPolicy>,
+    oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
@@ -452,6 +461,9 @@ pub async fn start_customized(
     }
     if let Some(snapshot_policy) = snapshot_policy_override {
         config.oplog.default_snapshotting = snapshot_policy;
+    }
+    if let Some(oplog_config) = oplog_config_override {
+        config.oplog = oplog_config;
     }
 
     let handle = Handle::current();
@@ -1414,6 +1426,10 @@ impl Oplog for TestOplog {
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.oplog.switch_persistence_level(mode).await;
+    }
+
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.oplog.clone())
     }
 }
 
