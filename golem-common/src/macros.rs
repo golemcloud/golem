@@ -496,14 +496,14 @@ macro_rules! agent_id {
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             None
-        )
+        ).unwrap()
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
         $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             None
-        )
+        ).unwrap()
     };
 }
 
@@ -526,13 +526,13 @@ macro_rules! phantom_agent_id {
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
             Some($phantom_id)
-        )
+        ).unwrap()
     };
     ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
         $crate::base_model::agent::ParsedAgentId::new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
             Some($phantom_id)
-        )
+        ).unwrap()
     };
 }

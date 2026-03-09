@@ -1826,7 +1826,7 @@ async fn start_workers<T: RdbmsType>(
             Uuid::new_v4(),
             name_suffix
         );
-        let agent_id = agent_id!("relational-databases", worker_name);
+        let agent_id = agent_id!("RelationalDatabases", worker_name);
         let worker_id = executor
             .start_agent_with(
                 &component.id,

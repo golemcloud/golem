@@ -519,21 +519,20 @@ impl ThroughputBenchmark {
             .unwrap();
 
         for n in 0..config.size {
-            rust_agent_ids.push(agent_id!("rust-benchmark-agent", format!("test-{n}")));
-            ts_agent_ids.push(agent_id!("benchmark-agent", format!("test-{n}")));
-            rust_agent_ids_for_http
-                .push(agent_id!("rust-benchmark-agent", format!("test-{n}-http")));
-            ts_agent_ids_for_http.push(agent_id!("benchmark-agent", format!("test-{n}-http")));
+            rust_agent_ids.push(agent_id!("RustBenchmarkAgent", format!("test-{n}")));
+            ts_agent_ids.push(agent_id!("BenchmarkAgent", format!("test-{n}")));
+            rust_agent_ids_for_http.push(agent_id!("RustBenchmarkAgent", format!("test-{n}-http")));
+            ts_agent_ids_for_http.push(agent_id!("BenchmarkAgent", format!("test-{n}-http")));
 
             ts_rpc_agent_id_pairs.push(AgentIdPair {
                 component_id: ts_agent_component.id,
-                parent: agent_id!("rpc-benchmark-agent", format!("rpc-test-{n}")),
-                child: agent_id!("benchmark-agent", format!("rpc-test-{n}")),
+                parent: agent_id!("RpcBenchmarkAgent", format!("rpc-test-{n}")),
+                child: agent_id!("BenchmarkAgent", format!("rpc-test-{n}")),
             });
             rust_rpc_agent_id_pairs.push(AgentIdPair {
                 component_id: rust_agent_component.id,
-                parent: agent_id!("rust-rpc-benchmark-agent", format!("rpc-test-{n}")),
-                child: agent_id!("rust-benchmark-agent", format!("rpc-test-{n}")),
+                parent: agent_id!("RustRpcBenchmarkAgent", format!("rpc-test-{n}")),
+                child: agent_id!("RustBenchmarkAgent", format!("rpc-test-{n}")),
             });
         }
 
@@ -560,11 +559,11 @@ impl ThroughputBenchmark {
             webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
             agents: BTreeMap::from_iter([
                 (
-                    AgentTypeName("benchmark-agent".to_string()),
+                    AgentTypeName("BenchmarkAgent".to_string()),
                     HttpApiDeploymentAgentOptions::default(),
                 ),
                 (
-                    AgentTypeName("rust-benchmark-agent".to_string()),
+                    AgentTypeName("RustBenchmarkAgent".to_string()),
                     HttpApiDeploymentAgentOptions::default(),
                 ),
             ]),

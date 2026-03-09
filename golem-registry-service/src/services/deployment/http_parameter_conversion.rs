@@ -351,7 +351,7 @@ mod test {
         LiteralSegment, NamedElementSchema, NamedElementSchemas, PathSegment, PathVariable,
         QueryVariable,
     };
-    use golem_wasm::analysis::{analysed_type, AnalysedType};
+    use golem_wasm::analysis::{AnalysedType, analysed_type};
     use test_r::test;
 
     use crate::services::deployment::http_parameter_conversion::{
@@ -718,8 +718,7 @@ mod test {
             }],
         });
 
-        let params =
-            build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(
@@ -759,8 +758,7 @@ mod test {
             }],
         });
 
-        let params =
-            build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
+        let params = build_http_agent_constructor_parameters(&mount, &schema, &|msg| msg).unwrap();
 
         assert_eq!(params.len(), 1);
         assert!(matches!(

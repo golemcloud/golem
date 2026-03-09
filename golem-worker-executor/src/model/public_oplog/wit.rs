@@ -648,7 +648,7 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::StackOverflow => Self::StackOverflow,
             oplog::WorkerError::OutOfMemory => Self::OutOfMemory,
             oplog::WorkerError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
-            oplog::WorkerError::AgentError(msg) => Self::InternalError(msg),
+            oplog::WorkerError::InternalError(msg) => Self::InternalError(msg),
         }
     }
 }
@@ -739,7 +739,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
         match value {
             oplog::OplogEntry::Create(params) => Ok(Self::Create {
                 timestamp: timestamp_from_datetime(params.timestamp),
-                agent_id: golem_common::model::AgentId::from(params.worker_id),
+                agent_id: golem_common::model::AgentId::from(params.agent_id),
                 component_revision: golem_common::model::component::ComponentRevision::try_from(
                     params.component_revision,
                 )

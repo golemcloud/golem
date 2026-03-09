@@ -162,7 +162,7 @@ async fn golem_rust_jump(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "jump");
+    let agent_id = agent_id!("GolemHostApi", "jump");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -234,7 +234,7 @@ async fn golem_rust_explicit_oplog_commit(
         .store()
         .await?;
 
-    let agent_id = agent_id!("golem-host-api", "explicit-oplog-commit");
+    let agent_id = agent_id!("GolemHostApi", "explicit-oplog-commit");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -268,7 +268,7 @@ async fn golem_rust_set_retry_policy(
         .store()
         .await?;
 
-    let agent_id = agent_id!("golem-host-api", "set-retry-policy-1");
+    let agent_id = agent_id!("GolemHostApi", "set-retry-policy-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -337,7 +337,7 @@ async fn golem_rust_atomic_region(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "atomic-region");
+    let agent_id = agent_id!("GolemHostApi", "atomic-region");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -390,7 +390,7 @@ async fn golem_rust_idempotence_on(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "idempotence-flag-on");
+    let agent_id = agent_id!("GolemHostApi", "idempotence-flag-on");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -440,7 +440,7 @@ async fn golem_rust_idempotence_off(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "idempotence-flag-off");
+    let agent_id = agent_id!("GolemHostApi", "idempotence-flag-off");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -497,7 +497,7 @@ async fn golem_rust_persist_nothing(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "persist-nothing");
+    let agent_id = agent_id!("GolemHostApi", "persist-nothing");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -556,7 +556,7 @@ async fn golem_rust_fallible_transaction(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "fallible-transaction");
+    let agent_id = agent_id!("GolemHostApi", "fallible-transaction");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -630,7 +630,7 @@ async fn golem_rust_infallible_transaction(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("golem-host-api", "infallible-transaction");
+    let agent_id = agent_id!("GolemHostApi", "infallible-transaction");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -695,10 +695,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .store()
         .await?;
 
-    let agent_id = agent_id!(
-        "host-function-tests",
-        "idempotency_keys_in_ephemeral_workers"
-    );
+    let agent_id = agent_id!("HostFunctionTests", "idempotency_keys_in_ephemeral_workers");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

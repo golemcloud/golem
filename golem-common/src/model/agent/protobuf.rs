@@ -110,6 +110,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
             mode: proto.mode().into(),
             type_name: AgentTypeName(proto.type_name),
             description: proto.description,
+            source_language: proto.source_language,
             constructor: proto
                 .constructor
                 .ok_or_else(|| "Missing field: constructor".to_string())?
@@ -145,6 +146,7 @@ impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
             mode: golem_api_grpc::proto::golem::component::AgentMode::from(value.mode) as i32,
             type_name: value.type_name.0,
             description: value.description,
+            source_language: value.source_language,
             constructor: Some(value.constructor.into()),
             methods: value
                 .methods
@@ -691,6 +693,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::NamedElementValue> for Nam
                 .value
                 .ok_or_else(|| "Missing field: value".to_string())?
                 .try_into()?,
+            schema_index: 0,
         })
     }
 }

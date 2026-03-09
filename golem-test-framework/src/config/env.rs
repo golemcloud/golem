@@ -98,11 +98,7 @@ impl EnvBasedTestDependenciesConfig {
     }
 
     pub fn default_stderr_level(&self) -> Level {
-        if self.quiet {
-            Level::DEBUG
-        } else {
-            Level::ERROR
-        }
+        Level::ERROR
     }
 
     pub fn default_verbosity(&self) -> Level {

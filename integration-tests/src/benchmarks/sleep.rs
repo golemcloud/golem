@@ -103,7 +103,7 @@ impl Benchmark for Sleep {
 
         let mut agent_ids = vec![];
         for n in 0..self.config.size {
-            let agent_id = agent_id!("rust-benchmark-agent", format!("test-{n}"));
+            let agent_id = agent_id!("RustBenchmarkAgent", format!("test-{n}"));
             agent_ids.push(agent_id);
         }
 

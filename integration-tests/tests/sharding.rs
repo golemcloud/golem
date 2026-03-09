@@ -393,7 +393,7 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let agent_id = agent_id!("counter", format!("sharding-test-{i}"));
+                let agent_id = agent_id!("Counter", format!("sharding-test-{i}"));
                 admin
                     .start_agent(&component.id, agent_id.clone())
                     .await

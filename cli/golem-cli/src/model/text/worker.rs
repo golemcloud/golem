@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::SourceLanguage;
 use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::EnvironmentReference;
@@ -271,7 +272,7 @@ impl TextView for InvokeResultView {
     fn log(&self) {
         fn log_results_format(format: &str) {
             logln(format!(
-                "Invocation results in {} format:",
+                "Invocation results in {}:",
                 format_message_highlight(format),
             ))
         }
@@ -284,7 +285,7 @@ impl TextView for InvokeResultView {
             if wave_values.is_empty() {
                 logln("Empty result.")
             } else {
-                log_results_format("WAVE");
+                log_results_format(&self.result_format);
                 for wave in wave_values {
                     logln(format!("  - {wave}"));
                 }
@@ -292,8 +293,8 @@ impl TextView for InvokeResultView {
         } else if let Some(json) = &self.result_json {
             logln(format_warn(indoc!(
                 "
-                Failed to convert invocation result to WAVE format.
-                At the moment WAVE does not support Handle (aka Resource) data type.
+                Failed to convert invocation result to the requested format.
+                At the moment it does not support Handle (aka Resource) data type.
                 "
             )));
             log_results_format("JSON");
@@ -377,7 +378,7 @@ impl TextView for PublicOplogEntry {
                         format_id(&inner.idempotency_key),
                     ));
                     logln(format!("{pad}input:"));
-                    log_data_value(pad, &inner.function_input);
+                    log_data_value(pad, &inner.function_input, &SourceLanguage::default());
                 }
                 other => {
                     logln(format!(
@@ -925,18 +926,23 @@ fn format_agent_name(agent_name: &RawAgentId) -> String {
     textwrap::wrap(&agent_name.to_string(), 80).join("\n")
 }
 
-fn log_data_value(pad: &str, value: &DataValue) {
-    match value {
-        DataValue::Tuple(values) => {
-            logln(format!("{pad}  tuple:"));
-            for value in &values.elements {
-                log_element_value(&format!("{pad}    "), value);
+fn log_data_value(pad: &str, value: &DataValue, source_language: &SourceLanguage) {
+    if source_language.is_known() {
+        let rendered = crate::agent_id_display::render_data_value(value, source_language);
+        logln(format!("{pad}  {rendered}"));
+    } else {
+        match value {
+            DataValue::Tuple(values) => {
+                logln(format!("{pad}  tuple:"));
+                for value in &values.elements {
+                    log_element_value(&format!("{pad}    "), value);
+                }
             }
-        }
-        DataValue::Multimodal(values) => {
-            logln(format!("{pad}  multi-modal:"));
-            for value in &values.elements {
-                log_element_value(&format!("{pad}    "), &value.value);
+            DataValue::Multimodal(values) => {
+                logln(format!("{pad}  multi-modal:"));
+                for value in &values.elements {
+                    log_element_value(&format!("{pad}    "), &value.value);
+                }
             }
         }
     }

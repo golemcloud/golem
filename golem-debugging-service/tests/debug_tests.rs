@@ -33,7 +33,7 @@ async fn test_connect_non_invoked_worker(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "non-invoked");
+    let repo_id = agent_id!("Repository", "non-invoked");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await
@@ -69,7 +69,7 @@ async fn test_connect_invoked_worker(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "invoked");
+    let repo_id = agent_id!("Repository", "invoked");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -116,7 +116,7 @@ async fn test_connect_and_playback(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "playback");
+    let repo_id = agent_id!("Repository", "playback");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -159,7 +159,7 @@ async fn test_connect_and_playback_raw(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "playback-raw");
+    let repo_id = agent_id!("Repository", "playback-raw");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -251,7 +251,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "playback-middle");
+    let repo_id = agent_id!("Repository", "playback-middle");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -295,7 +295,7 @@ async fn test_playback_from_breakpoint(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "breakpoint");
+    let repo_id = agent_id!("Repository", "breakpoint");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -351,7 +351,7 @@ async fn test_playback_and_rewind(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "rewind");
+    let repo_id = agent_id!("Repository", "rewind");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -398,7 +398,7 @@ async fn test_playback_and_fork(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "fork-source");
+    let repo_id = agent_id!("Repository", "fork-source");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -416,7 +416,7 @@ async fn test_playback_and_fork(
 
     let playback_result = debug_executor.playback(first_boundary, None).await?;
 
-    let forked_repo_id = agent_id!("repository", "forked-worker");
+    let forked_repo_id = agent_id!("Repository", "forked-worker");
     let target_agent_id = AgentId::from_agent_id(agent_id.component_id, &forked_repo_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -468,7 +468,7 @@ async fn test_playback_with_overrides(
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "overrides");
+    let repo_id = agent_id!("Repository", "overrides");
     let agent_id = regular_worker_executor
         .start_agent(&component.id, repo_id.clone())
         .await?;
@@ -509,7 +509,7 @@ async fn test_playback_with_overrides(
         .await?;
 
     // Fork from the list boundary
-    let target_agent_id = phantom_agent_id!("repository", uuid::Uuid::new_v4(), "overrides");
+    let target_agent_id = phantom_agent_id!("Repository", uuid::Uuid::new_v4(), "overrides");
     let target_agent_id = AgentId::from_agent_id(agent_id.component_id, &target_agent_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 

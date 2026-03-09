@@ -168,7 +168,7 @@ async fn auto_update_on_running(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -251,7 +251,7 @@ async fn auto_update_on_idle(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -307,7 +307,7 @@ async fn failing_auto_update_on_idle(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -373,7 +373,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -439,7 +439,7 @@ async fn failing_auto_update_on_running(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -532,7 +532,7 @@ async fn manual_update_on_idle(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -606,7 +606,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -676,7 +676,7 @@ async fn auto_update_on_running_followed_by_manual(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -780,7 +780,7 @@ async fn manual_update_on_idle_with_failing_load(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -849,7 +849,7 @@ async fn manual_update_on_idle_using_v11(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -923,7 +923,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -993,7 +993,7 @@ async fn auto_update_on_idle_to_non_existing(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1057,7 +1057,7 @@ async fn update_component_revision_environment_variable(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("revision-env-agent");
+    let agent_id = agent_id!("RevisionEnvAgent");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1101,7 +1101,7 @@ async fn update_component_revision_environment_variable(
 
     // agent created on the new version sees correct component version
     {
-        let agent_id_2 = phantom_agent_id!("revision-env-agent", uuid::Uuid::new_v4());
+        let agent_id_2 = phantom_agent_id!("RevisionEnvAgent", uuid::Uuid::new_v4());
         let _worker2 = executor
             .start_agent(&component.id, agent_id_2.clone())
             .await?;
@@ -1163,7 +1163,7 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
         .unique()
         .store()
         .await?;
-    let agent_id = agent_id!("update-test");
+    let agent_id = agent_id!("UpdateTest");
     let worker_id = executor
         .start_agent_with(
             &component.id,

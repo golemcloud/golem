@@ -66,7 +66,7 @@ async fn dynamic_worker_creation(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("environment", "dynamic-worker-creation-1");
+    let agent_id = agent_id!("Environment", "dynamic-worker-creation-1");
     let _agent_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let args = user
@@ -128,7 +128,7 @@ async fn counter_resource_test_1(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("rpc-counter", "counter1");
+    let parsed_agent_id = agent_id!("RpcCounter", "counter1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -165,7 +165,7 @@ async fn counter_resource_test_1_json(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("rpc-counter", "counter1j");
+    let parsed_agent_id = agent_id!("RpcCounter", "counter1j");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -201,7 +201,7 @@ async fn shopping_cart_example(
         .unique()
         .store()
         .await?;
-    let repo_id = agent_id!("repository", "shopping-cart-1");
+    let repo_id = agent_id!("Repository", "shopping-cart-1");
     let agent_id = user.start_agent(&component.id, repo_id.clone()).await?;
     user.log_output(&agent_id).await?;
 
@@ -285,7 +285,7 @@ async fn rust_rpc_with_payload(
         .store()
         .await?;
 
-    let parent_agent_id = agent_id!("rust-parent", "rust_rpc_with_payload");
+    let parent_agent_id = agent_id!("RustParent", "rust_rpc_with_payload");
     let parent = user
         .start_agent(&component.id, parent_agent_id.clone())
         .await?;
@@ -307,7 +307,7 @@ async fn rust_rpc_with_payload(
 
     let uuid = UuidRecord::from_value(uuid_as_value.clone()).expect("UUID expected");
 
-    let child_agent_id = agent_id!("rust-child", uuid);
+    let child_agent_id = agent_id!("RustChild", uuid);
 
     let get_result = user
         .invoke_and_await_agent(&component, &child_agent_id, "get", data_value!())
@@ -347,7 +347,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     let mut agent_map: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
 
     for i in 0..workers_count {
-        let aid = agent_id!("repository", format!("gw{i}"));
+        let aid = agent_id!("Repository", format!("gw{i}"));
         let agent_id = user.start_agent(&component.id, aid.clone()).await?;
         agent_ids.insert(agent_id.clone());
         agent_map.push((agent_id, aid));
@@ -397,7 +397,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
 
     let filter = Some(AgentFilter::new_name(
         StringFilterComparator::Like,
-        "repository(\"gw".to_string(),
+        "Repository(\"gw".to_string(),
     ));
     while found_agent_ids.len() < workers_count && cursor.is_some() {
         let (cursor1, values1) = user
@@ -461,7 +461,8 @@ async fn get_running_workers(
             get(move |query: Query<HashMap<String, String>>| {
                 async move {
                     let component_id = query.get("component_id");
-                    let agent_name = query.get("agent_name");
+                    let agent_name = query.get("worker_name");
+                    info!("Poll request received: component_id={component_id:?}, worker_name={agent_name:?}, all_keys={:?}", query.0.keys().collect::<Vec<_>>());
                     if let (Some(component_id), Some(agent_name)) = (component_id, agent_name) {
                         let component_id: ComponentId = component_id.as_str().try_into().unwrap();
                         let agent_id = AgentId {
@@ -470,6 +471,7 @@ async fn get_running_workers(
                         };
                         let mut ids = polling_agent_ids_clone.lock().unwrap();
                         ids.insert(agent_id.clone());
+                        info!("Registered polling agent: {agent_id:?}, total: {}", ids.len());
                     }
                     response_clone.lock().unwrap().clone()
                 }
@@ -487,7 +489,7 @@ async fn get_running_workers(
     let mut workers: Vec<(AgentId, golem_common::model::agent::ParsedAgentId)> = Vec::new();
 
     for _i in 0..workers_count {
-        let aid = phantom_agent_id!("http-client2", Uuid::new_v4());
+        let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());
         let agent_id = user
             .start_agent_with(
                 &component.id,
@@ -707,7 +709,7 @@ async fn auto_update_on_idle(
         .unique()
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("update-test");
+    let parsed_agent_id = agent_id!("UpdateTest");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -755,7 +757,7 @@ async fn auto_update_on_idle_via_host_function(
         .unique()
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("update-test");
+    let parsed_agent_id = agent_id!("UpdateTest");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -775,7 +777,7 @@ async fn auto_update_on_idle_via_host_function(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let host_api_agent_id = agent_id!("golem-host-api", "updater-1");
+    let host_api_agent_id = agent_id!("GolemHostApi", "updater-1");
     let _host_api_agent_id = user
         .start_agent(&host_api_component.id, host_api_agent_id.clone())
         .await?;
@@ -788,18 +790,21 @@ async fn auto_update_on_idle_via_host_function(
         data_value!(
             Record(vec![
                 (
-                    "component-id",
+                    "component_id",
                     Record(vec![(
                         "uuid",
                         Record(vec![
-                            ("high-bits", high_bits.into_value_and_type()),
-                            ("low-bits", low_bits.into_value_and_type()),
+                            ("high_bits", high_bits.into_value_and_type()),
+                            ("low_bits", low_bits.into_value_and_type()),
                         ])
                         .into_value_and_type(),
                     )])
                     .into_value_and_type(),
                 ),
-                ("agent-id", agent_id.to_string().into_value_and_type(),),
+                (
+                    "agent_id",
+                    parsed_agent_id.to_string().into_value_and_type(),
+                ),
             ])
             .into_value_and_type(),
             updated_component.revision.into_value_and_type(),
@@ -844,7 +849,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("golem-host-api", "getoplog1");
+    let parsed_agent_id = agent_id!("GolemHostApi", "getoplog1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -911,7 +916,7 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
         .store()
         .await?;
 
-    let repo_id = agent_id!("repository", "searchoplog1");
+    let repo_id = agent_id!("Repository", "searchoplog1");
     let agent_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -979,7 +984,7 @@ async fn worker_recreation(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("rpc-counter", "recreation");
+    let parsed_agent_id = agent_id!("RpcCounter", "recreation");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -1065,7 +1070,7 @@ async fn worker_use_initial_files(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let parsed_agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
+    let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
     let agent_id = user
         .start_agent_with(
             &component.id,
@@ -1134,7 +1139,7 @@ async fn worker_list_files(
         .store()
         .await?;
 
-    let agent_id = agent_id!("file-read-write", "worker-list-files-1");
+    let agent_id = agent_id!("FileReadWrite", "worker-list-files-1");
     let agent_id = user.start_agent(&component.id, agent_id).await?;
 
     let result = user.get_file_system_node(&agent_id, "/").await?;
@@ -1258,7 +1263,7 @@ async fn worker_read_files(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let parsed_agent_id = agent_id!("file-read-write", "initial-file-read-write-3");
+    let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
     let agent_id = user
         .start_agent_with(
             &component.id,
@@ -1316,7 +1321,7 @@ async fn worker_initial_files_after_automatic_worker_update(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("file-read-write", "initial-file-read-write-1");
+    let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -1391,11 +1396,11 @@ async fn resolve_components_from_name(
         .store()
         .await?;
 
-    let target_agent_id = agent_id!("rpc-counter", "counter-1");
+    let target_agent_id = agent_id!("RpcCounter", "counter-1");
     user.start_agent(&counter_component.id, target_agent_id)
         .await?;
 
-    let agent_id = agent_id!("golem-host-api", "resolver-1");
+    let agent_id = agent_id!("GolemHostApi", "resolver-1");
     let _resolve_worker = user
         .start_agent(&resolver_component.id, agent_id.clone())
         .await?;
@@ -1438,7 +1443,7 @@ async fn agent_promise_await(
         .store()
         .await?;
 
-    let promise_agent_id = agent_id!("promise-agent", "name");
+    let promise_agent_id = agent_id!("PromiseAgent", "name");
     let worker = user
         .start_agent(&component.id, promise_agent_id.clone())
         .await?;
@@ -1499,7 +1504,7 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("logging", "worker-1");
+    let parsed_agent_id = agent_id!("Logging", "worker-1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -1596,7 +1601,7 @@ async fn worker_suspends_when_running_out_of_fuel(
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
-    let http_agent_id = agent_id!("http-client");
+    let http_agent_id = agent_id!("HttpClient");
     let agent_id = user
         .start_agent_with(
             &component.id,
@@ -1656,7 +1661,7 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let unique_id = Uuid::new_v4();
-    let agent_id = agent_id!("test-agent", unique_id.to_string());
+    let agent_id = agent_id!("TestAgent", unique_id.to_string());
     let _agent_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     user.invoke_and_await_agent(&component, &agent_id, "run", data_value!(20f64))
@@ -1682,14 +1687,14 @@ async fn agent_update_constructor_signature(
 
     let first_deployment_revision = user.get_last_deployment_revision(&env.id)?;
 
-    let agent1_id = agent_id!("counter-agent", "agent1");
+    let agent1_id = agent_id!("CounterAgent", "agent1");
     let agent1 = user.start_agent(&component.id, agent1_id.clone()).await?;
     let result1a = user
         .invoke_and_await_agent(&component, &agent1_id, "increment", data_value!())
         .await?;
     assert_eq!(result1a.into_return_value(), Some(Value::U32(1)));
 
-    let old_singleton_id = agent_id!("caller");
+    let old_singleton_id = agent_id!("Caller");
     let old_singleton = user
         .start_agent(&component.id, old_singleton_id.clone())
         .await?;
@@ -1703,14 +1708,14 @@ async fn agent_update_constructor_signature(
     user.update_component(&component.id, "it_agent_update_v2_release")
         .await?;
 
-    let agent2_id = agent_id!("counter-agent", 123u64);
+    let agent2_id = agent_id!("CounterAgent", 123u64);
     let agent2 = user.start_agent(&component.id, agent2_id.clone()).await?;
     let result2a = user
         .invoke_and_await_agent(&component, &agent2_id, "increment", data_value!())
         .await?;
     assert_eq!(result2a.into_return_value(), Some(Value::U32(1)));
 
-    let new_singleton_id = agent_id!("new-caller");
+    let new_singleton_id = agent_id!("NewCaller");
     let _new_singleton = user
         .start_agent(&component.id, new_singleton_id.clone())
         .await?;
@@ -1773,10 +1778,10 @@ async fn agent_update_constructor_signature(
     assert_eq!(
         result,
         HashSet::from_iter(vec![
-            "counter-agent(\"agent1\")".to_string(),
-            "counter-agent(123)".to_string(),
-            "new-caller()".to_string(),
-            "caller()".to_string()
+            "CounterAgent(\"agent1\")".to_string(),
+            "CounterAgent(123)".to_string(),
+            "NewCaller()".to_string(),
+            "Caller()".to_string()
         ])
     );
 

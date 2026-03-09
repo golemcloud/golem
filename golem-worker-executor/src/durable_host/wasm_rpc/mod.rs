@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
@@ -88,10 +87,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|err| anyhow::anyhow!("Invalid constructor input: {err}"))?;
 
         let agent_id = golem_common::model::agent::ParsedAgentId::new(
-            golem_common::model::agent::AgentTypeName(agent_type_name).to_wit_naming(),
+            golem_common::model::agent::AgentTypeName(agent_type_name),
             input,
             phantom_id.map(|id| id.into()),
-        );
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let component_id: golem_common::model::component::ComponentId =
             agent_type.implemented_by.into();

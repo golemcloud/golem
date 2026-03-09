@@ -569,7 +569,7 @@ pub trait TestDsl {
         }
 
         Err(anyhow!(
-            "Timeout waiting for worker {agent_id} to reach component revision {target_revision}"
+            "Timeout waiting for agent {agent_id} to reach component revision {target_revision}"
         ))
     }
 

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::SourceLanguage;
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::wave::function_wave_compatible;
 use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
 use golem_common::model::agent::{
@@ -24,13 +24,10 @@ use golem_common::model::component::{
 };
 use golem_common::model::component::{ComponentName, InitialComponentFile};
 
+use crate::agent_id_display::render_type_for_language;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_wasm::analysis::wave::DisplayNamedFunc;
-use golem_wasm::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, AnalysedType,
-    NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
-};
+use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -143,12 +140,7 @@ impl ComponentView {
 
     pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: ComponentDto) -> Self {
         let exports = {
-            let agent_types = value
-                .metadata
-                .agent_types()
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let agent_types = value.metadata.agent_types().to_vec();
 
             show_exported_agents(&agent_types, true, true)
         };
@@ -191,75 +183,6 @@ impl TrimDateTime for ComponentView {
     }
 }
 
-pub fn render_type(typ: &AnalysedType) -> String {
-    match typ {
-        AnalysedType::Variant(TypeVariant { cases, .. }) => {
-            let cases_str = cases
-                .iter()
-                .map(|NameOptionTypePair { name, typ }| match typ {
-                    None => name.to_string(),
-                    Some(typ) => format!("{}({})", name, render_type(typ)),
-                })
-                .collect::<Vec<String>>()
-                .join(", ");
-            format!("variant {{ {cases_str} }}")
-        }
-        AnalysedType::Result(boxed) => {
-            let ok_str = boxed.ok.as_ref().map(|t| render_type(t));
-            let err_str = boxed.err.as_ref().map(|t| render_type(t));
-
-            if let Some(ok) = ok_str {
-                if let Some(err) = err_str {
-                    format!("result<{ok}, {err}>")
-                } else {
-                    format!("result<{ok}>")
-                }
-            } else if let Some(err) = err_str {
-                format!("result<_, {err}>")
-            } else {
-                "result".to_string()
-            }
-        }
-        AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        AnalysedType::Enum(TypeEnum { cases, .. }) => {
-            format!("enum {{ {} }}", cases.iter().join(", "))
-        }
-        AnalysedType::Flags(TypeFlags { names, .. }) => {
-            format!("flags {{ {} }}", names.iter().join(", "))
-        }
-        AnalysedType::Record(TypeRecord { fields, .. }) => {
-            let pairs: Vec<String> = fields
-                .iter()
-                .map(|NameTypePair { name, typ }| format!("{}: {}", name, render_type(typ)))
-                .collect();
-
-            format!("record {{ {} }}", pairs.join(", "))
-        }
-        AnalysedType::Tuple(TypeTuple { items, .. }) => {
-            let typs: Vec<String> = items.iter().map(render_type).collect();
-            format!("tuple<{}>", typs.join(", "))
-        }
-        AnalysedType::List(boxed) => format!("list<{}>", render_type(&boxed.inner)),
-        AnalysedType::Str { .. } => "string".to_string(),
-        AnalysedType::Chr { .. } => "char".to_string(),
-        AnalysedType::F64 { .. } => "f64".to_string(),
-        AnalysedType::F32 { .. } => "f32".to_string(),
-        AnalysedType::U64 { .. } => "u64".to_string(),
-        AnalysedType::S64 { .. } => "s64".to_string(),
-        AnalysedType::U32 { .. } => "u32".to_string(),
-        AnalysedType::S32 { .. } => "s32".to_string(),
-        AnalysedType::U16 { .. } => "u16".to_string(),
-        AnalysedType::S16 { .. } => "s16".to_string(),
-        AnalysedType::U8 { .. } => "u8".to_string(),
-        AnalysedType::S8 { .. } => "s8".to_string(),
-        AnalysedType::Bool { .. } => "bool".to_string(),
-        AnalysedType::Handle(handle) => match handle.mode {
-            AnalysedResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id.0),
-            AnalysedResourceMode::Owned => format!("handle<{}>", handle.resource_id.0),
-        },
-    }
-}
-
 pub fn show_exported_agents(
     agents: &[AgentType],
     wrapper_naming: bool,
@@ -283,32 +206,34 @@ fn render_exported_agent(
     wrapper_naming: bool,
     show_dummy_return_type: bool,
 ) -> Vec<String> {
+    let lang = SourceLanguage::from(agent.source_language.as_str());
     let mut result = Vec::new();
-    result.push(render_agent_constructor(
+    result.push(render_agent_constructor_with_lang(
         agent,
         wrapper_naming,
         show_dummy_return_type,
+        &lang,
     ));
     let agent_name = if wrapper_naming {
-        format!("{}.", agent.wrapper_type_name())
+        format!("{}.", agent.type_name.0)
     } else {
         "  ".to_string()
     };
     for method in &agent.methods {
-        let output = render_data_schema(&method.output_schema);
+        let output = render_data_schema(&method.output_schema, &lang, false);
         if output.is_empty() {
             result.push(format!(
                 "{}{}({})",
                 agent_name,
                 method.name,
-                render_data_schema(&method.input_schema),
+                render_data_schema(&method.input_schema, &lang, true),
             ));
         } else {
             result.push(format!(
                 "{}{}({}) -> {}",
                 agent_name,
                 method.name,
-                render_data_schema(&method.input_schema),
+                render_data_schema(&method.input_schema, &lang, true),
                 output
             ));
         }
@@ -322,6 +247,16 @@ pub fn render_agent_constructor(
     wrapper_naming: bool,
     show_dummy_return_type: bool,
 ) -> String {
+    let lang = SourceLanguage::from(agent.source_language.as_str());
+    render_agent_constructor_with_lang(agent, wrapper_naming, show_dummy_return_type, &lang)
+}
+
+fn render_agent_constructor_with_lang(
+    agent: &AgentType,
+    wrapper_naming: bool,
+    show_dummy_return_type: bool,
+    lang: &SourceLanguage,
+) -> String {
     let dummy_return_type = if show_dummy_return_type {
         " agent constructor"
     } else {
@@ -330,26 +265,48 @@ pub fn render_agent_constructor(
     if wrapper_naming {
         format!(
             "{}({}){}",
-            agent.wrapper_type_name(),
-            render_data_schema(&agent.constructor.input_schema),
+            agent.type_name.0.clone(),
+            render_data_schema(&agent.constructor.input_schema, lang, true),
             dummy_return_type
         )
     } else {
         format!(
             "{}({}){}",
             agent.type_name,
-            render_data_schema(&agent.constructor.input_schema),
+            render_data_schema(&agent.constructor.input_schema, lang, true),
             dummy_return_type
         )
     }
 }
 
-fn render_data_schema(schema: &DataSchema) -> String {
+fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
+    match lang {
+        SourceLanguage::Rust => name.to_snake_case(),
+        SourceLanguage::TypeScript | SourceLanguage::Other(_) => name.to_lower_camel_case(),
+    }
+}
+
+fn render_data_schema(
+    schema: &DataSchema,
+    lang: &SourceLanguage,
+    show_param_names: bool,
+) -> String {
     match schema {
         DataSchema::Tuple(elements) => elements
             .elements
             .iter()
-            .map(|named_elem| render_element_schema(&named_elem.schema))
+            .map(|named_elem| {
+                let rendered_type = render_element_schema(&named_elem.schema, lang);
+                if show_param_names {
+                    format!(
+                        "{}: {}",
+                        render_param_name(&named_elem.name, lang),
+                        rendered_type
+                    )
+                } else {
+                    rendered_type
+                }
+            })
             .join(", "),
         DataSchema::Multimodal(elements) => elements
             .elements
@@ -358,17 +315,17 @@ fn render_data_schema(schema: &DataSchema) -> String {
                 format!(
                     "{}({})",
                     named_elem.name,
-                    render_element_schema(&named_elem.schema)
+                    render_element_schema(&named_elem.schema, lang)
                 )
             })
             .join(" | "),
     }
 }
 
-fn render_element_schema(schema: &ElementSchema) -> String {
+fn render_element_schema(schema: &ElementSchema, lang: &SourceLanguage) -> String {
     match schema {
         ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
-            render_type(element_type)
+            render_type_for_language(lang, element_type, true)
         }
         ElementSchema::UnstructuredText(text_descriptor) => {
             let mut result = "text".to_string();
@@ -391,94 +348,6 @@ fn render_element_schema(schema: &ElementSchema) -> String {
     }
 }
 
-pub fn show_exported_functions(
-    exports: &[AnalysedExport],
-    with_parameters: bool,
-    agent_instance_name_filter: Option<&str>,
-) -> Vec<String> {
-    let is_agent = agent_instance_name_filter.is_some();
-    exports
-        .iter()
-        .flat_map(|exp| match exp {
-            AnalysedExport::Instance(AnalysedInstance { name, functions }) => {
-                if let Some(instance_name_filter) = agent_instance_name_filter {
-                    if name != instance_name_filter {
-                        return vec![];
-                    }
-                }
-                let fs: Vec<String> = functions
-                    .iter()
-                    .filter(|f| !is_agent || f.name != "get-definition")
-                    .map(|f| render_exported_function(Some(name), f, with_parameters))
-                    .collect();
-                fs
-            }
-            AnalysedExport::Function(f) => {
-                vec![render_exported_function(None, f, with_parameters)]
-            }
-        })
-        .collect()
-}
-
-pub fn render_exported_function(
-    prefix: Option<&str>,
-    f: &AnalysedFunction,
-    with_parameters: bool,
-) -> String {
-    // TODO: now that the formatter is implemented, and wave still not supports handles
-    //       is there a point in using the customized wave formatter?
-    //       Or maybe it should handled in the customized DisplayNamedFunc?
-    if with_parameters {
-        if function_wave_compatible(f) {
-            DisplayNamedFunc {
-                name: format_function_name(prefix, &f.name),
-                func: f.clone(),
-            }
-            .to_string()
-        } else {
-            render_non_wave_compatible_exported_function(prefix, f)
-        }
-    } else {
-        format_function_name(prefix, &f.name)
-    }
-}
-
-fn render_non_wave_compatible_exported_function(
-    prefix: Option<&str>,
-    f: &AnalysedFunction,
-) -> String {
-    let params = f
-        .parameters
-        .iter()
-        .map(|p| format!("{}: {}", p.name, render_type(&p.typ)))
-        .collect::<Vec<String>>()
-        .join(", ");
-
-    let results = f
-        .result
-        .iter()
-        .map(|res| render_type(&res.typ))
-        .collect::<Vec<String>>();
-
-    let res_str = results.join(", ");
-
-    let name = format_function_name(prefix, &f.name);
-    if results.is_empty() {
-        format!("{name}({params})")
-    } else if results.len() == 1 {
-        format!("{name}({params}) -> {res_str}")
-    } else {
-        format!("{name}({params}) -> ({res_str})")
-    }
-}
-
-pub fn format_function_name(prefix: Option<&str>, name: &str) -> String {
-    match prefix {
-        Some(prefix) => format!("{prefix}.{{{name}}}"),
-        None => name.to_string(),
-    }
-}
-
 pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> Option<String> {
     match (
         component.metadata.root_package_name(),
@@ -487,289 +356,5 @@ pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> 
         (Some(name), Some(version)) => Some(format!("{}/{}@{}", name, agent_type_name, version)),
         (Some(name), None) => Some(format!("{}/{}", name, agent_type_name)),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use test_r::test;
-
-    use crate::model::component::render_exported_function;
-    use golem_wasm::analysis::analysed_type::{
-        bool, case, chr, f32, f64, field, flags, handle, list, option, r#enum, record, result,
-        result_err, result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case,
-        variant,
-    };
-    use golem_wasm::analysis::{
-        AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
-        AnalysedResourceMode, AnalysedType,
-    };
-
-    #[test]
-    fn show_exported_function_handles_type_handle() {
-        let f = AnalysedFunction {
-            name: "n".to_string(),
-            parameters: vec![],
-            result: Some(AnalysedFunctionResult {
-                typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Borrowed),
-            }),
-        };
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "n() -> &handle<1>")
-    }
-
-    #[test]
-    fn show_no_results_wave() {
-        let f = AnalysedFunction {
-            name: "abc".to_string(),
-            parameters: vec![],
-            result: None,
-        };
-
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "abc()")
-    }
-
-    #[test]
-    fn show_no_results_custom() {
-        let f = AnalysedFunction {
-            name: "abc".to_string(),
-            parameters: vec![AnalysedFunctionParameter {
-                name: "n".to_string(),
-                typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
-            }],
-            result: None,
-        };
-
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "abc(n: handle<1>)")
-    }
-
-    #[test]
-    fn show_result_wave() {
-        let f = AnalysedFunction {
-            name: "abc".to_string(),
-            parameters: vec![],
-            result: Some(AnalysedFunctionResult { typ: bool() }),
-        };
-
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "abc() -> bool")
-    }
-
-    #[test]
-    fn show_result_custom() {
-        let f = AnalysedFunction {
-            name: "abc".to_string(),
-            parameters: vec![],
-            result: Some(AnalysedFunctionResult {
-                typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
-            }),
-        };
-
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "abc() -> handle<1>")
-    }
-
-    #[test]
-    fn show_params_and_results_wave() {
-        let f = AnalysedFunction {
-            name: "abc".to_string(),
-            parameters: vec![
-                AnalysedFunctionParameter {
-                    name: "n1".to_string(),
-                    typ: bool(),
-                },
-                AnalysedFunctionParameter {
-                    name: "n2".to_string(),
-                    typ: bool(),
-                },
-            ],
-            result: Some(AnalysedFunctionResult {
-                typ: tuple(vec![bool(), bool()]),
-            }),
-        };
-
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "abc(n1: bool, n2: bool) -> tuple<bool, bool>")
-    }
-
-    #[test]
-    fn show_params_and_results_custom() {
-        let f = AnalysedFunction {
-            name: "abc".to_string(),
-            parameters: vec![
-                AnalysedFunctionParameter {
-                    name: "n1".to_string(),
-                    typ: bool(),
-                },
-                AnalysedFunctionParameter {
-                    name: "n2".to_string(),
-                    typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
-                },
-            ],
-            result: Some(AnalysedFunctionResult {
-                typ: tuple(vec![bool(), bool()]),
-            }),
-        };
-
-        let repr = render_exported_function(None, &f, true);
-
-        assert_eq!(repr, "abc(n1: bool, n2: handle<1>) -> tuple<bool, bool>")
-    }
-
-    fn ensure_same_export(typ: AnalysedType, expected: &str) {
-        let expected_wave = format!("wn() -> {expected}");
-        let expected_custom = format!("cn() -> tuple<handle<1>, {expected}>");
-
-        let wave_f = AnalysedFunction {
-            name: "wn".to_string(),
-            parameters: vec![],
-            result: Some(AnalysedFunctionResult { typ: typ.clone() }),
-        };
-        let wave_res = render_exported_function(None, &wave_f, true);
-        assert_eq!(wave_res, expected_wave);
-
-        let custom_f = AnalysedFunction {
-            name: "cn".to_string(),
-            parameters: vec![],
-            result: Some(AnalysedFunctionResult {
-                typ: tuple(vec![
-                    handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
-                    typ,
-                ]),
-            }),
-        };
-        let custom_res = render_exported_function(None, &custom_f, true);
-        assert_eq!(custom_res, expected_custom);
-    }
-
-    #[test]
-    fn same_export_for_variant() {
-        ensure_same_export(variant(vec![]), "variant {  }");
-        ensure_same_export(variant(vec![case("v1", bool())]), "variant { v1(bool) }");
-        ensure_same_export(
-            variant(vec![case("v1", bool()), unit_case("v2")]),
-            "variant { v1(bool), v2 }",
-        );
-    }
-
-    #[test]
-    fn same_export_for_result() {
-        ensure_same_export(result_ok(bool()), "result<bool>");
-        ensure_same_export(result_err(bool()), "result<_, bool>");
-        ensure_same_export(result(bool(), bool()), "result<bool, bool>");
-    }
-
-    #[test]
-    fn same_export_for_option() {
-        ensure_same_export(option(bool()), "option<bool>")
-    }
-
-    #[test]
-    fn same_export_for_enum() {
-        ensure_same_export(r#enum(&[]), "enum {  }");
-        ensure_same_export(r#enum(&["a"]), "enum { a }");
-        ensure_same_export(r#enum(&["a", "b"]), "enum { a, b }");
-    }
-
-    #[test]
-    fn same_export_for_flags() {
-        ensure_same_export(flags(&[]), "flags {  }");
-        ensure_same_export(flags(&["a"]), "flags { a }");
-        ensure_same_export(flags(&["a", "b"]), "flags { a, b }");
-    }
-
-    #[test]
-    fn same_export_for_record() {
-        ensure_same_export(record(vec![]), "record {  }");
-        ensure_same_export(record(vec![field("n1", bool())]), "record { n1: bool }");
-        ensure_same_export(
-            record(vec![field("n1", bool()), field("n2", bool())]),
-            "record { n1: bool, n2: bool }",
-        );
-    }
-
-    #[test]
-    fn same_export_for_tuple() {
-        ensure_same_export(tuple(vec![]), "tuple<>");
-        ensure_same_export(tuple(vec![bool()]), "tuple<bool>");
-        ensure_same_export(tuple(vec![bool(), bool()]), "tuple<bool, bool>");
-    }
-
-    #[test]
-    fn same_export_for_list() {
-        ensure_same_export(list(bool()), "list<bool>")
-    }
-
-    #[test]
-    fn same_export_for_str() {
-        ensure_same_export(str(), "string")
-    }
-
-    #[test]
-    fn same_export_for_chr() {
-        ensure_same_export(chr(), "char")
-    }
-
-    #[test]
-    fn same_export_for_f64() {
-        ensure_same_export(f64(), "f64")
-    }
-
-    #[test]
-    fn same_export_for_f32() {
-        ensure_same_export(f32(), "f32")
-    }
-
-    #[test]
-    fn same_export_for_u64() {
-        ensure_same_export(u64(), "u64")
-    }
-
-    #[test]
-    fn same_export_for_s64() {
-        ensure_same_export(s64(), "s64")
-    }
-
-    #[test]
-    fn same_export_for_u32() {
-        ensure_same_export(u32(), "u32")
-    }
-
-    #[test]
-    fn same_export_for_s32() {
-        ensure_same_export(s32(), "s32")
-    }
-
-    #[test]
-    fn same_export_for_u16() {
-        ensure_same_export(u16(), "u16")
-    }
-
-    #[test]
-    fn same_export_for_s16() {
-        ensure_same_export(s16(), "s16")
-    }
-
-    #[test]
-    fn same_export_for_u8() {
-        ensure_same_export(u8(), "u8")
-    }
-
-    #[test]
-    fn same_export_for_s8() {
-        ensure_same_export(s8(), "s8")
-    }
-
-    #[test]
-    fn same_export_for_bool() {
-        ensure_same_export(bool(), "bool")
     }
 }

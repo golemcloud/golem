@@ -89,7 +89,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
-            AgentTypeName("invocation-context-agent".to_string()),
+            AgentTypeName("InvocationContextAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
