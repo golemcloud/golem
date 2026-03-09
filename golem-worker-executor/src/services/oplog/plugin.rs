@@ -531,6 +531,11 @@ pub struct ForwardingOplog {
 impl ForwardingOplog {
     const MAX_COMMIT_COUNT: usize = 3;
 
+    /// Returns the inner oplog wrapped by this forwarding oplog.
+    pub fn inner(&self) -> &Arc<dyn Oplog> {
+        &self.inner
+    }
+
     pub fn new(
         inner: Arc<dyn Oplog>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,

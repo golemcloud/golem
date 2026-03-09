@@ -17,6 +17,7 @@ use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
+use crate::services::oplog::plugin::ForwardingOplog;
 use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
@@ -659,13 +660,26 @@ impl MultiLayerOplog {
     }
 
     pub async fn try_archive(this: &Arc<dyn Oplog>) -> Option<bool> {
-        let this = downcast_oplog::<MultiLayerOplog>(this)?;
+        let this = Self::resolve_multi_layer(this)?;
         Some(Self::archive(this, false).await)
     }
 
     pub async fn try_archive_blocking(this: &Arc<dyn Oplog>) -> Option<bool> {
-        let this = downcast_oplog::<MultiLayerOplog>(this)?;
+        let this = Self::resolve_multi_layer(this)?;
         Some(Self::archive(this, true).await)
+    }
+
+    /// Attempts to downcast the oplog to `MultiLayerOplog`, unwrapping
+    /// a `ForwardingOplog` wrapper if necessary.
+    fn resolve_multi_layer(oplog: &Arc<dyn Oplog>) -> Option<Arc<MultiLayerOplog>> {
+        if let Some(ml) = downcast_oplog::<MultiLayerOplog>(oplog) {
+            return Some(ml);
+        }
+        // The oplog might be wrapped in a ForwardingOplog
+        if let Some(forwarding) = downcast_oplog::<ForwardingOplog>(oplog) {
+            return downcast_oplog::<MultiLayerOplog>(forwarding.inner());
+        }
+        None
     }
 
     async fn archive(this: Arc<Self>, blocking: bool) -> bool {

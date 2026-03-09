@@ -16,6 +16,7 @@ use crate::Tracing;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_common::model::agent::AgentId;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::WorkerStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -404,47 +405,36 @@ async fn dynamic_large_memory_allocation(
     Ok(())
 }
 
-/// Helper that checks whether any `ArchiveOplog` action has been scheduled for the
-/// given redis key prefix. It scans Redis for sorted-set keys matching
-/// `{prefix}worker:schedule:*` and returns the total number of entries across all
-/// matching keys. `ScheduledAction::ArchiveOplog` entries are stored in these sets.
-async fn count_scheduled_actions(
+/// Returns the number of entries in the primary oplog stream for a given worker.
+async fn primary_oplog_length(
     redis: &dyn golem_test_framework::components::redis::Redis,
     redis_prefix: &str,
-) -> usize {
+    worker_id: &golem_common::base_model::WorkerId,
+) -> u64 {
     let mut conn = redis.get_async_connection(0).await;
-    let pattern = format!("{redis_prefix}worker:schedule:*");
-    let keys: Vec<String> = redis::cmd("KEYS")
-        .arg(&pattern)
+    let key = format!("{redis_prefix}worker:oplog:{}", worker_id.to_redis_key());
+    redis::cmd("XLEN")
+        .arg(&key)
         .query_async(&mut conn)
         .await
-        .unwrap_or_default();
-    let mut total = 0usize;
-    for key in &keys {
-        let count: usize = redis::cmd("ZCARD")
-            .arg(key)
-            .query_async(&mut conn)
-            .await
-            .unwrap_or(0);
-        total += count;
-    }
-    total
+        .unwrap_or(0)
 }
 
-/// Wait until at least one scheduled action appears in Redis, or timeout.
-async fn wait_for_scheduled_archive(
+/// Wait until the primary oplog layer becomes empty (all entries archived), or timeout.
+async fn wait_for_primary_oplog_empty(
     redis: &dyn golem_test_framework::components::redis::Redis,
     redis_prefix: &str,
-    initial_count: usize,
+    worker_id: &golem_common::base_model::WorkerId,
     timeout: Duration,
 ) -> bool {
     let start = tokio::time::Instant::now();
     while start.elapsed() < timeout {
-        let count = count_scheduled_actions(redis, redis_prefix).await;
-        if count > initial_count {
+        let len = primary_oplog_length(redis, redis_prefix, worker_id).await;
+        if len == 0 {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        info!("Waiting for primary oplog to drain, current length: {len}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
     false
 }
@@ -474,10 +464,6 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Record the number of scheduled actions before the invocation
-    let redis_prefix = context.redis_prefix();
-    let before_count = count_scheduled_actions(deps.redis.as_ref(), &redis_prefix).await;
-
     // Invoke a simple function; after it completes the worker becomes Idle
     executor
         .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
@@ -489,18 +475,26 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .await?;
     assert_eq!(metadata.status, WorkerStatus::Idle);
 
-    // Wait for ArchiveOplog to be scheduled
-    let found = wait_for_scheduled_archive(
+    // Wait for archiving to move entries out of the primary oplog
+    let redis_prefix = context.redis_prefix();
+    let archived = wait_for_primary_oplog_empty(
         deps.redis.as_ref(),
         &redis_prefix,
-        before_count,
-        Duration::from_secs(10),
+        &worker_id,
+        Duration::from_secs(30),
     )
     .await;
-
+    let len_after = primary_oplog_length(deps.redis.as_ref(), &redis_prefix, &worker_id).await;
     assert!(
-        found,
-        "Expected ArchiveOplog to be scheduled after worker became Idle"
+        archived,
+        "Primary oplog should be empty after archiving (len={len_after})"
+    );
+
+    // Verify the oplog entries are still readable after archiving
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !entries.is_empty(),
+        "Oplog entries should still be readable after archiving"
     );
 
     Ok(())
@@ -531,10 +525,6 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Record the number of scheduled actions before triggering failure
-    let redis_prefix = context.redis_prefix();
-    let before_count = count_scheduled_actions(deps.redis.as_ref(), &redis_prefix).await;
-
     // Invoke with 0 retries to cause immediate failure
     let _result = executor
         .invoke_and_await_agent(
@@ -551,18 +541,26 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .await?;
     assert_eq!(metadata.status, WorkerStatus::Failed);
 
-    // Wait for ArchiveOplog to be scheduled
-    let found = wait_for_scheduled_archive(
+    // Wait for archiving to move entries out of the primary oplog
+    let redis_prefix = context.redis_prefix();
+    let archived = wait_for_primary_oplog_empty(
         deps.redis.as_ref(),
         &redis_prefix,
-        before_count,
-        Duration::from_secs(10),
+        &worker_id,
+        Duration::from_secs(30),
     )
     .await;
-
+    let len_after = primary_oplog_length(deps.redis.as_ref(), &redis_prefix, &worker_id).await;
     assert!(
-        found,
-        "Expected ArchiveOplog to be scheduled after worker Failed"
+        archived,
+        "Primary oplog should be empty after archiving (len={len_after})"
+    );
+
+    // Verify the oplog entries are still readable after archiving
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !entries.is_empty(),
+        "Oplog entries should still be readable after archiving"
     );
 
     Ok(())
