@@ -1427,6 +1427,10 @@ impl Oplog for TestOplog {
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.oplog.switch_persistence_level(mode).await;
     }
+
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.oplog.clone())
+    }
 }
 
 impl Debug for TestOplog {
