@@ -130,7 +130,7 @@ fn parse_type_desc(
   desc : @syntax.TypeDesc,
 ) -> ValueTypeKind raise AgentParseError {
   match desc {
-    Record(fields) => {
+    Record(fields~, ..) => {
       let result : Array[(String, ParamType)] = []
       let field_arr = fields.to_array()
       for field in field_arr {

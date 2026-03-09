@@ -557,7 +557,7 @@ fn make_struct_def(
     tycon: name,
     tycon_loc: dummy_loc,
     params: to_list([]),
-    components: @syntax.TypeDesc::Record(to_list(field_decls)),
+    components: @syntax.TypeDesc::Record(fields=to_list(field_decls), constr_decl=None),
     attrs: to_list([]),
     doc: @syntax.DocString::empty(),
     type_vis: @syntax.Visibility::Pub(attr=Some("all"), loc=dummy_loc),
@@ -608,6 +608,7 @@ fn make_top_func(
     vis: @syntax.Visibility::Pub(attr=None, loc=dummy_loc),
     attrs: to_list([]),
     doc: @syntax.DocString::empty(),
+    loc: dummy_loc,
   }
   @syntax.Impl::TopFuncDef(
     fun_decl~,
@@ -665,6 +666,7 @@ fn make_top_func_generic(
     vis: @syntax.Visibility::Pub(attr=None, loc=dummy_loc),
     attrs: to_list([]),
     doc: @syntax.DocString::empty(),
+    loc: dummy_loc,
   }
   @syntax.Impl::TopFuncDef(
     fun_decl~,

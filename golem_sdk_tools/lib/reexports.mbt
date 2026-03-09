@@ -31,6 +31,7 @@ pub fn generate_reexports(
       vis: @syntax.Visibility::Pub(attr=None, loc=dummy_loc),
       attrs: to_list([]),
       doc: @syntax.DocString::empty(),
+      loc: dummy_loc,
     }
     impls.push(
       @syntax.Impl::TopFuncDef(
