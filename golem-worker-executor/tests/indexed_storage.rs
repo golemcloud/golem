@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::config::RedisConfig;
+use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::component::ComponentId;
 use golem_common::model::WorkerId;
 use golem_common::redis::RedisPool;
-use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
@@ -36,6 +35,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use url::Url;
 use uuid::Uuid;
 
 #[async_trait]
@@ -202,17 +202,20 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
             .await
             .expect("Cannot create postgres test database");
 
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(10)
-            .connect(&self.postgres.public_connection_string_to_db(&db_name))
-            .await
-            .expect("Cannot create postgres pool");
+        let config = DbPostgresConfig {
+            host: "localhost".to_string(),
+            database: db_name,
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+            port: Url::parse(&self.postgres.public_connection_string())
+                .expect("Invalid postgres connection string")
+                .port()
+                .expect("Postgres connection string missing port"),
+            max_connections: 10,
+            schema: None,
+        };
 
-        let pool = PostgresPool::new(pool)
-            .await
-            .expect("Cannot create postgres db pool wrapper");
-
-        let storage = PostgresIndexedStorage::new(pool)
+        let storage = PostgresIndexedStorage::configured(&config)
             .await
             .expect("Cannot create postgres indexed storage");
 

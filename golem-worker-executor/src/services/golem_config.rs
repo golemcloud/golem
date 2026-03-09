@@ -16,7 +16,7 @@ use anyhow::Context;
 use figment::providers::{Format, Toml};
 use figment::Figment;
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
+    ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::RetryConfig;
@@ -607,6 +607,7 @@ impl SafeDisplay for KeyValueStorageInMemoryConfig {
 pub enum IndexedStorageConfig {
     KVStoreRedis(IndexedStorageKVStoreRedisConfig),
     Redis(RedisConfig),
+    Postgres(DbPostgresConfig),
     KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
     KVStoreMultiSqlite(IndexedStorageKVStoreMultiSqliteConfig),
     Sqlite(DbSqliteConfig),
@@ -624,6 +625,10 @@ impl SafeDisplay for IndexedStorageConfig {
             }
             IndexedStorageConfig::Redis(inner) => {
                 let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            IndexedStorageConfig::Postgres(inner) => {
+                let _ = writeln!(&mut result, "postgres:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
             IndexedStorageConfig::KVStoreSqlite(inner) => {

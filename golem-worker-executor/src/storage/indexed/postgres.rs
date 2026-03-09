@@ -14,10 +14,15 @@
 
 use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
+use golem_common::config::DbPostgresConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{LabelledPoolTransaction, Pool};
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
+use include_dir::include_dir;
 use std::time::Duration;
+
+static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {
@@ -25,36 +30,21 @@ pub struct PostgresIndexedStorage {
 }
 
 impl PostgresIndexedStorage {
-    pub async fn new(pool: PostgresPool) -> Result<Self, String> {
-        let result = Self { pool };
-        result.init().await?;
-        Ok(result)
+    pub async fn configured(config: &DbPostgresConfig) -> Result<Self, String> {
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+        golem_service_base::db::postgres::migrate(config, migrations.postgres_migrations())
+            .await
+            .map_err(|err| format!("Postgres indexed storage migration failed: {err:?}"))?;
+
+        let pool = PostgresPool::configured(config).await.map_err(|err| {
+            format!("Postgres indexed storage pool initialization failed: {err:?}")
+        })?;
+
+        Ok(Self { pool })
     }
 
-    async fn init(&self) -> Result<(), String> {
-        let pool = self.pool.with_rw("indexed_storage", "init");
-
-        pool.execute(sqlx::query(
-            r#"
-                        CREATE TABLE IF NOT EXISTS index_storage (
-                            namespace TEXT NOT NULL,
-                            key TEXT NOT NULL,
-                            id BIGINT NOT NULL,
-                            value BYTEA NOT NULL,
-                            PRIMARY KEY (namespace, key, id)
-                        );
-                         "#,
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
-
-        pool.execute(sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_index_storage_ns_key ON index_storage (namespace, key);",
-        ))
-        .await
-        .map_err(|err| err.to_safe_string())?;
-
-        Ok(())
+    pub async fn new(pool: PostgresPool) -> Result<Self, String> {
+        Ok(Self { pool })
     }
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
