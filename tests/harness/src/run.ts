@@ -27,7 +27,7 @@ async function main() {
       output: { type: 'string', default: './results' },
       scenario: { type: 'string' },
       timeout: { type: 'string' },
-      skills: { type: 'string', default: '../../.agents/skills' }
+      skills: { type: 'string', default: '../../golem/skills' }
     }
   });
 

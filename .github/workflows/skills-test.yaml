@@ -3,11 +3,11 @@ name: Skills Test Harness
 on:
   push:
     paths:
-      - '.agents/skills/**'
+      - 'golem/skills/**'
       - 'tests/harness/**'
   pull_request:
     paths:
-      - '.agents/skills/**'
+      - 'golem/skills/**'
       - 'tests/harness/**'
   schedule:
     - cron: '0 6 * * 1' # Weekly Monday 6am UTC
