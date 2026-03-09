@@ -88,8 +88,7 @@ impl McpAgentCapability {
                 agent_type_name.0
             );
 
-            let constructor_param_names =
-                AgentMcpResource::constructor_param_names(constructor);
+            let constructor_param_names = AgentMcpResource::constructor_param_names(constructor);
             let name = AgentMcpResource::resource_name(agent_type_name, method);
 
             let kind = if constructor_param_names.is_empty() {

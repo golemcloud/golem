@@ -174,8 +174,7 @@ fn element_schema_to_json_schema(schema: &ElementSchema) -> JsonTypeDescription 
         ElementSchema::UnstructuredText(descriptor) => {
             let language_code_description = match &descriptor.restrictions {
                 Some(types) if !types.is_empty() => {
-                    let codes: Vec<&str> =
-                        types.iter().map(|t| t.language_code.as_str()).collect();
+                    let codes: Vec<&str> = types.iter().map(|t| t.language_code.as_str()).collect();
                     format!("Language code. Must be one of: {}", codes.join(", "))
                 }
                 _ => "Language code".to_string(),
@@ -192,8 +191,7 @@ fn element_schema_to_json_schema(schema: &ElementSchema) -> JsonTypeDescription 
         ElementSchema::UnstructuredBinary(descriptor) => {
             let mime_type_description = match &descriptor.restrictions {
                 Some(types) if !types.is_empty() => {
-                    let mimes: Vec<&str> =
-                        types.iter().map(|t| t.mime_type.as_str()).collect();
+                    let mimes: Vec<&str> = types.iter().map(|t| t.mime_type.as_str()).collect();
                     format!("MIME type. Must be one of: {}", mimes.join(", "))
                 }
                 _ => "MIME type".to_string(),

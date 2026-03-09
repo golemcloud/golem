@@ -18,6 +18,7 @@ use golem_common::base_model::agent::DataSchema;
 pub fn get_mcp_schema(data_schema: &DataSchema) -> McpSchema {
     match data_schema {
         DataSchema::Tuple(schemas) => McpSchema::from_named_element_schemas(&schemas.elements),
+
         DataSchema::Multimodal(schemas) => {
             McpSchema::from_multimodal_element_schemas(&schemas.elements)
         }

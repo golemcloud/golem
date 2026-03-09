@@ -22,9 +22,7 @@ use golem_common::base_model::agent::*;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use rmcp::ErrorData;
-use rmcp::model::{
-    CallToolResult, Content, JsonObject, ReadResourceResult, ResourceContents,
-};
+use rmcp::model::{CallToolResult, Content, JsonObject, ReadResourceResult, ResourceContents};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -118,13 +116,13 @@ pub fn interpret_agent_response(
 ) -> Result<serde_json::Value, ErrorData> {
     match invoke_result {
         Some(untyped_data_value) => {
-            let typed_value = DataValue::try_from_untyped(untyped_data_value, expected_type.clone())
-                .map_err(|error| {
-                    ErrorData::internal_error(
-                        format!("Agent response type mismatch: {error}"),
-                        None,
-                    )
-                })?;
+            let typed_value = DataValue::try_from_untyped(
+                untyped_data_value,
+                expected_type.clone(),
+            )
+            .map_err(|error| {
+                ErrorData::internal_error(format!("Agent response type mismatch: {error}"), None)
+            })?;
 
             map_data_value_to_json(typed_value)
                 .map(|json_value| {
@@ -156,9 +154,8 @@ fn map_agent_response_to_contents(
     match typed_value {
         DataValue::Tuple(ElementValues { elements }) => match elements.len() {
             0 => Ok(CallToolResult::success(vec![])),
-            1 => element_value_to_content(elements.into_iter().next().unwrap()).map(|content| {
-                CallToolResult::success(vec![content])
-            }),
+            1 => element_value_to_content(elements.into_iter().next().unwrap())
+                .map(|content| CallToolResult::success(vec![content])),
             _ => Err(ErrorData::internal_error(
                 "Unexpected number of response tuple elements".to_string(),
                 None,
@@ -185,12 +182,10 @@ fn element_value_to_content(element: ElementValue) -> Result<Content, ErrorData>
             })?;
             Ok(Content::text(json_value.to_string()))
         }
-        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => {
-            match value {
-                TextReference::Inline(TextSource { data, .. }) => Ok(Content::text(data)),
-                TextReference::Url(url) => Ok(Content::text(url.value)),
-            }
-        }
+        ElementValue::UnstructuredText(UnstructuredTextElementValue { value, .. }) => match value {
+            TextReference::Inline(TextSource { data, .. }) => Ok(Content::text(data)),
+            TextReference::Url(url) => Ok(Content::text(url.value)),
+        },
         ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue { value, .. }) => {
             match value {
                 BinaryReference::Inline(BinarySource { data, binary_type }) => {
@@ -248,17 +243,14 @@ fn map_data_value_to_json(typed_value: DataValue) -> Result<serde_json::Value, E
             let mut result = serde_json::Map::new();
             for named in elements {
                 let value = match named.value {
-                    ElementValue::ComponentModel(v) => {
-                        v.value.to_json_value().map_err(|e| {
-                            ErrorData::internal_error(
-                                format!("Failed to serialize component model response: {e}"),
-                                None,
-                            )
-                        })?
-                    }
+                    ElementValue::ComponentModel(v) => v.value.to_json_value().map_err(|e| {
+                        ErrorData::internal_error(
+                            format!("Failed to serialize component model response: {e}"),
+                            None,
+                        )
+                    })?,
                     ElementValue::UnstructuredText(UnstructuredTextElementValue {
-                        value,
-                        ..
+                        value, ..
                     }) => match value {
                         TextReference::Inline(TextSource { data, .. }) => {
                             serde_json::Value::String(data)
@@ -426,8 +418,7 @@ fn extract_method_parameters(
                     .get("value")
                     .ok_or_else(|| format!("parts[{}] is missing 'value' field", i))?;
 
-                let element =
-                    extract_multimodal_element_value(name, value_json, elem_schema, i)?;
+                let element = extract_multimodal_element_value(name, value_json, elem_schema, i)?;
 
                 named_elements.push(UntypedNamedElementValue {
                     name: name.to_string(),
@@ -484,23 +475,22 @@ fn extract_multimodal_element_value(
             let data = obj
                 .get("data")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!("parts[{}] '{}': missing 'data' string field", index, name)
-                })?
+                .ok_or_else(|| format!("parts[{}] '{}': missing 'data' string field", index, name))?
                 .to_string();
 
             let language_code = obj.get("languageCode").and_then(|v| v.as_str());
 
             if let Some(code) = language_code {
                 if let Some(allowed) = &descriptor.restrictions {
-                    if !allowed.is_empty()
-                        && !allowed.iter().any(|t| t.language_code == code)
-                    {
+                    if !allowed.is_empty() && !allowed.iter().any(|t| t.language_code == code) {
                         let expected: Vec<&str> =
                             allowed.iter().map(|t| t.language_code.as_str()).collect();
                         return Err(format!(
                             "parts[{}] '{}': language code '{}' is not allowed. Expected one of: {}",
-                            index, name, code, expected.join(", ")
+                            index,
+                            name,
+                            code,
+                            expected.join(", ")
                         ));
                     }
                 }
@@ -542,7 +532,10 @@ fn extract_multimodal_element_value(
                         allowed.iter().map(|t| t.mime_type.as_str()).collect();
                     return Err(format!(
                         "parts[{}] '{}': MIME type '{}' is not allowed. Expected one of: {}",
-                        index, name, mime_type, expected.join(", ")
+                        index,
+                        name,
+                        mime_type,
+                        expected.join(", ")
                     ));
                 }
             }
@@ -591,13 +584,7 @@ fn extract_single_element_value(
 
             let value_and_type =
                 golem_wasm::ValueAndType::parse_with_type(&json_value, element_type).map_err(
-                    |errs| {
-                        format!(
-                            "Failed to parse parameter '{}': {}",
-                            name,
-                            errs.join(", ")
-                        )
-                    },
+                    |errs| format!("Failed to parse parameter '{}': {}", name, errs.join(", ")),
                 )?;
 
             Ok(UntypedElementValue::ComponentModel(value_and_type.value))
@@ -624,9 +611,7 @@ fn extract_single_element_value(
 
             if let Some(code) = language_code {
                 if let Some(allowed) = &descriptor.restrictions {
-                    if !allowed.is_empty()
-                        && !allowed.iter().any(|t| t.language_code == code)
-                    {
+                    if !allowed.is_empty() && !allowed.iter().any(|t| t.language_code == code) {
                         let expected: Vec<&str> =
                             allowed.iter().map(|t| t.language_code.as_str()).collect();
                         return Err(format!(
@@ -659,18 +644,16 @@ fn extract_single_element_value(
                 None => return Err(format!("Missing parameter: {}", name)),
             };
 
-            let b64 = obj.get("data").and_then(|v| v.as_str()).ok_or_else(|| {
-                format!("Parameter '{}' is missing 'data' string field", name)
-            })?;
+            let b64 = obj
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("Parameter '{}' is missing 'data' string field", name))?;
 
             let mime_type = obj
                 .get("mimeType")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    format!(
-                        "Parameter '{}' is missing 'mimeType' string field",
-                        name
-                    )
+                    format!("Parameter '{}' is missing 'mimeType' string field", name)
                 })?;
 
             if let Some(allowed) = &descriptor.restrictions {
