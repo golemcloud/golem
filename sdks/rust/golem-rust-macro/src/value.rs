@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::recursion::is_recursive;
-use heck::ToKebabCase;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
@@ -90,7 +89,7 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                 let case_labels = data
                     .variants
                     .iter()
-                    .map(|variant| variant.ident.to_string().to_kebab_case())
+                    .map(|variant| variant.ident.to_string())
                     .collect::<Vec<_>>();
 
                 let add_to_builder = quote! {
@@ -212,7 +211,7 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
 
                 let case_defs = data.variants.iter()
                     .map(|variant| {
-                        let case_name = variant.ident.to_string().to_kebab_case();
+                        let case_name = variant.ident.to_string();
                         if is_unit_case(variant) {
                             quote! {
                                 builder = builder.unit_case(#case_name);
@@ -296,7 +295,7 @@ fn record_or_tuple(
         let field_defs = fields
             .iter()
             .map(|field| {
-                let field_name = field.ident.as_ref().unwrap().to_string().to_kebab_case();
+                let field_name = field.ident.as_ref().unwrap().to_string();
                 let field_type = &field.ty;
                 quote! {
                     let builder = <#field_type as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.field(#field_name));

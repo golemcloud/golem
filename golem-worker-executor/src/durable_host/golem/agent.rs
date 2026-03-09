@@ -19,7 +19,6 @@ use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::ConfigValueType;
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::oplog::host_functions::{
@@ -120,10 +119,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             ) {
                 Ok(input) => {
                     let agent_id = ParsedAgentId::new(
-                        AgentTypeName(agent_type_name).to_wit_naming(),
+                        AgentTypeName(agent_type_name),
                         input,
                         phantom_id.map(|id| id.into()),
-                    );
+                    )
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
                     Ok(Ok(agent_id.to_string()))
                 }
                 Err(err) => Ok(Err(AgentError::InvalidInput(err))),

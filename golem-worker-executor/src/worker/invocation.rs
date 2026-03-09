@@ -43,7 +43,7 @@ use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm::{FromValue, IntoValue, Value};
 use tracing::debug;
 use wasmtime::component::{Func, Val};
-use wasmtime::{AsContext, AsContextMut, StoreContextMut};
+use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Invokes a function on a worker.
 ///
@@ -180,8 +180,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
-    let agent_id = store.as_context().data().parsed_agent_id();
-
     let parsed = ParsedFunctionName::parse(&lowered.wit_fqfn).map_err(|err| {
         WorkerExecutorError::invalid_request(format!(
             "Invalid function name {}: {err}",
@@ -213,8 +211,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             ))
         })?;
 
-    verify_agent_invocation(agent_id, &metadata)?;
-
     let kind = lowered.kind;
     let call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
@@ -237,37 +233,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store.data().set_suspended();
 
     call_result
-}
-
-fn verify_agent_invocation(
-    agent_id: Option<ParsedAgentId>,
-    invocation: &InvokableFunction,
-) -> Result<(), WorkerExecutorError> {
-    if let Some(agent_id) = agent_id {
-        if invocation.agent_method_or_constructor.is_some() {
-            if let Some(interface_name) = invocation.name.site.interface_name() {
-                // interface_name is the kebab-cased agent type name from the static wrapper
-                let agent_type = agent_id.wrapper_agent_type();
-                if interface_name != agent_type {
-                    Err(WorkerExecutorError::invalid_request(format!(
-                        "Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}"
-                    )))
-                } else {
-                    // matching names
-                    Ok(())
-                }
-            } else {
-                // Unexpected state - should never reach this
-                Ok(())
-            }
-        } else {
-            // Not an agent invocation (deprecated)
-            Ok(())
-        }
-    } else {
-        // Not an agent (deprecated)
-        Ok(())
-    }
 }
 
 async fn validate_function_parameters(

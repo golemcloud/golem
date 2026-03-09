@@ -41,7 +41,7 @@ use test_r::test;
 use uuid::Uuid;
 
 #[test]
-fn agent_id_wave_normalization() {
+fn agent_id_structural_normalization() {
     {
         let agent_id =
             ParsedAgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new())
@@ -50,15 +50,13 @@ fn agent_id_wave_normalization() {
     }
 
     {
+        // Structural format: record is positional `(x,y,flags)`, flags are `f(indices...)`
         let agent_id = ParsedAgentId::parse(
-            r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#,
+            "agent-3(  32 ,( 12, 32, f(0,    1  , 2   ) ))",
             TestAgentTypes::new(),
         )
         .unwrap();
-        assert_eq!(
-            agent_id.to_string(),
-            "agent-3(32,{x:12,y:32,properties:{a,b,c}})"
-        );
+        assert_eq!(agent_id.to_string(), "agent-3(32,(12,32,f(0,1,2)))");
     }
 }
 
@@ -187,12 +185,13 @@ proptest! {
                 elements: vec![
                     NamedElementValue {
                         name: "y".to_string(),
-                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt, descriptor: TextDescriptor::default() })
+                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt, descriptor: TextDescriptor::default() }),
+                        schema_index: 1,
                     },
                 ]
             }
         );
-        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
+        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
         let s = id.to_string();
         println!("{s}");
         let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -206,16 +205,18 @@ proptest! {
                 elements: vec![
                     NamedElementValue {
                         name: "y".to_string(),
-                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt1, descriptor: TextDescriptor::default() })
+                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt1, descriptor: TextDescriptor::default() }),
+                        schema_index: 1,
                     },
                     NamedElementValue {
                         name: "y".to_string(),
-                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt2, descriptor: TextDescriptor::default() })
+                        value: ElementValue::UnstructuredText(UnstructuredTextElementValue { value: txt2, descriptor: TextDescriptor::default() }),
+                        schema_index: 1,
                     },
                 ]
             }
         );
-        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None);
+        let id = ParsedAgentId::new(AgentTypeName("agent-6".to_string()), parameters, None).unwrap();
         let s = id.to_string();
         println!("{s}");
         let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -292,12 +293,14 @@ fn roundtrip_test_6() {
                         }),
                         descriptor: BinaryDescriptor::default(),
                     }),
+                    schema_index: 2,
                 },
                 NamedElementValue {
                     name: "x".to_string(),
                     value: ElementValue::ComponentModel(ComponentModelElementValue {
                         value: 101u32.into_value_and_type(),
                     }),
+                    schema_index: 0,
                 },
             ],
         }),
@@ -322,7 +325,7 @@ fn invalid_agent_param_count() {
                 value: 12u32.into_value_and_type(),
             })],
         }),
-        "Unexpected number of parameters: got 1, expected 0",
+        "Parse error at position 0: Unexpected trailing input: \"12\"",
     )
 }
 
@@ -335,13 +338,14 @@ fn invalid_agent_param_type() {
                 value: "hello".into_value_and_type(),
             })],
         }),
-        "Failed to parse parameter value \"hello\": invalid value type at 0..7",
+        "Parse error at position 0: Expected unsigned integer",
     )
 }
 
 #[test]
-fn invalid_text_url() {
-    failure_test(
+fn text_url_roundtrips_without_validation() {
+    // Structural format does not validate URLs; validation happens elsewhere
+    roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
             elements: vec![
@@ -359,7 +363,6 @@ fn invalid_text_url() {
                 }),
             ],
         }),
-        "Failed to parse parameter value not?a/valid!url as URL: relative URL without a base",
     )
 }
 
@@ -703,13 +706,21 @@ fn normalize_empty_params_stays_empty() {
 }
 
 #[test]
-fn normalize_rejects_empty_element_from_double_comma() {
-    assert!(ParsedAgentId::normalize_text("agent-x(1,,2)").is_err());
+fn normalize_preserves_double_comma() {
+    // normalize_structural only strips whitespace, it does not validate structure
+    assert_eq!(
+        ParsedAgentId::normalize_text("agent-x(1,,2)").unwrap(),
+        "agent-x(1,,2)"
+    );
 }
 
 #[test]
-fn normalize_rejects_leading_comma() {
-    assert!(ParsedAgentId::normalize_text("agent-x(,1)").is_err());
+fn normalize_preserves_leading_comma() {
+    // normalize_structural only strips whitespace, it does not validate structure
+    assert_eq!(
+        ParsedAgentId::normalize_text("agent-x(,1)").unwrap(),
+        "agent-x(,1)"
+    );
 }
 
 #[test]
@@ -728,7 +739,7 @@ proptest! {
                 ],
             }),
             None,
-        );
+        ).unwrap();
         let canonical = agent_id.to_string();
         let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
@@ -751,7 +762,7 @@ proptest! {
                 ],
             }),
             None,
-        );
+        ).unwrap();
         let canonical = agent_id.to_string();
         let normalized = ParsedAgentId::normalize_text(&canonical).unwrap();
         prop_assert_eq!(&normalized, &canonical);
@@ -777,7 +788,7 @@ proptest! {
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
+    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
     let s = id.to_string();
     println!("{s}");
     let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -789,7 +800,8 @@ fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: O
         AgentTypeName(agent_type.to_string()),
         parameters,
         phantom_id,
-    );
+    )
+    .unwrap();
     let s = id.to_string();
     println!("{s}");
     let id2 = ParsedAgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -798,7 +810,7 @@ fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: O
 }
 
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None);
+    let id = ParsedAgentId::new(AgentTypeName(agent_type.to_string()), parameters, None).unwrap();
     let s = id.to_string();
     let id2 = ParsedAgentId::parse(s, TestAgentTypes::new())
         .err()
@@ -827,10 +839,7 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    fn resolve_agent_type_by_wrapper_name(
-        &self,
-        agent_type: &AgentTypeName,
-    ) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
             .cloned()
@@ -843,6 +852,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-1".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -859,6 +869,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-2".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -882,6 +893,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-3".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -917,6 +929,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-4".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -948,6 +961,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-5".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -979,6 +993,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-6".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -1016,6 +1031,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("agent-7".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -1039,6 +1055,7 @@ fn test_agent_types() -> HashMap<AgentTypeName, AgentType> {
         AgentType {
             type_name: AgentTypeName("non-kebab-agent".to_string()),
             description: "".to_string(),
+            source_language: String::new(),
             constructor: AgentConstructor {
                 name: None,
                 description: "".to_string(),
@@ -1321,4 +1338,98 @@ fn agent_id_vs_phantom_agent_id() {
     // But different phantom_id values
     assert_eq!(regular_id.phantom_id, None);
     assert_eq!(phantom_id.phantom_id, Some(uuid));
+}
+
+#[test]
+fn agent_id_too_long_rejected() {
+    use crate::base_model::component::ComponentId;
+    use crate::base_model::AgentId;
+
+    let component_id = ComponentId(Uuid::nil());
+    let long_string = "a".repeat(600);
+    let parsed = ParsedAgentId::new(
+        AgentTypeName("t".to_string()),
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::String(long_string),
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+            })],
+        }),
+        None,
+    )
+    .expect("ParsedAgentId::new should succeed");
+    let result = AgentId::from_agent_id(component_id, &parsed);
+    assert!(result.is_err(), "Expected error for too-long agent ID");
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("too long"),
+        "Error should mention 'too long', got: {err}"
+    );
+}
+
+#[test]
+fn agent_id_at_max_length_accepted() {
+    use crate::base_model::component::ComponentId;
+    use crate::base_model::AgentId;
+
+    let component_id = ComponentId(Uuid::nil());
+    // Format is: t("aaa...aaa") → 1 + 1 + 1 + N + 1 + 1 = N + 5, so N = 507 for total 512
+    let content = "a".repeat(507);
+    let parsed = ParsedAgentId::new(
+        AgentTypeName("t".to_string()),
+        DataValue::Tuple(ElementValues {
+            elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+                value: ValueAndType::new(
+                    Value::String(content),
+                    golem_wasm::analysis::analysed_type::str(),
+                ),
+            })],
+        }),
+        None,
+    )
+    .expect("ParsedAgentId::new should succeed");
+    assert_eq!(
+        parsed.to_string().len(),
+        512,
+        "ParsedAgentId string should be exactly 512 chars"
+    );
+    let result = AgentId::from_agent_id(component_id, &parsed);
+    assert!(
+        result.is_ok(),
+        "Expected success for exactly 512-char agent ID, got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn source_language_protobuf_roundtrip() {
+    use golem_api_grpc::proto::golem::component::AgentType as ProtoAgentType;
+
+    for lang in &["rust", "typescript", ""] {
+        let agent_type = AgentType {
+            type_name: AgentTypeName("test-agent".to_string()),
+            description: "test".to_string(),
+            source_language: lang.to_string(),
+            constructor: AgentConstructor {
+                name: None,
+                description: "".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: Vec::new(),
+        };
+        let proto: ProtoAgentType = agent_type.clone().into();
+        let roundtripped: AgentType = proto.try_into().expect("protobuf roundtrip failed");
+        assert_eq!(
+            roundtripped.source_language, agent_type.source_language,
+            "source_language should survive protobuf roundtrip for '{lang}'"
+        );
+    }
 }

@@ -98,7 +98,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/WorkerCreationRequest'
+              $ref: '#/components/schemas/AgentCreationRequest'
         required: true
       responses:
         '200':
@@ -1718,6 +1718,29 @@ components:
         value:
           type: string
           format: date-time
+    AgentCreationRequest:
+      type: object
+      title: AgentCreationRequest
+      required:
+      - name
+      - env
+      properties:
+        name:
+          type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+        localAgentConfig:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
     AgentEnvFilter:
       type: object
       title: AgentEnvFilter
@@ -2906,11 +2929,15 @@ components:
       required:
       - name
       - value
+      - schemaIndex
       properties:
         name:
           type: string
         value:
           $ref: '#/components/schemas/ElementValue'
+        schemaIndex:
+          type: integer
+          format: uint32
     NamedElementValues:
       type: object
       title: NamedElementValues
@@ -4563,29 +4590,6 @@ components:
           items:
             type: string
         value: {}
-    WorkerCreationRequest:
-      type: object
-      title: WorkerCreationRequest
-      required:
-      - name
-      - env
-      properties:
-        name:
-          type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          type: object
-          default: {}
-          additionalProperties:
-            type: string
-        localAgentConfig:
-          type: array
-          default: []
-          items:
-            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse

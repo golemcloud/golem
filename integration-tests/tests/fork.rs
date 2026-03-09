@@ -56,7 +56,7 @@ async fn fork_interrupted_worker(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let source_agent_id = agent_id!("http-client2");
+    let source_agent_id = agent_id!("HttpClient2");
     let agent_id = user
         .start_agent_with(
             &component.id,
@@ -67,7 +67,7 @@ async fn fork_interrupted_worker(
         )
         .await?;
 
-    let target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
+    let target_agent_id = phantom_agent_id!("HttpClient2", Uuid::new_v4());
     let target_agent_name = target_agent_id.to_string();
 
     let target_agent_id = AgentId {
@@ -132,7 +132,7 @@ async fn fork_running_worker_1(
         .await?;
 
     let source_name = Uuid::new_v4().to_string();
-    let parsed_source_agent_id = agent_id!("repository", source_name.clone());
+    let parsed_source_agent_id = agent_id!("Repository", source_name.clone());
     let source_agent_id = user
         .start_agent(&component.id, parsed_source_agent_id.clone())
         .await?;
@@ -146,7 +146,7 @@ async fn fork_running_worker_1(
     .await?;
 
     let target_name = Uuid::new_v4().to_string();
-    let parsed_target_agent_id = agent_id!("repository", target_name.clone());
+    let parsed_target_agent_id = agent_id!("Repository", target_name.clone());
     let target_agent_id = AgentId {
         component_id: component.id,
         agent_id: parsed_target_agent_id.to_string(),
@@ -167,7 +167,7 @@ async fn fork_running_worker_1(
 
     user.fork_worker(
         &source_agent_id,
-        &target_agent_id.to_string(),
+        &parsed_target_agent_id.to_string(),
         oplog_index_of_function_invoked,
     )
     .await?;
@@ -206,7 +206,7 @@ async fn fork_running_worker_2(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let parsed_source_agent_id = agent_id!("http-client2");
+    let parsed_source_agent_id = agent_id!("HttpClient2");
     let source_agent_id = user
         .start_agent_with(
             &component.id,
@@ -217,7 +217,7 @@ async fn fork_running_worker_2(
         )
         .await?;
 
-    let parsed_target_agent_id = phantom_agent_id!("http-client2", Uuid::new_v4());
+    let parsed_target_agent_id = phantom_agent_id!("HttpClient2", Uuid::new_v4());
     let target_agent_name = parsed_target_agent_id.to_string();
 
     let target_agent_id = AgentId {
@@ -293,7 +293,7 @@ async fn fork_idle_worker(
         .await?;
 
     let source_name = Uuid::new_v4().to_string();
-    let parsed_source_agent_id = agent_id!("repository", source_name.clone());
+    let parsed_source_agent_id = agent_id!("Repository", source_name.clone());
     let source_agent_id = user
         .start_agent(&component.id, parsed_source_agent_id.clone())
         .await?;
@@ -315,7 +315,7 @@ async fn fork_idle_worker(
     .await?;
 
     let target_name = Uuid::new_v4().to_string();
-    let parsed_target_agent_id = agent_id!("repository", target_name.clone());
+    let parsed_target_agent_id = agent_id!("Repository", target_name.clone());
     let target_agent_id = AgentId {
         component_id: component.id,
         agent_id: parsed_target_agent_id.to_string(),
@@ -336,7 +336,7 @@ async fn fork_idle_worker(
 
     user.fork_worker(
         &source_agent_id,
-        &target_agent_id.to_string(),
+        &parsed_target_agent_id.to_string(),
         OplogIndex::from_u64(source_oplog.len() as u64),
     )
     .await?;
@@ -428,7 +428,7 @@ async fn fork_worker_when_target_already_exists(
         .await?;
 
     let source_name = Uuid::new_v4().to_string();
-    let parsed_source_agent_id = agent_id!("repository", source_name.clone());
+    let parsed_source_agent_id = agent_id!("Repository", source_name.clone());
     let source_agent_id = user
         .start_agent(&component.id, parsed_source_agent_id.clone())
         .await?;
@@ -475,7 +475,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
         .await?;
 
     let source_name = Uuid::new_v4().to_string();
-    let parsed_source_agent_id = agent_id!("repository", source_name.clone());
+    let parsed_source_agent_id = agent_id!("Repository", source_name.clone());
     let source_agent_id = user
         .start_agent(&component.id, parsed_source_agent_id.clone())
         .await?;
@@ -489,7 +489,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
     .await?;
 
     let target_name = Uuid::new_v4().to_string();
-    let target_agent_id = agent_id!("repository", target_name.clone());
+    let target_agent_id = agent_id!("Repository", target_name.clone());
 
     let error = user
         .fork_worker(
@@ -522,9 +522,9 @@ async fn fork_invalid_worker(
         .await?;
 
     let source_name = Uuid::new_v4().to_string();
-    let source_agent_id = agent_id!("repository", source_name.clone());
+    let source_agent_id = agent_id!("Repository", source_name.clone());
     let target_name = Uuid::new_v4().to_string();
-    let target_agent_id = agent_id!("repository", target_name.clone());
+    let target_agent_id = agent_id!("Repository", target_name.clone());
 
     let source_agent_id = AgentId {
         component_id: component.id,
@@ -564,7 +564,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         .await?;
 
     let source_name = Uuid::new_v4().to_string();
-    let parsed_source_agent_id = agent_id!("environment", source_name.clone());
+    let parsed_source_agent_id = agent_id!("Environment", source_name.clone());
     let source_agent_id = user
         .start_agent(&component.id, parsed_source_agent_id.clone())
         .await?;
@@ -581,7 +581,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     let source_agent_name = source_agent_id.to_string();
 
     let target_name = Uuid::new_v4().to_string();
-    let target_agent_id = agent_id!("environment", target_name.clone());
+    let target_agent_id = agent_id!("Environment", target_name.clone());
 
     let oplog = user
         .get_oplog(&source_agent_id, OplogIndex::INITIAL)
@@ -720,7 +720,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 
     info!("Using environment: {:?}", env);
 
-    let parsed_source_agent_id = agent_id!("golem-host-api", "source-worker");
+    let parsed_source_agent_id = agent_id!("GolemHostApi", "source-worker");
     let source_agent_id = user
         .start_agent_with(
             &component.id,
@@ -750,7 +750,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     let forked_phantom_uuid: Uuid = forked_phantom_id.parse().expect("Expected valid UUID");
 
     let parsed_target_agent_id =
-        phantom_agent_id!("golem-host-api", forked_phantom_uuid, "source-worker");
+        phantom_agent_id!("GolemHostApi", forked_phantom_uuid, "source-worker");
     let target_agent_id = AgentId {
         component_id: component.id,
         agent_id: parsed_target_agent_id.to_string(),
@@ -769,7 +769,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 
     http_server.abort();
 
-    let source_name = source_agent_id.to_string();
+    let source_name = parsed_source_agent_id.to_string();
     assert_eq!(
         source_result,
         Value::String(format!(
@@ -802,7 +802,7 @@ async fn fork_and_sync_with_promise(
         .await?;
 
     let uuid = Uuid::new_v4();
-    let promise_agent_id = agent_id!("promise-agent", uuid.to_string());
+    let promise_agent_id = agent_id!("PromiseAgent", uuid.to_string());
     let _worker = user
         .start_agent(&component.id, promise_agent_id.clone())
         .await?;

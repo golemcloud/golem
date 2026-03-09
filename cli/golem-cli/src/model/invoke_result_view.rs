@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::{render_value_and_type, SourceLanguage};
 use crate::log::log_error;
 use anyhow::{anyhow, bail};
 use golem_client::model::AgentInvocationResult;
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, DataValue, ElementSchema};
 use golem_common::model::IdempotencyKey;
-use golem_wasm::{print_value_and_type, ValueAndType};
+use golem_wasm::ValueAndType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,6 +28,12 @@ pub struct InvokeResultView {
     pub result_json: Option<ValueAndType>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub result_wave: Option<Vec<String>>,
+    #[serde(default = "default_result_format")]
+    pub result_format: String,
+}
+
+fn default_result_format() -> String {
+    "WAVE".to_string()
 }
 
 impl InvokeResultView {
@@ -37,13 +43,24 @@ impl InvokeResultView {
         agent_type: &AgentType,
         method_name: &str,
     ) -> Self {
-        let wave = match Self::try_parse_agent_wave(&result, agent_type, method_name) {
-            Ok(wave) => Some(wave),
-            Err(err) => {
-                log_error(format!("{err}"));
-                None
-            }
-        };
+        let source_language = SourceLanguage::from(agent_type.source_language.as_str());
+
+        let result_format = match &source_language {
+            SourceLanguage::Rust => "Rust syntax",
+            SourceLanguage::TypeScript => "TypeScript syntax",
+            SourceLanguage::Other(_) => "WAVE",
+        }
+        .to_string();
+
+        let rendered =
+            match Self::try_render_agent_result(&result, agent_type, method_name, &source_language)
+            {
+                Ok(r) => Some(r),
+                Err(err) => {
+                    log_error(format!("{err}"));
+                    None
+                }
+            };
 
         let result_json = result.result.and_then(|untyped| {
             let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
@@ -77,7 +94,7 @@ impl InvokeResultView {
                 }
             };
             let analysed_type = match &first_schema.schema {
-                ElementSchema::ComponentModel(cm) => cm.element_type.to_wit_naming(),
+                ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
                 _ => {
                     log_error("Non-ComponentModel output schema not supported for result display");
                     return None;
@@ -89,7 +106,8 @@ impl InvokeResultView {
         Self {
             idempotency_key: idempotency_key.value,
             result_json,
-            result_wave: wave,
+            result_wave: rendered,
+            result_format,
         }
     }
 
@@ -98,13 +116,15 @@ impl InvokeResultView {
             idempotency_key: idempotency_key.value,
             result_json: None,
             result_wave: None,
+            result_format: default_result_format(),
         }
     }
 
-    fn try_parse_agent_wave(
+    fn try_render_agent_result(
         result: &AgentInvocationResult,
         agent_type: &AgentType,
         method_name: &str,
+        source_language: &SourceLanguage,
     ) -> anyhow::Result<Vec<String>> {
         let Some(ref untyped) = result.result else {
             return Ok(vec![]);
@@ -126,7 +146,7 @@ impl InvokeResultView {
 
         let output_schemas = match &method.output_schema {
             DataSchema::Tuple(schemas) => &schemas.elements,
-            _ => bail!("Non-tuple output schema not supported for WAVE formatting"),
+            _ => bail!("Non-tuple output schema not supported for result rendering"),
         };
 
         let first_schema = output_schemas
@@ -134,18 +154,11 @@ impl InvokeResultView {
             .ok_or_else(|| anyhow!("Empty output schema"))?;
 
         let analysed_type = match &first_schema.schema {
-            ElementSchema::ComponentModel(cm) => cm.element_type.to_wit_naming(),
-            _ => bail!("Non-ComponentModel output schema not supported for WAVE formatting"),
+            ElementSchema::ComponentModel(cm) => cm.element_type.clone(),
+            _ => bail!("Non-ComponentModel output schema not supported for result rendering"),
         };
 
         let vt = ValueAndType::new(value, analysed_type);
-        Ok(vec![Self::try_wave_format(vt)?])
-    }
-
-    fn try_wave_format(parsed: ValueAndType) -> anyhow::Result<String> {
-        match print_value_and_type(&parsed) {
-            Ok(res) => Ok(res),
-            Err(err) => Err(anyhow!("Failed to format parsed value as wave: {err}")),
-        }
+        Ok(vec![render_value_and_type(&vt, source_language)])
     }
 }

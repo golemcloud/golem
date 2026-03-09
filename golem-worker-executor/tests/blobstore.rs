@@ -46,7 +46,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("blob-store", "blob-store-service-1");
+    let agent_id = agent_id!("BlobStore", "blob-store-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -97,7 +97,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("blob-store", "blob-store-service-1");
+    let agent_id = agent_id!("BlobStore", "blob-store-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

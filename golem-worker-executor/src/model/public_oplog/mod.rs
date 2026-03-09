@@ -802,12 +802,7 @@ fn resolve_agent_type_from_worker_name(
 ) -> Option<golem_common::model::agent::AgentType> {
     ParsedAgentId::parse_agent_type_name(worker_name)
         .ok()
-        .and_then(|type_name| {
-            metadata
-                .find_agent_type_by_wrapper_name(&type_name)
-                .ok()
-                .flatten()
-        })
+        .and_then(|type_name| metadata.find_agent_type_by_name(&type_name))
 }
 
 async fn agent_invocation_to_public(

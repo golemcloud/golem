@@ -50,6 +50,7 @@ message AgentType {
   optional HttpMountDetails http_mount = 7;
   optional Snapshotting snapshotting = 8;
   repeated ConfigKeyValueType config = 9;
+  string source_language = 10;
 }
 
 message BinaryDescriptor {

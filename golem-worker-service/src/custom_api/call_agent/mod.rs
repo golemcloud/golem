@@ -148,7 +148,8 @@ impl CallAgentHandler {
 
         let phantom_id = phantom.then(Uuid::new_v4);
 
-        let agent_id = ParsedAgentId::new(agent_type.clone(), data_value, phantom_id);
+        let agent_id = ParsedAgentId::new(agent_type.clone(), data_value, phantom_id)
+            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
             component_id: *component_id,

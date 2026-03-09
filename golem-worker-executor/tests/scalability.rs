@@ -57,7 +57,7 @@ async fn spawning_many_workers_that_sleep(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     fn agent_id(n: i32) -> ParsedAgentId {
-        agent_id!("clocks", format!("sleeping-agent-{n}"))
+        agent_id!("Clocks", format!("sleeping-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -174,7 +174,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     fn agent_id(n: i32) -> ParsedAgentId {
-        agent_id!("clocks", format!("sleeping-suspending-agent-{n}"))
+        agent_id!("Clocks", format!("sleeping-suspending-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -320,7 +320,7 @@ async fn initial_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("large-initial-memory-agent", format!("mem-{i}"));
+        let agent_id = agent_id!("LargeInitialMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
@@ -372,7 +372,7 @@ async fn dynamic_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("large-dynamic-memory-agent", format!("mem-{i}"));
+        let agent_id = agent_id!("LargeDynamicMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone

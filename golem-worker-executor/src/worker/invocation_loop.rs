@@ -42,6 +42,7 @@ use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 
+use golem_common::model::agent::structural_format::format_structural;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -944,7 +945,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             );
             invocation_span.set_attribute(
                 "agent_parameters".to_string(),
-                AttributeValue::String(parsed_agent_id.parameters.to_string()),
+                AttributeValue::String(
+                    format_structural(&parsed_agent_id.parameters)
+                        .unwrap_or_else(|err| format!("Cannot render: {}", err)),
+                ),
             )
         }
         invocation_context.push(invocation_span);

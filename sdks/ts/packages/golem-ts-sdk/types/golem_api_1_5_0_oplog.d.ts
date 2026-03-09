@@ -395,12 +395,12 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'exceeded-memory-limit'
   } |
   {
-    tag: 'agent-error'
+    tag: 'internal-error'
     val: string
   };
   export type RawCreateParameters = {
     timestamp: Datetime;
-    workerId: AgentId;
+    agentId: AgentId;
     componentRevision: ComponentRevision;
     env: [string, string][];
     environmentId: EnvironmentId;

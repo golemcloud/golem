@@ -176,7 +176,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/WorkerCreationRequest'
+              $ref: '#/components/schemas/AgentCreationRequest'
         required: true
       responses:
         '200':
@@ -8468,6 +8468,29 @@ components:
       required:
       - comparator
       - value
+    AgentCreationRequest:
+      title: AgentCreationRequest
+      type: object
+      properties:
+        name:
+          type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        configVars:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        localAgentConfig:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
+      required:
+      - name
+      - env
     AgentEnvFilter:
       title: AgentEnvFilter
       type: object
@@ -9658,9 +9681,13 @@ components:
           type: string
         value:
           $ref: '#/components/schemas/ElementValue'
+        schemaIndex:
+          type: integer
+          format: uint32
       required:
       - name
       - value
+      - schemaIndex
     NamedElementValues:
       title: NamedElementValues
       type: object
@@ -11313,29 +11340,6 @@ components:
       required:
       - key
       - value
-    WorkerCreationRequest:
-      title: WorkerCreationRequest
-      type: object
-      properties:
-        name:
-          type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
-        localAgentConfig:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkerCreationLocalAgentConfigEntry'
-      required:
-      - name
-      - env
     WorkerCreationResponse:
       title: WorkerCreationResponse
       type: object
@@ -12182,6 +12186,8 @@ components:
           type: string
         description:
           type: string
+        sourceLanguage:
+          type: string
         constructor:
           $ref: '#/components/schemas/AgentConstructor'
         methods:
@@ -12205,6 +12211,7 @@ components:
       required:
       - typeName
       - description
+      - sourceLanguage
       - constructor
       - methods
       - dependencies
