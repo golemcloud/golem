@@ -416,6 +416,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_unicode_escape(&mut self, esc_pos: usize) -> Result<char, LexError> {
+        // Rust-style \u{XXXX} (variable-length hex inside braces)
+        if self.pos < self.input.len() && self.bytes()[self.pos] == b'{' {
+            return self.read_braced_unicode_escape(esc_pos);
+        }
+        // JSON-style \uXXXX (exactly 4 hex digits)
         let code = self.read_hex4(esc_pos)?;
         if (0xD800..=0xDBFF).contains(&code) {
             // high surrogate — expect \uXXXX low surrogate
@@ -448,6 +453,36 @@ impl<'a> Lexer<'a> {
                 message: "invalid codepoint".into(),
             })
         }
+    }
+
+    fn read_braced_unicode_escape(&mut self, esc_pos: usize) -> Result<char, LexError> {
+        self.pos += 1; // skip '{'
+        let start = self.pos;
+        while self.pos < self.input.len() && self.bytes()[self.pos] != b'}' {
+            self.pos += 1;
+        }
+        if self.pos >= self.input.len() {
+            return Err(LexError {
+                position: esc_pos,
+                message: "unterminated \\u{...} escape".into(),
+            });
+        }
+        let hex = &self.input[start..self.pos];
+        self.pos += 1; // skip '}'
+        if hex.is_empty() || hex.len() > 6 {
+            return Err(LexError {
+                position: esc_pos,
+                message: format!("invalid \\u{{{}}} escape: expected 1-6 hex digits", hex),
+            });
+        }
+        let cp = u32::from_str_radix(hex, 16).map_err(|_| LexError {
+            position: esc_pos,
+            message: format!("invalid hex in \\u{{{hex}}}"),
+        })?;
+        char::from_u32(cp).ok_or_else(|| LexError {
+            position: esc_pos,
+            message: format!("invalid codepoint U+{cp:04X}"),
+        })
     }
 
     fn read_hex4(&mut self, esc_pos: usize) -> Result<u16, LexError> {

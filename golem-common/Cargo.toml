@@ -138,6 +138,7 @@ anyhow = { workspace = true }
 assert2 = { workspace = true }
 criterion = { workspace = true }
 futures = { workspace = true }
+golem-wasm = { workspace = true, features = ["proptest"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 test-r = { workspace = true }
