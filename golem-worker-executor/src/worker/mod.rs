@@ -39,11 +39,10 @@ use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use futures::channel::oneshot;
 use chrono::Utc;
+use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode, Principal, Snapshotting, SnapshottingConfig};
-use golem_common::model::WorkerStatus;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -51,6 +50,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
 use golem_common::model::RetryConfig;
+use golem_common::model::WorkerStatus;
 use golem_common::model::{
     AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, OwnedWorkerId,
     ScheduledAction, Timestamp, TimestampedAgentInvocation, WorkerId, WorkerMetadata,
@@ -1780,11 +1780,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await;
 
-                    self.schedule_oplog_archive_if_needed(
-                        &old_status,
-                        &updated_status,
-                    )
-                    .await;
+                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
+                        .await;
 
                     true
                 } else {
@@ -1816,7 +1813,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             let archive_interval = self.config().oplog.archive_interval;
             let last_oplog_index = new_status.oplog_idx;
-            let account_id = self.initial_worker_metadata.created_by.clone();
+            let account_id = self.initial_worker_metadata.created_by;
 
             debug!(
                 worker_id = %self.owned_worker_id,
