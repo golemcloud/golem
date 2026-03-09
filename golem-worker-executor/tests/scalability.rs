@@ -459,7 +459,7 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .store()
         .await?;
 
-    let agent_id = agent_id!("environment", "archive-idle-1");
+    let agent_id = agent_id!("Environment", "archive-idle-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -520,7 +520,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .store()
         .await?;
 
-    let agent_id = agent_id!("golem-host-api", "archive-failed-1");
+    let agent_id = agent_id!("GolemHostApi", "archive-failed-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
