@@ -56,6 +56,7 @@ use golem_registry_service::repo::model::mcp_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
 use golem_service_base::repo::blob::Blob;
+use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -1256,6 +1257,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         component_revision_id,
         webhook_prefix_authority_and_path: None,
         agent_type: Blob::new(agent_type),
+        canonical_agent_type_name: agent_type_name.to_kebab_case(),
     };
 
     let deployment_creation = DeploymentRevisionCreationRecord {

@@ -146,9 +146,11 @@ impl DeploymentContext {
                         .insert(agent_type_name, registered_agent_type)
                         .is_some()
                     {
-                        Err(DeployValidationError::AmbiguousAgentTypeName(
-                            agent_type.type_name.clone(),
-                        ))
+                        Err(DeployValidationError::ConflictingAgentTypeNames {
+                            name1: agent_type.type_name.clone(),
+                            name2: agent_type.type_name.clone(),
+                            normalized: agent_type.type_name.0.to_kebab_case(),
+                        })
                     } else {
                         Ok(())
                     },
@@ -367,40 +369,5 @@ fn validate_final_router(
                 path: compiled_route.path.clone(),
             })
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use heck::ToKebabCase;
-    use std::collections::HashMap;
-    use test_r::test;
-
-    #[test]
-    fn kebab_case_collision_detected() {
-        assert_eq!("WeatherAgent".to_kebab_case(), "weather-agent");
-        assert_eq!("weather-agent".to_kebab_case(), "weather-agent");
-        assert_eq!("StockAgent".to_kebab_case(), "stock-agent");
-        assert_ne!(
-            "weather-agent".to_kebab_case(),
-            "stock-agent".to_kebab_case()
-        );
-    }
-
-    #[test]
-    fn kebab_case_no_collision() {
-        let names = vec!["WeatherAgent", "StockAgent", "email-service"];
-        let mut kebab_map: HashMap<String, &str> = HashMap::new();
-        let mut has_collision = false;
-        for name in &names {
-            let kebab = name.to_kebab_case();
-            if kebab_map.insert(kebab, name).is_some() {
-                has_collision = true;
-            }
-        }
-        assert!(
-            !has_collision,
-            "Should not have collision for distinct kebab names"
-        );
     }
 }

@@ -116,8 +116,6 @@ pub enum DeployValidationError {
     InvalidHttpCorsBindingExpr(String),
     #[error("Component {0} not found in deployment")]
     ComponentNotFound(ComponentName),
-    #[error("Agent type name {0} is provided by multiple components")]
-    AmbiguousAgentTypeName(AgentTypeName),
     #[error("No security scheme configured for agent {0} but agent has methods that require auth")]
     NoSecuritySchemeConfigured(AgentTypeName),
     #[error(
