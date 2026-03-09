@@ -210,6 +210,10 @@ impl Oplog for EphemeralOplog {
 
     async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.primary.clone())
+    }
+
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
         self.primary.upload_raw_payload(data).await
     }

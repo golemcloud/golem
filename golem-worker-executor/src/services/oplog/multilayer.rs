@@ -869,6 +869,10 @@ impl Oplog for MultiLayerOplog {
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.primary.switch_persistence_level(mode).await;
     }
+
+    fn inner(&self) -> Option<Arc<dyn Oplog>> {
+        Some(self.primary.clone())
+    }
 }
 
 #[derive(Debug)]

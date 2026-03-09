@@ -34,8 +34,6 @@ pub mod login;
 pub mod lucene;
 pub mod mcp_deployment;
 pub mod oplog;
-pub mod optional_field_update;
-#[cfg(feature = "full")]
 pub mod parsed_function_name;
 pub mod plan;
 pub mod plugin_registration;

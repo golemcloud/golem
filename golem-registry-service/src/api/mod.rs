@@ -14,6 +14,7 @@
 
 pub mod account_tokens;
 pub mod accounts;
+pub mod agent_secrets;
 pub mod applications;
 pub mod components;
 pub mod domain_registrations;
@@ -31,6 +32,7 @@ pub mod tokens;
 
 use self::account_tokens::AccountTokensApi;
 use self::accounts::AccountsApi;
+use self::agent_secrets::AgentSecretsApi;
 use self::applications::ApplicationsApi;
 use self::components::ComponentsApi;
 use self::domain_registrations::DomainRegistrationsApi;
@@ -52,6 +54,7 @@ use poem_openapi::OpenApiService;
 pub type Apis = (
     HealthcheckApi,
     (AccountTokensApi, AccountsApi),
+    AgentSecretsApi,
     ApplicationsApi,
     ComponentsApi,
     DomainRegistrationsApi,
@@ -84,6 +87,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.auth_service.clone(),
                     services.plugin_registration_service.clone(),
                 ),
+            ),
+            AgentSecretsApi::new(
+                services.agent_secret_service.clone(),
+                services.auth_service.clone(),
             ),
             ApplicationsApi::new(
                 services.application_service.clone(),

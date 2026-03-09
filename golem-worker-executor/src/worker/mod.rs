@@ -39,6 +39,7 @@ use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use chrono::Utc;
 use futures::channel::oneshot;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -50,10 +51,12 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationLocalAgentConfigEntry};
+use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, AgentMetadata,
-    AgentStatusRecord, IdempotencyKey, OwnedAgentId, Timestamp, TimestampedAgentInvocation,
+    AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
+    TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -103,11 +106,11 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     initial_worker_metadata: AgentMetadata,
-    last_known_status: Arc<tokio::sync::RwLock<AgentStatusRecord>>,
+    last_known_status: Arc<RwLock<AgentStatusRecord>>,
     last_known_status_detached: AtomicBool,
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    update_state_lock: tokio::sync::Mutex<()>,
+    update_state_lock: Mutex<()>,
     worker_estimate_coefficient: f64,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
@@ -1534,7 +1537,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await?;
 
-                let current_status = Arc::new(tokio::sync::RwLock::new(current_status));
+                let current_status = Arc::new(RwLock::new(current_status));
 
                 let agent_id = if initial_component.metadata.is_agent() {
                     let agent_id = ParsedAgentId::parse(
@@ -1774,6 +1777,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await;
 
+                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
+                        .await;
+
                     true
                 } else {
                     false
@@ -1788,6 +1794,41 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         } else {
             false
+        }
+    }
+
+    async fn schedule_oplog_archive_if_needed(
+        &self,
+        old_status: &AgentStatusRecord,
+        new_status: &AgentStatusRecord,
+    ) {
+        if old_status.status != new_status.status
+            && matches!(
+                new_status.status,
+                AgentStatus::Idle | AgentStatus::Failed | AgentStatus::Exited
+            )
+        {
+            let archive_interval = self.config().oplog.archive_interval;
+            let last_oplog_index = new_status.oplog_idx;
+            let account_id = self.initial_worker_metadata.created_by;
+
+            debug!(
+                worker_id = %self.owned_agent_id,
+                new_status = ?new_status.status,
+                "Scheduling ArchiveOplog after status transition"
+            );
+
+            self.scheduler_service()
+                .schedule(
+                    Utc::now() + archive_interval,
+                    ScheduledAction::ArchiveOplog {
+                        account_id,
+                        owned_agent_id: self.owned_agent_id.clone(),
+                        last_oplog_index,
+                        next_after: archive_interval,
+                    },
+                )
+                .await;
         }
     }
 
@@ -1934,7 +1975,7 @@ impl Drop for RunningWorker {
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
-    queue: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
@@ -1944,7 +1985,7 @@ struct RunningWorker {
 impl RunningWorker {
     pub async fn new<Ctx: WorkerCtx>(
         owned_agent_id: OwnedAgentId,
-        queue: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
+        queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
         oom_retry_count: u32,
@@ -2410,7 +2451,7 @@ pub enum ResultOrSubscription {
 
 struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
-    current_status: Arc<tokio::sync::RwLock<AgentStatusRecord>>,
+    current_status: Arc<RwLock<AgentStatusRecord>>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,
