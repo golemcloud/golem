@@ -769,6 +769,7 @@ impl WorkerCtx for TestWorkerCtx {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -803,6 +804,7 @@ impl WorkerCtx for TestWorkerCtx {
             agent_types_service,
             agent_webhooks_service,
             shard_service,
+            http_connection_pool,
             pending_update,
             original_phantom_id,
         )
@@ -1134,6 +1136,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(
@@ -1177,6 +1180,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1212,6 +1216,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             shutdown_token.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1244,6 +1249,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            http_connection_pool,
             extra_deps.clone(),
             leak_sentinel,
         ))

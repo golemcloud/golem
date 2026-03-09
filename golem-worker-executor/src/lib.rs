@@ -250,6 +250,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>>;
 
@@ -495,7 +496,21 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         registry_service.clone(),
     );
 
-    let golem_config = Arc::new(golem_config.clone());
+    let http_connection_pool = if golem_config.http_client.pool_enabled {
+        Some(wasmtime_wasi_http::HttpConnectionPool::new(
+            wasmtime_wasi_http::HttpConnectionPoolConfig {
+                max_idle_per_host: golem_config.http_client.max_idle_per_host,
+                idle_timeout: golem_config.http_client.idle_timeout,
+                connect_timeout: golem_config.http_client.connect_timeout,
+                max_connections_per_host: golem_config.http_client.max_connections_per_host,
+                max_total_connections: golem_config.http_client.max_total_connections,
+                max_host_entries: golem_config.http_client.max_host_entries,
+            },
+        ))
+    } else {
+        None
+    };
+    let golem_config = Arc::new(golem_config);
 
     let shard_service = Arc::new(ShardServiceDefault::new());
 
@@ -654,6 +669,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             agent_webhooks_service,
             registry_service,
             shutdown_token,
+            http_connection_pool,
             leak_sentinel,
         )
         .await?;

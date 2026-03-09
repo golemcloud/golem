@@ -28,8 +28,8 @@ use crate::services::{
     active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasFileLoader, HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin,
-    HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
+    HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasLeakSentinel,
+    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
@@ -54,6 +54,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use uuid::Uuid;
+use wasmtime_wasi_http::HttpConnectionPool;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -106,6 +107,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
     pub shutdown_token: tokio_util::sync::CancellationToken,
+    pub http_connection_pool: Option<HttpConnectionPool>,
     pub extra_deps: Ctx::ExtraDeps,
     pub leak_sentinel: Arc<()>,
 }
@@ -288,6 +290,12 @@ impl<Ctx: WorkerCtx> HasLeakSentinel for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasHttpConnectionPool for DefaultWorkerFork<Ctx> {
+    fn http_connection_pool(&self) -> Option<HttpConnectionPool> {
+        self.http_connection_pool.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -318,6 +326,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
+            http_connection_pool: self.http_connection_pool.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -356,6 +365,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
         shutdown_token: tokio_util::sync::CancellationToken,
+        http_connection_pool: Option<HttpConnectionPool>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -387,6 +397,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             oplog_processor_plugin,
             resource_limits,
             shutdown_token,
+            http_connection_pool,
             extra_deps,
             leak_sentinel,
         }

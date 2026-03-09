@@ -228,30 +228,41 @@ fn calculate_latest_worker_status(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (WorkerStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
     for (idx, entry) in entries {
-        // Skipping entries in skipped regions, as they are skipped during replay too
-        if skipped_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
         // Errors are counted in skipped regions too (but not in deleted ones),
-        // otherwise we would not be able to know how many times we retried failures in atomic regions
+        // otherwise we would not be able to know how many times we retried failures in atomic regions.
+        // This must happen before the skipped-region continue below.
         if !deleted_regions.is_in_deleted_region(*idx) {
-            if let OplogEntry::Error {
-                error, retry_from, ..
-            } = entry
-            {
+            if let OplogEntry::Error { retry_from, .. } = entry {
                 let new_count = current_retry_count
                     .get(retry_from)
                     .copied()
                     .unwrap_or_default()
                     + 1;
                 current_retry_count.insert(*retry_from, new_count);
+            }
+        }
+
+        // Skipping entries in skipped regions, as they are skipped during replay too
+        if skipped_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
+        // For non-skipped errors, update the worker status based on the accumulated retry count
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            if let OplogEntry::Error {
+                error, retry_from, ..
+            } = entry
+            {
+                let count = current_retry_count
+                    .get(retry_from)
+                    .copied()
+                    .unwrap_or_default();
                 if is_worker_error_retriable(
                     current_retry_policy
                         .as_ref()
                         .unwrap_or(default_retry_policy),
                     error,
-                    new_count,
+                    count,
                 ) {
                     current_status = WorkerStatus::Retrying;
                 } else {

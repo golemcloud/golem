@@ -135,9 +135,9 @@ use wasmtime_wasi::{
 };
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
-    default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
+    default_send_request_with_pool, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
-use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use wasmtime_wasi_http::{HttpConnectionPool, HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -179,6 +179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_types_service: Arc<dyn AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
+        http_connection_pool: Option<HttpConnectionPool>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -244,7 +245,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             config.suspend.suspend_after,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
-        let wasi_http = WasiHttpCtx::new();
+        let mut wasi_http = WasiHttpCtx::new();
+        wasi_http.connection_pool = http_connection_pool;
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
@@ -3284,6 +3286,10 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             .expect("ResourceTable mutex must never fail")
     }
 
+    fn connection_pool(&self) -> Option<&HttpConnectionPool> {
+        self.0.wasi_http.connection_pool.as_ref()
+    }
+
     fn send_request(
         &mut self,
         request: hyper::Request<HyperOutgoingBody>,
@@ -3299,7 +3305,11 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
             // or poll the response future.
             Ok(HostFutureIncomingResponse::deferred(request, config))
         } else {
-            Ok(default_send_request(request, config))
+            Ok(default_send_request_with_pool(
+                request,
+                config,
+                self.0.wasi_http.connection_pool.clone(),
+            ))
         }
     }
 }
