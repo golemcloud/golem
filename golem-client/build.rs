@@ -87,6 +87,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "ApplicationUpdate",
                 "golem_common::model::application::ApplicationUpdate",
             ),
+            // agent secret
+            (
+                "AgentSecretDto",
+                "golem_common::model::agent_secret::AgentSecretDto",
+            ),
+            (
+                "AgentSecretCreation",
+                "golem_common::model::agent_secret::AgentSecretCreation",
+            ),
+            (
+                "AgentSecretUpdate",
+                "golem_common::model::agent_secret::AgentSecretUpdate",
+            ),
             // auth
             ("Token", "golem_common::model::auth::Token"),
             ("TokenCreation", "golem_common::model::auth::TokenCreation"),
@@ -202,6 +215,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "OAuth2WebflowData",
                 "golem_common::model::login::OAuth2WebflowData",
             ),
+            // mcp deployment
+            (
+                "McpDeployment",
+                "golem_common::model::mcp_deployment::McpDeployment",
+            ),
+            (
+                "McpDeploymentCreation",
+                "golem_common::model::mcp_deployment::McpDeploymentCreation",
+            ),
+            (
+                "McpDeploymentUpdate",
+                "golem_common::model::mcp_deployment::McpDeploymentUpdate",
+            ),
             // plan
             ("Plan", "golem_common::model::plan::Plan"),
             // plugin_registration
@@ -286,18 +312,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "HttpApiDeploymentUpdate",
                 "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
-            ),
-            (
-                "McpDeployment",
-                "golem_common::model::mcp_deployment::McpDeployment",
-            ),
-            (
-                "McpDeploymentCreation",
-                "golem_common::model::mcp_deployment::McpDeploymentCreation",
-            ),
-            (
-                "McpDeploymentUpdate",
-                "golem_common::model::mcp_deployment::McpDeploymentUpdate",
             ),
             // common
             ("Empty", "golem_common::model::Empty"),

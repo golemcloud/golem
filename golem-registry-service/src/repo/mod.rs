@@ -15,6 +15,7 @@
 // Repos
 pub mod account;
 pub mod account_usage;
+pub mod agent_secret;
 pub mod application;
 pub mod component;
 pub mod deployment;
@@ -28,7 +29,7 @@ pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod plan;
 pub mod plugin;
-pub mod reports;
+pub mod report;
 pub mod security_scheme;
 pub mod token;
 
