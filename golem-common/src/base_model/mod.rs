@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod agent;
+pub mod agent_secret;
 pub mod application;
 pub mod auth;
 pub mod base64;
@@ -33,6 +34,7 @@ pub mod invocation_context;
 pub mod login;
 pub mod mcp_deployment;
 pub mod oplog;
+pub mod optional_field_update;
 pub mod plan;
 pub mod plugin_registration;
 pub mod regions;

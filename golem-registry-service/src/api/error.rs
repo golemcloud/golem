@@ -14,6 +14,7 @@
 
 use crate::services::account::AccountError;
 use crate::services::account_usage::error::LimitExceededError;
+use crate::services::agent_secret::AgentSecretError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
@@ -615,6 +616,28 @@ impl From<McpDeploymentError> for ApiError {
 
             McpDeploymentError::Unauthorized(inner) => inner.into(),
             McpDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<AgentSecretError> for ApiError {
+    fn from(value: AgentSecretError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            AgentSecretError::ConcurrentModification
+            | AgentSecretError::AgentSecretForPathAlreadyExists { .. }
+            | AgentSecretError::AgentSecretValueDoesNotMatchType { .. } => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+            AgentSecretError::AgentSecretNotFound(_)
+            | AgentSecretError::ParentEnvironmentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+            AgentSecretError::Unauthorized(inner) => inner.into(),
+            AgentSecretError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

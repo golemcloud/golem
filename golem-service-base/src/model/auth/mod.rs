@@ -189,6 +189,7 @@ pub enum AccountAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum EnvironmentAction {
+    CreateAgentSecret,
     CreateComponent,
     CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
@@ -199,6 +200,7 @@ pub enum EnvironmentAction {
     CreateShare,
     CreateWorker,
     DebugWorker,
+    DeleteAgentSecret,
     DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
@@ -209,6 +211,7 @@ pub enum EnvironmentAction {
     DeleteShare,
     DeleteWorker,
     DeployEnvironment,
+    UpdateAgentSecret,
     UpdateComponent,
     UpdateEnvironment,
     UpdateHttpApiDefinition,
@@ -217,6 +220,7 @@ pub enum EnvironmentAction {
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
+    ViewAgentSecret,
     ViewAgentTypes,
     ViewComponent,
     ViewDeployment,
@@ -651,6 +655,23 @@ impl AuthCtx {
                     EnvironmentRole::Deployer,
                     EnvironmentRole::Viewer,
                 ],
+            ),
+            // agent secrets
+            EnvironmentAction::ViewAgentSecret => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateAgentSecret => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::CreateAgentSecret => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::DeleteAgentSecret => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
         };
 

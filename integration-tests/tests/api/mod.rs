@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod account;
+mod agent_secret;
 mod application;
 mod auth;
 mod component;
