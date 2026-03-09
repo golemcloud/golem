@@ -1048,7 +1048,7 @@ mod protobuf {
         }
     }
 
-    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::WorkerError {
+    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::AgentError {
         fn from(error: AuthorizationError) -> Self {
             Self {
                 error: Some(error.into()),
@@ -1056,7 +1056,7 @@ mod protobuf {
         }
     }
 
-    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::worker_error::Error {
+    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::agent_error::Error {
         fn from(error: AuthorizationError) -> Self {
             use golem_api_grpc::proto::golem::common::ErrorBody;
 

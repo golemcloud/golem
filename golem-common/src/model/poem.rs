@@ -181,15 +181,15 @@ mod tests {
     use crate::model::component::{
         ComponentFileContentHash, ComponentFilePath, InitialComponentFile,
     };
-    use crate::model::{ComponentFilePermissions, Empty, IdempotencyKey, WorkerStatus};
+    use crate::model::{AgentStatus, ComponentFilePermissions, Empty, IdempotencyKey};
     use poem_openapi::types::ToJSON;
     use test_r::test;
 
     #[test]
     fn worker_status_serialization_poem_serde_equivalence() {
-        let status = WorkerStatus::Retrying;
+        let status = AgentStatus::Retrying;
         let serialized = status.to_json_string();
-        let deserialized: WorkerStatus = serde_json::from_str(&serialized).unwrap();
+        let deserialized: AgentStatus = serde_json::from_str(&serialized).unwrap();
         assert_eq!(status, deserialized);
     }
 

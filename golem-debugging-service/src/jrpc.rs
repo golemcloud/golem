@@ -18,7 +18,7 @@ use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
 use futures::{SinkExt, StreamExt};
 use golem_common::model::account::AccountId;
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::OwnedAgentId;
 use golem_common::SafeDisplay;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
@@ -168,7 +168,7 @@ pub async fn run_jrpc_debug_websocket_session(
 
 struct JrpcSessionData {
     pub account_id: AccountId,
-    pub connected_worker: OwnedWorkerId,
+    pub connected_worker: OwnedAgentId,
 }
 
 struct JrpcSession {
@@ -226,11 +226,11 @@ impl JrpcSession {
         match request.method.as_str() {
             "current_oplog_index" => {
                 if let Some(active_session_data) = &self.active_session {
-                    let owned_worker_id = active_session_data.connected_worker.clone();
+                    let owned_agent_id = active_session_data.connected_worker.clone();
 
                     let result = self
                         .debug_service
-                        .current_oplog_index(&owned_worker_id)
+                        .current_oplog_index(&owned_agent_id)
                         .await;
                     to_json_rpc_result(&jrpc_id, result)
                 } else {
@@ -249,7 +249,7 @@ impl JrpcSession {
 
                 let result = self
                     .debug_service
-                    .connect(&self.auth_ctx, &params.worker_id)
+                    .connect(&self.auth_ctx, &params.agent_id)
                     .await;
 
                 match result {
@@ -272,12 +272,12 @@ impl JrpcSession {
                 if let Some(active_session_data) = &self.active_session {
                     let params: PlaybackParams = parse_params(&jrpc_id, request.params)?;
 
-                    let owned_worker_id = active_session_data.connected_worker.clone();
+                    let owned_agent_id = active_session_data.connected_worker.clone();
 
                     let result = self
                         .debug_service
                         .playback(
-                            &owned_worker_id,
+                            &owned_agent_id,
                             active_session_data.account_id,
                             params.target_index,
                             params.overrides,
@@ -296,12 +296,12 @@ impl JrpcSession {
                 if let Some(active_session_data) = &self.active_session {
                     let params: RewindParams = parse_params(&jrpc_id, request.params)?;
 
-                    let owned_worker_id = active_session_data.connected_worker.clone();
+                    let owned_agent_id = active_session_data.connected_worker.clone();
 
                     let result = self
                         .debug_service
                         .rewind(
-                            &owned_worker_id,
+                            &owned_agent_id,
                             active_session_data.account_id,
                             params.target_index,
                             params.ensure_invocation_boundary.unwrap_or(true),
@@ -317,15 +317,15 @@ impl JrpcSession {
             }
             "fork" => {
                 if let Some(active_session_data) = &self.active_session {
-                    let owned_worker_id = active_session_data.connected_worker.clone();
+                    let owned_agent_id = active_session_data.connected_worker.clone();
 
                     let params: ForkParams = parse_params(&jrpc_id, request.params)?;
                     let result = self
                         .debug_service
                         .fork(
                             active_session_data.account_id,
-                            &owned_worker_id,
-                            &params.target_worker_id,
+                            &owned_agent_id,
+                            &params.target_agent_id,
                             params.oplog_index_cut_off,
                         )
                         .await;

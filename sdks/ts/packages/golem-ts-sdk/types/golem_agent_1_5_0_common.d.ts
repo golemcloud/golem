@@ -217,6 +217,7 @@ declare module 'golem:agent/common@1.5.0' {
   export type AgentType = {
     typeName: string;
     description: string;
+    sourceLanguage: string;
     constructor: AgentConstructor;
     methods: AgentMethod[];
     dependencies: AgentDependency[];

@@ -39,6 +39,7 @@ console-subscriber = { workspace = true }
 desert_rust.workspace = true
 figment = { workspace = true }
 futures = { workspace = true }
+heck = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }

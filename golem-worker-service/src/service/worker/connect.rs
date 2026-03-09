@@ -16,14 +16,14 @@ use super::WorkerStream;
 use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use std::sync::Arc;
 use tonic::Status;
 
 pub struct ConnectWorkerStream {
     stream: WorkerStream<LogEvent>,
-    worker_id: WorkerId,
+    agent_id: AgentId,
     account_id: AccountId,
     limit_service: Arc<dyn LimitService>,
 }
@@ -31,13 +31,13 @@ pub struct ConnectWorkerStream {
 impl ConnectWorkerStream {
     pub fn new(
         stream: WorkerStream<LogEvent>,
-        worker_id: WorkerId,
+        agent_id: AgentId,
         account_id: AccountId,
         limit_service: Arc<dyn LimitService>,
     ) -> Self {
         Self {
             stream,
-            worker_id,
+            agent_id,
             account_id,
             limit_service,
         }
@@ -60,14 +60,14 @@ impl Drop for ConnectWorkerStream {
         tracing::info!(
             account_id = %self.account_id,
             "Dropping worker {} connections",
-            self.worker_id
+            self.agent_id
         );
         let limit_service = self.limit_service.clone();
-        let worker_id = self.worker_id.clone();
+        let agent_id = self.agent_id.clone();
         let account_id = self.account_id;
         tokio::spawn(async move {
             let result = limit_service
-                .update_worker_connection_limit(account_id, &worker_id, false)
+                .update_worker_connection_limit(account_id, &agent_id, false)
                 .await;
 
             if let Err(error) = result {
