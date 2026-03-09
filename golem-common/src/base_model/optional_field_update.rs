@@ -12,17 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use poem::web::Field as PoemField;
-use poem_openapi::registry::MetaSchema;
-use poem_openapi::{
-    registry::{MetaDiscriminatorObject, MetaSchemaRef, Registry},
-    types::{ParseError, ParseFromJSON, ParseFromMultipartField, ParseResult, ToJSON, Type},
-};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value;
-use std::borrow::Cow;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,23 +149,35 @@ where
     }
 }
 
-impl<T: Type> Type for OptionalFieldUpdate<T> {
-    const IS_REQUIRED: bool = false;
+#[cfg(feature = "full")]
+mod poem {
+    use super::OptionalFieldUpdate;
+    use poem::web::Field as PoemField;
+    use poem_openapi::registry::MetaSchema;
+    use poem_openapi::{
+        registry::{MetaDiscriminatorObject, MetaSchemaRef, Registry},
+        types::{ParseError, ParseFromJSON, ParseFromMultipartField, ParseResult, ToJSON, Type},
+    };
+    use serde_json::Value;
+    use std::borrow::Cow;
 
-    type RawValueType = Self;
-    type RawElementValueType = Self;
+    impl<T: Type> Type for OptionalFieldUpdate<T> {
+        const IS_REQUIRED: bool = false;
 
-    fn name() -> Cow<'static, str> {
-        format!("OptionalFieldUpdate_{}", T::name()).into()
-    }
+        type RawValueType = Self;
+        type RawElementValueType = Self;
 
-    fn schema_ref() -> MetaSchemaRef {
-        MetaSchemaRef::Reference(Self::name().into_owned())
-    }
+        fn name() -> Cow<'static, str> {
+            format!("OptionalFieldUpdate_{}", T::name()).into()
+        }
 
-    fn register(registry: &mut Registry) {
-        T::register(registry);
-        registry.create_schema::<Self, _>(Self::name().into_owned(), |registry| {
+        fn schema_ref() -> MetaSchemaRef {
+            MetaSchemaRef::Reference(Self::name().into_owned())
+        }
+
+        fn register(registry: &mut Registry) {
+            T::register(registry);
+
             let set_schema_name = format!("{}_Set", Self::name());
             let unset_schema_name = format!("{}_Unset", Self::name());
 
@@ -191,7 +195,7 @@ impl<T: Type> Type for OptionalFieldUpdate<T> {
                                 ..MetaSchema::ANY
                             })),
                         ),
-                        ("value", MetaSchemaRef::Reference(T::name().into_owned())),
+                        ("value", T::schema_ref()),
                     ],
                     ..MetaSchema::ANY
                 },
@@ -206,7 +210,7 @@ impl<T: Type> Type for OptionalFieldUpdate<T> {
                         "op",
                         MetaSchemaRef::Inline(Box::new(MetaSchema {
                             ty: "string",
-                            enum_items: vec!["set".into()],
+                            enum_items: vec!["unset".into()],
                             ..MetaSchema::ANY
                         })),
                     )],
@@ -214,107 +218,110 @@ impl<T: Type> Type for OptionalFieldUpdate<T> {
                 },
             );
 
-            MetaSchema {
-                ty: "object",
-                one_of: vec![
-                    MetaSchemaRef::Reference(set_schema_name.clone()),
-                    MetaSchemaRef::Reference(unset_schema_name.clone()),
-                ],
-                discriminator: Some(MetaDiscriminatorObject {
-                    property_name: "op",
-                    mapping: vec![
-                        (
-                            "set".to_string(),
-                            format!("#/components/schemas/{}", set_schema_name),
-                        ),
-                        (
-                            "unset".to_string(),
-                            format!("#/components/schemas/{}", unset_schema_name),
-                        ),
+            registry.schemas.insert(
+                Self::name().into_owned(),
+                MetaSchema {
+                    ty: "object",
+                    one_of: vec![
+                        MetaSchemaRef::Reference(set_schema_name.clone()),
+                        MetaSchemaRef::Reference(unset_schema_name.clone()),
                     ],
-                }),
-                ..MetaSchema::ANY
-            }
-        });
+                    discriminator: Some(MetaDiscriminatorObject {
+                        property_name: "op",
+                        mapping: vec![
+                            (
+                                "set".to_string(),
+                                format!("#/components/schemas/{}", set_schema_name),
+                            ),
+                            (
+                                "unset".to_string(),
+                                format!("#/components/schemas/{}", unset_schema_name),
+                            ),
+                        ],
+                    }),
+                    ..MetaSchema::ANY
+                },
+            );
+        }
+
+        fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+            Some(self)
+        }
+
+        fn raw_element_iter<'a>(
+            &'a self,
+        ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+            Box::new(std::iter::once(self))
+        }
+
+        #[inline]
+        fn is_none(&self) -> bool {
+            matches!(self, OptionalFieldUpdate::NoChange)
+        }
     }
 
-    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
-        Some(self)
-    }
+    impl<T: ParseFromJSON> ParseFromJSON for OptionalFieldUpdate<T> {
+        fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
+            match value.unwrap_or(Value::Null) {
+                Value::Null => Ok(OptionalFieldUpdate::NoChange),
+                Value::Object(map) => {
+                    let op = map
+                        .get("op")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| ParseError::custom("Missing 'op' field"))?;
 
-    fn raw_element_iter<'a>(
-        &'a self,
-    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
-        Box::new(std::iter::once(self))
-    }
-
-    #[inline]
-    fn is_none(&self) -> bool {
-        matches!(self, OptionalFieldUpdate::NoChange)
-    }
-}
-
-impl<T: ParseFromJSON> ParseFromJSON for OptionalFieldUpdate<T> {
-    fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
-        match value.unwrap_or(Value::Null) {
-            Value::Null => Ok(OptionalFieldUpdate::NoChange),
-            Value::Object(map) => {
-                let op = map
-                    .get("op")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ParseError::custom("Missing 'op' field"))?;
-
-                match op {
-                    "set" => {
-                        let val = map
-                            .get("value")
-                            .ok_or_else(|| ParseError::custom("Missing 'value' field for set"))?;
-                        T::parse_from_json(Some(val.clone()))
-                            .map(OptionalFieldUpdate::Set)
-                            .map_err(ParseError::propagate)
+                    match op {
+                        "set" => {
+                            let val = map.get("value").ok_or_else(|| {
+                                ParseError::custom("Missing 'value' field for set")
+                            })?;
+                            T::parse_from_json(Some(val.clone()))
+                                .map(OptionalFieldUpdate::Set)
+                                .map_err(ParseError::propagate)
+                        }
+                        "unset" => Ok(OptionalFieldUpdate::Unset),
+                        other => Err(ParseError::custom(format!("Unknown op '{}'", other))),
                     }
-                    "unset" => Ok(OptionalFieldUpdate::Unset),
-                    other => Err(ParseError::custom(format!("Unknown op '{}'", other))),
                 }
+                other => Err(ParseError::custom(format!(
+                    "Expected object or null, got {:?}",
+                    other
+                ))),
             }
-            other => Err(ParseError::custom(format!(
-                "Expected object or null, got {:?}",
-                other
-            ))),
         }
     }
-}
 
-impl<T: ToJSON> ToJSON for OptionalFieldUpdate<T> {
-    fn to_json(&self) -> Option<Value> {
-        match self {
-            OptionalFieldUpdate::Set(value) => {
-                let mut obj = serde_json::Map::new();
-                obj.insert("op".to_string(), Value::String("set".to_string()));
-                obj.insert("value".to_string(), value.to_json().unwrap_or(Value::Null));
-                Some(Value::Object(obj))
+    impl<T: ToJSON> ToJSON for OptionalFieldUpdate<T> {
+        fn to_json(&self) -> Option<Value> {
+            match self {
+                OptionalFieldUpdate::Set(value) => {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("op".to_string(), Value::String("set".to_string()));
+                    obj.insert("value".to_string(), value.to_json().unwrap_or(Value::Null));
+                    Some(Value::Object(obj))
+                }
+                OptionalFieldUpdate::Unset => {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert("op".to_string(), Value::String("unset".to_string()));
+                    Some(Value::Object(obj))
+                }
+                OptionalFieldUpdate::NoChange => Some(Value::Null),
             }
-            OptionalFieldUpdate::Unset => {
-                let mut obj = serde_json::Map::new();
-                obj.insert("op".to_string(), Value::String("unset".to_string()));
-                Some(Value::Object(obj))
-            }
-            OptionalFieldUpdate::NoChange => Some(Value::Null),
         }
     }
-}
 
-impl<T: ParseFromMultipartField> ParseFromMultipartField for OptionalFieldUpdate<T> {
-    async fn parse_from_multipart(value: Option<PoemField>) -> ParseResult<Self> {
-        match value {
-            Some(field) => {
-                let val = T::parse_from_multipart(Some(field))
-                    .await
-                    .map(OptionalFieldUpdate::Set)
-                    .map_err(ParseError::propagate)?;
-                Ok(val)
+    impl<T: ParseFromMultipartField> ParseFromMultipartField for OptionalFieldUpdate<T> {
+        async fn parse_from_multipart(value: Option<PoemField>) -> ParseResult<Self> {
+            match value {
+                Some(field) => {
+                    let val = T::parse_from_multipart(Some(field))
+                        .await
+                        .map(OptionalFieldUpdate::Set)
+                        .map_err(ParseError::propagate)?;
+                    Ok(val)
+                }
+                None => Ok(OptionalFieldUpdate::NoChange),
             }
-            None => Ok(OptionalFieldUpdate::NoChange),
         }
     }
 }
