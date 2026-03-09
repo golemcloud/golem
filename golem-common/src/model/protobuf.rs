@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{diff, WorkerConfigVarsFilter, WorkerResourceDescription};
+use super::{diff, AgentConfigVarsFilter, AgentResourceDescription};
 use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
-use crate::model::oplog::{OplogIndex, WorkerResourceId};
+use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
-    ComponentFilePermissions, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod,
-    PromiseId, RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator,
-    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerNameFilter, WorkerNotFilter, WorkerRevisionFilter, WorkerStatus, WorkerStatusFilter,
+    AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilter, AgentId, AgentNameFilter,
+    AgentNotFilter, AgentRevisionFilter, AgentStatus, AgentStatusFilter, ComponentFilePermissions,
+    FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
+    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
 };
 use applying::Apply;
 use golem_api_grpc::proto::golem;
@@ -80,22 +80,22 @@ impl TryFrom<golem::common::Hash> for diff::Hash {
     }
 }
 
-impl From<WorkerId> for golem::worker::WorkerId {
-    fn from(value: WorkerId) -> Self {
+impl From<AgentId> for golem::worker::AgentId {
+    fn from(value: AgentId) -> Self {
         Self {
             component_id: Some(value.component_id.into()),
-            name: value.worker_name,
+            name: value.agent_id,
         }
     }
 }
 
-impl TryFrom<golem::worker::WorkerId> for WorkerId {
+impl TryFrom<golem::worker::AgentId> for AgentId {
     type Error = String;
 
-    fn try_from(value: golem::worker::WorkerId) -> Result<Self, Self::Error> {
+    fn try_from(value: golem::worker::AgentId) -> Result<Self, Self::Error> {
         Ok(Self {
             component_id: value.component_id.unwrap().try_into()?,
-            worker_name: value.name,
+            agent_id: value.name,
         })
     }
 }
@@ -103,7 +103,7 @@ impl TryFrom<golem::worker::WorkerId> for WorkerId {
 impl From<PromiseId> for golem::worker::PromiseId {
     fn from(value: PromiseId) -> Self {
         Self {
-            worker_id: Some(value.worker_id.into()),
+            agent_id: Some(value.agent_id.into()),
             oplog_idx: value.oplog_idx.into(),
         }
     }
@@ -114,7 +114,7 @@ impl TryFrom<golem::worker::PromiseId> for PromiseId {
 
     fn try_from(value: golem::worker::PromiseId) -> Result<Self, Self::Error> {
         Ok(Self {
-            worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
+            agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
             oplog_idx: OplogIndex::from_u64(value.oplog_idx),
         })
     }
@@ -178,89 +178,87 @@ impl From<IdempotencyKey> for golem::worker::IdempotencyKey {
     }
 }
 
-impl From<WorkerStatus> for golem::worker::WorkerStatus {
-    fn from(value: WorkerStatus) -> Self {
+impl From<AgentStatus> for golem::worker::AgentStatus {
+    fn from(value: AgentStatus) -> Self {
         match value {
-            WorkerStatus::Running => golem::worker::WorkerStatus::Running,
-            WorkerStatus::Idle => golem::worker::WorkerStatus::Idle,
-            WorkerStatus::Suspended => golem::worker::WorkerStatus::Suspended,
-            WorkerStatus::Interrupted => golem::worker::WorkerStatus::Interrupted,
-            WorkerStatus::Retrying => golem::worker::WorkerStatus::Retrying,
-            WorkerStatus::Failed => golem::worker::WorkerStatus::Failed,
-            WorkerStatus::Exited => golem::worker::WorkerStatus::Exited,
+            AgentStatus::Running => golem::worker::AgentStatus::Running,
+            AgentStatus::Idle => golem::worker::AgentStatus::Idle,
+            AgentStatus::Suspended => golem::worker::AgentStatus::Suspended,
+            AgentStatus::Interrupted => golem::worker::AgentStatus::Interrupted,
+            AgentStatus::Retrying => golem::worker::AgentStatus::Retrying,
+            AgentStatus::Failed => golem::worker::AgentStatus::Failed,
+            AgentStatus::Exited => golem::worker::AgentStatus::Exited,
         }
     }
 }
 
-impl TryFrom<golem::worker::WorkerFilter> for WorkerFilter {
+impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
     type Error = String;
 
-    fn try_from(value: golem::worker::WorkerFilter) -> Result<Self, Self::Error> {
+    fn try_from(value: golem::worker::AgentFilter) -> Result<Self, Self::Error> {
         match value.filter {
             Some(filter) => match filter {
-                golem::worker::worker_filter::Filter::Name(filter) => Ok(WorkerFilter::new_name(
+                golem::worker::agent_filter::Filter::Name(filter) => Ok(AgentFilter::new_name(
                     filter.comparator.try_into()?,
                     filter.value,
                 )),
-                golem::worker::worker_filter::Filter::Revision(filter) => {
-                    Ok(WorkerFilter::new_revision(
+                golem::worker::agent_filter::Filter::Revision(filter) => {
+                    Ok(AgentFilter::new_revision(
                         filter.comparator.try_into()?,
                         filter.value.try_into()?,
                     ))
                 }
-                golem::worker::worker_filter::Filter::Status(filter) => {
-                    Ok(WorkerFilter::new_status(
-                        filter.comparator.try_into()?,
-                        filter.value.try_into()?,
-                    ))
-                }
-                golem::worker::worker_filter::Filter::CreatedAt(filter) => {
+                golem::worker::agent_filter::Filter::Status(filter) => Ok(AgentFilter::new_status(
+                    filter.comparator.try_into()?,
+                    filter.value.try_into()?,
+                )),
+                golem::worker::agent_filter::Filter::CreatedAt(filter) => {
                     let value = filter
                         .value
                         .map(|t| t.into())
                         .ok_or_else(|| "Missing value".to_string())?;
-                    Ok(WorkerFilter::new_created_at(
+                    Ok(AgentFilter::new_created_at(
                         filter.comparator.try_into()?,
                         value,
                     ))
                 }
-                golem::worker::worker_filter::Filter::Env(filter) => Ok(WorkerFilter::new_env(
+                golem::worker::agent_filter::Filter::Env(filter) => Ok(AgentFilter::new_env(
                     filter.name,
                     filter.comparator.try_into()?,
                     filter.value,
                 )),
-                golem::worker::worker_filter::Filter::ConfigVars(filter) => {
-                    Ok(WorkerFilter::new_config_vars(
+                golem::worker::agent_filter::Filter::ConfigVars(filter) => {
+                    Ok(AgentFilter::new_config_vars(
                         filter.name,
                         filter.comparator.try_into()?,
                         filter.value,
                     ))
                 }
-                golem::worker::worker_filter::Filter::Not(filter) => {
+                golem::worker::agent_filter::Filter::Not(filter) => {
                     let filter = *filter.filter.ok_or_else(|| "Missing filter".to_string())?;
-                    Ok(WorkerFilter::new_not(filter.try_into()?))
+                    Ok(AgentFilter::new_not(filter.try_into()?))
                 }
-                golem::worker::worker_filter::Filter::And(golem::worker::WorkerAndFilter {
+                golem::worker::agent_filter::Filter::And(golem::worker::AgentAndFilter {
                     filters,
                 }) => {
                     let filters = filters.into_iter().map(|f| f.try_into()).collect::<Result<
-                        Vec<WorkerFilter>,
+                        Vec<AgentFilter>,
                         String,
                     >>(
                     )?;
 
-                    Ok(WorkerFilter::new_and(filters))
+                    Ok(AgentFilter::new_and(filters))
                 }
-                golem::worker::worker_filter::Filter::Or(golem::worker::WorkerOrFilter {
+                golem::worker::agent_filter::Filter::Or(golem::worker::AgentOrFilter {
                     filters,
                 }) => {
                     let filters = filters.into_iter().map(|f| f.try_into()).collect::<Result<
-                        Vec<WorkerFilter>,
+                        Vec<AgentFilter>,
                         String,
                     >>(
                     )?;
 
-                    Ok(WorkerFilter::new_or(filters))
+                    Ok(AgentFilter::new_or(filters))
                 }
             },
             None => Err("Missing filter".to_string()),
@@ -268,78 +266,74 @@ impl TryFrom<golem::worker::WorkerFilter> for WorkerFilter {
     }
 }
 
-impl From<WorkerFilter> for golem::worker::WorkerFilter {
-    fn from(value: WorkerFilter) -> Self {
+impl From<AgentFilter> for golem::worker::AgentFilter {
+    fn from(value: AgentFilter) -> Self {
         let filter = match value {
-            WorkerFilter::Name(WorkerNameFilter { comparator, value }) => {
-                golem::worker::worker_filter::Filter::Name(golem::worker::WorkerNameFilter {
+            AgentFilter::Name(AgentNameFilter { comparator, value }) => {
+                golem::worker::agent_filter::Filter::Name(golem::worker::AgentNameFilter {
                     comparator: comparator.into(),
                     value,
                 })
             }
-            WorkerFilter::Revision(WorkerRevisionFilter { comparator, value }) => {
-                golem::worker::worker_filter::Filter::Revision(
-                    golem::worker::WorkerRevisionFilter {
-                        comparator: comparator.into(),
-                        value: value.into(),
-                    },
-                )
+            AgentFilter::Revision(AgentRevisionFilter { comparator, value }) => {
+                golem::worker::agent_filter::Filter::Revision(golem::worker::AgentRevisionFilter {
+                    comparator: comparator.into(),
+                    value: value.into(),
+                })
             }
-            WorkerFilter::Env(WorkerEnvFilter {
+            AgentFilter::Env(AgentEnvFilter {
                 name,
                 comparator,
                 value,
-            }) => golem::worker::worker_filter::Filter::Env(golem::worker::WorkerEnvFilter {
+            }) => golem::worker::agent_filter::Filter::Env(golem::worker::AgentEnvFilter {
                 name,
                 comparator: comparator.into(),
                 value,
             }),
-            WorkerFilter::ConfigVars(WorkerConfigVarsFilter {
+            AgentFilter::ConfigVars(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
-            }) => golem::worker::worker_filter::Filter::ConfigVars(
-                golem::worker::WorkerConfigVarsFilter {
+            }) => golem::worker::agent_filter::Filter::ConfigVars(
+                golem::worker::AgentConfigVarsFilter {
                     name,
                     comparator: comparator.into(),
                     value,
                 },
             ),
-            WorkerFilter::Status(WorkerStatusFilter { comparator, value }) => {
-                golem::worker::worker_filter::Filter::Status(golem::worker::WorkerStatusFilter {
+            AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
+                golem::worker::agent_filter::Filter::Status(golem::worker::AgentStatusFilter {
                     comparator: comparator.into(),
                     value: value.into(),
                 })
             }
-            WorkerFilter::CreatedAt(WorkerCreatedAtFilter { comparator, value }) => {
-                golem::worker::worker_filter::Filter::CreatedAt(
-                    golem::worker::WorkerCreatedAtFilter {
+            AgentFilter::CreatedAt(AgentCreatedAtFilter { comparator, value }) => {
+                golem::worker::agent_filter::Filter::CreatedAt(
+                    golem::worker::AgentCreatedAtFilter {
                         value: Some(value.into()),
                         comparator: comparator.into(),
                     },
                 )
             }
-            WorkerFilter::Not(WorkerNotFilter { filter }) => {
-                let f: golem::worker::WorkerFilter = (*filter).into();
-                golem::worker::worker_filter::Filter::Not(Box::new(
-                    golem::worker::WorkerNotFilter {
-                        filter: Some(Box::new(f)),
-                    },
-                ))
+            AgentFilter::Not(AgentNotFilter { filter }) => {
+                let f: golem::worker::AgentFilter = (*filter).into();
+                golem::worker::agent_filter::Filter::Not(Box::new(golem::worker::AgentNotFilter {
+                    filter: Some(Box::new(f)),
+                }))
             }
-            WorkerFilter::And(filter) => {
-                golem::worker::worker_filter::Filter::And(golem::worker::WorkerAndFilter {
+            AgentFilter::And(filter) => {
+                golem::worker::agent_filter::Filter::And(golem::worker::AgentAndFilter {
                     filters: filter.filters.into_iter().map(|f| f.into()).collect(),
                 })
             }
-            WorkerFilter::Or(filter) => {
-                golem::worker::worker_filter::Filter::Or(golem::worker::WorkerOrFilter {
+            AgentFilter::Or(filter) => {
+                golem::worker::agent_filter::Filter::Or(golem::worker::AgentOrFilter {
                     filters: filter.filters.into_iter().map(|f| f.into()).collect(),
                 })
             }
         };
 
-        golem::worker::WorkerFilter {
+        golem::worker::AgentFilter {
             filter: Some(filter),
         }
     }
@@ -416,28 +410,28 @@ impl From<LogLevel> for golem::worker::Level {
     }
 }
 
-impl TryFrom<golem::worker::LogEvent> for WorkerEvent {
+impl TryFrom<golem::worker::LogEvent> for AgentEvent {
     type Error = String;
 
     fn try_from(value: golem::worker::LogEvent) -> Result<Self, Self::Error> {
         match value.event {
             Some(event) => match event {
-                golem::worker::log_event::Event::Stdout(event) => Ok(WorkerEvent::StdOut {
+                golem::worker::log_event::Event::Stdout(event) => Ok(AgentEvent::StdOut {
                     timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                     bytes: event.message.into_bytes(),
                 }),
-                golem::worker::log_event::Event::Stderr(event) => Ok(WorkerEvent::StdErr {
+                golem::worker::log_event::Event::Stderr(event) => Ok(AgentEvent::StdErr {
                     timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                     bytes: event.message.into_bytes(),
                 }),
-                golem::worker::log_event::Event::Log(event) => Ok(WorkerEvent::Log {
+                golem::worker::log_event::Event::Log(event) => Ok(AgentEvent::Log {
                     timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                     level: event.level().into(),
                     context: event.context,
                     message: event.message,
                 }),
                 golem::worker::log_event::Event::InvocationStarted(event) => {
-                    Ok(WorkerEvent::InvocationStart {
+                    Ok(AgentEvent::InvocationStart {
                         timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                         function: event.function,
                         idempotency_key: event
@@ -447,7 +441,7 @@ impl TryFrom<golem::worker::LogEvent> for WorkerEvent {
                     })
                 }
                 golem::worker::log_event::Event::InvocationFinished(event) => {
-                    Ok(WorkerEvent::InvocationFinished {
+                    Ok(AgentEvent::InvocationFinished {
                         timestamp: event.timestamp.ok_or("Missing timestamp")?.into(),
                         function: event.function,
                         idempotency_key: event
@@ -457,7 +451,7 @@ impl TryFrom<golem::worker::LogEvent> for WorkerEvent {
                     })
                 }
                 golem::worker::log_event::Event::ClientLagged(event) => {
-                    Ok(WorkerEvent::ClientLagged {
+                    Ok(AgentEvent::ClientLagged {
                         number_of_missed_messages: event.number_of_missed_messages,
                     })
                 }
@@ -467,12 +461,12 @@ impl TryFrom<golem::worker::LogEvent> for WorkerEvent {
     }
 }
 
-impl TryFrom<WorkerEvent> for golem::worker::LogEvent {
+impl TryFrom<AgentEvent> for golem::worker::LogEvent {
     type Error = String;
 
-    fn try_from(value: WorkerEvent) -> Result<Self, Self::Error> {
+    fn try_from(value: AgentEvent) -> Result<Self, Self::Error> {
         match value {
-            WorkerEvent::StdOut { timestamp, bytes } => Ok(golem::worker::LogEvent {
+            AgentEvent::StdOut { timestamp, bytes } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::Stdout(
                     golem::worker::StdOutLog {
                         message: String::from_utf8_lossy(&bytes).to_string(),
@@ -480,7 +474,7 @@ impl TryFrom<WorkerEvent> for golem::worker::LogEvent {
                     },
                 )),
             }),
-            WorkerEvent::StdErr { timestamp, bytes } => Ok(golem::worker::LogEvent {
+            AgentEvent::StdErr { timestamp, bytes } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::Stderr(
                     golem::worker::StdErrLog {
                         message: String::from_utf8_lossy(&bytes).to_string(),
@@ -488,7 +482,7 @@ impl TryFrom<WorkerEvent> for golem::worker::LogEvent {
                     },
                 )),
             }),
-            WorkerEvent::Log {
+            AgentEvent::Log {
                 timestamp,
                 level,
                 context,
@@ -508,7 +502,7 @@ impl TryFrom<WorkerEvent> for golem::worker::LogEvent {
                     timestamp: Some(timestamp.into()),
                 })),
             }),
-            WorkerEvent::InvocationStart {
+            AgentEvent::InvocationStart {
                 timestamp,
                 function,
                 idempotency_key,
@@ -521,7 +515,7 @@ impl TryFrom<WorkerEvent> for golem::worker::LogEvent {
                     },
                 )),
             }),
-            WorkerEvent::InvocationFinished {
+            AgentEvent::InvocationFinished {
                 timestamp,
                 function,
                 idempotency_key,
@@ -534,7 +528,7 @@ impl TryFrom<WorkerEvent> for golem::worker::LogEvent {
                     },
                 )),
             }),
-            WorkerEvent::ClientLagged {
+            AgentEvent::ClientLagged {
                 number_of_missed_messages,
             } => Ok(golem::worker::LogEvent {
                 event: Some(golem::worker::log_event::Event::ClientLagged(
@@ -608,8 +602,8 @@ impl TryFrom<golem::component::InitialComponentFile> for InitialComponentFile {
 }
 
 pub fn to_protobuf_resource_description(
-    key: WorkerResourceId,
-    description: WorkerResourceDescription,
+    key: AgentResourceId,
+    description: AgentResourceDescription,
 ) -> golem::worker::ResourceDescription {
     golem::worker::ResourceDescription {
         created_at: Some(description.created_at.into()),
@@ -621,9 +615,9 @@ pub fn to_protobuf_resource_description(
 
 pub fn from_protobuf_resource_description(
     description: golem::worker::ResourceDescription,
-) -> Result<(WorkerResourceId, WorkerResourceDescription), String> {
-    let key = WorkerResourceId(description.resource_id);
-    let value = WorkerResourceDescription {
+) -> Result<(AgentResourceId, AgentResourceDescription), String> {
+    let key = AgentResourceId(description.resource_id);
+    let value = AgentResourceDescription {
         created_at: description.created_at.ok_or("Missing created_at")?.into(),
         resource_owner: description.resource_owner,
         resource_name: description.resource_name,

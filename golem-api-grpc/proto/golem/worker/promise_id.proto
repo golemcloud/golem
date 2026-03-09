@@ -5,6 +5,6 @@ package golem.worker;
 import "golem/worker/worker_id.proto";
 
 message PromiseId {
-  WorkerId worker_id = 1;
+  AgentId agent_id = 1;
   uint64 oplog_idx = 2;
 }

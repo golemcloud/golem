@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::agent::{
-    AgentId, AgentType, AgentTypeName, ConfigKeyValueType, ConfigValueType,
+    AgentType, AgentTypeName, ConfigKeyValueType, ConfigValueType, ParsedAgentId,
 };
 use golem_common::model::worker::{
     ParsedWorkerCreationLocalAgentConfigEntry, WorkerCreationLocalAgentConfigEntry,
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 
 pub fn parse_worker_creation_local_agent_config(
     worker_local_agent_config: Vec<WorkerCreationLocalAgentConfigEntry>,
-    agent_id: Option<&AgentId>,
+    agent_id: Option<&ParsedAgentId>,
     component: &Component,
 ) -> Result<Vec<ParsedWorkerCreationLocalAgentConfigEntry>, WorkerExecutorError> {
     let Some(agent_id) = agent_id else {

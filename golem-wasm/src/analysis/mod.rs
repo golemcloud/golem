@@ -28,6 +28,10 @@ pub mod wave;
 #[cfg(feature = "host")]
 pub mod wit_parser;
 
+/// Proptest strategies for generating arbitrary `AnalysedType` + `Value` pairs.
+#[cfg(feature = "proptest")]
+pub mod proptest_strategies;
+
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 
 #[cfg(test)]

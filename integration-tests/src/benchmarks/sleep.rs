@@ -15,9 +15,9 @@
 use crate::benchmarks::delete_workers;
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::base_model::agent::AgentId;
+use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::WorkerId;
+use golem_common::model::AgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -38,7 +38,7 @@ pub struct SleepBenchmarkContext {
 pub struct SleepIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
-    agent_ids: Vec<AgentId>,
+    agent_ids: Vec<ParsedAgentId>,
 }
 
 #[async_trait]
@@ -103,7 +103,7 @@ impl Benchmark for Sleep {
 
         let mut agent_ids = vec![];
         for n in 0..self.config.size {
-            let agent_id = agent_id!("rust-benchmark-agent", format!("test-{n}"));
+            let agent_id = agent_id!("RustBenchmarkAgent", format!("test-{n}"));
             agent_ids.push(agent_id);
         }
 
@@ -176,11 +176,11 @@ impl Benchmark for Sleep {
         _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        let worker_ids: Vec<WorkerId> = context
+        let agent_ids: Vec<AgentId> = context
             .agent_ids
             .iter()
-            .filter_map(|agent_id| WorkerId::from_agent_id(context.component.id, agent_id).ok())
+            .filter_map(|agent_id| AgentId::from_agent_id(context.component.id, agent_id).ok())
             .collect();
-        delete_workers(&context.user, &worker_ids).await
+        delete_workers(&context.user, &agent_ids).await
     }
 }

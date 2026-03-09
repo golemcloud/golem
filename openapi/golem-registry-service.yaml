@@ -7327,6 +7327,7 @@ components:
       required:
       - typeName
       - description
+      - sourceLanguage
       - constructor
       - methods
       - dependencies
@@ -7337,6 +7338,8 @@ components:
         typeName:
           type: string
         description:
+          type: string
+        sourceLanguage:
           type: string
         constructor:
           $ref: '#/components/schemas/AgentConstructor'
