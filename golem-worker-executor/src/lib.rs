@@ -393,7 +393,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
         IndexedStorageConfig::Postgres(postgres) => {
-            Arc::new(PostgresIndexedStorage::configured(postgres).await.map_err(|err| anyhow!(err))?)
+            Arc::new(
+                PostgresIndexedStorage::configured(postgres)
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            )
         }
         IndexedStorageConfig::KVStoreSqlite(_) => {
             let sqlite = sqlite

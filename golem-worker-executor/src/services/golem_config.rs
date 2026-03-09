@@ -607,7 +607,7 @@ impl SafeDisplay for KeyValueStorageInMemoryConfig {
 pub enum IndexedStorageConfig {
     KVStoreRedis(IndexedStorageKVStoreRedisConfig),
     Redis(RedisConfig),
-    Postgres(DbPostgresConfig),
+    Postgres(IndexedStoragePostgresConfig),
     KVStoreSqlite(IndexedStorageKVStoreSqliteConfig),
     KVStoreMultiSqlite(IndexedStorageKVStoreMultiSqliteConfig),
     Sqlite(DbSqliteConfig),
@@ -707,6 +707,31 @@ impl SafeDisplay for IndexedStorageInMemoryConfig {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndexedStoragePostgresConfig {
+    #[serde(flatten)]
+    pub postgres: DbPostgresConfig,
+    #[serde(default = "default_indexed_storage_postgres_drop_prefix_delete_batch_size")]
+    pub drop_prefix_delete_batch_size: u64,
+}
+
+impl SafeDisplay for IndexedStoragePostgresConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "{}", self.postgres.to_safe_string_indented());
+        let _ = writeln!(
+            &mut result,
+            "drop prefix delete batch size: {}",
+            self.drop_prefix_delete_batch_size
+        );
+        result
+    }
+}
+
+fn default_indexed_storage_postgres_drop_prefix_delete_batch_size() -> u64 {
+    1024
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

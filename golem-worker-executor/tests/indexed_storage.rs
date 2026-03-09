@@ -20,6 +20,7 @@ use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
+use golem_worker_executor::services::golem_config::IndexedStoragePostgresConfig;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
@@ -202,7 +203,7 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
             .await
             .expect("Cannot create postgres test database");
 
-        let config = DbPostgresConfig {
+        let postgres = DbPostgresConfig {
             host: "localhost".to_string(),
             database: db_name,
             username: "postgres".to_string(),
@@ -213,6 +214,11 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+        };
+
+        let config = IndexedStoragePostgresConfig {
+            postgres,
+            drop_prefix_delete_batch_size: 1000,
         };
 
         let storage = PostgresIndexedStorage::configured(&config)

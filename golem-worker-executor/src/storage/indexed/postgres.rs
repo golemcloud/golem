@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
+use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
-use golem_common::config::DbPostgresConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{LabelledPoolTransaction, Pool};
@@ -27,24 +27,36 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {
     pool: PostgresPool,
+    drop_prefix_delete_batch_size: u64,
 }
 
 impl PostgresIndexedStorage {
-    pub async fn configured(config: &DbPostgresConfig) -> Result<Self, String> {
+    pub async fn configured(config: &IndexedStoragePostgresConfig) -> Result<Self, String> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-        golem_service_base::db::postgres::migrate(config, migrations.postgres_migrations())
+        golem_service_base::db::postgres::migrate(
+            &config.postgres,
+            migrations.postgres_migrations(),
+        )
+        .await
+        .map_err(|err| format!("Postgres indexed storage migration failed: {err:?}"))?;
+
+        let pool = PostgresPool::configured(&config.postgres)
             .await
-            .map_err(|err| format!("Postgres indexed storage migration failed: {err:?}"))?;
+            .map_err(|err| {
+                format!("Postgres indexed storage pool initialization failed: {err:?}")
+            })?;
 
-        let pool = PostgresPool::configured(config).await.map_err(|err| {
-            format!("Postgres indexed storage pool initialization failed: {err:?}")
-        })?;
-
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            drop_prefix_delete_batch_size: config.drop_prefix_delete_batch_size,
+        })
     }
 
     pub async fn new(pool: PostgresPool) -> Result<Self, String> {
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            drop_prefix_delete_batch_size: 1024,
+        })
     }
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
@@ -350,19 +362,28 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), String> {
-        let query = sqlx::query(
-            "DELETE FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3;",
-        )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(last_dropped_id as i64);
+        let namespace = Self::namespace(namespace);
+        let mut deleted_rows = self.drop_prefix_delete_batch_size;
 
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+        while deleted_rows >= self.drop_prefix_delete_batch_size {
+            let query = sqlx::query(
+                "DELETE FROM index_storage WHERE ctid IN (SELECT ctid FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3 LIMIT $4);",
+            )
+            .bind(&namespace)
+            .bind(key)
+            .bind(last_dropped_id as i64)
+            .bind(self.drop_prefix_delete_batch_size as i64);
+
+            deleted_rows = self
+                .pool
+                .with_rw(svc_name, api_name)
+                .execute(query)
+                .await
+                .map_err(|err| err.to_safe_string())?
+                .rows_affected();
+        }
+
+        Ok(())
     }
 }
 
