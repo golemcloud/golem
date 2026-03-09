@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -42,6 +42,7 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
+use crate::model::worker::ParsedWorkerCreationLocalAgentConfigEntry;
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
@@ -217,6 +218,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
                 config_vars: create.config_vars.into_iter().collect(),
+                local_agent_config: create
+                    .local_agent_config
+                    .into_iter()
+                    .map(ParsedWorkerCreationLocalAgentConfigEntry::try_from)
+                    .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id
                     .ok_or("Missing environment_id field")?
@@ -607,6 +613,11 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         config_vars: create.config_vars.into_iter().collect(),
+                        local_agent_config: create
+                            .local_agent_config
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
                         parent: create.parent.map(Into::into),

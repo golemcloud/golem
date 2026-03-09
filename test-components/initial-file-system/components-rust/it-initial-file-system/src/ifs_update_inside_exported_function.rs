@@ -1,6 +1,5 @@
 use golem_rust::{agent_definition, agent_implementation};
 use wstd::http::{Client, Request};
-use wstd::io::empty;
 
 #[agent_definition]
 pub trait IfsUpdateInsideExportedFunction {
@@ -25,7 +24,7 @@ impl IfsUpdateInsideExportedFunction for IfsUpdateInsideExportedFunctionImpl {
         let url = format!("http://localhost:{port}/");
 
         let request = Request::get(&url)
-            .body(empty())
+            .body(())
             .expect("Failed to build request");
 
         let _response = Client::new().send(request).await.expect("Request failed");

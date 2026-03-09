@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -39,7 +39,7 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
-use golem_service_base::model::{Component, LocalAgentConfigEntry};
+use golem_service_base::model::component::{Component, LocalAgentConfigEntry};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;

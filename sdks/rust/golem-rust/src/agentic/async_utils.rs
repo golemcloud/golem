@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 use crate::golem_agentic::golem::agent::common::DataValue;
 use crate::golem_agentic::golem::agent::host::{FutureInvokeResult, RpcError};
-use wstd::wasi::io::poll::Pollable;
+use wasip2::io::poll::Pollable;
 
 pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<DataValue, RpcError> {
     loop {

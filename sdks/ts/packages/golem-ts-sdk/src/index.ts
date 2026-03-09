@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -22,6 +22,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { TypeInfoInternal } from './internal/typeInfoInternal';
 import { loadConfigKey } from './internal/mapping/values/dataValue';
+import { Type } from '@golemcloud/golem-ts-types-core';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -234,23 +235,52 @@ export const loadSnapshot: typeof bindings.loadSnapshot = {
 
 export class Secret<T> {
   private readonly path: string[];
-  private readonly typeInfoInternal: TypeInfoInternal;
+  private readonly type: Type.Type;
 
-  constructor(path: string[], typeInfoInternal: TypeInfoInternal) {
+  constructor(path: string[], type: Type.Type) {
     this.path = path;
-    this.typeInfoInternal = typeInfoInternal;
+    this.type = type;
   }
 
   /** Lazily loads or reloads the secret value */
   get(): T {
-    return loadConfigKey(this.path, this.typeInfoInternal);
+    return loadConfigKey(this.path, this.type);
   }
 }
 
 export class Config<T> {
-  readonly value: T;
+  constructor(readonly properties: Type.ConfigProperty[]) {}
 
-  constructor(value: T) {
-    this.value = value;
+  get value(): T {
+    return this.loadConfig();
+  }
+
+  private loadConfig(): T {
+    const root: Record<string, any> = {};
+
+    for (const prop of this.properties) {
+      const { path } = prop;
+      if (path.length === 0) continue;
+
+      let current = root;
+
+      for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        if (!(key in current)) current[key] = {};
+        current = current[key];
+      }
+
+      const leafKey = path[path.length - 1];
+      let leafValue;
+      if (prop.secret) {
+        leafValue = new Secret(path, prop.type);
+      } else {
+        leafValue = loadConfigKey(path, prop.type);
+      }
+
+      current[leafKey] = leafValue;
+    }
+
+    return root as T;
   }
 }

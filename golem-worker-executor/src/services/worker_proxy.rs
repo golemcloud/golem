@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -257,6 +257,8 @@ impl WorkerProxy for RemoteWorkerProxy {
                     name: owned_worker_id.worker_name(),
                     env: caller_env.clone(),
                     config_vars: caller_config_vars.clone().into_iter().collect(),
+                    // FIXME: agent-config
+                    local_agent_config: Vec::new(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {

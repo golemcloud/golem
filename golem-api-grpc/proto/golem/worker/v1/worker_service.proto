@@ -2,26 +2,26 @@ syntax = "proto3";
 
 package golem.worker.v1;
 
+import "golem/auth/auth_ctx.proto";
 import "golem/common/empty.proto";
 import "golem/common/revert_worker_response.proto";
+import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
+import "golem/worker/agent_config.proto";
 import "golem/worker/complete_parameters.proto";
 import "golem/worker/cursor.proto";
+import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
-
-import "golem/worker/v1/worker_error.proto";
-import "golem/worker/worker_filter.proto";
-import "golem/worker/worker_metadata.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/public_oplog.proto";
-import "golem/worker/worker_id.proto";
-import "golem/component/component_id.proto";
 import "golem/worker/update_mode.proto";
-import "golem/worker/filesystem.proto";
-import "golem/auth/auth_ctx.proto";
-import "golem/component/agent.proto";
-import "golem/common/uuid.proto";
+import "golem/worker/v1/worker_error.proto";
+import "golem/worker/worker_filter.proto";
+import "golem/worker/worker_id.proto";
+import "golem/worker/worker_metadata.proto";
 import "google/protobuf/timestamp.proto";
 
 service WorkerService {
@@ -37,8 +37,9 @@ service WorkerService {
 message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
   string name = 2;
-  map<string, string> env = 4;
-  map<string, string> config_vars = 5;
+  map<string, string> env = 3;
+  map<string, string> config_vars = 4;
+  repeated LocalAgentConfigEntry local_agent_config = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
   optional golem.worker.InvocationContext context = 8;

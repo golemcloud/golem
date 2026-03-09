@@ -1,6 +1,6 @@
-// Copyright 2024-2025 Golem Cloud
+// Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.0 (the "License");
+// Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, span, warn, Instrument, Level};
 
 #[async_trait]
@@ -85,6 +86,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
                 owned_worker_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -106,6 +108,7 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
                 owned_worker_id,
                 None,
                 None,
+                Vec::new(),
                 None,
                 None,
                 &InvocationContextStack::fresh(),
@@ -141,6 +144,7 @@ impl SchedulerServiceDefault {
         oplog_service: Arc<dyn OplogService>,
         worker_service: Arc<dyn WorkerService>,
         process_interval: Duration,
+        shutdown_token: CancellationToken,
     ) -> Arc<Self> {
         let svc = Self {
             key_value_storage,
@@ -153,11 +157,24 @@ impl SchedulerServiceDefault {
         };
         let svc = Arc::new(svc);
         let background_handle = {
-            let svc = svc.clone();
+            let svc_weak = Arc::downgrade(&svc);
             tokio::spawn(
                 async move {
                     loop {
-                        tokio::time::sleep(process_interval).await;
+                        tokio::select! {
+                            _ = shutdown_token.cancelled() => {
+                                info!("Shutdown requested, stopping scheduler background loop");
+                                break;
+                            }
+                            _ = tokio::time::sleep(process_interval) => {}
+                        }
+                        let svc = match svc_weak.upgrade() {
+                            Some(s) => s,
+                            None => {
+                                info!("Scheduler service dropped, stopping background loop");
+                                break;
+                            }
+                        };
                         if svc.shard_service.is_ready() {
                             let r = svc.process(Utc::now()).await;
                             if let Err(err) = r {
@@ -427,23 +444,24 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
-    use crate::services::worker::{DefaultWorkerService, WorkerService};
+    use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use async_trait::async_trait;
     use chrono::DateTime;
     use desert_rust::BinarySerializer;
     use golem_common::model::account::AccountId;
+    use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::WorkerStatusRecord;
     use golem_common::model::{
         AgentInvocation, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
     };
@@ -454,6 +472,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::test;
+    use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
     struct SchedulerWorkerAccessMock;
@@ -475,6 +494,31 @@ mod tests {
             _invocation: AgentInvocation,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
+        }
+    }
+
+    struct WorkerServiceMock;
+
+    #[async_trait]
+    impl WorkerService for WorkerServiceMock {
+        async fn get(&self, _owned_worker_id: &OwnedWorkerId) -> Option<GetWorkerMetadataResult> {
+            unimplemented!()
+        }
+
+        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+            unimplemented!()
+        }
+
+        async fn remove(&self, _owned_worker_id: &OwnedWorkerId) {}
+
+        async fn remove_cached_status(&self, _owned_worker_id: &OwnedWorkerId) {}
+
+        async fn update_cached_status(
+            &self,
+            _owned_worker_id: &OwnedWorkerId,
+            _status_value: &WorkerStatusRecord,
+            _agent_mode: AgentMode,
+        ) {
         }
     }
 
@@ -511,18 +555,8 @@ mod tests {
         )
     }
 
-    fn create_worker_service_mock(
-        kvs: Arc<InMemoryKeyValueStorage>,
-        shard_service: Arc<dyn ShardService>,
-        oplog_service: Arc<dyn OplogService>,
-        config: Arc<GolemConfig>,
-    ) -> Arc<dyn WorkerService> {
-        Arc::new(DefaultWorkerService::new(
-            kvs,
-            shard_service,
-            oplog_service,
-            config,
-        ))
+    fn create_worker_service_mock() -> Arc<dyn WorkerService> {
+        Arc::new(WorkerServiceMock)
     }
 
     #[test]
@@ -559,13 +593,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -575,6 +603,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -689,14 +718,8 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
 
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -706,6 +729,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // not testing process() here
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -804,13 +828,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -820,6 +838,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -922,13 +941,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -938,6 +951,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -1037,13 +1051,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -1053,6 +1061,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
@@ -1159,13 +1168,7 @@ mod tests {
         let promise_service = create_promise_service_mock();
         let worker_access = create_worker_access_mock();
         let oplog_service = create_oplog_service_mock().await;
-        let golem_config = Arc::new(GolemConfig::default());
-        let worker_service = create_worker_service_mock(
-            kvs.clone(),
-            shard_service.clone(),
-            oplog_service.clone(),
-            golem_config,
-        );
+        let worker_service = create_worker_service_mock();
 
         let svc = SchedulerServiceDefault::new(
             kvs.clone(),
@@ -1175,6 +1178,7 @@ mod tests {
             oplog_service,
             worker_service,
             Duration::from_secs(1000), // explicitly calling process for testing
+            CancellationToken::new(),
         );
 
         let account_id = AccountId::new();
