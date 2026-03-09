@@ -61,11 +61,8 @@ impl PostgresIndexedStorage {
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog { worker_id: _ } => "worker-oplog".to_string(),
-            IndexedStorageNamespace::CompressedOpLog {
-                worker_id: _,
-                level,
-            } => {
+            IndexedStorageNamespace::OpLog { agent_id: _ } => "worker-oplog".to_string(),
+            IndexedStorageNamespace::CompressedOpLog { agent_id: _, level } => {
                 format!("worker-c{level}-oplog")
             }
         }
